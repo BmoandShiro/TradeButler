@@ -531,7 +531,20 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
                 strategy_id: None,
             };
             
-            let _id = conn.execute(
+            // Check for duplicate trade (same symbol, side, quantity, price, and timestamp)
+            let existing: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM trades WHERE symbol = ?1 AND side = ?2 AND quantity = ?3 AND price = ?4 AND timestamp = ?5",
+                    params![trade.symbol, trade.side, trade.quantity, trade.price, trade.timestamp],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            
+            if existing > 0 {
+                continue; // Skip duplicate trade
+            }
+            
+            let id = conn.execute(
                 "INSERT INTO trades (symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
@@ -547,6 +560,8 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
                     trade.strategy_id
                 ],
             ).map_err(|e| e.to_string())?;
+            
+            inserted_ids.push(conn.last_insert_rowid());
             
             inserted_ids.push(conn.last_insert_rowid());
         }
@@ -569,7 +584,20 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
                 strategy_id: None,
             };
             
-            let _id = conn.execute(
+            // Check for duplicate trade (same symbol, side, quantity, price, and timestamp)
+            let existing: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM trades WHERE symbol = ?1 AND side = ?2 AND quantity = ?3 AND price = ?4 AND timestamp = ?5",
+                    params![trade.symbol, trade.side, trade.quantity, trade.price, trade.timestamp],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            
+            if existing > 0 {
+                continue; // Skip duplicate trade
+            }
+            
+            let id = conn.execute(
                 "INSERT INTO trades (symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
@@ -1098,7 +1126,10 @@ pub fn get_metrics(pairing_method: Option<String>) -> Result<Metrics, String> {
         .map_err(|e| e.to_string())?;
     
     // Get paired trades for accurate metrics
-    let paired_trades = get_paired_trades(pairing_method).map_err(|e| e.to_string())?;
+    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    
+    // Get position groups to calculate largest win/loss per position (not per pair)
+    let position_groups = get_position_groups(pairing_method).map_err(|e| e.to_string())?;
     
     let mut winning_trades = 0;
     let mut losing_trades = 0;
@@ -1108,12 +1139,29 @@ pub fn get_metrics(pairing_method: Option<String>) -> Result<Metrics, String> {
     let mut profit_count = 0;
     let mut loss_count = 0;
     let mut largest_win = 0.0;
-    let mut largest_loss = 0.0;
+    let mut largest_loss = f64::NEG_INFINITY; // Start with negative infinity to track the most negative loss
     let mut consecutive_wins = 0;
     let mut consecutive_losses = 0;
     let mut current_win_streak = 0;
     let mut current_loss_streak = 0;
     
+    // Calculate largest win/loss from position groups (complete positions, not individual pairs)
+    for group in &position_groups {
+        let position_pnl = group.total_pnl;
+        
+        if position_pnl > 0.0 {
+            if position_pnl > largest_win {
+                largest_win = position_pnl;
+            }
+        } else if position_pnl < 0.0 {
+            // largest_loss should be the actual loss value (negative) per position
+            if largest_loss == f64::NEG_INFINITY || position_pnl < largest_loss {
+                largest_loss = position_pnl; // Store as negative value (most negative = largest loss)
+            }
+        }
+    }
+    
+    // Calculate other metrics from paired trades
     for paired in &paired_trades {
         let pnl = paired.net_profit_loss;
         total_profit_loss += pnl;
@@ -1122,9 +1170,6 @@ pub fn get_metrics(pairing_method: Option<String>) -> Result<Metrics, String> {
             winning_trades += 1;
             total_profit += pnl;
             profit_count += 1;
-            if pnl > largest_win {
-                largest_win = pnl;
-            }
             
             // Update streaks
             current_loss_streak = 0;
@@ -1136,9 +1181,6 @@ pub fn get_metrics(pairing_method: Option<String>) -> Result<Metrics, String> {
             losing_trades += 1;
             total_loss += pnl.abs();
             loss_count += 1;
-            if pnl.abs() > largest_loss {
-                largest_loss = pnl.abs();
-            }
             
             // Update streaks
             current_win_streak = 0;
@@ -1213,7 +1255,7 @@ pub fn get_metrics(pairing_method: Option<String>) -> Result<Metrics, String> {
         average_profit,
         average_loss,
         largest_win,
-        largest_loss,
+        largest_loss: if largest_loss == f64::NEG_INFINITY { 0.0 } else { largest_loss }, // Return 0.0 if no losses found
         total_volume,
         trades_by_symbol: vec![],
         consecutive_wins,

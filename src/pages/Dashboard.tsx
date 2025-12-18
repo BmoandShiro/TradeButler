@@ -110,6 +110,7 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
     case "average_loss":
     case "largest_win":
     case "largest_loss":
+      // largest_loss is stored as negative, so display it as-is
       return `$${(value || 0).toFixed(2)}`;
     case "win_rate":
       return `${((value || 0) * 100).toFixed(1)}%`;
@@ -134,6 +135,10 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
 };
 
 const getMetricColor = (id: string, value: number): string => {
+  // Total P&L should be red if negative
+  if (id === "total_profit_loss" || id === "strategy_profit_loss") {
+    return value >= 0 ? "var(--profit)" : "var(--loss)";
+  }
   if (id.includes("profit") || (id.includes("win") && !id.includes("losing")) || 
       (id === "win_rate" && value > 0) || (id === "strategy_win_rate" && value > 0) || 
       (id.includes("streak") && !id.includes("loss") && value > 0)) {
@@ -142,9 +147,6 @@ const getMetricColor = (id: string, value: number): string => {
   if (id.includes("loss") || id.includes("losing") || (id === "win_rate" && value < 0) ||
       (id === "strategy_win_rate" && value < 0) || (id.includes("loss_streak") && value > 0)) {
     return "var(--loss)";
-  }
-  if (id === "total_profit_loss" || id === "strategy_profit_loss") {
-    return value >= 0 ? "var(--profit)" : "var(--loss)";
   }
   return "var(--accent)";
 };
