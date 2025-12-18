@@ -120,6 +120,208 @@ pub struct SymbolStats {
     pub profit_loss: f64,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PairedTrade {
+    pub symbol: String,
+    pub entry_trade_id: i64,
+    pub exit_trade_id: i64,
+    pub quantity: f64,
+    pub entry_price: f64,
+    pub exit_price: f64,
+    pub entry_timestamp: String,
+    pub exit_timestamp: String,
+    pub gross_profit_loss: f64,
+    pub entry_fees: f64,
+    pub exit_fees: f64,
+    pub net_profit_loss: f64,
+    pub strategy_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SymbolPnL {
+    pub symbol: String,
+    pub closed_positions: i64,
+    pub open_position_qty: f64,
+    pub total_gross_pnl: f64,
+    pub total_net_pnl: f64,
+    pub total_fees: f64,
+    pub winning_trades: i64,
+    pub losing_trades: i64,
+    pub win_rate: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TradeWithPairing {
+    pub trade: Trade,
+    pub entry_pairs: Vec<PairedTrade>, // Pairs where this trade is the entry (BUY)
+    pub exit_pairs: Vec<PairedTrade>,  // Pairs where this trade is the exit (SELL)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PositionGroup {
+    pub entry_trade: Trade,
+    pub position_trades: Vec<Trade>, // All trades (BUY and SELL) that make up this position
+    pub total_pnl: f64,
+    pub final_quantity: f64, // Remaining quantity after all trades (0.0 if fully closed)
+}
+
+// Detect if a symbol is an options contract
+// Options typically have patterns like: SPY251218C00679000 (underlying + date + C/P + strike)
+fn is_options_symbol(symbol: &str) -> bool {
+    // Options symbols are typically longer and contain:
+    // 1. A 6-digit date (YYMMDD format)
+    // 2. C (Call) or P (Put) indicator
+    // 3. Strike price digits
+    // Pattern: Usually 12+ characters, contains C or P followed by numbers
+    
+    if symbol.len() < 10 {
+        return false; // Too short to be an option
+    }
+    
+    // Check for C or P followed by digits (strike price)
+    let has_call_put = symbol.contains('C') || symbol.contains('P');
+    
+    // Check for 6-digit date pattern (YYMMDD) - typically appears before C/P
+    let has_date_pattern = symbol.chars()
+        .collect::<Vec<_>>()
+        .windows(6)
+        .any(|w| {
+            w.iter().all(|c| c.is_ascii_digit())
+        });
+    
+    // Options symbols are typically much longer than stock symbols
+    // and contain both date pattern and C/P indicator
+    has_call_put && (has_date_pattern || symbol.len() > 15)
+}
+
+// Pair trades using FIFO method
+fn pair_trades_fifo(trades: Vec<Trade>) -> (Vec<PairedTrade>, Vec<Trade>) {
+    pair_trades(trades, true)
+}
+
+// Pair trades using LIFO method
+fn pair_trades_lifo(trades: Vec<Trade>) -> (Vec<PairedTrade>, Vec<Trade>) {
+    pair_trades(trades, false)
+}
+
+// Generic pairing function - is_fifo=true for FIFO, false for LIFO
+fn pair_trades(trades: Vec<Trade>, is_fifo: bool) -> (Vec<PairedTrade>, Vec<Trade>) {
+    use std::collections::HashMap;
+    
+    let mut paired_trades = Vec::new();
+    let mut open_positions: HashMap<String, Vec<(i64, f64, f64, String, f64, Option<i64>)>> = HashMap::new(); // symbol -> [(id, remaining_qty, price, timestamp, fees, strategy_id)]
+    
+    // Sort trades by timestamp
+    let mut sorted_trades = trades;
+    sorted_trades.sort_by(|a, b| {
+        a.timestamp.cmp(&b.timestamp)
+    });
+    
+    for trade in sorted_trades {
+        let trade_id = trade.id.unwrap_or(0);
+        let symbol = trade.symbol.clone();
+        
+        if trade.side.to_uppercase() == "BUY" {
+            // Add to open positions
+            open_positions
+                .entry(symbol.clone())
+                .or_insert_with(Vec::new)
+                .push((
+                    trade_id,
+                    trade.quantity,
+                    trade.price,
+                    trade.timestamp.clone(),
+                    trade.fees.unwrap_or(0.0),
+                    trade.strategy_id,
+                ));
+        } else if trade.side.to_uppercase() == "SELL" {
+            // Match against open positions (FIFO)
+            if let Some(positions) = open_positions.get_mut(&symbol) {
+                let mut remaining_sell_qty = trade.quantity;
+                let sell_price = trade.price;
+                let sell_timestamp = trade.timestamp.clone();
+                let total_sell_fees = trade.fees.unwrap_or(0.0);
+                let sell_strategy_id = trade.strategy_id;
+                let total_sell_qty = trade.quantity;
+                
+                while remaining_sell_qty > 0.0001 && !positions.is_empty() {
+                    // For FIFO, use first position (index 0), for LIFO use last position
+                    let position_index = if is_fifo { 0 } else { positions.len() - 1 };
+                    let (buy_id, buy_remaining_qty, buy_price, buy_timestamp, buy_fees, buy_strategy_id) = 
+                        positions[position_index].clone();
+                    
+                    let qty_to_close = remaining_sell_qty.min(buy_remaining_qty);
+                    
+                    // Prorate fees based on quantity closed
+                    let buy_fee_ratio = qty_to_close / buy_remaining_qty;
+                    let prorated_buy_fees = buy_fees * buy_fee_ratio;
+                    let sell_fee_ratio = qty_to_close / total_sell_qty;
+                    let prorated_sell_fees = total_sell_fees * sell_fee_ratio;
+                    
+                    // Calculate P&L
+                    let gross_pnl = (sell_price - buy_price) * qty_to_close;
+                    let net_pnl = gross_pnl - prorated_buy_fees - prorated_sell_fees;
+                    
+                    // Multiply by 100 for options contracts (each contract = 100 shares)
+                    let options_multiplier = if is_options_symbol(&symbol) { 100.0 } else { 1.0 };
+                    let gross_pnl_adjusted = gross_pnl * options_multiplier;
+                    let net_pnl_adjusted = net_pnl * options_multiplier;
+                    
+                    // Create paired trade
+                    paired_trades.push(PairedTrade {
+                        symbol: symbol.clone(),
+                        entry_trade_id: buy_id,
+                        exit_trade_id: trade_id,
+                        quantity: qty_to_close,
+                        entry_price: buy_price,
+                        exit_price: sell_price,
+                        entry_timestamp: buy_timestamp,
+                        exit_timestamp: sell_timestamp.clone(),
+                        gross_profit_loss: gross_pnl_adjusted,
+                        entry_fees: prorated_buy_fees,
+                        exit_fees: prorated_sell_fees,
+                        net_profit_loss: net_pnl_adjusted,
+                        strategy_id: buy_strategy_id.or(sell_strategy_id),
+                    });
+                    
+                    // Update quantities
+                    remaining_sell_qty -= qty_to_close;
+                    positions[position_index].1 -= qty_to_close;
+                    
+                    // Remove position if fully closed
+                    if positions[position_index].1 < 0.0001 {
+                        positions.remove(position_index);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Return remaining open positions as unpaired trades
+    let mut open_trades = Vec::new();
+    for (symbol, positions) in open_positions {
+        for (id, qty, price, timestamp, fees, strategy_id) in positions {
+            if qty > 0.0001 {
+                open_trades.push(Trade {
+                    id: Some(id),
+                    symbol: symbol.clone(),
+                    side: "BUY".to_string(),
+                    quantity: qty,
+                    price,
+                    timestamp,
+                    order_type: "OPEN".to_string(),
+                    status: "OPEN".to_string(),
+                    fees: Some(fees),
+                    notes: None,
+                    strategy_id,
+                });
+            }
+        }
+    }
+    
+    (paired_trades, open_trades)
+}
+
 fn get_db_path() -> PathBuf {
     // Use the same path calculation as in main.rs
     // Tauri's app_data_dir uses %APPDATA% on Windows (roaming), not %LOCALAPPDATA%
@@ -263,6 +465,199 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
 }
 
 #[tauri::command]
+pub fn get_trades_with_pairing(pairing_method: Option<String>) -> Result<Vec<TradeWithPairing>, String> {
+    use std::collections::HashMap;
+    
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    // Get all trades
+    let mut stmt = conn
+        .prepare("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades ORDER BY timestamp DESC")
+        .map_err(|e| e.to_string())?;
+    
+    let trade_iter = stmt
+        .query_map([], |row| {
+            Ok(Trade {
+                id: Some(row.get(0)?),
+                symbol: row.get(1)?,
+                side: row.get(2)?,
+                quantity: row.get(3)?,
+                price: row.get(4)?,
+                timestamp: row.get(5)?,
+                order_type: row.get(6)?,
+                status: row.get(7)?,
+                fees: row.get(8)?,
+                notes: row.get(9)?,
+                strategy_id: row.get(10)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut all_trades = Vec::new();
+    for trade in trade_iter {
+        all_trades.push(trade.map_err(|e| e.to_string())?);
+    }
+    
+    // Get paired trades
+    let use_fifo = pairing_method.as_deref().unwrap_or("FIFO") == "FIFO";
+    let (paired_trades, _open_trades) = if use_fifo {
+        pair_trades_fifo(all_trades.clone())
+    } else {
+        pair_trades_lifo(all_trades.clone())
+    };
+    
+    // Create a map of trade_id -> paired trades
+    let mut entry_map: HashMap<i64, Vec<PairedTrade>> = HashMap::new();
+    let mut exit_map: HashMap<i64, Vec<PairedTrade>> = HashMap::new();
+    
+    for paired in paired_trades {
+        entry_map.entry(paired.entry_trade_id).or_insert_with(Vec::new).push(paired.clone());
+        exit_map.entry(paired.exit_trade_id).or_insert_with(Vec::new).push(paired);
+    }
+    
+    // Convert to TradeWithPairing
+    let mut result = Vec::new();
+    for trade in all_trades {
+        let trade_id = trade.id.unwrap_or(0);
+        let entry_pairs = entry_map.get(&trade_id).cloned().unwrap_or_default();
+        let exit_pairs = exit_map.get(&trade_id).cloned().unwrap_or_default();
+        
+        result.push(TradeWithPairing {
+            trade,
+            entry_pairs,
+            exit_pairs,
+        });
+    }
+    
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn get_position_groups(pairing_method: Option<String>) -> Result<Vec<PositionGroup>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    // Get all trades ordered by timestamp
+    let mut stmt = conn
+        .prepare("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades WHERE status = 'Filled' OR status = 'FILLED' ORDER BY timestamp ASC")
+        .map_err(|e| e.to_string())?;
+    
+    let trade_iter = stmt
+        .query_map([], |row| {
+            Ok(Trade {
+                id: Some(row.get(0)?),
+                symbol: row.get(1)?,
+                side: row.get(2)?,
+                quantity: row.get(3)?,
+                price: row.get(4)?,
+                timestamp: row.get(5)?,
+                order_type: row.get(6)?,
+                status: row.get(7)?,
+                fees: row.get(8)?,
+                notes: row.get(9)?,
+                strategy_id: row.get(10)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut all_trades = Vec::new();
+    for trade in trade_iter {
+        all_trades.push(trade.map_err(|e| e.to_string())?);
+    }
+    
+    // Get paired trades to calculate P&L
+    let use_fifo = pairing_method.as_deref().unwrap_or("FIFO") == "FIFO";
+    let (paired_trades, _open_trades) = if use_fifo {
+        pair_trades_fifo(all_trades.clone())
+    } else {
+        pair_trades_lifo(all_trades.clone())
+    };
+    
+    // Group trades by position (entry trade)
+    use std::collections::HashMap;
+    let mut position_groups: Vec<PositionGroup> = Vec::new();
+    let mut processed_trades: HashMap<i64, bool> = HashMap::new();
+    
+    // Find all entry (BUY) trades and build position groups
+    for (idx, trade) in all_trades.iter().enumerate() {
+        let trade_id = trade.id.unwrap_or(0);
+        
+        // Skip if already processed
+        if processed_trades.contains_key(&trade_id) {
+            continue;
+        }
+        
+        // Only process BUY trades as potential entry points
+        if trade.side.to_uppercase() == "BUY" {
+            let mut position_trades = vec![trade.clone()];
+            processed_trades.insert(trade_id, true);
+            
+            // Track running quantity for this position
+            let mut running_qty = trade.quantity;
+            let mut position_closed = false;
+            
+            // Find all subsequent trades for this symbol until quantity reaches 0
+            for subsequent_trade in all_trades.iter().skip(idx + 1) {
+                if subsequent_trade.symbol != trade.symbol {
+                    continue;
+                }
+                
+                let sub_trade_id = subsequent_trade.id.unwrap_or(0);
+                
+                // If this trade was already used in another position, skip it
+                if processed_trades.contains_key(&sub_trade_id) {
+                    continue;
+                }
+                
+                if subsequent_trade.side.to_uppercase() == "BUY" {
+                    running_qty += subsequent_trade.quantity;
+                    position_trades.push(subsequent_trade.clone());
+                    processed_trades.insert(sub_trade_id, true);
+                } else if subsequent_trade.side.to_uppercase() == "SELL" {
+                    running_qty -= subsequent_trade.quantity;
+                    position_trades.push(subsequent_trade.clone());
+                    processed_trades.insert(sub_trade_id, true);
+                    
+                    // If quantity reaches 0 or below, position is closed
+                    if running_qty <= 0.0001 {
+                        position_closed = true;
+                        break;
+                    }
+                }
+            }
+            
+            // Calculate P&L for this position from paired trades
+            let position_pnl: f64 = paired_trades
+                .iter()
+                .filter(|p| {
+                    // Check if this pair's entry trade is in our position trades
+                    position_trades.iter().any(|t| t.id == Some(p.entry_trade_id))
+                })
+                .map(|p| p.net_profit_loss)
+                .sum();
+            
+            position_groups.push(PositionGroup {
+                entry_trade: trade.clone(),
+                position_trades,
+                total_pnl: position_pnl,
+                final_quantity: running_qty.max(0.0),
+            });
+        }
+    }
+    
+    // Sort position trades by timestamp within each group
+    for group in position_groups.iter_mut() {
+        group.position_trades.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    }
+    
+    // Sort groups by entry timestamp (newest first)
+    position_groups.sort_by(|a, b| b.entry_trade.timestamp.cmp(&a.entry_trade.timestamp));
+    
+    Ok(position_groups)
+}
+
+#[tauri::command]
 pub fn get_trades() -> Result<Vec<Trade>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
@@ -295,6 +690,142 @@ pub fn get_trades() -> Result<Vec<Trade>, String> {
     }
     
     Ok(trades)
+}
+
+#[tauri::command]
+pub fn get_paired_trades(pairing_method: Option<String>) -> Result<Vec<PairedTrade>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn
+        .prepare("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades WHERE status = 'Filled' OR status = 'FILLED' ORDER BY timestamp ASC")
+        .map_err(|e| e.to_string())?;
+    
+    let trade_iter = stmt
+        .query_map([], |row| {
+            Ok(Trade {
+                id: Some(row.get(0)?),
+                symbol: row.get(1)?,
+                side: row.get(2)?,
+                quantity: row.get(3)?,
+                price: row.get(4)?,
+                timestamp: row.get(5)?,
+                order_type: row.get(6)?,
+                status: row.get(7)?,
+                fees: row.get(8)?,
+                notes: row.get(9)?,
+                strategy_id: row.get(10)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut trades = Vec::new();
+    for trade in trade_iter {
+        trades.push(trade.map_err(|e| e.to_string())?);
+    }
+    
+    // Default to FIFO if not specified
+    let use_fifo = pairing_method.as_deref().unwrap_or("FIFO") == "FIFO";
+    let (paired_trades, _open_trades) = if use_fifo {
+        pair_trades_fifo(trades)
+    } else {
+        pair_trades_lifo(trades)
+    };
+    Ok(paired_trades)
+}
+
+#[tauri::command]
+pub fn get_symbol_pnl(pairing_method: Option<String>) -> Result<Vec<SymbolPnL>, String> {
+    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    
+    use std::collections::HashMap;
+    let mut symbol_map: HashMap<String, SymbolPnL> = HashMap::new();
+    
+    // Calculate P&L for closed positions
+    for paired in &paired_trades {
+        let entry = symbol_map.entry(paired.symbol.clone()).or_insert_with(|| SymbolPnL {
+            symbol: paired.symbol.clone(),
+            closed_positions: 0,
+            open_position_qty: 0.0,
+            total_gross_pnl: 0.0,
+            total_net_pnl: 0.0,
+            total_fees: 0.0,
+            winning_trades: 0,
+            losing_trades: 0,
+            win_rate: 0.0,
+        });
+        
+        entry.closed_positions += 1;
+        entry.total_gross_pnl += paired.gross_profit_loss;
+        entry.total_net_pnl += paired.net_profit_loss;
+        entry.total_fees += paired.entry_fees + paired.exit_fees;
+        
+        if paired.net_profit_loss > 0.0 {
+            entry.winning_trades += 1;
+        } else if paired.net_profit_loss < 0.0 {
+            entry.losing_trades += 1;
+        }
+    }
+    
+    // Calculate open positions
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn
+        .prepare("SELECT symbol, side, quantity FROM trades WHERE status = 'Filled' OR status = 'FILLED' ORDER BY timestamp ASC")
+        .map_err(|e| e.to_string())?;
+    
+    let trade_iter = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut open_positions: HashMap<String, f64> = HashMap::new();
+    for trade_result in trade_iter {
+        let (symbol, side, qty) = trade_result.map_err(|e| e.to_string())?;
+        let current_qty = open_positions.get(&symbol).copied().unwrap_or(0.0);
+        if side.to_uppercase() == "BUY" {
+            open_positions.insert(symbol.clone(), current_qty + qty);
+        } else if side.to_uppercase() == "SELL" {
+            open_positions.insert(symbol.clone(), (current_qty - qty).max(0.0));
+        }
+    }
+    
+    // Add open positions to results
+    for (symbol, qty) in open_positions {
+        if qty > 0.0001 {
+            let entry = symbol_map.entry(symbol.clone()).or_insert_with(|| SymbolPnL {
+                symbol: symbol.clone(),
+                closed_positions: 0,
+                open_position_qty: 0.0,
+                total_gross_pnl: 0.0,
+                total_net_pnl: 0.0,
+                total_fees: 0.0,
+                winning_trades: 0,
+                losing_trades: 0,
+                win_rate: 0.0,
+            });
+            entry.open_position_qty = qty;
+        }
+    }
+    
+    // Calculate win rates
+    for pnl in symbol_map.values_mut() {
+        let total_closed = pnl.winning_trades + pnl.losing_trades;
+        if total_closed > 0 {
+            pnl.win_rate = pnl.winning_trades as f64 / total_closed as f64;
+        }
+    }
+    
+    let mut result: Vec<SymbolPnL> = symbol_map.into_values().collect();
+    result.sort_by(|a, b| b.total_net_pnl.partial_cmp(&a.total_net_pnl).unwrap_or(std::cmp::Ordering::Equal));
+    
+    Ok(result)
 }
 
 #[tauri::command]
@@ -413,68 +944,137 @@ pub fn get_daily_pnl() -> Result<Vec<DailyPnL>, String> {
 }
 
 #[tauri::command]
-pub fn get_metrics() -> Result<Metrics, String> {
+pub fn get_metrics(pairing_method: Option<String>) -> Result<Metrics, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
-    // This is a simplified metrics calculation
-    // In a real app, you'd need to match buy/sell pairs to calculate P&L
     let total_trades: i64 = conn
         .query_row("SELECT COUNT(*) FROM trades", [], |row| row.get(0))
         .map_err(|e| e.to_string())?;
     
-    // For now, we'll calculate basic metrics
-    // A full implementation would need to pair trades
     let total_volume: f64 = conn
         .query_row("SELECT SUM(quantity * price) FROM trades", [], |row| {
             Ok(row.get::<_, Option<f64>>(0)?.unwrap_or(0.0))
         })
         .map_err(|e| e.to_string())?;
     
-    // Calculate streaks (simplified - would need proper trade pairing for accurate streaks)
-    let consecutive_wins: i64 = 0; // TODO: Calculate from paired trades
-    let consecutive_losses: i64 = 0; // TODO: Calculate from paired trades
-    let current_win_streak: i64 = 0; // TODO: Calculate from paired trades
-    let current_loss_streak: i64 = 0; // TODO: Calculate from paired trades
+    // Get paired trades for accurate metrics
+    let paired_trades = get_paired_trades(pairing_method).map_err(|e| e.to_string())?;
     
-    // Strategy metrics (for trades with strategies assigned)
-    let strategy_stats: (i64, i64, f64) = conn
-        .query_row(
-            "SELECT 
-                COUNT(*) as count,
-                SUM(CASE WHEN side = 'SELL' THEN 1 ELSE 0 END) as sells,
-                SUM(CASE WHEN side = 'SELL' THEN quantity * price ELSE -(quantity * price) END) as pnl
-            FROM trades 
-            WHERE strategy_id IS NOT NULL",
-            [],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
-                ))
-            },
-        )
-        .unwrap_or((0, 0, 0.0));
+    let mut winning_trades = 0;
+    let mut losing_trades = 0;
+    let mut total_profit_loss = 0.0;
+    let mut total_profit = 0.0;
+    let mut total_loss = 0.0;
+    let mut profit_count = 0;
+    let mut loss_count = 0;
+    let mut largest_win = 0.0;
+    let mut largest_loss = 0.0;
+    let mut consecutive_wins = 0;
+    let mut consecutive_losses = 0;
+    let mut current_win_streak = 0;
+    let mut current_loss_streak = 0;
     
-    let strategy_winning_trades = strategy_stats.1; // Simplified
-    let strategy_losing_trades = strategy_stats.0 - strategy_stats.1; // Simplified
-    let strategy_win_rate = if strategy_stats.0 > 0 {
-        strategy_winning_trades as f64 / strategy_stats.0 as f64
+    for paired in &paired_trades {
+        let pnl = paired.net_profit_loss;
+        total_profit_loss += pnl;
+        
+        if pnl > 0.0 {
+            winning_trades += 1;
+            total_profit += pnl;
+            profit_count += 1;
+            if pnl > largest_win {
+                largest_win = pnl;
+            }
+            
+            // Update streaks
+            current_loss_streak = 0;
+            current_win_streak += 1;
+            if current_win_streak > consecutive_wins {
+                consecutive_wins = current_win_streak;
+            }
+        } else if pnl < 0.0 {
+            losing_trades += 1;
+            total_loss += pnl.abs();
+            loss_count += 1;
+            if pnl.abs() > largest_loss {
+                largest_loss = pnl.abs();
+            }
+            
+            // Update streaks
+            current_win_streak = 0;
+            current_loss_streak += 1;
+            if current_loss_streak > consecutive_losses {
+                consecutive_losses = current_loss_streak;
+            }
+        }
+    }
+    
+    let win_rate = if paired_trades.len() > 0 {
+        winning_trades as f64 / paired_trades.len() as f64
+    } else {
+        0.0
+    };
+    
+    let average_profit = if profit_count > 0 {
+        total_profit / profit_count as f64
+    } else {
+        0.0
+    };
+    
+    let average_loss = if loss_count > 0 {
+        total_loss / loss_count as f64
+    } else {
+        0.0
+    };
+    
+    // Strategy metrics (from paired trades with strategies)
+    let mut strategy_winning = 0;
+    let mut strategy_losing = 0;
+    let mut strategy_pnl = 0.0;
+    let mut strategy_consecutive_wins = 0;
+    let mut strategy_consecutive_losses = 0;
+    let mut strategy_current_win = 0;
+    let mut strategy_current_loss = 0;
+    
+    for paired in &paired_trades {
+        if paired.strategy_id.is_some() {
+            if paired.net_profit_loss > 0.0 {
+                strategy_winning += 1;
+                strategy_pnl += paired.net_profit_loss;
+                strategy_current_loss = 0;
+                strategy_current_win += 1;
+                if strategy_current_win > strategy_consecutive_wins {
+                    strategy_consecutive_wins = strategy_current_win;
+                }
+            } else if paired.net_profit_loss < 0.0 {
+                strategy_losing += 1;
+                strategy_pnl += paired.net_profit_loss;
+                strategy_current_win = 0;
+                strategy_current_loss += 1;
+                if strategy_current_loss > strategy_consecutive_losses {
+                    strategy_consecutive_losses = strategy_current_loss;
+                }
+            }
+        }
+    }
+    
+    let strategy_win_rate = if (strategy_winning + strategy_losing) > 0 {
+        strategy_winning as f64 / (strategy_winning + strategy_losing) as f64
     } else {
         0.0
     };
     
     Ok(Metrics {
         total_trades,
-        winning_trades: 0,
-        losing_trades: 0,
-        total_profit_loss: 0.0,
-        win_rate: 0.0,
-        average_profit: 0.0,
-        average_loss: 0.0,
-        largest_win: 0.0,
-        largest_loss: 0.0,
+        winning_trades,
+        losing_trades,
+        total_profit_loss,
+        win_rate,
+        average_profit,
+        average_loss,
+        largest_win,
+        largest_loss,
         total_volume,
         trades_by_symbol: vec![],
         consecutive_wins,
@@ -482,11 +1082,11 @@ pub fn get_metrics() -> Result<Metrics, String> {
         current_win_streak,
         current_loss_streak,
         strategy_win_rate,
-        strategy_winning_trades,
-        strategy_losing_trades,
-        strategy_profit_loss: strategy_stats.2,
-        strategy_consecutive_wins: 0, // TODO: Calculate from strategy trades
-        strategy_consecutive_losses: 0, // TODO: Calculate from strategy trades
+        strategy_winning_trades: strategy_winning,
+        strategy_losing_trades: strategy_losing,
+        strategy_profit_loss: strategy_pnl,
+        strategy_consecutive_wins,
+        strategy_consecutive_losses,
     })
 }
 

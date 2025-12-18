@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { TrendingUp, TrendingDown } from "lucide-react";
 
 interface Trade {
   id: number;
@@ -15,20 +16,38 @@ interface Trade {
   notes: string | null;
 }
 
+interface SymbolPnL {
+  symbol: string;
+  closed_positions: number;
+  open_position_qty: number;
+  total_gross_pnl: number;
+  total_net_pnl: number;
+  total_fees: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number;
+}
+
 export default function Analytics() {
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [symbolPnL, setSymbolPnL] = useState<SymbolPnL[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadTrades();
+    loadData();
   }, []);
 
-  const loadTrades = async () => {
+  const loadData = async () => {
     try {
-      const data = await invoke<Trade[]>("get_trades");
-      setTrades(data);
+      const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+      const [tradesData, pnlData] = await Promise.all([
+        invoke<Trade[]>("get_trades"),
+        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod }),
+      ]);
+      setTrades(tradesData);
+      setSymbolPnL(pnlData);
     } catch (error) {
-      console.error("Error loading trades:", error);
+      console.error("Error loading data:", error);
     } finally {
       setLoading(false);
     }
@@ -86,6 +105,105 @@ export default function Analytics() {
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "30px" }}>
+          {/* Symbol P&L Table */}
+          {symbolPnL.length > 0 && (
+            <div
+              style={{
+                backgroundColor: "var(--bg-secondary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "8px",
+                padding: "20px",
+              }}
+            >
+              <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "20px" }}>
+                Profit & Loss by Symbol
+              </h2>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                      <th style={{ padding: "12px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                        Symbol
+                      </th>
+                      <th style={{ padding: "12px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                        Closed Positions
+                      </th>
+                      <th style={{ padding: "12px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                        Open Qty
+                      </th>
+                      <th style={{ padding: "12px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                        Win Rate
+                      </th>
+                      <th style={{ padding: "12px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                        Gross P&L
+                      </th>
+                      <th style={{ padding: "12px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                        Fees
+                      </th>
+                      <th style={{ padding: "12px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                        Net P&L
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {symbolPnL.map((pnl) => (
+                      <tr
+                        key={pnl.symbol}
+                        style={{
+                          borderBottom: "1px solid var(--border-color)",
+                        }}
+                      >
+                        <td style={{ padding: "12px", fontWeight: "600" }}>{pnl.symbol}</td>
+                        <td style={{ padding: "12px", textAlign: "right" }}>{pnl.closed_positions}</td>
+                        <td style={{ padding: "12px", textAlign: "right", color: pnl.open_position_qty > 0 ? "var(--accent)" : "var(--text-secondary)" }}>
+                          {pnl.open_position_qty > 0 ? pnl.open_position_qty.toFixed(4) : "—"}
+                        </td>
+                        <td style={{ padding: "12px", textAlign: "right" }}>
+                          {pnl.closed_positions > 0 ? (
+                            <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "4px" }}>
+                              {(pnl.win_rate * 100).toFixed(1)}%
+                              {pnl.win_rate >= 0.5 ? (
+                                <TrendingUp size={14} color="var(--profit)" />
+                              ) : (
+                                <TrendingDown size={14} color="var(--loss)" />
+                              )}
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td
+                          style={{
+                            padding: "12px",
+                            textAlign: "right",
+                            fontWeight: "600",
+                            color: pnl.total_gross_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                          }}
+                        >
+                          ${pnl.total_gross_pnl.toFixed(2)}
+                        </td>
+                        <td style={{ padding: "12px", textAlign: "right", color: "var(--text-secondary)" }}>
+                          ${pnl.total_fees.toFixed(2)}
+                        </td>
+                        <td
+                          style={{
+                            padding: "12px",
+                            textAlign: "right",
+                            fontWeight: "600",
+                            fontSize: "16px",
+                            color: pnl.total_net_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                          }}
+                        >
+                          ${pnl.total_net_pnl.toFixed(2)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           <div
             style={{
               backgroundColor: "var(--bg-secondary)",

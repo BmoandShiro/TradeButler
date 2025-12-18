@@ -25,8 +25,12 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::import_trades_csv,
             commands::get_trades,
+            commands::get_trades_with_pairing,
+            commands::get_position_groups,
             commands::get_metrics,
             commands::get_daily_pnl,
+            commands::get_paired_trades,
+            commands::get_symbol_pnl,
             commands::add_emotional_state,
             commands::get_emotional_states,
             commands::get_trade_by_id,

@@ -44,6 +44,18 @@ interface TopSymbol {
   estimated_pnl: number;
 }
 
+interface SymbolPnL {
+  symbol: string;
+  closed_positions: number;
+  open_position_qty: number;
+  total_gross_pnl: number;
+  total_net_pnl: number;
+  total_fees: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number;
+}
+
 interface StrategyPerformance {
   strategy_id: number | null;
   strategy_name: string;
@@ -152,14 +164,25 @@ export default function Dashboard() {
 
   const loadDashboardData = async () => {
     try {
-      const [metricsData, symbolsData, strategiesData, tradesData] = await Promise.all([
-        invoke<Metrics>("get_metrics"),
-        invoke<TopSymbol[]>("get_top_symbols", { limit: 5 }),
+      const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+      const [metricsData, pnlData, strategiesData, tradesData] = await Promise.all([
+        invoke<Metrics>("get_metrics", { pairingMethod }),
+        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod }),
         invoke<StrategyPerformance[]>("get_strategy_performance"),
         invoke<RecentTrade[]>("get_recent_trades", { limit: 5 }),
       ]);
       setMetrics(metricsData);
-      setTopSymbols(symbolsData);
+      
+      // Convert SymbolPnL to TopSymbol format for display
+      const topSymbolsData = pnlData
+        .slice(0, 5)
+        .map((pnl) => ({
+          symbol: pnl.symbol,
+          trade_count: pnl.closed_positions,
+          total_volume: 0, // We don't track volume separately
+          estimated_pnl: pnl.total_net_pnl,
+        }));
+      setTopSymbols(topSymbolsData);
       setStrategyPerformance(strategiesData);
       setRecentTrades(tradesData);
     } catch (error) {
@@ -350,7 +373,7 @@ export default function Dashboard() {
                       ${symbol.estimated_pnl.toFixed(2)}
                     </p>
                     <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                      ${(symbol.total_volume / 1000).toFixed(1)}k vol
+                      {symbol.trade_count} {symbol.trade_count === 1 ? "trade" : "trades"}
                     </p>
                   </div>
                 </div>
