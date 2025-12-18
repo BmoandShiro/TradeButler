@@ -32,6 +32,14 @@ fn main() {
             commands::get_trade_by_id,
             commands::update_trade,
             commands::delete_trade,
+            commands::create_strategy,
+            commands::get_strategies,
+            commands::update_strategy,
+            commands::delete_strategy,
+            commands::update_trade_strategy,
+            commands::get_top_symbols,
+            commands::get_strategy_performance,
+            commands::get_recent_trades,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

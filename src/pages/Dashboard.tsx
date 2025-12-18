@@ -6,8 +6,12 @@ import {
   DollarSign,
   Activity,
   Settings,
+  TrendingUp as TrendingUpIcon,
+  BarChart3,
+  Clock,
 } from "lucide-react";
 import { MetricsConfigPanel, useMetricsConfig } from "../components/MetricsConfig";
+import { format } from "date-fns";
 
 interface Metrics {
   total_trades: number;
@@ -21,6 +25,41 @@ interface Metrics {
   largest_loss: number;
   total_volume: number;
   trades_by_symbol: Array<{ symbol: string; count: number; profit_loss: number }>;
+  consecutive_wins: number;
+  consecutive_losses: number;
+  current_win_streak: number;
+  current_loss_streak: number;
+  strategy_win_rate: number;
+  strategy_winning_trades: number;
+  strategy_losing_trades: number;
+  strategy_profit_loss: number;
+  strategy_consecutive_wins: number;
+  strategy_consecutive_losses: number;
+}
+
+interface TopSymbol {
+  symbol: string;
+  trade_count: number;
+  total_volume: number;
+  estimated_pnl: number;
+}
+
+interface StrategyPerformance {
+  strategy_id: number | null;
+  strategy_name: string;
+  trade_count: number;
+  total_volume: number;
+  estimated_pnl: number;
+}
+
+interface RecentTrade {
+  id: number;
+  symbol: string;
+  side: string;
+  quantity: number;
+  price: number;
+  timestamp: string;
+  strategy_name: string | null;
 }
 
 const metricIcons: Record<string, any> = {
@@ -34,6 +73,16 @@ const metricIcons: Record<string, any> = {
   average_loss: TrendingDown,
   largest_win: TrendingUp,
   largest_loss: TrendingDown,
+  consecutive_wins: TrendingUp,
+  consecutive_losses: TrendingDown,
+  current_win_streak: TrendingUp,
+  current_loss_streak: TrendingDown,
+  strategy_win_rate: TrendingUp,
+  strategy_winning_trades: TrendingUp,
+  strategy_losing_trades: TrendingDown,
+  strategy_profit_loss: DollarSign,
+  strategy_consecutive_wins: TrendingUp,
+  strategy_consecutive_losses: TrendingDown,
 };
 
 const formatMetricValue = (id: string, value: number, metrics: Metrics | null): string => {
@@ -54,20 +103,35 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
       return `${((value || 0) * 100).toFixed(1)}%`;
     case "winning_trades":
     case "losing_trades":
+    case "consecutive_wins":
+    case "consecutive_losses":
+    case "current_win_streak":
+    case "current_loss_streak":
+    case "strategy_winning_trades":
+    case "strategy_losing_trades":
+    case "strategy_consecutive_wins":
+    case "strategy_consecutive_losses":
       return value.toString();
+    case "strategy_win_rate":
+      return `${((value || 0) * 100).toFixed(1)}%`;
+    case "strategy_profit_loss":
+      return `$${(value || 0).toFixed(2)}`;
     default:
       return value.toFixed(2);
   }
 };
 
 const getMetricColor = (id: string, value: number): string => {
-  if (id.includes("profit") || id.includes("win") || (id === "win_rate" && value > 0)) {
+  if (id.includes("profit") || (id.includes("win") && !id.includes("losing")) || 
+      (id === "win_rate" && value > 0) || (id === "strategy_win_rate" && value > 0) || 
+      (id.includes("streak") && !id.includes("loss") && value > 0)) {
     return "var(--profit)";
   }
-  if (id.includes("loss") || id.includes("losing") || (id === "win_rate" && value < 0)) {
+  if (id.includes("loss") || id.includes("losing") || (id === "win_rate" && value < 0) ||
+      (id === "strategy_win_rate" && value < 0) || (id.includes("loss_streak") && value > 0)) {
     return "var(--loss)";
   }
-  if (id === "total_profit_loss") {
+  if (id === "total_profit_loss" || id === "strategy_profit_loss") {
     return value >= 0 ? "var(--profit)" : "var(--loss)";
   }
   return "var(--accent)";
@@ -75,20 +139,31 @@ const getMetricColor = (id: string, value: number): string => {
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [topSymbols, setTopSymbols] = useState<TopSymbol[]>([]);
+  const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformance[]>([]);
+  const [recentTrades, setRecentTrades] = useState<RecentTrade[]>([]);
   const [loading, setLoading] = useState(true);
   const [showMetricsConfig, setShowMetricsConfig] = useState(false);
   const { getEnabledMetrics } = useMetricsConfig();
 
   useEffect(() => {
-    loadMetrics();
+    loadDashboardData();
   }, []);
 
-  const loadMetrics = async () => {
+  const loadDashboardData = async () => {
     try {
-      const data = await invoke<Metrics>("get_metrics");
-      setMetrics(data);
+      const [metricsData, symbolsData, strategiesData, tradesData] = await Promise.all([
+        invoke<Metrics>("get_metrics"),
+        invoke<TopSymbol[]>("get_top_symbols", { limit: 5 }),
+        invoke<StrategyPerformance[]>("get_strategy_performance"),
+        invoke<RecentTrade[]>("get_recent_trades", { limit: 5 }),
+      ]);
+      setMetrics(metricsData);
+      setTopSymbols(symbolsData);
+      setStrategyPerformance(strategiesData);
+      setRecentTrades(tradesData);
     } catch (error) {
-      console.error("Error loading metrics:", error);
+      console.error("Error loading dashboard data:", error);
     } finally {
       setLoading(false);
     }
@@ -114,6 +189,16 @@ export default function Dashboard() {
     average_loss: metrics?.average_loss || 0,
     largest_win: metrics?.largest_win || 0,
     largest_loss: metrics?.largest_loss || 0,
+    consecutive_wins: metrics?.consecutive_wins || 0,
+    consecutive_losses: metrics?.consecutive_losses || 0,
+    current_win_streak: metrics?.current_win_streak || 0,
+    current_loss_streak: metrics?.current_loss_streak || 0,
+    strategy_win_rate: metrics?.strategy_win_rate || 0,
+    strategy_winning_trades: metrics?.strategy_winning_trades || 0,
+    strategy_losing_trades: metrics?.strategy_losing_trades || 0,
+    strategy_profit_loss: metrics?.strategy_profit_loss || 0,
+    strategy_consecutive_wins: metrics?.strategy_consecutive_wins || 0,
+    strategy_consecutive_losses: metrics?.strategy_consecutive_losses || 0,
   };
 
   return (
@@ -213,40 +298,174 @@ export default function Dashboard() {
         })}
       </div>
 
-      {/* Additional Stats */}
-      {enabledMetrics.some((m) => ["winning_trades", "losing_trades", "average_profit", "average_loss"].includes(m.id)) && (
-        <div
-          style={{
-            backgroundColor: "var(--bg-secondary)",
-            border: "1px solid var(--border-color)",
-            borderRadius: "8px",
-            padding: "20px",
-          }}
-        >
-          <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "16px" }}>
-            Additional Stats
-          </h2>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "16px" }}>
-            {enabledMetrics
-              .filter((m) => ["winning_trades", "losing_trades", "average_profit", "average_loss"].includes(m.id))
-              .map((metric) => {
-                const value = metricValues[metric.id] || 0;
-                const color = getMetricColor(metric.id, value);
-
-                return (
-                  <div key={metric.id}>
-                    <p style={{ color: "var(--text-secondary)", fontSize: "14px", marginBottom: "4px" }}>
-                      {metric.label}
-                    </p>
-                    <p style={{ fontSize: "18px", fontWeight: "600", color: color }}>
-                      {formatMetricValue(metric.id, value, metrics)}
+      {/* Dashboard Stats Grid */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))",
+          gap: "20px",
+          marginBottom: "30px",
+        }}
+      >
+        {/* Top Symbols */}
+        {topSymbols.length > 0 && (
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              padding: "20px",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "16px" }}>
+              <BarChart3 size={20} color="var(--accent)" />
+              <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Top Symbols</h2>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              {topSymbols.map((symbol) => (
+                <div
+                  key={symbol.symbol}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "12px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    borderRadius: "6px",
+                  }}
+                >
+                  <div>
+                    <p style={{ fontWeight: "600", marginBottom: "4px" }}>{symbol.symbol}</p>
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                      {symbol.trade_count} trades
                     </p>
                   </div>
-                );
-              })}
+                  <div style={{ textAlign: "right" }}>
+                    <p
+                      style={{
+                        fontWeight: "600",
+                        color: symbol.estimated_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                      }}
+                    >
+                      ${symbol.estimated_pnl.toFixed(2)}
+                    </p>
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                      ${(symbol.total_volume / 1000).toFixed(1)}k vol
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Strategy Performance */}
+        {strategyPerformance.length > 0 && (
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              padding: "20px",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "16px" }}>
+              <TrendingUpIcon size={20} color="var(--accent)" />
+              <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Strategy Performance</h2>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              {strategyPerformance.map((strategy) => (
+                <div
+                  key={strategy.strategy_id || "unassigned"}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "12px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    borderRadius: "6px",
+                  }}
+                >
+                  <div>
+                    <p style={{ fontWeight: "600", marginBottom: "4px" }}>{strategy.strategy_name}</p>
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                      {strategy.trade_count} trades
+                    </p>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <p
+                      style={{
+                        fontWeight: "600",
+                        color: strategy.estimated_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                      }}
+                    >
+                      ${strategy.estimated_pnl.toFixed(2)}
+                    </p>
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                      ${(strategy.total_volume / 1000).toFixed(1)}k vol
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Recent Trades */}
+        {recentTrades.length > 0 && (
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              padding: "20px",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "16px" }}>
+              <Clock size={20} color="var(--accent)" />
+              <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Recent Trades</h2>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              {recentTrades.map((trade) => (
+                <div
+                  key={trade.id}
+                  style={{
+                    padding: "12px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    borderRadius: "6px",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                    <p style={{ fontWeight: "600" }}>{trade.symbol}</p>
+                    <p
+                      style={{
+                        fontSize: "14px",
+                        color: trade.side === "BUY" ? "var(--profit)" : "var(--loss)",
+                        fontWeight: "600",
+                      }}
+                    >
+                      {trade.side}
+                    </p>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px" }}>
+                    <p style={{ color: "var(--text-secondary)" }}>
+                      {trade.quantity} @ ${trade.price.toFixed(2)}
+                    </p>
+                    <p style={{ color: "var(--text-secondary)" }}>
+                      {format(new Date(trade.timestamp), "MMM d, HH:mm")}
+                    </p>
+                  </div>
+                  {trade.strategy_name && (
+                    <p style={{ fontSize: "11px", color: "var(--accent)", marginTop: "4px" }}>
+                      {trade.strategy_name}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
 
       <MetricsConfigPanel
         isOpen={showMetricsConfig}

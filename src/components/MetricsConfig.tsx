@@ -32,6 +32,16 @@ const defaultMetrics: MetricConfig[] = [
   { id: "risk_reward_ratio", label: "Risk/Reward Ratio", enabled: false, category: "Risk" },
   { id: "consecutive_wins", label: "Consecutive Wins", enabled: false, category: "Risk" },
   { id: "consecutive_losses", label: "Consecutive Losses", enabled: false, category: "Risk" },
+  { id: "current_win_streak", label: "Current Win Streak", enabled: false, category: "Risk" },
+  { id: "current_loss_streak", label: "Current Loss Streak", enabled: false, category: "Risk" },
+  
+  // Strategy Metrics
+  { id: "strategy_win_rate", label: "Strategy Win Rate", enabled: false, category: "Strategy" },
+  { id: "strategy_winning_trades", label: "Strategy Winning Trades", enabled: false, category: "Strategy" },
+  { id: "strategy_losing_trades", label: "Strategy Losing Trades", enabled: false, category: "Strategy" },
+  { id: "strategy_profit_loss", label: "Strategy P&L", enabled: false, category: "Strategy" },
+  { id: "strategy_consecutive_wins", label: "Strategy Consecutive Wins", enabled: false, category: "Strategy" },
+  { id: "strategy_consecutive_losses", label: "Strategy Consecutive Losses", enabled: false, category: "Strategy" },
   
   // Advanced Metrics
   { id: "total_fees", label: "Total Fees", enabled: false, category: "Advanced" },

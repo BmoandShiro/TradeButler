@@ -13,24 +13,48 @@ interface Trade {
   status: string;
   fees: number | null;
   notes: string | null;
+  strategy_id: number | null;
+}
+
+interface Strategy {
+  id: number;
+  name: string;
+  color: string | null;
 }
 
 export default function Trades() {
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadTrades();
+    loadData();
   }, []);
 
-  const loadTrades = async () => {
+  const loadData = async () => {
     try {
-      const data = await invoke<Trade[]>("get_trades");
-      setTrades(data);
+      const [tradesData, strategiesData] = await Promise.all([
+        invoke<Trade[]>("get_trades"),
+        invoke<Strategy[]>("get_strategies"),
+      ]);
+      setTrades(tradesData);
+      setStrategies(strategiesData);
     } catch (error) {
-      console.error("Error loading trades:", error);
+      console.error("Error loading data:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleStrategyChange = async (tradeId: number, strategyId: number | null) => {
+    try {
+      await invoke("update_trade_strategy", { tradeId, strategyId });
+      setTrades((prev) =>
+        prev.map((trade) => (trade.id === tradeId ? { ...trade, strategy_id: strategyId } : trade))
+      );
+    } catch (error) {
+      console.error("Error updating trade strategy:", error);
+      alert("Failed to update strategy: " + error);
     }
   };
 
@@ -107,6 +131,9 @@ export default function Trades() {
                   <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
                     Status
                   </th>
+                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                    Strategy
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -164,6 +191,34 @@ export default function Trades() {
                       >
                         {trade.status}
                       </span>
+                    </td>
+                    <td style={{ padding: "12px 16px", fontSize: "14px" }}>
+                      <select
+                        value={trade.strategy_id || ""}
+                        onChange={(e) =>
+                          handleStrategyChange(
+                            trade.id,
+                            e.target.value ? parseInt(e.target.value) : null
+                          )
+                        }
+                        style={{
+                          padding: "6px 10px",
+                          backgroundColor: "var(--bg-tertiary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "4px",
+                          color: "var(--text-primary)",
+                          fontSize: "13px",
+                          cursor: "pointer",
+                          minWidth: "120px",
+                        }}
+                      >
+                        <option value="">Unassigned</option>
+                        {strategies.map((strategy) => (
+                          <option key={strategy.id} value={strategy.id}>
+                            {strategy.name}
+                          </option>
+                        ))}
+                      </select>
                     </td>
                   </tr>
                 ))}

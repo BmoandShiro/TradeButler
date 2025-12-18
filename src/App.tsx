@@ -5,6 +5,7 @@ import Trades from "./pages/Trades";
 import Emotions from "./pages/Emotions";
 import Analytics from "./pages/Analytics";
 import CalendarPage from "./pages/Calendar";
+import Strategies from "./pages/Strategies";
 
 function App() {
   return (
@@ -13,9 +14,10 @@ function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/trades" element={<Trades />} />
+          <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/strategies" element={<Strategies />} />
           <Route path="/emotions" element={<Emotions />} />
           <Route path="/analytics" element={<Analytics />} />
-          <Route path="/calendar" element={<CalendarPage />} />
         </Routes>
       </Layout>
     </Router>

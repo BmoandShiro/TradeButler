@@ -5,6 +5,7 @@ import {
   Heart, 
   BarChart3,
   Calendar,
+  Target,
   Upload
 } from "lucide-react";
 import { useState } from "react";
@@ -45,6 +46,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: "/", icon: LayoutDashboard, label: "Dashboard" },
     { path: "/trades", icon: TrendingUp, label: "Trades" },
     { path: "/calendar", icon: Calendar, label: "Calendar" },
+    { path: "/strategies", icon: Target, label: "Strategies" },
     { path: "/emotions", icon: Heart, label: "Emotions" },
     { path: "/analytics", icon: BarChart3, label: "Analytics" },
   ];

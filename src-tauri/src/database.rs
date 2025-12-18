@@ -14,6 +14,7 @@ pub struct Trade {
     pub status: String,
     pub fees: Option<f64>,
     pub notes: Option<String>,
+    pub strategy_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,6 +25,16 @@ pub struct EmotionalState {
     pub intensity: i32, // 1-10 scale
     pub notes: Option<String>,
     pub trade_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Strategy {
+    pub id: Option<i64>,
+    pub name: String,
+    pub description: Option<String>,
+    pub notes: Option<String>,
+    pub created_at: Option<String>,
+    pub color: Option<String>,
 }
 
 pub fn init_database(db_path: &Path) -> Result<()> {
@@ -41,7 +52,8 @@ pub fn init_database(db_path: &Path) -> Result<()> {
             order_type TEXT NOT NULL,
             status TEXT NOT NULL,
             fees REAL,
-            notes TEXT
+            notes TEXT,
+            strategy_id INTEGER
         )",
         [],
     )?;
@@ -57,6 +69,32 @@ pub fn init_database(db_path: &Path) -> Result<()> {
             trade_id INTEGER,
             FOREIGN KEY (trade_id) REFERENCES trades(id)
         )",
+        [],
+    )?;
+
+    // Create strategies table
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS strategies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            color TEXT
+        )",
+        [],
+    )?;
+
+    // Add strategy_id to trades if it doesn't exist (SQLite doesn't support IF NOT EXISTS for ALTER TABLE)
+    // We'll try to add it and ignore the error if it already exists
+    let _ = conn.execute(
+        "ALTER TABLE trades ADD COLUMN strategy_id INTEGER",
+        [],
+    );
+    
+    // Create index for strategy_id
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy_id)",
         [],
     )?;
 
