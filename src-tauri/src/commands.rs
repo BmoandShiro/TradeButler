@@ -204,6 +204,52 @@ pub fn delete_trade(id: i64) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DailyPnL {
+    pub date: String,
+    pub profit_loss: f64,
+    pub trade_count: i64,
+}
+
+#[tauri::command]
+pub fn get_daily_pnl() -> Result<Vec<DailyPnL>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    // Group trades by date and calculate P&L
+    // For now, we'll use a simple calculation: SELL - BUY per symbol per day
+    // This is simplified - a full implementation would match buy/sell pairs
+    // SQLite uses date() function, and we need to handle the date format
+    let mut stmt = conn
+        .prepare(
+            "SELECT 
+                date(timestamp) as trade_date,
+                COUNT(*) as trade_count,
+                SUM(CASE WHEN side = 'SELL' THEN quantity * price ELSE -(quantity * price) END) as daily_pnl
+            FROM trades
+            GROUP BY date(timestamp)
+            ORDER BY trade_date DESC"
+        )
+        .map_err(|e| e.to_string())?;
+    
+    let daily_iter = stmt
+        .query_map([], |row| {
+            Ok(DailyPnL {
+                date: row.get::<_, String>(0)?,
+                profit_loss: row.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
+                trade_count: row.get(1)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut daily_pnl = Vec::new();
+    for day in daily_iter {
+        daily_pnl.push(day.map_err(|e| e.to_string())?);
+    }
+    
+    Ok(daily_pnl)
+}
+
 #[tauri::command]
 pub fn get_metrics() -> Result<Metrics, String> {
     let db_path = get_db_path();

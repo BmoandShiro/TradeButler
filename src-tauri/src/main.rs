@@ -26,6 +26,7 @@ fn main() {
             commands::import_trades_csv,
             commands::get_trades,
             commands::get_metrics,
+            commands::get_daily_pnl,
             commands::add_emotional_state,
             commands::get_emotional_states,
             commands::get_trade_by_id,

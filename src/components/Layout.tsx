@@ -4,6 +4,7 @@ import {
   TrendingUp, 
   Heart, 
   BarChart3,
+  Calendar,
   Upload
 } from "lucide-react";
 import { useState } from "react";
@@ -43,6 +44,7 @@ export default function Layout({ children }: LayoutProps) {
   const navItems = [
     { path: "/", icon: LayoutDashboard, label: "Dashboard" },
     { path: "/trades", icon: TrendingUp, label: "Trades" },
+    { path: "/calendar", icon: Calendar, label: "Calendar" },
     { path: "/emotions", icon: Heart, label: "Emotions" },
     { path: "/analytics", icon: BarChart3, label: "Analytics" },
   ];
