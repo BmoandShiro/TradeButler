@@ -209,7 +209,10 @@ fn pair_trades(trades: Vec<Trade>, is_fifo: bool) -> (Vec<PairedTrade>, Vec<Trad
     use std::collections::HashMap;
     
     let mut paired_trades = Vec::new();
-    let mut open_positions: HashMap<String, Vec<(i64, f64, f64, String, f64, Option<i64>)>> = HashMap::new(); // symbol -> [(id, remaining_qty, price, timestamp, fees, strategy_id)]
+    // Long positions: BUY to open, SELL to close
+    let mut long_positions: HashMap<String, Vec<(i64, f64, f64, String, f64, Option<i64>)>> = HashMap::new();
+    // Short positions: SELL to open, BUY to close
+    let mut short_positions: HashMap<String, Vec<(i64, f64, f64, String, f64, Option<i64>)>> = HashMap::new();
     
     // Sort trades by timestamp
     let mut sorted_trades = trades;
@@ -222,21 +225,102 @@ fn pair_trades(trades: Vec<Trade>, is_fifo: bool) -> (Vec<PairedTrade>, Vec<Trad
         let symbol = trade.symbol.clone();
         
         if trade.side.to_uppercase() == "BUY" {
-            // Add to open positions
-            open_positions
-                .entry(symbol.clone())
-                .or_insert_with(Vec::new)
-                .push((
-                    trade_id,
-                    trade.quantity,
-                    trade.price,
-                    trade.timestamp.clone(),
-                    trade.fees.unwrap_or(0.0),
-                    trade.strategy_id,
-                ));
+            // BUY can either:
+            // 1. Open a long position (if no matching short positions)
+            // 2. Close a short position (if short positions exist)
+            
+            // First, try to close short positions
+            if let Some(positions) = short_positions.get_mut(&symbol) {
+                let mut remaining_buy_qty = trade.quantity;
+                let buy_price = trade.price;
+                let buy_timestamp = trade.timestamp.clone();
+                let total_buy_fees = trade.fees.unwrap_or(0.0);
+                let buy_strategy_id = trade.strategy_id;
+                let total_buy_qty = trade.quantity;
+                
+                while remaining_buy_qty > 0.0001 && !positions.is_empty() {
+                    let position_index = if is_fifo { 0 } else { positions.len() - 1 };
+                    let (sell_id, sell_remaining_qty, sell_price, sell_timestamp, sell_fees, sell_strategy_id) = 
+                        positions[position_index].clone();
+                    
+                    let qty_to_close = remaining_buy_qty.min(sell_remaining_qty);
+                    
+                    // Prorate fees
+                    let sell_fee_ratio = qty_to_close / sell_remaining_qty;
+                    let prorated_sell_fees = sell_fees * sell_fee_ratio;
+                    let buy_fee_ratio = qty_to_close / total_buy_qty;
+                    let prorated_buy_fees = total_buy_fees * buy_fee_ratio;
+                    
+                    // For short positions: SELL to open (entry), BUY to close (exit)
+                    // P&L = entry_price - exit_price (you received premium, paid to close)
+                    let gross_pnl = (sell_price - buy_price) * qty_to_close;
+                    let net_pnl = gross_pnl - prorated_sell_fees - prorated_buy_fees;
+                    
+                    // Multiply by 100 for options
+                    let options_multiplier = if is_options_symbol(&symbol) { 100.0 } else { 1.0 };
+                    let gross_pnl_adjusted = gross_pnl * options_multiplier;
+                    let net_pnl_adjusted = net_pnl * options_multiplier;
+                    
+                    // Create paired trade (SELL is entry, BUY is exit for short positions)
+                    paired_trades.push(PairedTrade {
+                        symbol: symbol.clone(),
+                        entry_trade_id: sell_id,
+                        exit_trade_id: trade_id,
+                        quantity: qty_to_close,
+                        entry_price: sell_price,
+                        exit_price: buy_price,
+                        entry_timestamp: sell_timestamp,
+                        exit_timestamp: buy_timestamp.clone(),
+                        gross_profit_loss: gross_pnl_adjusted,
+                        entry_fees: prorated_sell_fees,
+                        exit_fees: prorated_buy_fees,
+                        net_profit_loss: net_pnl_adjusted,
+                        strategy_id: sell_strategy_id.or(buy_strategy_id),
+                    });
+                    
+                    remaining_buy_qty -= qty_to_close;
+                    positions[position_index].1 -= qty_to_close;
+                    
+                    if positions[position_index].1 < 0.0001 {
+                        positions.remove(position_index);
+                    }
+                }
+                
+                // If there's remaining quantity, open a long position
+                if remaining_buy_qty > 0.0001 {
+                    long_positions
+                        .entry(symbol.clone())
+                        .or_insert_with(Vec::new)
+                        .push((
+                            trade_id,
+                            remaining_buy_qty,
+                            buy_price,
+                            buy_timestamp,
+                            total_buy_fees * (remaining_buy_qty / total_buy_qty),
+                            buy_strategy_id,
+                        ));
+                }
+            } else {
+                // No short positions to close, open a long position
+                long_positions
+                    .entry(symbol.clone())
+                    .or_insert_with(Vec::new)
+                    .push((
+                        trade_id,
+                        trade.quantity,
+                        trade.price,
+                        trade.timestamp.clone(),
+                        trade.fees.unwrap_or(0.0),
+                        trade.strategy_id,
+                    ));
+            }
         } else if trade.side.to_uppercase() == "SELL" {
-            // Match against open positions (FIFO)
-            if let Some(positions) = open_positions.get_mut(&symbol) {
+            // SELL can either:
+            // 1. Open a short position (if no matching long positions)
+            // 2. Close a long position (if long positions exist)
+            
+            // First, try to close long positions
+            if let Some(positions) = long_positions.get_mut(&symbol) {
                 let mut remaining_sell_qty = trade.quantity;
                 let sell_price = trade.price;
                 let sell_timestamp = trade.timestamp.clone();
@@ -245,29 +329,29 @@ fn pair_trades(trades: Vec<Trade>, is_fifo: bool) -> (Vec<PairedTrade>, Vec<Trad
                 let total_sell_qty = trade.quantity;
                 
                 while remaining_sell_qty > 0.0001 && !positions.is_empty() {
-                    // For FIFO, use first position (index 0), for LIFO use last position
                     let position_index = if is_fifo { 0 } else { positions.len() - 1 };
                     let (buy_id, buy_remaining_qty, buy_price, buy_timestamp, buy_fees, buy_strategy_id) = 
                         positions[position_index].clone();
                     
                     let qty_to_close = remaining_sell_qty.min(buy_remaining_qty);
                     
-                    // Prorate fees based on quantity closed
+                    // Prorate fees
                     let buy_fee_ratio = qty_to_close / buy_remaining_qty;
                     let prorated_buy_fees = buy_fees * buy_fee_ratio;
                     let sell_fee_ratio = qty_to_close / total_sell_qty;
                     let prorated_sell_fees = total_sell_fees * sell_fee_ratio;
                     
-                    // Calculate P&L
+                    // For long positions: BUY to open (entry), SELL to close (exit)
+                    // P&L = exit_price - entry_price
                     let gross_pnl = (sell_price - buy_price) * qty_to_close;
                     let net_pnl = gross_pnl - prorated_buy_fees - prorated_sell_fees;
                     
-                    // Multiply by 100 for options contracts (each contract = 100 shares)
+                    // Multiply by 100 for options
                     let options_multiplier = if is_options_symbol(&symbol) { 100.0 } else { 1.0 };
                     let gross_pnl_adjusted = gross_pnl * options_multiplier;
                     let net_pnl_adjusted = net_pnl * options_multiplier;
                     
-                    // Create paired trade
+                    // Create paired trade (BUY is entry, SELL is exit for long positions)
                     paired_trades.push(PairedTrade {
                         symbol: symbol.clone(),
                         entry_trade_id: buy_id,
@@ -284,28 +368,73 @@ fn pair_trades(trades: Vec<Trade>, is_fifo: bool) -> (Vec<PairedTrade>, Vec<Trad
                         strategy_id: buy_strategy_id.or(sell_strategy_id),
                     });
                     
-                    // Update quantities
                     remaining_sell_qty -= qty_to_close;
                     positions[position_index].1 -= qty_to_close;
                     
-                    // Remove position if fully closed
                     if positions[position_index].1 < 0.0001 {
                         positions.remove(position_index);
                     }
                 }
+                
+                // If there's remaining quantity, open a short position
+                if remaining_sell_qty > 0.0001 {
+                    short_positions
+                        .entry(symbol.clone())
+                        .or_insert_with(Vec::new)
+                        .push((
+                            trade_id,
+                            remaining_sell_qty,
+                            sell_price,
+                            sell_timestamp,
+                            total_sell_fees * (remaining_sell_qty / total_sell_qty),
+                            sell_strategy_id,
+                        ));
+                }
+            } else {
+                // No long positions to close, open a short position
+                short_positions
+                    .entry(symbol.clone())
+                    .or_insert_with(Vec::new)
+                    .push((
+                        trade_id,
+                        trade.quantity,
+                        trade.price,
+                        trade.timestamp.clone(),
+                        trade.fees.unwrap_or(0.0),
+                        trade.strategy_id,
+                    ));
             }
         }
     }
     
     // Return remaining open positions as unpaired trades
     let mut open_trades = Vec::new();
-    for (symbol, positions) in open_positions {
+    for (symbol, positions) in long_positions {
         for (id, qty, price, timestamp, fees, strategy_id) in positions {
             if qty > 0.0001 {
                 open_trades.push(Trade {
                     id: Some(id),
                     symbol: symbol.clone(),
                     side: "BUY".to_string(),
+                    quantity: qty,
+                    price,
+                    timestamp,
+                    order_type: "OPEN".to_string(),
+                    status: "OPEN".to_string(),
+                    fees: Some(fees),
+                    notes: None,
+                    strategy_id,
+                });
+            }
+        }
+    }
+    for (symbol, positions) in short_positions {
+        for (id, qty, price, timestamp, fees, strategy_id) in positions {
+            if qty > 0.0001 {
+                open_trades.push(Trade {
+                    id: Some(id),
+                    symbol: symbol.clone(),
+                    side: "SELL".to_string(),
                     quantity: qty,
                     price,
                     timestamp,
@@ -579,7 +708,7 @@ pub fn get_position_groups(pairing_method: Option<String>) -> Result<Vec<Positio
     let mut position_groups: Vec<PositionGroup> = Vec::new();
     let mut processed_trades: HashMap<i64, bool> = HashMap::new();
     
-    // Find all entry (BUY) trades and build position groups
+    // Find all entry trades (BUY for long, SELL for short) and build position groups
     for (idx, trade) in all_trades.iter().enumerate() {
         let trade_id = trade.id.unwrap_or(0);
         
@@ -588,16 +717,22 @@ pub fn get_position_groups(pairing_method: Option<String>) -> Result<Vec<Positio
             continue;
         }
         
-        // Only process BUY trades as potential entry points
-        if trade.side.to_uppercase() == "BUY" {
+        // Process both BUY (long entry) and SELL (short entry) trades as potential entry points
+        let is_entry = trade.side.to_uppercase() == "BUY" || trade.side.to_uppercase() == "SELL";
+        
+        if is_entry {
             let mut position_trades = vec![trade.clone()];
             processed_trades.insert(trade_id, true);
             
-            // Track running quantity for this position
-            let mut running_qty = trade.quantity;
-            let mut position_closed = false;
+            // Track position size (positive for long, negative for short)
+            // BUY opens long (positive), SELL opens short (negative)
+            let mut position_size = if trade.side.to_uppercase() == "BUY" {
+                trade.quantity
+            } else {
+                -trade.quantity
+            };
             
-            // Find all subsequent trades for this symbol until quantity reaches 0
+            // Find all subsequent trades for this symbol until position returns to 0
             for subsequent_trade in all_trades.iter().skip(idx + 1) {
                 if subsequent_trade.symbol != trade.symbol {
                     continue;
@@ -610,20 +745,22 @@ pub fn get_position_groups(pairing_method: Option<String>) -> Result<Vec<Positio
                     continue;
                 }
                 
+                // Add trade to position
+                position_trades.push(subsequent_trade.clone());
+                processed_trades.insert(sub_trade_id, true);
+                
+                // Update position size
+                // BUY increases position (more long or less short)
+                // SELL decreases position (less long or more short)
                 if subsequent_trade.side.to_uppercase() == "BUY" {
-                    running_qty += subsequent_trade.quantity;
-                    position_trades.push(subsequent_trade.clone());
-                    processed_trades.insert(sub_trade_id, true);
+                    position_size += subsequent_trade.quantity;
                 } else if subsequent_trade.side.to_uppercase() == "SELL" {
-                    running_qty -= subsequent_trade.quantity;
-                    position_trades.push(subsequent_trade.clone());
-                    processed_trades.insert(sub_trade_id, true);
-                    
-                    // If quantity reaches 0 or below, position is closed
-                    if running_qty <= 0.0001 {
-                        position_closed = true;
-                        break;
-                    }
+                    position_size -= subsequent_trade.quantity;
+                }
+                
+                // Position is closed when it returns to 0 (or very close to 0)
+                if position_size.abs() < 0.0001 {
+                    break;
                 }
             }
             
@@ -631,8 +768,10 @@ pub fn get_position_groups(pairing_method: Option<String>) -> Result<Vec<Positio
             let position_pnl: f64 = paired_trades
                 .iter()
                 .filter(|p| {
-                    // Check if this pair's entry trade is in our position trades
-                    position_trades.iter().any(|t| t.id == Some(p.entry_trade_id))
+                    // Check if this pair's entry or exit trade is in our position trades
+                    position_trades.iter().any(|t| {
+                        t.id == Some(p.entry_trade_id) || t.id == Some(p.exit_trade_id)
+                    })
                 })
                 .map(|p| p.net_profit_loss)
                 .sum();
@@ -641,7 +780,7 @@ pub fn get_position_groups(pairing_method: Option<String>) -> Result<Vec<Positio
                 entry_trade: trade.clone(),
                 position_trades,
                 total_pnl: position_pnl,
-                final_quantity: running_qty.max(0.0),
+                final_quantity: position_size, // Can be positive (long), negative (short), or 0 (closed)
             });
         }
     }

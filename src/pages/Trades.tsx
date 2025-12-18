@@ -292,9 +292,6 @@ export default function Trades() {
                     <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
                       P&L
                     </th>
-                    <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                      Remaining Qty
-                    </th>
                     <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
                       Strategy
                     </th>
@@ -324,6 +321,11 @@ export default function Trades() {
                           </td>
                           <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
                             {group.entry_trade.quantity.toFixed(4)}
+                            {group.entry_trade.side.toUpperCase() === "SELL" && (
+                              <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "4px" }}>
+                                (Short)
+                              </span>
+                            )}
                           </td>
                           <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
                             ${group.entry_trade.price.toFixed(2)}
@@ -340,9 +342,6 @@ export default function Trades() {
                             >
                               {group.total_pnl >= 0 ? "+" : ""}${group.total_pnl.toFixed(2)}
                             </span>
-                          </td>
-                          <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right", color: group.final_quantity > 0 ? "var(--accent)" : "var(--text-secondary)" }}>
-                            {group.final_quantity > 0 ? group.final_quantity.toFixed(4) : "0.0000"}
                           </td>
                           <td style={{ padding: "12px 16px", fontSize: "14px" }}>
                             <select
@@ -401,21 +400,31 @@ export default function Trades() {
                                           Value
                                         </th>
                                         <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                                          Running Qty
+                                          Position Size
                                         </th>
                                       </tr>
                                     </thead>
                                     <tbody>
                                       {group.position_trades.map((trade, idx) => {
-                                        // Calculate running quantity
-                                        let runningQty = 0;
+                                        // Calculate position size (running quantity)
+                                        // BUY adds to position (positive for long), SELL subtracts (can go negative for short)
+                                        // Start from 0, then accumulate based on trades in chronological order
+                                        let positionSize = 0;
                                         for (let i = 0; i <= idx; i++) {
-                                          if (group.position_trades[i].side === "BUY") {
-                                            runningQty += group.position_trades[i].quantity;
-                                          } else {
-                                            runningQty -= group.position_trades[i].quantity;
+                                          const t = group.position_trades[i];
+                                          // BUY increases position (more long or less short)
+                                          // SELL decreases position (less long or more short)
+                                          const sideUpper = t.side.toUpperCase();
+                                          if (sideUpper === "BUY") {
+                                            positionSize += t.quantity;
+                                          } else if (sideUpper === "SELL") {
+                                            positionSize -= t.quantity;
                                           }
                                         }
+                                        
+                                        const isLong = positionSize > 0.0001;
+                                        const isShort = positionSize < -0.0001;
+                                        const isClosed = Math.abs(positionSize) < 0.0001;
                                         
                                         return (
                                           <tr
@@ -454,8 +463,18 @@ export default function Trades() {
                                             <td style={{ padding: "8px 12px", fontSize: "13px", textAlign: "right" }}>
                                               ${(trade.quantity * trade.price).toFixed(2)}
                                             </td>
-                                            <td style={{ padding: "8px 12px", fontSize: "13px", textAlign: "right", color: runningQty <= 0 ? "var(--text-secondary)" : "var(--accent)" }}>
-                                              {runningQty.toFixed(4)}
+                                            <td style={{ 
+                                              padding: "8px 12px", 
+                                              fontSize: "13px", 
+                                              textAlign: "right",
+                                              color: isClosed 
+                                                ? "var(--text-secondary)" 
+                                                : isLong 
+                                                  ? "var(--profit)" 
+                                                  : "var(--loss)",
+                                              fontWeight: isClosed ? "normal" : "600"
+                                            }}>
+                                              {isClosed ? "0.0000" : (positionSize > 0 ? "+" : "") + positionSize.toFixed(4)}
                                             </td>
                                           </tr>
                                         );
