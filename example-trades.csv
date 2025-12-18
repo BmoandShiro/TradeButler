@@ -1,0 +1,5 @@
+symbol,side,quantity,price,timestamp,order_type,status,fees,notes
+AAPL,BUY,10,150.25,2024-01-15T10:30:00Z,MARKET,FILLED,1.50,Test trade
+TSLA,SELL,5,250.75,2024-01-15T14:20:00Z,LIMIT,FILLED,2.25,Profit taking
+MSFT,BUY,15,380.50,2024-01-16T09:15:00Z,MARKET,FILLED,2.00,Long position
+
