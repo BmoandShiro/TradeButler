@@ -148,11 +148,30 @@ export default function Trades() {
   const handleStrategyChange = async (tradeId: number, strategyId: number | null) => {
     try {
       await invoke("update_trade_strategy", { tradeId, strategyId });
+      // Update tradesWithPairing
       setTradesWithPairing((prev) =>
         prev.map((item) =>
           item.trade.id === tradeId
             ? { ...item, trade: { ...item.trade, strategy_id: strategyId } }
             : item
+        )
+      );
+      // Update positionGroups if the trade is an entry trade
+      setPositionGroups((prev) =>
+        prev.map((group) =>
+          group.entry_trade.id === tradeId
+            ? {
+                ...group,
+                entry_trade: { ...group.entry_trade, strategy_id: strategyId },
+              }
+            : {
+                ...group,
+                position_trades: group.position_trades.map((trade) =>
+                  trade.id === tradeId
+                    ? { ...trade, strategy_id: strategyId }
+                    : trade
+                ),
+              }
         )
       );
     } catch (error) {
@@ -401,14 +420,14 @@ export default function Trades() {
                           </td>
                           <td style={{ padding: "12px 16px", fontSize: "14px" }}>
                             <select
-                              value={group.entry_trade.strategy_id || ""}
-                              onChange={(e) =>
-                                handleStrategyChange(
-                                  group.entry_trade.id,
-                                  e.target.value ? parseInt(e.target.value) : null
-                                )
-                              }
+                              value={group.entry_trade.strategy_id ? String(group.entry_trade.strategy_id) : ""}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                const newStrategyId = e.target.value ? parseInt(e.target.value, 10) : null;
+                                handleStrategyChange(group.entry_trade.id, newStrategyId);
+                              }}
                               onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
                               style={{
                                 padding: "6px 10px",
                                 backgroundColor: "var(--bg-tertiary)",
@@ -418,11 +437,12 @@ export default function Trades() {
                                 fontSize: "13px",
                                 cursor: "pointer",
                                 minWidth: "120px",
+                                outline: "none",
                               }}
                             >
                               <option value="">Unassigned</option>
                               {strategies.map((strategy) => (
-                                <option key={strategy.id} value={strategy.id}>
+                                <option key={strategy.id} value={String(strategy.id)}>
                                   {strategy.name}
                                 </option>
                               ))}
@@ -698,14 +718,14 @@ export default function Trades() {
                         </td>
                         <td style={{ padding: "12px 16px", fontSize: "14px" }}>
                           <select
-                            value={trade.strategy_id || ""}
-                            onChange={(e) =>
-                              handleStrategyChange(
-                                trade.id,
-                                e.target.value ? parseInt(e.target.value) : null
-                              )
-                            }
+                            value={trade.strategy_id ? String(trade.strategy_id) : ""}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              const newStrategyId = e.target.value ? parseInt(e.target.value, 10) : null;
+                              handleStrategyChange(trade.id, newStrategyId);
+                            }}
                             onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
                             style={{
                               padding: "6px 10px",
                               backgroundColor: "var(--bg-tertiary)",
@@ -715,11 +735,12 @@ export default function Trades() {
                               fontSize: "13px",
                               cursor: "pointer",
                               minWidth: "120px",
+                              outline: "none",
                             }}
                           >
                             <option value="">Unassigned</option>
                             {strategies.map((strategy) => (
-                              <option key={strategy.id} value={strategy.id}>
+                              <option key={strategy.id} value={String(strategy.id)}>
                                 {strategy.name}
                               </option>
                             ))}
