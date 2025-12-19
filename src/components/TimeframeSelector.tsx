@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Calendar } from "lucide-react";
 
 export type Timeframe = "all" | "7d" | "30d" | "90d" | "180d" | "1y" | "custom";
@@ -12,36 +12,88 @@ export interface TimeframeSelectorProps {
 }
 
 function DatePicker({ value, onChange }: { value: string; onChange: (date: string) => void }) {
-  const [year, setYear] = useState<string>("");
-  const [month, setMonth] = useState<string>("");
-  const [day, setDay] = useState<string>("");
-
-  // Parse the date value when it changes
-  useEffect(() => {
-    if (value) {
-      const date = new Date(value);
-      if (!isNaN(date.getTime())) {
-        setYear(date.getFullYear().toString());
-        setMonth((date.getMonth() + 1).toString().padStart(2, "0"));
-        setDay(date.getDate().toString().padStart(2, "0"));
-      }
+  const parseDateValue = (val: string): { year: string; month: string; day: string } => {
+    if (!val) return { year: "", month: "", day: "" };
+    
+    // Parse date string (format: YYYY-MM-DD)
+    // Handle both ISO format and simple date format
+    let date: Date;
+    if (val.includes('T') || val.includes('Z')) {
+      // ISO format with time
+      date = new Date(val);
     } else {
-      setYear("");
-      setMonth("");
-      setDay("");
+      // Simple date format YYYY-MM-DD - parse in local timezone
+      const parts = val.split('-').map(Number);
+      if (parts.length === 3) {
+        date = new Date(parts[0], parts[1] - 1, parts[2]);
+      } else {
+        date = new Date(val);
+      }
+    }
+    
+    if (!isNaN(date.getTime())) {
+      return {
+        year: date.getFullYear().toString(),
+        month: (date.getMonth() + 1).toString().padStart(2, "0"),
+        day: date.getDate().toString().padStart(2, "0"),
+      };
+    }
+    return { year: "", month: "", day: "" };
+  };
+  
+  const initialDate = parseDateValue(value);
+  const [year, setYear] = useState<string>(initialDate.year);
+  const [month, setMonth] = useState<string>(initialDate.month);
+  const [day, setDay] = useState<string>(initialDate.day);
+  const lastGeneratedDate = useRef<string>("");
+
+  // Parse the date value when it changes from external source (only if different from what we generated)
+  useEffect(() => {
+    // Skip if this value change came from our own onChange call
+    if (value === lastGeneratedDate.current) {
+      return;
+    }
+    
+    if (value) {
+      const parsed = parseDateValue(value);
+      // Update state if different
+      if (year !== parsed.year) setYear(parsed.year);
+      if (month !== parsed.month) setMonth(parsed.month);
+      if (day !== parsed.day) setDay(parsed.day);
+    } else {
+      // Clear if value is empty
+      if (year || month || day) {
+        setYear("");
+        setMonth("");
+        setDay("");
+      }
     }
   }, [value]);
 
-  // Generate date string when year, month, or day changes
+  // Generate date string when year, month, or day changes - confirm immediately when complete
   useEffect(() => {
     if (year && month && day) {
       const dateStr = `${year}-${month}-${day}`;
-      const date = new Date(dateStr);
-      if (!isNaN(date.getTime()) && date.getFullYear().toString() === year) {
-        onChange(dateStr);
+      // Parse in local timezone to validate
+      const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+      // Validate the date is correct
+      if (!isNaN(date.getTime()) && 
+          date.getFullYear().toString() === year &&
+          (date.getMonth() + 1).toString().padStart(2, "0") === month &&
+          date.getDate().toString().padStart(2, "0") === day) {
+        // Always call onChange immediately when we have a valid complete date
+        // The lastGeneratedDate check prevents circular updates from parent
+        if (lastGeneratedDate.current !== dateStr) {
+          lastGeneratedDate.current = dateStr;
+          onChange(dateStr);
+        }
       }
     } else if (!year && !month && !day) {
-      onChange("");
+      // Only clear if value is not already empty
+      if (lastGeneratedDate.current !== "") {
+        lastGeneratedDate.current = "";
+        onChange("");
+      }
     }
   }, [year, month, day, onChange]);
 
@@ -81,12 +133,21 @@ function DatePicker({ value, onChange }: { value: string; onChange: (date: strin
       <select
         value={month}
         onChange={(e) => {
-          setMonth(e.target.value);
+          const newMonth = e.target.value;
+          setMonth(newMonth);
           // Reset day if it's invalid for the new month
           if (year && day) {
-            const maxDays = getDaysInMonth(parseInt(e.target.value), parseInt(year));
+            const maxDays = getDaysInMonth(parseInt(newMonth), parseInt(year));
             if (parseInt(day) > maxDays) {
               setDay(maxDays.toString().padStart(2, "0"));
+            }
+          }
+          // Confirm immediately if we have all three fields
+          if (newMonth && year && day) {
+            const maxDays = getDaysInMonth(parseInt(newMonth), parseInt(year));
+            const validDay = parseInt(day) > maxDays ? maxDays.toString().padStart(2, "0") : day;
+            if (validDay !== day) {
+              setDay(validDay);
             }
           }
         }}
@@ -111,7 +172,11 @@ function DatePicker({ value, onChange }: { value: string; onChange: (date: strin
       <span style={{ color: "var(--text-secondary)" }}>/</span>
       <select
         value={day}
-        onChange={(e) => setDay(e.target.value)}
+        onChange={(e) => {
+          setDay(e.target.value);
+          // Confirm immediately when day is selected if we have month and year
+          // The useEffect will handle the onChange call
+        }}
         style={{
           padding: "4px 6px",
           backgroundColor: "var(--bg-tertiary)",
@@ -134,14 +199,17 @@ function DatePicker({ value, onChange }: { value: string; onChange: (date: strin
       <select
         value={year}
         onChange={(e) => {
-          setYear(e.target.value);
+          const newYear = e.target.value;
+          setYear(newYear);
           // Reset day if it's invalid for the new year
           if (month && day) {
-            const maxDays = getDaysInMonth(parseInt(month), parseInt(e.target.value));
+            const maxDays = getDaysInMonth(parseInt(month), parseInt(newYear));
             if (parseInt(day) > maxDays) {
               setDay(maxDays.toString().padStart(2, "0"));
             }
           }
+          // Confirm immediately if we have all three fields
+          // The useEffect will handle the onChange call
         }}
         style={{
           padding: "4px 6px",
@@ -262,7 +330,8 @@ export function TimeframeSelector({
             value={customStartDate || ""}
             onChange={(date) => {
               if (onCustomDatesChange) {
-                onCustomDatesChange(date, customEndDate || "");
+                // Always call with both dates, preserving the other one
+                onCustomDatesChange(date || "", customEndDate || "");
               }
             }}
           />
@@ -271,7 +340,8 @@ export function TimeframeSelector({
             value={customEndDate || ""}
             onChange={(date) => {
               if (onCustomDatesChange) {
-                onCustomDatesChange(customStartDate || "", date);
+                // Always call with both dates, preserving the other one
+                onCustomDatesChange(customStartDate || "", date || "");
               }
             }}
           />
@@ -288,32 +358,44 @@ export function getTimeframeDates(timeframe: Timeframe, customStart?: string, cu
   
   if (timeframe === "custom") {
     if (customStart && customEnd) {
+      // Parse the date strings (format: YYYY-MM-DD)
+      // Create dates in local timezone to avoid UTC conversion issues
+      const [startYear, startMonth, startDay] = customStart.split('-').map(Number);
+      const startDate = new Date(startYear, startMonth - 1, startDay, 0, 0, 0, 0);
+      
+      const [endYear, endMonth, endDay] = customEnd.split('-').map(Number);
+      const endDate = new Date(endYear, endMonth - 1, endDay, 23, 59, 59, 999);
+      
       return {
-        start: new Date(customStart),
-        end: new Date(customEnd),
+        start: startDate,
+        end: endDate,
       };
     }
     return { start: null, end: null };
   }
   
   const end = new Date();
+  end.setHours(23, 59, 59, 999); // End of today
   const start = new Date();
+  start.setHours(0, 0, 0, 0); // Start of day
   
   switch (timeframe) {
     case "7d":
-      start.setDate(end.getDate() - 7);
+      start.setDate(end.getDate() - 6); // Include today, so 6 days ago
       break;
     case "30d":
-      start.setDate(end.getDate() - 30);
+      start.setDate(end.getDate() - 29); // Include today, so 29 days ago
       break;
     case "90d":
-      start.setDate(end.getDate() - 90);
+      start.setDate(end.getDate() - 89); // Include today, so 89 days ago
       break;
     case "180d":
-      start.setDate(end.getDate() - 180);
+      start.setDate(end.getDate() - 179); // Include today, so 179 days ago
       break;
     case "1y":
       start.setFullYear(end.getFullYear() - 1);
+      start.setMonth(end.getMonth());
+      start.setDate(end.getDate());
       break;
     default:
       return { start: null, end: null };

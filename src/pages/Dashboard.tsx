@@ -462,9 +462,13 @@ export default function Dashboard() {
   useEffect(() => {
     if (customStartDate) {
       localStorage.setItem("tradebutler_dashboard_custom_start", customStartDate);
+    } else {
+      localStorage.removeItem("tradebutler_dashboard_custom_start");
     }
     if (customEndDate) {
       localStorage.setItem("tradebutler_dashboard_custom_end", customEndDate);
+    } else {
+      localStorage.removeItem("tradebutler_dashboard_custom_end");
     }
   }, [customStartDate, customEndDate]);
 
@@ -481,6 +485,7 @@ export default function Dashboard() {
   }, [configKey]);
 
   const loadDashboardData = async () => {
+    setLoading(true);
     try {
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
       const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
@@ -593,8 +598,20 @@ export default function Dashboard() {
               customStartDate={customStartDate}
               customEndDate={customEndDate}
               onCustomDatesChange={(start, end) => {
-                setCustomStartDate(start);
-                setCustomEndDate(end);
+                // Ensure we save the dates immediately
+                setCustomStartDate(start || "");
+                setCustomEndDate(end || "");
+                // Also save directly to localStorage to ensure persistence
+                if (start) {
+                  localStorage.setItem("tradebutler_dashboard_custom_start", start);
+                } else {
+                  localStorage.removeItem("tradebutler_dashboard_custom_start");
+                }
+                if (end) {
+                  localStorage.setItem("tradebutler_dashboard_custom_end", end);
+                } else {
+                  localStorage.removeItem("tradebutler_dashboard_custom_end");
+                }
               }}
             />
           </div>

@@ -92,9 +92,13 @@ export default function Trades() {
   useEffect(() => {
     if (customStartDate) {
       localStorage.setItem("tradebutler_trades_custom_start", customStartDate);
+    } else {
+      localStorage.removeItem("tradebutler_trades_custom_start");
     }
     if (customEndDate) {
       localStorage.setItem("tradebutler_trades_custom_end", customEndDate);
+    } else {
+      localStorage.removeItem("tradebutler_trades_custom_end");
     }
   }, [customStartDate, customEndDate]);
 
@@ -276,10 +280,22 @@ export default function Trades() {
           onChange={setTimeframe}
           customStartDate={customStartDate}
           customEndDate={customEndDate}
-          onCustomDatesChange={(start, end) => {
-            setCustomStartDate(start);
-            setCustomEndDate(end);
-          }}
+            onCustomDatesChange={(start, end) => {
+              // Ensure we save the dates immediately
+              setCustomStartDate(start || "");
+              setCustomEndDate(end || "");
+              // Also save directly to localStorage to ensure persistence
+              if (start) {
+                localStorage.setItem("tradebutler_trades_custom_start", start);
+              } else {
+                localStorage.removeItem("tradebutler_trades_custom_start");
+              }
+              if (end) {
+                localStorage.setItem("tradebutler_trades_custom_end", end);
+              } else {
+                localStorage.removeItem("tradebutler_trades_custom_end");
+              }
+            }}
         />
       </div>
 
