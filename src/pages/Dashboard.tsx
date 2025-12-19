@@ -16,6 +16,7 @@ import {
   GripVertical,
 } from "lucide-react";
 import { MetricsConfigPanel, useMetricsConfig } from "../components/MetricsConfig";
+import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { format } from "date-fns";
 
 interface Metrics {
@@ -296,6 +297,16 @@ export default function Dashboard() {
     strategyPerformance: { top: 0, right: 0 },
     recentTrades: { top: 0, right: 0 },
   });
+  const [timeframe, setTimeframe] = useState<Timeframe>(() => {
+    const saved = localStorage.getItem("tradebutler_dashboard_timeframe");
+    return (saved as Timeframe) || "all";
+  });
+  const [customStartDate, setCustomStartDate] = useState<string>(() => {
+    return localStorage.getItem("tradebutler_dashboard_custom_start") || "";
+  });
+  const [customEndDate, setCustomEndDate] = useState<string>(() => {
+    return localStorage.getItem("tradebutler_dashboard_custom_end") || "";
+  });
   
   // Close settings menus when clicking outside
   useEffect(() => {
@@ -442,7 +453,20 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadDashboardData();
-  }, []);
+  }, [timeframe, customStartDate, customEndDate]);
+  
+  useEffect(() => {
+    localStorage.setItem("tradebutler_dashboard_timeframe", timeframe);
+  }, [timeframe]);
+  
+  useEffect(() => {
+    if (customStartDate) {
+      localStorage.setItem("tradebutler_dashboard_custom_start", customStartDate);
+    }
+    if (customEndDate) {
+      localStorage.setItem("tradebutler_dashboard_custom_end", customEndDate);
+    }
+  }, [customStartDate, customEndDate]);
 
   // Re-read dashboard sections from localStorage when config changes
   useEffect(() => {
@@ -459,11 +483,15 @@ export default function Dashboard() {
   const loadDashboardData = async () => {
     try {
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+      const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
+      const startDate = dateRange.start ? dateRange.start.toISOString() : null;
+      const endDate = dateRange.end ? dateRange.end.toISOString() : null;
+      
       const [metricsData, pnlData, strategiesData, tradesData] = await Promise.all([
-        invoke<Metrics>("get_metrics", { pairingMethod }),
-        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod }),
-        invoke<StrategyPerformance[]>("get_strategy_performance"),
-        invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod }),
+        invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate }),
+        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate }),
+        invoke<StrategyPerformance[]>("get_strategy_performance", { startDate, endDate }),
+        invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate }),
       ]);
       setMetrics(metricsData);
       
@@ -529,13 +557,13 @@ export default function Dashboard() {
   };
 
   return (
-    <div style={{ padding: "30px", overflowY: "auto", height: "100%" }}>
+      <div style={{ padding: "30px", overflowY: "auto", height: "100%" }}>
           <div
             style={{
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              marginBottom: "30px",
+              marginBottom: "20px",
             }}
           >
             <h1 style={{ fontSize: "32px", fontWeight: "bold" }}>Dashboard</h1>
@@ -557,6 +585,18 @@ export default function Dashboard() {
               <Settings size={16} />
               Configure
             </button>
+          </div>
+          <div style={{ marginBottom: "30px" }}>
+            <TimeframeSelector
+              value={timeframe}
+              onChange={setTimeframe}
+              customStartDate={customStartDate}
+              customEndDate={customEndDate}
+              onCustomDatesChange={(start, end) => {
+                setCustomStartDate(start);
+                setCustomEndDate(end);
+              }}
+            />
           </div>
 
       {/* Metrics Cards */}

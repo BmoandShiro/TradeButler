@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
 import { ChevronDown, ChevronRight, TrendingUp, TrendingDown } from "lucide-react";
+import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 
 interface Trade {
   id: number;
@@ -69,16 +70,43 @@ export default function Trades() {
     return (saved === "Pair" ? "Pair" : "Individual") as "Individual" | "Pair";
   });
   const [expandedTrades, setExpandedTrades] = useState<Set<number>>(new Set());
+  const [timeframe, setTimeframe] = useState<Timeframe>(() => {
+    const saved = localStorage.getItem("tradebutler_trades_timeframe");
+    return (saved as Timeframe) || "all";
+  });
+  const [customStartDate, setCustomStartDate] = useState<string>(() => {
+    return localStorage.getItem("tradebutler_trades_custom_start") || "";
+  });
+  const [customEndDate, setCustomEndDate] = useState<string>(() => {
+    return localStorage.getItem("tradebutler_trades_custom_end") || "";
+  });
 
   useEffect(() => {
     loadData();
-  }, [pairingMethod, viewMode]);
+  }, [pairingMethod, viewMode, timeframe, customStartDate, customEndDate]);
+  
+  useEffect(() => {
+    localStorage.setItem("tradebutler_trades_timeframe", timeframe);
+  }, [timeframe]);
+  
+  useEffect(() => {
+    if (customStartDate) {
+      localStorage.setItem("tradebutler_trades_custom_start", customStartDate);
+    }
+    if (customEndDate) {
+      localStorage.setItem("tradebutler_trades_custom_end", customEndDate);
+    }
+  }, [customStartDate, customEndDate]);
 
   const loadData = async () => {
     try {
+      const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
+      const startDate = dateRange.start ? dateRange.start.toISOString() : null;
+      const endDate = dateRange.end ? dateRange.end.toISOString() : null;
+      
       const [tradesData, positionsData, strategiesData] = await Promise.all([
-        invoke<TradeWithPairing[]>("get_trades_with_pairing", { pairing_method: pairingMethod }),
-        invoke<PositionGroup[]>("get_position_groups", { pairing_method: pairingMethod }),
+        invoke<TradeWithPairing[]>("get_trades_with_pairing", { pairing_method: pairingMethod, startDate, endDate }),
+        invoke<PositionGroup[]>("get_position_groups", { pairing_method: pairingMethod, startDate, endDate }),
         invoke<Strategy[]>("get_strategies"),
       ]);
       setTradesWithPairing(tradesData);
@@ -147,9 +175,9 @@ export default function Trades() {
 
   return (
     <div style={{ padding: "30px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "30px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
         <h1 style={{ fontSize: "32px", fontWeight: "bold" }}>Trades</h1>
-        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <span style={{ fontSize: "14px", color: "var(--text-secondary)" }}>View:</span>
             <div
@@ -241,6 +269,18 @@ export default function Trades() {
             </div>
           </div>
         </div>
+      </div>
+      <div style={{ marginBottom: "30px" }}>
+        <TimeframeSelector
+          value={timeframe}
+          onChange={setTimeframe}
+          customStartDate={customStartDate}
+          customEndDate={customEndDate}
+          onCustomDatesChange={(start, end) => {
+            setCustomStartDate(start);
+            setCustomEndDate(end);
+          }}
+        />
       </div>
 
       {viewMode === "Pair" ? (
