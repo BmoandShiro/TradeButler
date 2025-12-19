@@ -1825,56 +1825,139 @@ pub struct StrategyPerformance {
 }
 
 #[tauri::command]
-pub fn get_strategy_performance(start_date: Option<String>, end_date: Option<String>) -> Result<Vec<StrategyPerformance>, String> {
+pub fn get_strategy_performance(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>) -> Result<Vec<StrategyPerformance>, String> {
+    use std::collections::HashMap;
+    
+    // Get paired trades using the pairing method
+    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    
+    // Filter paired trades by date range if provided
+    let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
+        paired_trades.into_iter().filter(|pair| {
+            let exit_date = &pair.exit_timestamp;
+            let in_range = if let Some(start) = &start_date {
+                exit_date >= start
+            } else {
+                true
+            } && if let Some(end) = &end_date {
+                exit_date <= end
+            } else {
+                true
+            };
+            in_range
+        }).collect()
+    } else {
+        paired_trades
+    };
+    
+    // Get position groups to find the original entry trade's strategy_id for positions with additions
+    let position_groups = get_position_groups(pairing_method.clone(), start_date.clone(), end_date.clone()).map_err(|e| e.to_string())?;
+    
+    // Create a map: trade_id -> position_group_entry_trade_strategy_id
+    // This maps any trade in a position group to the position group's entry trade's strategy_id
+    let mut trade_to_position_strategy: HashMap<i64, Option<i64>> = HashMap::new();
+    for group in &position_groups {
+        let position_strategy_id = group.entry_trade.strategy_id;
+        for trade in &group.position_trades {
+            if let Some(trade_id) = trade.id {
+                trade_to_position_strategy.insert(trade_id, position_strategy_id);
+            }
+        }
+    }
+    
+    // Get strategy names from database
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
-    // Build date filter clause
-    let date_filter = if start_date.is_some() || end_date.is_some() {
-        let mut filter = String::from(" WHERE 1=1");
-        if let Some(start) = &start_date {
-            filter.push_str(&format!(" AND t.timestamp >= '{}'", start));
-        }
-        if let Some(end) = &end_date {
-            filter.push_str(&format!(" AND t.timestamp <= '{}'", end));
-        }
-        filter
-    } else {
-        String::new()
-    };
-    
     let mut stmt = conn
-        .prepare(&format!(
-            "SELECT 
-                t.strategy_id,
-                COALESCE(s.name, 'Unassigned') as strategy_name,
-                COUNT(*) as trade_count,
-                SUM(t.quantity * t.price) as total_volume,
-                SUM(CASE WHEN t.side = 'SELL' THEN t.quantity * t.price ELSE -(t.quantity * t.price) END) as estimated_pnl
-            FROM trades t
-            LEFT JOIN strategies s ON t.strategy_id = s.id{}
-            GROUP BY t.strategy_id, strategy_name
-            ORDER BY trade_count DESC",
-            date_filter
-        ))
+        .prepare("SELECT id, name FROM strategies")
         .map_err(|e| e.to_string())?;
     
-    let perf_iter = stmt
+    let strategy_iter = stmt
         .query_map([], |row| {
-            Ok(StrategyPerformance {
-                strategy_id: row.get(0)?,
-                strategy_name: row.get(1)?,
-                trade_count: row.get(2)?,
-                total_volume: row.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
-                estimated_pnl: row.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
-            })
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })
         .map_err(|e| e.to_string())?;
     
-    let mut performance = Vec::new();
-    for perf in perf_iter {
-        performance.push(perf.map_err(|e| e.to_string())?);
+    let mut strategy_names: HashMap<i64, String> = HashMap::new();
+    for strategy_result in strategy_iter {
+        let (id, name) = strategy_result.map_err(|e| e.to_string())?;
+        strategy_names.insert(id, name);
     }
+    
+    // Get all unique entry trade IDs
+    let entry_trade_ids: Vec<i64> = filtered_paired_trades
+        .iter()
+        .map(|p| p.entry_trade_id)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    
+    // Batch lookup entry trade strategy_ids from database
+    let mut entry_trade_strategies: HashMap<i64, Option<i64>> = HashMap::new();
+    if !entry_trade_ids.is_empty() {
+        // Query each entry trade individually (simple and reliable)
+        let mut entry_trade_stmt = conn
+            .prepare("SELECT strategy_id FROM trades WHERE id = ?")
+            .map_err(|e| e.to_string())?;
+        
+        for entry_trade_id in &entry_trade_ids {
+            if let Ok(strategy_id) = entry_trade_stmt.query_row([entry_trade_id], |row| {
+                row.get::<_, Option<i64>>(0)
+            }) {
+                entry_trade_strategies.insert(*entry_trade_id, strategy_id);
+            }
+        }
+    }
+    
+    // Group paired trades by strategy_id and calculate performance
+    // For positions with additions, use the position group's entry trade strategy_id
+    let mut strategy_map: HashMap<Option<i64>, StrategyPerformance> = HashMap::new();
+    
+    for paired in &filtered_paired_trades {
+        // First, try to get strategy_id from position group (for positions with additions)
+        // This ensures we use the original entry trade's strategy_id, not a later add's strategy_id
+        let strategy_id = trade_to_position_strategy
+            .get(&paired.entry_trade_id)
+            .copied()
+            .flatten()
+            // Fallback to direct entry trade lookup
+            .or_else(|| {
+                entry_trade_strategies
+                    .get(&paired.entry_trade_id)
+                    .copied()
+                    .flatten()
+            })
+            // Final fallback to paired trade's strategy_id
+            .or(paired.strategy_id);
+        
+        let entry = strategy_map.entry(strategy_id).or_insert_with(|| {
+            let strategy_name = if let Some(id) = strategy_id {
+                strategy_names.get(&id).cloned().unwrap_or_else(|| "Unknown".to_string())
+            } else {
+                "Unassigned".to_string()
+            };
+            
+            StrategyPerformance {
+                strategy_id,
+                strategy_name,
+                trade_count: 0,
+                total_volume: 0.0,
+                estimated_pnl: 0.0,
+            }
+        });
+        
+        // Count closed positions (pairs), not individual trades
+        entry.trade_count += 1;
+        // Calculate volume from the paired trade
+        entry.total_volume += paired.quantity * paired.entry_price;
+        // Use actual net_profit_loss from paired trades
+        entry.estimated_pnl += paired.net_profit_loss;
+    }
+    
+    // Convert to vector and sort by trade count descending
+    let mut performance: Vec<StrategyPerformance> = strategy_map.into_values().collect();
+    performance.sort_by(|a, b| b.trade_count.cmp(&a.trade_count));
     
     Ok(performance)
 }

@@ -536,7 +536,7 @@ export default function Dashboard() {
       const [metricsData, pnlData, strategiesData, tradesData, allTradesData] = await Promise.all([
         invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate }),
         invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate }),
-        invoke<StrategyPerformance[]>("get_strategy_performance", { startDate, endDate }),
+        invoke<StrategyPerformance[]>("get_strategy_performance", { pairingMethod, startDate, endDate }),
         invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate }),
         invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate }),
       ]);
