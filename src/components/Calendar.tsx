@@ -103,9 +103,73 @@ export default function Calendar() {
         >
           <ChevronLeft size={20} />
         </button>
-        <h2 style={{ fontSize: "20px", fontWeight: "600" }}>
-          {format(currentDate, "MMMM yyyy")}
-        </h2>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <select
+            value={currentDate.getMonth()}
+            onChange={(e) => {
+              const newMonth = parseInt(e.target.value);
+              setCurrentDate(new Date(currentDate.getFullYear(), newMonth, 1));
+            }}
+            style={{
+              padding: "8px 12px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--text-primary)",
+              fontSize: "16px",
+              fontWeight: "600",
+              cursor: "pointer",
+              outline: "none",
+            }}
+          >
+            {[
+              "January",
+              "February",
+              "March",
+              "April",
+              "May",
+              "June",
+              "July",
+              "August",
+              "September",
+              "October",
+              "November",
+              "December",
+            ].map((month, index) => (
+              <option key={month} value={index}>
+                {month}
+              </option>
+            ))}
+          </select>
+          <select
+            value={currentDate.getFullYear()}
+            onChange={(e) => {
+              const newYear = parseInt(e.target.value);
+              setCurrentDate(new Date(newYear, currentDate.getMonth(), 1));
+            }}
+            style={{
+              padding: "8px 12px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--text-primary)",
+              fontSize: "16px",
+              fontWeight: "600",
+              cursor: "pointer",
+              outline: "none",
+              minWidth: "90px",
+            }}
+          >
+            {Array.from({ length: 30 }, (_, i) => {
+              const year = new Date().getFullYear() - 10 + i;
+              return (
+                <option key={year} value={year}>
+                  {year}
+                </option>
+              );
+            })}
+          </select>
+        </div>
         <button
           onClick={nextMonth}
           style={{

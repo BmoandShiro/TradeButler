@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Calendar } from "lucide-react";
 
 export type Timeframe = "all" | "7d" | "30d" | "90d" | "180d" | "1y" | "custom";
@@ -9,6 +9,161 @@ export interface TimeframeSelectorProps {
   customStartDate?: string;
   customEndDate?: string;
   onCustomDatesChange?: (start: string, end: string) => void;
+}
+
+function DatePicker({ value, onChange }: { value: string; onChange: (date: string) => void }) {
+  const [year, setYear] = useState<string>("");
+  const [month, setMonth] = useState<string>("");
+  const [day, setDay] = useState<string>("");
+
+  // Parse the date value when it changes
+  useEffect(() => {
+    if (value) {
+      const date = new Date(value);
+      if (!isNaN(date.getTime())) {
+        setYear(date.getFullYear().toString());
+        setMonth((date.getMonth() + 1).toString().padStart(2, "0"));
+        setDay(date.getDate().toString().padStart(2, "0"));
+      }
+    } else {
+      setYear("");
+      setMonth("");
+      setDay("");
+    }
+  }, [value]);
+
+  // Generate date string when year, month, or day changes
+  useEffect(() => {
+    if (year && month && day) {
+      const dateStr = `${year}-${month}-${day}`;
+      const date = new Date(dateStr);
+      if (!isNaN(date.getTime()) && date.getFullYear().toString() === year) {
+        onChange(dateStr);
+      }
+    } else if (!year && !month && !day) {
+      onChange("");
+    }
+  }, [year, month, day, onChange]);
+
+  // Generate year options (last 20 years to next 5 years)
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: 26 }, (_, i) => currentYear - 20 + i);
+
+  // Generate month options
+  const months = Array.from({ length: 12 }, (_, i) => (i + 1).toString().padStart(2, "0"));
+
+  // Generate day options based on month and year
+  const getDaysInMonth = (monthNum: number, yearNum: number) => {
+    return new Date(yearNum, monthNum, 0).getDate();
+  };
+
+  const days = year && month
+    ? Array.from(
+        { length: getDaysInMonth(parseInt(month), parseInt(year)) },
+        (_, i) => (i + 1).toString().padStart(2, "0")
+      )
+    : Array.from({ length: 31 }, (_, i) => (i + 1).toString().padStart(2, "0"));
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "4px",
+        padding: "6px 10px",
+        backgroundColor: "var(--bg-secondary)",
+        border: "1px solid var(--border-color)",
+        borderRadius: "4px",
+      }}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <select
+        value={month}
+        onChange={(e) => {
+          setMonth(e.target.value);
+          // Reset day if it's invalid for the new month
+          if (year && day) {
+            const maxDays = getDaysInMonth(parseInt(e.target.value), parseInt(year));
+            if (parseInt(day) > maxDays) {
+              setDay(maxDays.toString().padStart(2, "0"));
+            }
+          }
+        }}
+        style={{
+          padding: "4px 6px",
+          backgroundColor: "var(--bg-tertiary)",
+          border: "none",
+          borderRadius: "3px",
+          color: "var(--text-primary)",
+          fontSize: "13px",
+          cursor: "pointer",
+          outline: "none",
+        }}
+      >
+        <option value="">MM</option>
+        {months.map((m) => (
+          <option key={m} value={m}>
+            {m}
+          </option>
+        ))}
+      </select>
+      <span style={{ color: "var(--text-secondary)" }}>/</span>
+      <select
+        value={day}
+        onChange={(e) => setDay(e.target.value)}
+        style={{
+          padding: "4px 6px",
+          backgroundColor: "var(--bg-tertiary)",
+          border: "none",
+          borderRadius: "3px",
+          color: "var(--text-primary)",
+          fontSize: "13px",
+          cursor: "pointer",
+          outline: "none",
+        }}
+      >
+        <option value="">DD</option>
+        {days.map((d) => (
+          <option key={d} value={d}>
+            {d}
+          </option>
+        ))}
+      </select>
+      <span style={{ color: "var(--text-secondary)" }}>/</span>
+      <select
+        value={year}
+        onChange={(e) => {
+          setYear(e.target.value);
+          // Reset day if it's invalid for the new year
+          if (month && day) {
+            const maxDays = getDaysInMonth(parseInt(month), parseInt(e.target.value));
+            if (parseInt(day) > maxDays) {
+              setDay(maxDays.toString().padStart(2, "0"));
+            }
+          }
+        }}
+        style={{
+          padding: "4px 6px",
+          backgroundColor: "var(--bg-tertiary)",
+          border: "none",
+          borderRadius: "3px",
+          color: "var(--text-primary)",
+          fontSize: "13px",
+          cursor: "pointer",
+          outline: "none",
+          minWidth: "70px",
+        }}
+      >
+        <option value="">YYYY</option>
+        {years.map((y) => (
+          <option key={y} value={y.toString()}>
+            {y}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
 }
 
 export function TimeframeSelector({
@@ -103,57 +258,21 @@ export function TimeframeSelector({
       </div>
       {value === "custom" && (
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <input
-            type="date"
+          <DatePicker
             value={customStartDate || ""}
-            onChange={(e) => {
+            onChange={(date) => {
               if (onCustomDatesChange) {
-                onCustomDatesChange(e.target.value, customEndDate || "");
+                onCustomDatesChange(date, customEndDate || "");
               }
-            }}
-            onFocus={(e) => {
-              e.stopPropagation();
-              e.currentTarget.select();
-            }}
-            onClick={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
-            style={{
-              padding: "6px 10px",
-              backgroundColor: "var(--bg-secondary)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "4px",
-              color: "var(--text-primary)",
-              fontSize: "13px",
-              cursor: "text",
-              outline: "none",
             }}
           />
           <span style={{ color: "var(--text-secondary)" }}>to</span>
-          <input
-            type="date"
+          <DatePicker
             value={customEndDate || ""}
-            onChange={(e) => {
+            onChange={(date) => {
               if (onCustomDatesChange) {
-                onCustomDatesChange(customStartDate || "", e.target.value);
+                onCustomDatesChange(customStartDate || "", date);
               }
-            }}
-            onFocus={(e) => {
-              e.stopPropagation();
-              e.currentTarget.select();
-            }}
-            onClick={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
-            style={{
-              padding: "6px 10px",
-              backgroundColor: "var(--bg-secondary)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "4px",
-              color: "var(--text-primary)",
-              fontSize: "13px",
-              cursor: "text",
-              outline: "none",
             }}
           />
         </div>
