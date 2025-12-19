@@ -121,10 +121,10 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange }: MetricsC
       try {
         return JSON.parse(saved);
       } catch {
-        return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true };
+        return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true, showTrades: true };
       }
     }
-    return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true };
+    return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true, showTrades: true };
   });
   
   const toggleDashboardSection = (section: string) => {
@@ -364,6 +364,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange }: MetricsC
               { id: "showTopSymbols", label: "Top Symbols" },
               { id: "showStrategyPerformance", label: "Strategy Performance" },
               { id: "showRecentTrades", label: "Recent Trades" },
+              { id: "showTrades", label: "Trades" },
             ].map((section) => (
               <label
                 key={section.id}

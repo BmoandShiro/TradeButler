@@ -132,6 +132,10 @@ pub struct Metrics {
     pub trades_per_day: f64,
     pub best_day: f64,
     pub worst_day: f64,
+    pub best_day_date: Option<String>,
+    pub worst_day_date: Option<String>,
+    pub largest_win_group_id: Option<i64>,
+    pub largest_loss_group_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1324,10 +1328,6 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
         String::new()
     };
     
-    let total_trades: i64 = conn
-        .query_row(&format!("SELECT COUNT(*) FROM trades{}", date_filter), [], |row| row.get(0))
-        .map_err(|e| e.to_string())?;
-    
     let total_volume: f64 = conn
         .query_row(&format!("SELECT SUM(quantity * price) FROM trades{}", date_filter), [], |row| {
             Ok(row.get::<_, Option<f64>>(0)?.unwrap_or(0.0))
@@ -1356,6 +1356,9 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
         paired_trades
     };
     
+    // Total trades should count pairs, not individual trades
+    let total_trades = filtered_paired_trades.len() as i64;
+    
     // Get position groups to calculate largest win/loss per position (not per pair)
     let position_groups = get_position_groups(pairing_method, start_date.clone(), end_date.clone()).map_err(|e| e.to_string())?;
     
@@ -1374,17 +1377,24 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
     let mut current_loss_streak = 0;
     
     // Calculate largest win/loss from position groups (complete positions, not individual pairs)
+    let mut largest_win_group_id: Option<i64> = None;
+    let mut largest_loss_group_id: Option<i64> = None;
+    
     for group in &position_groups {
         let position_pnl = group.total_pnl;
         
         if position_pnl > 0.0 {
             if position_pnl > largest_win {
                 largest_win = position_pnl;
+                // Track the entry trade ID to identify this position group
+                largest_win_group_id = group.entry_trade.id;
             }
         } else if position_pnl < 0.0 {
             // largest_loss should be the actual loss value (negative) per position
             if largest_loss == f64::NEG_INFINITY || position_pnl < largest_loss {
                 largest_loss = position_pnl; // Store as negative value (most negative = largest loss)
+                // Track the entry trade ID to identify this position group
+                largest_loss_group_id = group.entry_trade.id;
             }
         }
     }
@@ -1539,19 +1549,43 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
     let sharpe_ratio = 0.0; // TODO: Implement proper Sharpe ratio calculation
     
     // Get daily P&L for best/worst day and trades per day
-    let daily_pnl = get_daily_pnl().unwrap_or_default();
+    // Filter daily P&L by date range if provided
+    let mut daily_pnl = get_daily_pnl().unwrap_or_default();
     
-    let best_day = daily_pnl.iter()
-        .map(|d| d.profit_loss)
-        .fold(f64::NEG_INFINITY, |a, b| a.max(b));
-    let best_day_value = if best_day == f64::NEG_INFINITY { 0.0 } else { best_day };
+    // Filter by date range if provided
+    if start_date.is_some() || end_date.is_some() {
+        daily_pnl.retain(|d| {
+            let day_date = &d.date;
+            let in_range = if let Some(start) = &start_date {
+                day_date >= start
+            } else {
+                true
+            } && if let Some(end) = &end_date {
+                day_date <= end
+            } else {
+                true
+            };
+            in_range
+        });
+    }
     
-    let worst_day = daily_pnl.iter()
-        .map(|d| d.profit_loss)
-        .fold(f64::INFINITY, |a, b| a.min(b));
-    let worst_day_value = if worst_day == f64::INFINITY { 0.0 } else { worst_day };
+    // Find best day and its date
+    let mut best_day_value = 0.0;
+    let mut best_day_date: Option<String> = None;
+    if let Some(best) = daily_pnl.iter().max_by(|a, b| a.profit_loss.partial_cmp(&b.profit_loss).unwrap_or(std::cmp::Ordering::Equal)) {
+        best_day_value = best.profit_loss;
+        best_day_date = Some(best.date.clone());
+    }
     
-    // Trades per day = total trades / number of trading days
+    // Find worst day and its date
+    let mut worst_day_value = 0.0;
+    let mut worst_day_date: Option<String> = None;
+    if let Some(worst) = daily_pnl.iter().min_by(|a, b| a.profit_loss.partial_cmp(&b.profit_loss).unwrap_or(std::cmp::Ordering::Equal)) {
+        worst_day_value = worst.profit_loss;
+        worst_day_date = Some(worst.date.clone());
+    }
+    
+    // Trades per day = total trades (pairs) / number of trading days
     let trading_days = daily_pnl.len() as f64;
     let trades_per_day = if trading_days > 0.0 {
         total_trades as f64 / trading_days
@@ -1592,6 +1626,10 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
         trades_per_day,
         best_day: best_day_value,
         worst_day: worst_day_value,
+        best_day_date,
+        worst_day_date,
+        largest_win_group_id,
+        largest_loss_group_id,
     })
 }
 

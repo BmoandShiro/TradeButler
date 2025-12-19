@@ -52,6 +52,10 @@ interface Metrics {
   trades_per_day: number;
   best_day: number;
   worst_day: number;
+  best_day_date?: string | null;
+  worst_day_date?: string | null;
+  largest_win_group_id?: number | null;
+  largest_loss_group_id?: number | null;
 }
 
 interface TopSymbol {
@@ -225,23 +229,32 @@ interface DashboardSections {
   showTopSymbols: boolean;
   showStrategyPerformance: boolean;
   showRecentTrades: boolean;
+  showTrades: boolean;
 }
 
 const defaultDashboardSections: DashboardSections = {
   showTopSymbols: true,
   showStrategyPerformance: true,
   showRecentTrades: true,
+  showTrades: true,
 };
 
-type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades";
+type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades" | "trades";
 
-const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades"];
+const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades"];
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [topSymbols, setTopSymbols] = useState<TopSymbol[]>([]);
   const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformance[]>([]);
   const [recentTrades, setRecentTrades] = useState<RecentTrade[]>([]);
+  const [trades, setTrades] = useState<RecentTrade[]>([]);
+  const [expandedTrades, setExpandedTrades] = useState<Set<number>>(new Set());
+  const [tradesPerPage, setTradesPerPage] = useState<number>(() => {
+    const saved = localStorage.getItem("tradebutler_trades_per_page");
+    return saved ? parseInt(saved, 10) : 20;
+  });
+  const [currentTradesPage, setCurrentTradesPage] = useState<number>(1);
   const [loading, setLoading] = useState(true);
   const [showMetricsConfig, setShowMetricsConfig] = useState(false);
   const [configKey, setConfigKey] = useState(0); // Force re-render when config changes
@@ -263,9 +276,10 @@ export default function Dashboard() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        // Validate that all sections are present
-        const validOrder = defaultSectionOrder.filter(id => parsed.includes(id));
-        const missing = defaultSectionOrder.filter(id => !parsed.includes(id));
+        // Validate that all sections are present - include all possible sections
+        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades"];
+        const validOrder = allSections.filter(id => parsed.includes(id));
+        const missing = allSections.filter(id => !parsed.includes(id));
         return [...validOrder, ...missing];
       } catch {
         return defaultSectionOrder;
@@ -296,6 +310,7 @@ export default function Dashboard() {
     topSymbols: { top: 0, right: 0 },
     strategyPerformance: { top: 0, right: 0 },
     recentTrades: { top: 0, right: 0 },
+    trades: { top: 0, right: 0 },
   });
   const [timeframe, setTimeframe] = useState<Timeframe>(() => {
     const saved = localStorage.getItem("tradebutler_dashboard_timeframe");
@@ -307,6 +322,9 @@ export default function Dashboard() {
   const [customEndDate, setCustomEndDate] = useState<string>(() => {
     return localStorage.getItem("tradebutler_dashboard_custom_end") || "";
   });
+  const [showPositionGroupModal, setShowPositionGroupModal] = useState(false);
+  const [selectedPositionGroupId, setSelectedPositionGroupId] = useState<number | null>(null);
+  const [selectedPositionGroup, setSelectedPositionGroup] = useState<any>(null);
   
   // Close settings menus when clicking outside
   useEffect(() => {
@@ -453,6 +471,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadDashboardData();
+    // Reset to first page when timeframe changes
+    setCurrentTradesPage(1);
   }, [timeframe, customStartDate, customEndDate]);
   
   useEffect(() => {
@@ -477,7 +497,28 @@ export default function Dashboard() {
     const saved = localStorage.getItem(DASHBOARD_SECTIONS_KEY);
     if (saved) {
       try {
-        setDashboardSections({ ...defaultDashboardSections, ...JSON.parse(saved) });
+        const newSections = { ...defaultDashboardSections, ...JSON.parse(saved) };
+        setDashboardSections(newSections);
+        
+        // Ensure all enabled sections are in the sectionOrder
+        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades"];
+        setSectionOrder(prevOrder => {
+          const enabledSections = allSections.filter(id => {
+            const key = `show${id.charAt(0).toUpperCase() + id.slice(1)}` as keyof typeof newSections;
+            return newSections[key] !== false;
+          });
+          
+          // Keep existing order for sections that are still enabled, add new ones at the end
+          const existingOrder = prevOrder.filter(id => enabledSections.includes(id));
+          const missing = enabledSections.filter(id => !existingOrder.includes(id));
+          const newOrder = [...existingOrder, ...missing];
+          
+          if (JSON.stringify(newOrder) !== JSON.stringify(prevOrder)) {
+            localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+            return newOrder;
+          }
+          return prevOrder;
+        });
       } catch {
         // Keep current state
       }
@@ -492,11 +533,12 @@ export default function Dashboard() {
       const startDate = dateRange.start ? dateRange.start.toISOString() : null;
       const endDate = dateRange.end ? dateRange.end.toISOString() : null;
       
-      const [metricsData, pnlData, strategiesData, tradesData] = await Promise.all([
+      const [metricsData, pnlData, strategiesData, tradesData, allTradesData] = await Promise.all([
         invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate }),
         invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate }),
         invoke<StrategyPerformance[]>("get_strategy_performance", { startDate, endDate }),
         invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate }),
+        invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate }),
       ]);
       setMetrics(metricsData);
       
@@ -512,6 +554,11 @@ export default function Dashboard() {
       setTopSymbols(topSymbolsData);
       setStrategyPerformance(strategiesData);
       setRecentTrades(tradesData);
+      // Sort all trades by exit timestamp (most recent first)
+      const sortedTrades = [...allTradesData].sort((a, b) => 
+        new Date(b.exit_timestamp).getTime() - new Date(a.exit_timestamp).getTime()
+      );
+      setTrades(sortedTrades);
     } catch (error) {
       console.error("Error loading dashboard data:", error);
     } finally {
@@ -783,7 +830,66 @@ export default function Dashboard() {
               >
                 <Icon size={24} />
               </div>
-              <div style={{ flex: 1, pointerEvents: "none" }}>
+              <div 
+                style={{ 
+                  flex: 1, 
+                  pointerEvents: (metric.id === "best_day" || metric.id === "worst_day" || metric.id === "largest_win" || metric.id === "largest_loss") ? "auto" : "none",
+                  cursor: (metric.id === "best_day" || metric.id === "worst_day" || metric.id === "largest_win" || metric.id === "largest_loss") ? "pointer" : "default",
+                }}
+                onClick={async (e) => {
+                  if (metric.id === "best_day" && metrics?.best_day_date) {
+                    e.stopPropagation();
+                    // Set timeframe to that specific day
+                    setTimeframe("custom");
+                    setCustomStartDate(metrics.best_day_date);
+                    setCustomEndDate(metrics.best_day_date);
+                    localStorage.setItem("tradebutler_dashboard_timeframe", "custom");
+                    localStorage.setItem("tradebutler_dashboard_custom_start", metrics.best_day_date);
+                    localStorage.setItem("tradebutler_dashboard_custom_end", metrics.best_day_date);
+                  } else if (metric.id === "worst_day" && metrics?.worst_day_date) {
+                    e.stopPropagation();
+                    // Set timeframe to that specific day
+                    setTimeframe("custom");
+                    setCustomStartDate(metrics.worst_day_date);
+                    setCustomEndDate(metrics.worst_day_date);
+                    localStorage.setItem("tradebutler_dashboard_timeframe", "custom");
+                    localStorage.setItem("tradebutler_dashboard_custom_start", metrics.worst_day_date);
+                    localStorage.setItem("tradebutler_dashboard_custom_end", metrics.worst_day_date);
+                  } else if (metric.id === "largest_win" && metrics?.largest_win_group_id) {
+                    e.stopPropagation();
+                    // Show position group details
+                    setSelectedPositionGroupId(metrics.largest_win_group_id);
+                    setShowPositionGroupModal(true);
+                    // Load position group details
+                    try {
+                      const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+                      const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null });
+                      const group = groups.find(g => g.entry_trade.id === metrics.largest_win_group_id);
+                      if (group) {
+                        setSelectedPositionGroup(group);
+                      }
+                    } catch (error) {
+                      console.error("Error loading position group:", error);
+                    }
+                  } else if (metric.id === "largest_loss" && metrics?.largest_loss_group_id) {
+                    e.stopPropagation();
+                    // Show position group details
+                    setSelectedPositionGroupId(metrics.largest_loss_group_id);
+                    setShowPositionGroupModal(true);
+                    // Load position group details
+                    try {
+                      const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+                      const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null });
+                      const group = groups.find(g => g.entry_trade.id === metrics.largest_loss_group_id);
+                      if (group) {
+                        setSelectedPositionGroup(group);
+                      }
+                    } catch (error) {
+                      console.error("Error loading position group:", error);
+                    }
+                  }
+                }}
+              >
                 <p
                   style={{
                     fontSize: "14px",
@@ -1656,6 +1762,396 @@ export default function Dashboard() {
               </div>
             );
           }
+          
+          // Trades Section
+          if (sectionId === "trades" && dashboardSections.showTrades) {
+            return (
+              <div
+                key="trades"
+                draggable
+                onDragStart={(e) => {
+                  setDraggedSection("trades");
+                  draggedMetricRef.current = null;
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (draggedSection && draggedSection !== "trades") {
+                    setDragOverSection("trades");
+                  }
+                }}
+                onDragLeave={() => {
+                  setDragOverSection(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (draggedSection && draggedSection !== "trades") {
+                    const dragged = draggedSection;
+                    const newOrder = [...sectionOrder];
+                    const draggedIndex = newOrder.indexOf(dragged);
+                    const targetIndex = newOrder.indexOf("trades");
+                    newOrder.splice(draggedIndex, 1);
+                    newOrder.splice(targetIndex, 0, dragged);
+                    setSectionOrder(newOrder);
+                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                  }
+                  setDraggedSection(null);
+                  setDragOverSection(null);
+                }}
+                onDragEnd={() => {
+                  setDraggedSection(null);
+                  setDragOverSection(null);
+                }}
+                style={{
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "20px",
+                  cursor: "grab",
+                  opacity: draggedSection === "trades" ? 0.5 : 1,
+                  borderColor: dragOverSection === "trades" ? "var(--accent)" : "var(--border-color)",
+                  borderWidth: dragOverSection === "trades" ? "2px" : "1px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
+                    <Activity size={20} color="var(--accent)" />
+                    <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Trades</h2>
+                  </div>
+                  <div style={{ position: "relative" }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setSectionMenuPosition({
+                          ...sectionMenuPosition,
+                          trades: {
+                            top: rect.bottom + 4,
+                            right: window.innerWidth - rect.right,
+                          },
+                        });
+                        setOpenSectionSettings(openSectionSettings === "trades" ? null : "trades");
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        padding: "4px",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "4px",
+                      }}
+                      title="Settings"
+                    >
+                      <Settings size={16} />
+                    </button>
+                    {openSectionSettings === "trades" && createPortal(
+                      <div
+                        data-settings-menu
+                        style={{
+                          position: "fixed",
+                          top: `${sectionMenuPosition.trades.top}px`,
+                          right: `${sectionMenuPosition.trades.right}px`,
+                          backgroundColor: "var(--bg-secondary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "8px",
+                          padding: "8px",
+                          boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                          zIndex: 99999,
+                          minWidth: "120px",
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              const currentIndex = sectionOrder.indexOf("trades");
+                              if (currentIndex > 0) {
+                                const newOrder = [...sectionOrder];
+                                [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
+                                setSectionOrder(newOrder);
+                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                              }
+                              setOpenSectionSettings(null);
+                            }}
+                            disabled={sectionOrder.indexOf("trades") === 0}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: sectionOrder.indexOf("trades") === 0 ? "not-allowed" : "pointer",
+                              color: "var(--text-primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                              opacity: sectionOrder.indexOf("trades") === 0 ? 0.3 : 1,
+                            }}
+                          >
+                            <ChevronUp size={14} />
+                            <span>Move Up</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              const currentIndex = sectionOrder.indexOf("trades");
+                              if (currentIndex < sectionOrder.length - 1) {
+                                const newOrder = [...sectionOrder];
+                                [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
+                                setSectionOrder(newOrder);
+                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                              }
+                              setOpenSectionSettings(null);
+                            }}
+                            disabled={sectionOrder.indexOf("trades") === sectionOrder.length - 1}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: sectionOrder.indexOf("trades") === sectionOrder.length - 1 ? "not-allowed" : "pointer",
+                              color: "var(--text-primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                              opacity: sectionOrder.indexOf("trades") === sectionOrder.length - 1 ? 0.3 : 1,
+                            }}
+                          >
+                            <ChevronDown size={14} />
+                            <span>Move Down</span>
+                          </button>
+                          <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                          <div style={{ padding: "8px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                            <label style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                              Trades Per Page:
+                            </label>
+                            <input
+                              type="number"
+                              min="5"
+                              max="100"
+                              step="5"
+                              value={tradesPerPage}
+                              onChange={(e) => {
+                                const value = Math.max(5, Math.min(100, parseInt(e.target.value) || 20));
+                                setTradesPerPage(value);
+                                localStorage.setItem("tradebutler_trades_per_page", value.toString());
+                                setCurrentTradesPage(1); // Reset to first page when changing page size
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{
+                                padding: "6px 8px",
+                                backgroundColor: "var(--bg-tertiary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "4px",
+                                color: "var(--text-primary)",
+                                fontSize: "13px",
+                                width: "100%",
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </div>,
+                      document.body
+                    )}
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  {trades.length === 0 ? (
+                    <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "20px" }}>
+                      No trades found for the selected timeframe.
+                    </p>
+                  ) : (() => {
+                    // Calculate pagination
+                    const totalPages = Math.ceil(trades.length / tradesPerPage);
+                    const startIndex = (currentTradesPage - 1) * tradesPerPage;
+                    const endIndex = startIndex + tradesPerPage;
+                    const paginatedTrades = trades.slice(startIndex, endIndex);
+                    
+                    return (
+                      <>
+                        {paginatedTrades.map((trade, idx) => {
+                          const actualIndex = startIndex + idx;
+                          const isExpanded = expandedTrades.has(actualIndex);
+                          return (
+                            <div key={`${trade.symbol}-${trade.exit_timestamp}-${actualIndex}`}>
+                              <div
+                                onClick={() => {
+                                  const newExpanded = new Set(expandedTrades);
+                                  if (isExpanded) {
+                                    newExpanded.delete(actualIndex);
+                                  } else {
+                                    newExpanded.add(actualIndex);
+                                  }
+                                  setExpandedTrades(newExpanded);
+                                }}
+                            style={{
+                              padding: "12px",
+                              backgroundColor: "var(--bg-tertiary)",
+                              borderRadius: "6px",
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                            }}
+                          >
+                            {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                            <div style={{ flex: 1, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <p style={{ fontWeight: "600" }}>{trade.symbol}</p>
+                              <p
+                                style={{
+                                  fontSize: "14px",
+                                  fontWeight: "600",
+                                  color: trade.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
+                                }}
+                              >
+                                {trade.net_profit_loss >= 0 ? "+" : ""}${trade.net_profit_loss.toFixed(2)}
+                              </p>
+                            </div>
+                          </div>
+                          {isExpanded && (
+                            <div
+                              style={{
+                                padding: "12px",
+                                paddingLeft: "36px",
+                                backgroundColor: "var(--bg-primary)",
+                                borderBottomLeftRadius: "6px",
+                                borderBottomRightRadius: "6px",
+                                marginTop: "4px",
+                              }}
+                            >
+                              <div style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "12px" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                  <span style={{ color: "var(--text-secondary)" }}>Entry:</span>
+                                  <span style={{ color: "var(--text-primary)" }}>
+                                    {trade.quantity} @ ${trade.entry_price.toFixed(2)}
+                                  </span>
+                                </div>
+                                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                  <span style={{ color: "var(--text-secondary)" }}>Exit:</span>
+                                  <span style={{ color: "var(--text-primary)" }}>
+                                    {trade.quantity} @ ${trade.exit_price.toFixed(2)}
+                                  </span>
+                                </div>
+                                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                  <span style={{ color: "var(--text-secondary)" }}>Closed:</span>
+                                  <span style={{ color: "var(--text-secondary)" }}>
+                                    {format(new Date(trade.exit_timestamp), "MMM d, HH:mm")}
+                                  </span>
+                                </div>
+                              </div>
+                              {trade.strategy_name && (
+                                <p style={{ fontSize: "11px", color: "var(--accent)", marginTop: "8px" }}>
+                                  {trade.strategy_name}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                            </div>
+                          );
+                        })}
+                        {/* Pagination Controls */}
+                        {totalPages > 1 && (
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              gap: "8px",
+                              marginTop: "16px",
+                              paddingTop: "16px",
+                              borderTop: "1px solid var(--border-color)",
+                            }}
+                          >
+                            <button
+                              onClick={() => setCurrentTradesPage(prev => Math.max(1, prev - 1))}
+                              disabled={currentTradesPage === 1}
+                              style={{
+                                background: currentTradesPage === 1 ? "var(--bg-tertiary)" : "var(--bg-secondary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "6px",
+                                padding: "6px 12px",
+                                color: "var(--text-primary)",
+                                cursor: currentTradesPage === 1 ? "not-allowed" : "pointer",
+                                fontSize: "13px",
+                                opacity: currentTradesPage === 1 ? 0.5 : 1,
+                              }}
+                            >
+                              Previous
+                            </button>
+                            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                                let pageNum: number;
+                                if (totalPages <= 5) {
+                                  pageNum = i + 1;
+                                } else if (currentTradesPage <= 3) {
+                                  pageNum = i + 1;
+                                } else if (currentTradesPage >= totalPages - 2) {
+                                  pageNum = totalPages - 4 + i;
+                                } else {
+                                  pageNum = currentTradesPage - 2 + i;
+                                }
+                                
+                                return (
+                                  <button
+                                    key={pageNum}
+                                    onClick={() => setCurrentTradesPage(pageNum)}
+                                    style={{
+                                      background: currentTradesPage === pageNum ? "var(--accent)" : "var(--bg-secondary)",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "6px",
+                                      padding: "6px 12px",
+                                      color: currentTradesPage === pageNum ? "white" : "var(--text-primary)",
+                                      cursor: "pointer",
+                                      fontSize: "13px",
+                                      minWidth: "36px",
+                                    }}
+                                  >
+                                    {pageNum}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <button
+                              onClick={() => setCurrentTradesPage(prev => Math.min(totalPages, prev + 1))}
+                              disabled={currentTradesPage === totalPages}
+                              style={{
+                                background: currentTradesPage === totalPages ? "var(--bg-tertiary)" : "var(--bg-secondary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "6px",
+                                padding: "6px 12px",
+                                color: "var(--text-primary)",
+                                cursor: currentTradesPage === totalPages ? "not-allowed" : "pointer",
+                                fontSize: "13px",
+                                opacity: currentTradesPage === totalPages ? 0.5 : 1,
+                              }}
+                            >
+                              Next
+                            </button>
+                            <span style={{ fontSize: "12px", color: "var(--text-secondary)", marginLeft: "8px" }}>
+                              Page {currentTradesPage} of {totalPages}
+                            </span>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            );
+          }
           return null;
         })}
       </div>
@@ -1668,6 +2164,156 @@ export default function Dashboard() {
             }}
             onConfigChange={() => setConfigKey(prev => prev + 1)}
           />
+        
+        {/* Position Group Detail Modal */}
+        {showPositionGroupModal && selectedPositionGroup && (
+          <div
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: "rgba(0, 0, 0, 0.5)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 10000,
+            }}
+            onClick={() => {
+              setShowPositionGroupModal(false);
+              setSelectedPositionGroup(null);
+              setSelectedPositionGroupId(null);
+            }}
+          >
+            <div
+              style={{
+                backgroundColor: "var(--bg-primary)",
+                borderRadius: "12px",
+                padding: "24px",
+                maxWidth: "800px",
+                maxHeight: "80vh",
+                overflowY: "auto",
+                width: "90%",
+                border: "1px solid var(--border-color)",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+                <h2 style={{ fontSize: "20px", fontWeight: "bold" }}>
+                  {selectedPositionGroup.entry_trade.symbol} - Position Details
+                </h2>
+                <button
+                  onClick={() => {
+                    setShowPositionGroupModal(false);
+                    setSelectedPositionGroup(null);
+                    setSelectedPositionGroupId(null);
+                  }}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    fontSize: "24px",
+                    padding: "0",
+                    width: "32px",
+                    height: "32px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+              
+              <div style={{ marginBottom: "20px" }}>
+                <p style={{ fontSize: "14px", color: "var(--text-secondary)", marginBottom: "8px" }}>Total P&L:</p>
+                <p
+                  style={{
+                    fontSize: "24px",
+                    fontWeight: "bold",
+                    color: selectedPositionGroup.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                  }}
+                >
+                  ${selectedPositionGroup.total_pnl.toFixed(2)}
+                </p>
+              </div>
+              
+              <div style={{ marginBottom: "20px" }}>
+                <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px" }}>Entry Trade</h3>
+                <div
+                  style={{
+                    backgroundColor: "var(--bg-secondary)",
+                    borderRadius: "8px",
+                    padding: "12px",
+                    marginBottom: "12px",
+                  }}
+                >
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", fontSize: "14px" }}>
+                    <div>
+                      <span style={{ color: "var(--text-secondary)" }}>Side: </span>
+                      <span style={{ color: selectedPositionGroup.entry_trade.side === "BUY" ? "var(--profit)" : "var(--loss)" }}>
+                        {selectedPositionGroup.entry_trade.side}
+                      </span>
+                    </div>
+                    <div>
+                      <span style={{ color: "var(--text-secondary)" }}>Quantity: </span>
+                      <span>{selectedPositionGroup.entry_trade.quantity}</span>
+                    </div>
+                    <div>
+                      <span style={{ color: "var(--text-secondary)" }}>Price: </span>
+                      <span>${selectedPositionGroup.entry_trade.price.toFixed(2)}</span>
+                    </div>
+                    <div>
+                      <span style={{ color: "var(--text-secondary)" }}>Date: </span>
+                      <span>{format(new Date(selectedPositionGroup.entry_trade.timestamp), "MMM dd, yyyy HH:mm")}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div>
+                <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px" }}>
+                  Position Trades ({selectedPositionGroup.position_trades.length})
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                  {selectedPositionGroup.position_trades.map((trade: any, idx: number) => (
+                    <div
+                      key={idx}
+                      style={{
+                        backgroundColor: "var(--bg-secondary)",
+                        borderRadius: "8px",
+                        padding: "12px",
+                      }}
+                    >
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", fontSize: "14px" }}>
+                        <div>
+                          <span style={{ color: "var(--text-secondary)" }}>Side: </span>
+                          <span style={{ color: trade.side === "BUY" ? "var(--profit)" : "var(--loss)" }}>
+                            {trade.side}
+                          </span>
+                        </div>
+                        <div>
+                          <span style={{ color: "var(--text-secondary)" }}>Quantity: </span>
+                          <span>{trade.quantity}</span>
+                        </div>
+                        <div>
+                          <span style={{ color: "var(--text-secondary)" }}>Price: </span>
+                          <span>${trade.price.toFixed(2)}</span>
+                        </div>
+                        <div>
+                          <span style={{ color: "var(--text-secondary)" }}>Date: </span>
+                          <span>{format(new Date(trade.timestamp), "MMM dd, yyyy HH:mm")}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
     </div>
   );
 }
