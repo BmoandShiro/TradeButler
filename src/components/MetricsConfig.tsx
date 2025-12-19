@@ -32,8 +32,8 @@ const defaultMetrics: MetricConfig[] = [
   { id: "risk_reward_ratio", label: "Risk/Reward Ratio", enabled: false, category: "Risk" },
   { id: "consecutive_wins", label: "Consecutive Wins", enabled: false, category: "Risk" },
   { id: "consecutive_losses", label: "Consecutive Losses", enabled: false, category: "Risk" },
-  { id: "current_win_streak", label: "Current Win Streak", enabled: false, category: "Risk" },
-  { id: "current_loss_streak", label: "Current Loss Streak", enabled: false, category: "Risk" },
+  { id: "current_win_streak", label: "Win Streak", enabled: true, category: "Performance" },
+  { id: "current_loss_streak", label: "Loss Streak", enabled: true, category: "Performance" },
   
   // Strategy Metrics
   { id: "strategy_win_rate", label: "Strategy Win Rate", enabled: false, category: "Strategy" },
@@ -52,6 +52,7 @@ const defaultMetrics: MetricConfig[] = [
 ];
 
 const STORAGE_KEY = "tradebutler_metrics_config";
+const COLOR_RANGE_KEY = "tradebutler_color_range";
 
 export function useMetricsConfig() {
   const [metrics, setMetrics] = useState<MetricConfig[]>(() => {
@@ -93,10 +94,39 @@ export function useMetricsConfig() {
 interface MetricsConfigPanelProps {
   isOpen: boolean;
   onClose: () => void;
+  onConfigChange?: () => void; // Callback when config changes
 }
 
-export function MetricsConfigPanel({ isOpen, onClose }: MetricsConfigPanelProps) {
+export function MetricsConfigPanel({ isOpen, onClose, onConfigChange }: MetricsConfigPanelProps) {
   const { metrics, toggleMetric, resetToDefaults } = useMetricsConfig();
+  
+  // Color range state
+  const [colorRange, setColorRange] = useState(() => {
+    const saved = localStorage.getItem(COLOR_RANGE_KEY);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return { min: -100, max: 100 };
+      }
+    }
+    return { min: -100, max: 100 };
+  });
+  
+  // Save color range to localStorage
+  useEffect(() => {
+    localStorage.setItem(COLOR_RANGE_KEY, JSON.stringify(colorRange));
+    if (onConfigChange) {
+      onConfigChange();
+    }
+  }, [colorRange, onConfigChange]);
+  
+  // Notify parent when config changes
+  useEffect(() => {
+    if (onConfigChange) {
+      onConfigChange();
+    }
+  }, [metrics, onConfigChange]);
 
   if (!isOpen) return null;
 
@@ -166,7 +196,7 @@ export function MetricsConfigPanel({ isOpen, onClose }: MetricsConfigPanelProps)
           </button>
         </div>
 
-        <div style={{ marginBottom: "16px" }}>
+        <div style={{ marginBottom: "16px", display: "flex", gap: "10px" }}>
           <button
             onClick={resetToDefaults}
             style={{
@@ -181,6 +211,115 @@ export function MetricsConfigPanel({ isOpen, onClose }: MetricsConfigPanelProps)
           >
             Reset to Defaults
           </button>
+        </div>
+
+        {/* Color Range Configuration */}
+        <div style={{ marginBottom: "24px", padding: "20px", backgroundColor: "var(--bg-tertiary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+          <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "8px", color: "var(--text-primary)" }}>
+            Color Range for Dollar Metrics
+          </h3>
+          <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "20px", lineHeight: "1.5" }}>
+            Configure how dollar-based metrics are colored. Values below the minimum will be red, within the range will be blue, and above the maximum will be green.
+          </p>
+          
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            {/* Visual Color Scale */}
+            <div style={{ 
+              display: "flex", 
+              alignItems: "center", 
+              gap: "8px",
+              padding: "12px",
+              backgroundColor: "var(--bg-secondary)",
+              borderRadius: "6px",
+              border: "1px solid var(--border-color)"
+            }}>
+              <div style={{ 
+                flex: 1, 
+                height: "32px", 
+                background: `linear-gradient(to right, var(--loss) 0%, var(--loss) 33%, var(--accent) 33%, var(--accent) 66%, var(--profit) 66%, var(--profit) 100%)`,
+                borderRadius: "4px",
+                border: "1px solid var(--border-color)"
+              }}></div>
+            </div>
+            
+            {/* Range Inputs */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                <label style={{ fontSize: "13px", fontWeight: "500", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <div style={{ width: "16px", height: "16px", backgroundColor: "var(--loss)", borderRadius: "3px" }}></div>
+                  Red Threshold (Minimum)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={colorRange.min}
+                  onChange={(e) => {
+                    const newMin = parseFloat(e.target.value) || 0;
+                    if (newMin < colorRange.max) {
+                      setColorRange({ ...colorRange, min: newMin });
+                    }
+                  }}
+                  style={{
+                    padding: "8px 12px",
+                    backgroundColor: "var(--bg-secondary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-primary)",
+                    fontSize: "14px",
+                    width: "100%",
+                  }}
+                />
+                <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                  Values &lt; {colorRange.min.toFixed(2)} will be <span style={{ color: "var(--loss)" }}>red</span>
+                </div>
+              </div>
+              
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                <label style={{ fontSize: "13px", fontWeight: "500", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <div style={{ width: "16px", height: "16px", backgroundColor: "var(--profit)", borderRadius: "3px" }}></div>
+                  Green Threshold (Maximum)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={colorRange.max}
+                  onChange={(e) => {
+                    const newMax = parseFloat(e.target.value) || 0;
+                    if (newMax > colorRange.min) {
+                      setColorRange({ ...colorRange, max: newMax });
+                    }
+                  }}
+                  style={{
+                    padding: "8px 12px",
+                    backgroundColor: "var(--bg-secondary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-primary)",
+                    fontSize: "14px",
+                    width: "100%",
+                  }}
+                />
+                <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                  Values &gt; {colorRange.max.toFixed(2)} will be <span style={{ color: "var(--profit)" }}>green</span>
+                </div>
+              </div>
+            </div>
+            
+            {/* Summary */}
+            <div style={{ 
+              padding: "12px", 
+              backgroundColor: "var(--bg-secondary)", 
+              borderRadius: "6px",
+              border: "1px solid var(--border-color)"
+            }}>
+              <div style={{ fontSize: "12px", color: "var(--text-secondary)", lineHeight: "1.8" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                  <div style={{ width: "14px", height: "14px", backgroundColor: "var(--accent)", borderRadius: "2px" }}></div>
+                  <span>Values between <strong>{colorRange.min.toFixed(2)}</strong> and <strong>{colorRange.max.toFixed(2)}</strong> will be <span style={{ color: "var(--accent)" }}>blue</span></span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>

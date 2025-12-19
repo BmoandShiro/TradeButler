@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import {
   TrendingUp,
@@ -35,6 +35,17 @@ interface Metrics {
   strategy_profit_loss: number;
   strategy_consecutive_wins: number;
   strategy_consecutive_losses: number;
+  expectancy: number;
+  profit_factor: number;
+  average_trade: number;
+  total_fees: number;
+  net_profit: number;
+  max_drawdown: number;
+  sharpe_ratio: number;
+  risk_reward_ratio: number;
+  trades_per_day: number;
+  best_day: number;
+  worst_day: number;
 }
 
 interface TopSymbol {
@@ -110,10 +121,22 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
     case "average_loss":
     case "largest_win":
     case "largest_loss":
+    case "average_trade":
+    case "total_fees":
+    case "net_profit":
+    case "max_drawdown":
+    case "best_day":
+    case "worst_day":
       // largest_loss is stored as negative, so display it as-is
       return `$${(value || 0).toFixed(2)}`;
     case "win_rate":
       return `${((value || 0) * 100).toFixed(1)}%`;
+    case "expectancy":
+    case "profit_factor":
+    case "sharpe_ratio":
+    case "risk_reward_ratio":
+    case "trades_per_day":
+      return (value || 0).toFixed(2);
     case "winning_trades":
     case "losing_trades":
     case "consecutive_wins":
@@ -134,21 +157,52 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
   }
 };
 
-const getMetricColor = (id: string, value: number): string => {
-  // Total P&L should be red if negative
-  if (id === "total_profit_loss" || id === "strategy_profit_loss") {
-    return value >= 0 ? "var(--profit)" : "var(--loss)";
+const getMetricColor = (id: string, value: number, colorRange?: { min: number; max: number }): string => {
+  // Get color range from localStorage if not provided
+  if (!colorRange) {
+    const saved = localStorage.getItem("tradebutler_color_range");
+    if (saved) {
+      try {
+        colorRange = JSON.parse(saved);
+      } catch {
+        colorRange = undefined;
+      }
+    }
   }
-  if (id.includes("profit") || (id.includes("win") && !id.includes("losing")) || 
-      (id === "win_rate" && value > 0) || (id === "strategy_win_rate" && value > 0) || 
-      (id.includes("streak") && !id.includes("loss") && value > 0)) {
+  
+  // Dollar-based metrics that should use color range
+  const dollarMetrics = [
+    "total_profit_loss", "strategy_profit_loss", "average_profit", "average_loss",
+    "largest_win", "largest_loss", "average_trade", "total_fees", "net_profit",
+    "max_drawdown", "best_day", "worst_day", "expectancy"
+  ];
+  
+  // Apply color range for dollar metrics
+  if (dollarMetrics.includes(id) && colorRange) {
+    if (value < colorRange.min) {
+      return "var(--loss)"; // Below range = red
+    } else if (value > colorRange.max) {
+      return "var(--profit)"; // Above range = green
+    } else {
+      return "var(--accent)"; // Within range = blue
+    }
+  }
+  
+  // Default behavior: positive = green, negative = red, zero = blue
+  if (value > 0) {
+    // Positive values
+    if (id.includes("loss") || id.includes("losing") || id.includes("drawdown")) {
+      // Loss-related metrics should be red even if positive (like max_drawdown)
+      return "var(--loss)";
+    }
     return "var(--profit)";
-  }
-  if (id.includes("loss") || id.includes("losing") || (id === "win_rate" && value < 0) ||
-      (id === "strategy_win_rate" && value < 0) || (id.includes("loss_streak") && value > 0)) {
+  } else if (value < 0) {
+    // Negative values
     return "var(--loss)";
+  } else {
+    // Zero values
+    return "var(--accent)";
   }
-  return "var(--accent)";
 };
 
 export default function Dashboard() {
@@ -158,7 +212,46 @@ export default function Dashboard() {
   const [recentTrades, setRecentTrades] = useState<RecentTrade[]>([]);
   const [loading, setLoading] = useState(true);
   const [showMetricsConfig, setShowMetricsConfig] = useState(false);
-  const { getEnabledMetrics } = useMetricsConfig();
+  const [configKey, setConfigKey] = useState(0); // Force re-render when config changes
+  const metricsConfigHook = useMetricsConfig();
+  
+  // Re-read enabled metrics from localStorage when config changes
+  const [enabledMetrics, setEnabledMetrics] = useState(() => metricsConfigHook.getEnabledMetrics());
+  
+  useEffect(() => {
+    // Re-read from localStorage when configKey changes (includes color range changes)
+    const saved = localStorage.getItem("tradebutler_metrics_config");
+    if (saved) {
+      try {
+        const allMetrics = JSON.parse(saved);
+        const enabled = allMetrics.filter((m: any) => m.enabled);
+        setEnabledMetrics(enabled);
+      } catch {
+        setEnabledMetrics(metricsConfigHook.getEnabledMetrics());
+      }
+    } else {
+      setEnabledMetrics(metricsConfigHook.getEnabledMetrics());
+    }
+  }, [configKey, metricsConfigHook]);
+  
+  // Listen for color range changes - use a ref to track previous value
+  const prevColorRangeRef = useRef<string>("");
+  useEffect(() => {
+    const checkColorRange = () => {
+      const currentRange = localStorage.getItem("tradebutler_color_range");
+      if (currentRange && currentRange !== prevColorRangeRef.current) {
+        prevColorRangeRef.current = currentRange;
+        setConfigKey(prev => prev + 1);
+      }
+    };
+    
+    // Check immediately
+    checkColorRange();
+    
+    // Check periodically for localStorage changes
+    const interval = setInterval(checkColorRange, 300);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     loadDashboardData();
@@ -202,7 +295,6 @@ export default function Dashboard() {
     );
   }
 
-  const enabledMetrics = getEnabledMetrics();
   const metricValues: Record<string, number> = {
     total_trades: metrics?.total_trades || 0,
     total_volume: metrics?.total_volume || 0,
@@ -224,6 +316,17 @@ export default function Dashboard() {
     strategy_profit_loss: metrics?.strategy_profit_loss || 0,
     strategy_consecutive_wins: metrics?.strategy_consecutive_wins || 0,
     strategy_consecutive_losses: metrics?.strategy_consecutive_losses || 0,
+    expectancy: metrics?.expectancy || 0,
+    profit_factor: metrics?.profit_factor || 0,
+    average_trade: metrics?.average_trade || 0,
+    total_fees: metrics?.total_fees || 0,
+    net_profit: metrics?.net_profit || 0,
+    max_drawdown: metrics?.max_drawdown || 0,
+    sharpe_ratio: metrics?.sharpe_ratio || 0,
+    risk_reward_ratio: metrics?.risk_reward_ratio || 0,
+    trades_per_day: metrics?.trades_per_day || 0,
+    best_day: metrics?.best_day || 0,
+    worst_day: metrics?.worst_day || 0,
   };
 
   return (
@@ -492,10 +595,11 @@ export default function Dashboard() {
         )}
       </div>
 
-      <MetricsConfigPanel
-        isOpen={showMetricsConfig}
-        onClose={() => setShowMetricsConfig(false)}
-      />
+          <MetricsConfigPanel
+            isOpen={showMetricsConfig}
+            onClose={() => setShowMetricsConfig(false)}
+            onConfigChange={() => setConfigKey(prev => prev + 1)}
+          />
     </div>
   );
 }

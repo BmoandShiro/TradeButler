@@ -33,6 +33,24 @@ if not exist "node_modules" (
     )
 )
 
+REM Kill any existing Tauri processes
+echo.
+echo 🔍 Checking for existing TradeButler instances...
+tasklist /FI "IMAGENAME eq TradeButler.exe" 2>NUL | find /I /N "TradeButler.exe">NUL
+if not errorlevel 1 (
+    echo 🛑 Closing existing TradeButler instances...
+    taskkill /F /IM TradeButler.exe >NUL 2>&1
+    timeout /t 1 /nobreak >NUL
+)
+
+REM Kill any Node processes that might be running Tauri dev server (simplified)
+echo 🔍 Checking for Node processes...
+taskkill /F /IM node.exe >NUL 2>&1
+if not errorlevel 1 (
+    echo 🛑 Closed Node processes
+    timeout /t 1 /nobreak >NUL
+)
+
 REM Run the development server
 echo.
 echo 🎯 Starting Tauri development server...

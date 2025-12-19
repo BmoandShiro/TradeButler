@@ -111,6 +111,18 @@ pub struct Metrics {
     pub strategy_profit_loss: f64,
     pub strategy_consecutive_wins: i64,
     pub strategy_consecutive_losses: i64,
+    // Additional metrics
+    pub expectancy: f64,
+    pub profit_factor: f64,
+    pub average_trade: f64,
+    pub total_fees: f64,
+    pub net_profit: f64,
+    pub max_drawdown: f64,
+    pub sharpe_ratio: f64,
+    pub risk_reward_ratio: f64,
+    pub trades_per_day: f64,
+    pub best_day: f64,
+    pub worst_day: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -157,7 +169,7 @@ pub struct TradeWithPairing {
     pub exit_pairs: Vec<PairedTrade>,  // Pairs where this trade is the exit (SELL)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PositionGroup {
     pub entry_trade: Trade,
     pub position_trades: Vec<Trade>, // All trades (BUY and SELL) that make up this position
@@ -544,7 +556,7 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
                 continue; // Skip duplicate trade
             }
             
-            let id = conn.execute(
+            let _id = conn.execute(
                 "INSERT INTO trades (symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
@@ -597,7 +609,7 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
                 continue; // Skip duplicate trade
             }
             
-            let id = conn.execute(
+            let _id = conn.execute(
                 "INSERT INTO trades (symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
@@ -1076,36 +1088,72 @@ pub fn get_daily_pnl() -> Result<Vec<DailyPnL>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
-    // Group trades by date and calculate P&L
-    // For now, we'll use a simple calculation: SELL - BUY per symbol per day
-    // This is simplified - a full implementation would match buy/sell pairs
-    // SQLite uses date() function, and we need to handle the date format
+    // Group trades by date and calculate P&L using paired trades
+    // Use strftime for SQLite date extraction
     let mut stmt = conn
         .prepare(
             "SELECT 
-                date(timestamp) as trade_date,
-                COUNT(*) as trade_count,
-                SUM(CASE WHEN side = 'SELL' THEN quantity * price ELSE -(quantity * price) END) as daily_pnl
+                strftime('%Y-%m-%d', timestamp) as trade_date,
+                COUNT(*) as trade_count
             FROM trades
-            GROUP BY date(timestamp)
+            WHERE status = 'Filled' OR status = 'FILLED'
+            GROUP BY strftime('%Y-%m-%d', timestamp)
             ORDER BY trade_date DESC"
         )
         .map_err(|e| e.to_string())?;
     
     let daily_iter = stmt
         .query_map([], |row| {
-            Ok(DailyPnL {
-                date: row.get::<_, String>(0)?,
-                profit_loss: row.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
-                trade_count: row.get(1)?,
-            })
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+            ))
         })
         .map_err(|e| e.to_string())?;
     
-    let mut daily_pnl = Vec::new();
-    for day in daily_iter {
-        daily_pnl.push(day.map_err(|e| e.to_string())?);
+    // Get paired trades to calculate accurate daily P&L
+    let paired_trades = get_paired_trades(None).map_err(|e| e.to_string())?;
+    
+    // Group paired trades by date
+    use std::collections::HashMap;
+    let mut daily_pnl_map: HashMap<String, f64> = HashMap::new();
+    let mut daily_count_map: HashMap<String, i64> = HashMap::new();
+    
+    for day_result in daily_iter {
+        let (date, count) = day_result.map_err(|e| e.to_string())?;
+        daily_count_map.insert(date.clone(), count);
+        daily_pnl_map.insert(date, 0.0);
     }
+    
+    // Calculate P&L per day from paired trades
+    for paired in &paired_trades {
+        // Extract date from exit timestamp (when trade was closed)
+        if let Some(date_str) = paired.exit_timestamp.split('T').next() {
+            if let Some(pnl) = daily_pnl_map.get_mut(date_str) {
+                *pnl += paired.net_profit_loss;
+            } else {
+                // Date not in map, add it
+                daily_pnl_map.insert(date_str.to_string(), paired.net_profit_loss);
+                daily_count_map.insert(date_str.to_string(), 1);
+            }
+        }
+    }
+    
+    // Convert to Vec<DailyPnL>
+    let mut daily_pnl: Vec<DailyPnL> = daily_pnl_map
+        .into_iter()
+        .map(|(date, pnl)| {
+            let trade_count = daily_count_map.get(&date).copied().unwrap_or(0);
+            DailyPnL {
+                date,
+                profit_loss: pnl,
+                trade_count,
+            }
+        })
+        .collect();
+    
+    // Sort by date descending
+    daily_pnl.sort_by(|a, b| b.date.cmp(&a.date));
     
     Ok(daily_pnl)
 }
@@ -1246,6 +1294,91 @@ pub fn get_metrics(pairing_method: Option<String>) -> Result<Metrics, String> {
         0.0
     };
     
+    // Calculate additional metrics
+    // Total fees from paired trades
+    let total_fees: f64 = paired_trades.iter().map(|p| p.entry_fees + p.exit_fees).sum();
+    
+    // Net profit (after fees) = total_profit_loss (already includes fees in net_profit_loss)
+    let net_profit = total_profit_loss;
+    
+    // Average trade = total_profit_loss / number of trades
+    let average_trade = if paired_trades.len() > 0 {
+        total_profit_loss / paired_trades.len() as f64
+    } else {
+        0.0
+    };
+    
+    // Expectancy = (Win Rate × Average Win) - (Loss Rate × Average Loss)
+    let loss_rate = if paired_trades.len() > 0 {
+        losing_trades as f64 / paired_trades.len() as f64
+    } else {
+        0.0
+    };
+    let expectancy = (win_rate * average_profit) - (loss_rate * average_loss);
+    
+    // Profit Factor = Total Gross Profit / Total Gross Loss
+    let profit_factor = if total_loss > 0.0 {
+        total_profit / total_loss
+    } else if total_profit > 0.0 {
+        f64::INFINITY // All trades are winners
+    } else {
+        0.0
+    };
+    
+    // Risk/Reward Ratio = Average Win / Average Loss
+    let risk_reward_ratio = if average_loss > 0.0 {
+        average_profit / average_loss
+    } else if average_profit > 0.0 {
+        f64::INFINITY // No losses
+    } else {
+        0.0
+    };
+    
+    // Calculate max drawdown from position groups (equity curve)
+    let mut max_drawdown = 0.0;
+    let mut peak_equity = 0.0;
+    let mut running_equity = 0.0;
+    
+    // Sort position groups by timestamp to build equity curve
+    let mut sorted_groups = position_groups.clone();
+    sorted_groups.sort_by(|a, b| a.entry_trade.timestamp.cmp(&b.entry_trade.timestamp));
+    
+    for group in &sorted_groups {
+        running_equity += group.total_pnl;
+        if running_equity > peak_equity {
+            peak_equity = running_equity;
+        }
+        let drawdown = peak_equity - running_equity;
+        if drawdown > max_drawdown {
+            max_drawdown = drawdown;
+        }
+    }
+    
+    // Sharpe Ratio (simplified: average return / standard deviation of returns)
+    // For now, return 0.0 as it requires more complex calculation with risk-free rate
+    let sharpe_ratio = 0.0; // TODO: Implement proper Sharpe ratio calculation
+    
+    // Get daily P&L for best/worst day and trades per day
+    let daily_pnl = get_daily_pnl().unwrap_or_default();
+    
+    let best_day = daily_pnl.iter()
+        .map(|d| d.profit_loss)
+        .fold(f64::NEG_INFINITY, |a, b| a.max(b));
+    let best_day_value = if best_day == f64::NEG_INFINITY { 0.0 } else { best_day };
+    
+    let worst_day = daily_pnl.iter()
+        .map(|d| d.profit_loss)
+        .fold(f64::INFINITY, |a, b| a.min(b));
+    let worst_day_value = if worst_day == f64::INFINITY { 0.0 } else { worst_day };
+    
+    // Trades per day = total trades / number of trading days
+    let trading_days = daily_pnl.len() as f64;
+    let trades_per_day = if trading_days > 0.0 {
+        total_trades as f64 / trading_days
+    } else {
+        0.0
+    };
+    
     Ok(Metrics {
         total_trades,
         winning_trades,
@@ -1268,6 +1401,17 @@ pub fn get_metrics(pairing_method: Option<String>) -> Result<Metrics, String> {
         strategy_profit_loss: strategy_pnl,
         strategy_consecutive_wins,
         strategy_consecutive_losses,
+        expectancy,
+        profit_factor: if profit_factor == f64::INFINITY { 0.0 } else { profit_factor },
+        average_trade,
+        total_fees,
+        net_profit,
+        max_drawdown,
+        sharpe_ratio,
+        risk_reward_ratio: if risk_reward_ratio == f64::INFINITY { 0.0 } else { risk_reward_ratio },
+        trades_per_day,
+        best_day: best_day_value,
+        worst_day: worst_day_value,
     })
 }
 
