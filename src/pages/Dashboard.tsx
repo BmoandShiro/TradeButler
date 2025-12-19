@@ -1,4 +1,5 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import {
   TrendingUp,
@@ -11,6 +12,8 @@ import {
   Clock,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
+  GripVertical,
 } from "lucide-react";
 import { MetricsConfigPanel, useMetricsConfig } from "../components/MetricsConfig";
 import { format } from "date-fns";
@@ -214,6 +217,8 @@ const getMetricColor = (id: string, value: number, colorRange?: { min: number; m
 };
 
 const DASHBOARD_SECTIONS_KEY = "tradebutler_dashboard_sections";
+const DASHBOARD_SECTION_ORDER_KEY = "tradebutler_dashboard_section_order";
+const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
 
 interface DashboardSections {
   showTopSymbols: boolean;
@@ -226,6 +231,10 @@ const defaultDashboardSections: DashboardSections = {
   showStrategyPerformance: true,
   showRecentTrades: true,
 };
+
+type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades";
+
+const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades"];
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
@@ -248,6 +257,68 @@ export default function Dashboard() {
     }
     return defaultDashboardSections;
   });
+  const [sectionOrder, setSectionOrder] = useState<SectionId[]>(() => {
+    const saved = localStorage.getItem(DASHBOARD_SECTION_ORDER_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        // Validate that all sections are present
+        const validOrder = defaultSectionOrder.filter(id => parsed.includes(id));
+        const missing = defaultSectionOrder.filter(id => !parsed.includes(id));
+        return [...validOrder, ...missing];
+      } catch {
+        return defaultSectionOrder;
+      }
+    }
+    return defaultSectionOrder;
+  });
+  const [draggedSection, setDraggedSection] = useState<SectionId | null>(null);
+  const [dragOverSection, setDragOverSection] = useState<SectionId | null>(null);
+  const [metricCardOrder, setMetricCardOrder] = useState<string[]>(() => {
+    const saved = localStorage.getItem(METRIC_CARDS_ORDER_KEY);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
+  const [draggedMetric, setDraggedMetric] = useState<string | null>(null);
+  const [dragOverMetric, setDragOverMetric] = useState<string | null>(null);
+  const draggedMetricRef = useRef<string | null>(null);
+  const [openMetricSettings, setOpenMetricSettings] = useState<string | null>(null);
+  const [openSectionSettings, setOpenSectionSettings] = useState<SectionId | null>(null);
+  const [metricMenuPosition, setMetricMenuPosition] = useState({ top: 0, right: 0 });
+  const [sectionMenuPosition, setSectionMenuPosition] = useState<Record<SectionId, { top: number; right: number }>>({
+    topSymbols: { top: 0, right: 0 },
+    strategyPerformance: { top: 0, right: 0 },
+    recentTrades: { top: 0, right: 0 },
+  });
+  
+  // Close settings menus when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Don't close if clicking on a settings button or inside a settings menu
+      if (target.closest('[data-settings-menu]') || target.closest('button[title="Settings"]')) {
+        return;
+      }
+      if (openMetricSettings || openSectionSettings) {
+        setOpenMetricSettings(null);
+        setOpenSectionSettings(null);
+      }
+    };
+    
+    if (openMetricSettings || openSectionSettings) {
+      // Use a small delay to allow the click event on the button to complete first
+      setTimeout(() => {
+        document.addEventListener("mousedown", handleClickOutside);
+      }, 0);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [openMetricSettings, openSectionSettings]);
   
   // Re-read enabled metrics from localStorage when config changes
   const [enabledMetrics, setEnabledMetrics] = useState(() => metricsConfigHook.getEnabledMetrics());
@@ -260,13 +331,95 @@ export default function Dashboard() {
         const allMetrics = JSON.parse(saved);
         const enabled = allMetrics.filter((m: any) => m.enabled);
         setEnabledMetrics(enabled);
+        
+        // Initialize or update metric card order
+        const currentOrder = localStorage.getItem(METRIC_CARDS_ORDER_KEY);
+        const enabledIds = enabled.map((m: any) => m.id);
+        
+        if (!currentOrder || currentOrder === "[]") {
+          // Initialize with current enabled metrics
+          setMetricCardOrder(enabledIds);
+          localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(enabledIds));
+        } else {
+          // Update order to include any new metrics and remove disabled ones
+          const savedOrder: string[] = JSON.parse(currentOrder);
+          const newOrder = [...savedOrder];
+          
+          // Add any missing metric IDs to the end
+          enabledIds.forEach((id: string) => {
+            if (!newOrder.includes(id)) {
+              newOrder.push(id);
+            }
+          });
+          
+          // Remove any IDs that are no longer enabled
+          const filteredOrder = newOrder.filter((id: string) => enabledIds.includes(id));
+          
+          if (JSON.stringify(filteredOrder) !== JSON.stringify(metricCardOrder)) {
+            setMetricCardOrder(filteredOrder);
+            localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(filteredOrder));
+          }
+        }
       } catch {
-        setEnabledMetrics(metricsConfigHook.getEnabledMetrics());
+        const enabled = metricsConfigHook.getEnabledMetrics();
+        setEnabledMetrics(enabled);
+        const order = enabled.map(m => m.id);
+        setMetricCardOrder(order);
+        localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(order));
       }
     } else {
-      setEnabledMetrics(metricsConfigHook.getEnabledMetrics());
+      const enabled = metricsConfigHook.getEnabledMetrics();
+      setEnabledMetrics(enabled);
+      const order = enabled.map(m => m.id);
+      setMetricCardOrder(order);
+      localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(order));
     }
   }, [configKey, metricsConfigHook]);
+
+  // Sync metric card order when enabled metrics change
+  useEffect(() => {
+    const enabledIds = enabledMetrics.map(m => m.id);
+    if (enabledIds.length === 0) return;
+    
+    setMetricCardOrder(prevOrder => {
+      const newOrder = [...prevOrder];
+      
+      // Add any missing metric IDs to the end
+      enabledIds.forEach(id => {
+        if (!newOrder.includes(id)) {
+          newOrder.push(id);
+        }
+      });
+      
+      // Remove any IDs that are no longer enabled
+      const filteredOrder = newOrder.filter(id => enabledIds.includes(id));
+      
+      // Only update if order actually changed
+      if (JSON.stringify(filteredOrder) !== JSON.stringify(prevOrder)) {
+        localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(filteredOrder));
+        return filteredOrder;
+      }
+      return prevOrder;
+    });
+  }, [enabledMetrics]); // Only run when enabledMetrics changes
+
+  // Sort metrics by saved order using useMemo
+  const sortedMetrics = useMemo(() => {
+    return [...enabledMetrics].sort((a, b) => {
+      const aIndex = metricCardOrder.indexOf(a.id);
+      const bIndex = metricCardOrder.indexOf(b.id);
+      
+      // If both are in the order, sort by their position
+      if (aIndex !== -1 && bIndex !== -1) {
+        return aIndex - bIndex;
+      }
+      // If only one is in the order, prioritize it
+      if (aIndex !== -1) return -1;
+      if (bIndex !== -1) return 1;
+      // If neither is in the order, maintain original order
+      return 0;
+    });
+  }, [enabledMetrics, metricCardOrder]);
   
   // Listen for color range changes - use a ref to track previous value
   const prevColorRangeRef = useRef<string>("");
@@ -410,12 +563,16 @@ export default function Dashboard() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
           gap: "20px",
           marginBottom: "30px",
         }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+        }}
       >
-        {enabledMetrics.map((metric) => {
+        {sortedMetrics.map((metric) => {
           const value = metricValues[metric.id] || 0;
           const Icon = metricIcons[metric.id] || Activity;
           const color = getMetricColor(metric.id, value);
@@ -423,6 +580,111 @@ export default function Dashboard() {
           return (
             <div
               key={metric.id}
+              draggable={true}
+              onDragStart={(e) => {
+                // Prevent drag if starting from a button
+                const target = e.target as HTMLElement;
+                if (target.tagName === 'BUTTON' || target.closest('button')) {
+                  e.preventDefault();
+                  return false;
+                }
+                
+                draggedMetricRef.current = metric.id;
+                setDraggedMetric(metric.id);
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", metric.id);
+                e.dataTransfer.setData("application/json", JSON.stringify({ type: "metric", id: metric.id }));
+              }}
+              onDragEnter={(e) => {
+                e.preventDefault();
+                const dragged = draggedMetricRef.current || draggedMetric;
+                if (dragged && dragged !== metric.id) {
+                  setDragOverMetric(metric.id);
+                }
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                const dragged = draggedMetricRef.current || draggedMetric;
+                if (dragged && dragged !== metric.id) {
+                  setDragOverMetric(metric.id);
+                }
+              }}
+              onDragLeave={(e) => {
+                // Check if we're actually leaving the element
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = e.clientX;
+                const y = e.clientY;
+                if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+                  setDragOverMetric(null);
+                }
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                // Try multiple ways to get the dragged metric ID
+                let dragged: string | null = null;
+                try {
+                  const jsonData = e.dataTransfer.getData("application/json");
+                  if (jsonData) {
+                    const parsed = JSON.parse(jsonData);
+                    if (parsed.type === "metric" && parsed.id) {
+                      dragged = parsed.id;
+                    }
+                  }
+                } catch {}
+                
+                if (!dragged) {
+                  dragged = e.dataTransfer.getData("text/plain") || draggedMetricRef.current || draggedMetric;
+                }
+                
+                if (!dragged || dragged === metric.id) {
+                  draggedMetricRef.current = null;
+                  setDraggedMetric(null);
+                  setDragOverMetric(null);
+                  return;
+                }
+                
+                setMetricCardOrder(prevOrder => {
+                  const currentIds = enabledMetrics.map(m => m.id);
+                  let newOrder = [...prevOrder];
+                  
+                  // Ensure all enabled metrics are in the order
+                  currentIds.forEach(id => {
+                    if (!newOrder.includes(id)) {
+                      newOrder.push(id);
+                    }
+                  });
+                  
+                  // Remove any IDs that are no longer enabled
+                  newOrder = newOrder.filter(id => currentIds.includes(id));
+                  
+                  // Reorder: move draggedMetric to the position of metric.id
+                  const draggedIndex = newOrder.indexOf(dragged);
+                  const targetIndex = newOrder.indexOf(metric.id);
+                  
+                  if (draggedIndex !== -1 && targetIndex !== -1 && draggedIndex !== targetIndex) {
+                    // Remove dragged item from its current position
+                    newOrder.splice(draggedIndex, 1);
+                    // Calculate new target index (may have shifted after removal)
+                    const newTargetIndex = draggedIndex < targetIndex ? targetIndex - 1 : targetIndex;
+                    // Insert it at the target position
+                    newOrder.splice(newTargetIndex, 0, dragged);
+                    
+                    // Save to localStorage
+                    localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+                    return newOrder;
+                  }
+                  return prevOrder;
+                });
+                draggedMetricRef.current = null;
+                setDraggedMetric(null);
+                setDragOverMetric(null);
+              }}
+              onDragEnd={() => {
+                draggedMetricRef.current = null;
+                setDraggedMetric(null);
+                setDragOverMetric(null);
+              }}
               style={{
                 backgroundColor: "var(--bg-secondary)",
                 border: "1px solid var(--border-color)",
@@ -431,8 +693,23 @@ export default function Dashboard() {
                 display: "flex",
                 alignItems: "center",
                 gap: "16px",
+                cursor: draggedMetric === metric.id ? "grabbing" : "grab",
+                opacity: draggedMetric === metric.id ? 0.5 : 1,
+                borderColor: dragOverMetric === metric.id ? "var(--accent)" : "var(--border-color)",
+                borderWidth: dragOverMetric === metric.id ? "2px" : "1px",
+                userSelect: "none",
+                WebkitUserSelect: "none",
+                width: "100%",
+                height: "100px",
+                transition: "border-color 0.2s, opacity 0.2s, transform 0.2s",
+                transform: draggedMetric === metric.id ? "scale(0.95)" : dragOverMetric === metric.id ? "scale(1.02)" : "scale(1)",
               }}
             >
+              <GripVertical 
+                size={16} 
+                color="var(--text-secondary)" 
+                style={{ cursor: "grab", flexShrink: 0, pointerEvents: "none" }} 
+              />
               <div
                 style={{
                   width: "48px",
@@ -443,11 +720,13 @@ export default function Dashboard() {
                   alignItems: "center",
                   justifyContent: "center",
                   color: color,
+                  flexShrink: 0,
+                  pointerEvents: "none",
                 }}
               >
                 <Icon size={24} />
               </div>
-              <div style={{ flex: 1 }}>
+              <div style={{ flex: 1, pointerEvents: "none" }}>
                 <p
                   style={{
                     fontSize: "14px",
@@ -467,6 +746,154 @@ export default function Dashboard() {
                   {formatMetricValue(metric.id, value, metrics)}
                 </p>
               </div>
+              <div style={{ position: "relative", flexShrink: 0 }}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setMetricMenuPosition({
+                      top: rect.bottom + 4,
+                      right: window.innerWidth - rect.right,
+                    });
+                    setOpenMetricSettings(openMetricSettings === metric.id ? null : metric.id);
+                  }}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                  }}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    padding: "4px",
+                    cursor: "pointer",
+                    color: "var(--text-secondary)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: "4px",
+                    pointerEvents: "auto",
+                  }}
+                  title="Settings"
+                >
+                  <Settings size={16} />
+                </button>
+                {openMetricSettings === metric.id && createPortal(
+                  <div
+                    data-settings-menu
+                    style={{
+                      position: "fixed",
+                      top: `${metricMenuPosition.top}px`,
+                      right: `${metricMenuPosition.right}px`,
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                      padding: "8px",
+                      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                      zIndex: 99999,
+                      minWidth: "120px",
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                  >
+                    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
+                          if (currentIndex > 0) {
+                            setMetricCardOrder(prevOrder => {
+                              const currentIds = enabledMetrics.map(m => m.id);
+                              let newOrder = [...prevOrder];
+                              
+                              currentIds.forEach(id => {
+                                if (!newOrder.includes(id)) {
+                                  newOrder.push(id);
+                                }
+                              });
+                              
+                              newOrder = newOrder.filter(id => currentIds.includes(id));
+                              
+                              const metricIndex = newOrder.indexOf(metric.id);
+                              if (metricIndex > 0) {
+                                [newOrder[metricIndex - 1], newOrder[metricIndex]] = [newOrder[metricIndex], newOrder[metricIndex - 1]];
+                                localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+                                return newOrder;
+                              }
+                              return prevOrder;
+                            });
+                          }
+                        }}
+                        disabled={sortedMetrics.findIndex(m => m.id === metric.id) === 0}
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "4px",
+                          padding: "6px 8px",
+                          cursor: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? "not-allowed" : "pointer",
+                          color: "var(--text-primary)",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px",
+                          fontSize: "13px",
+                          opacity: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? 0.3 : 1,
+                        }}
+                      >
+                        <ChevronUp size={14} />
+                        <span>Move Up</span>
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
+                          if (currentIndex < sortedMetrics.length - 1) {
+                            setMetricCardOrder(prevOrder => {
+                              const currentIds = enabledMetrics.map(m => m.id);
+                              let newOrder = [...prevOrder];
+                              
+                              currentIds.forEach(id => {
+                                if (!newOrder.includes(id)) {
+                                  newOrder.push(id);
+                                }
+                              });
+                              
+                              newOrder = newOrder.filter(id => currentIds.includes(id));
+                              
+                              const metricIndex = newOrder.indexOf(metric.id);
+                              if (metricIndex < newOrder.length - 1) {
+                                [newOrder[metricIndex], newOrder[metricIndex + 1]] = [newOrder[metricIndex + 1], newOrder[metricIndex]];
+                                localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+                                return newOrder;
+                              }
+                              return prevOrder;
+                            });
+                          }
+                        }}
+                        disabled={sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1}
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "4px",
+                          padding: "6px 8px",
+                          cursor: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? "not-allowed" : "pointer",
+                          color: "var(--text-primary)",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px",
+                          fontSize: "13px",
+                          opacity: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? 0.3 : 1,
+                        }}
+                      >
+                        <ChevronDown size={14} />
+                        <span>Move Down</span>
+                      </button>
+                    </div>
+                  </div>,
+                  document.body
+                )}
+              </div>
             </div>
           );
         })}
@@ -481,72 +908,398 @@ export default function Dashboard() {
           marginBottom: "30px",
         }}
       >
-        {/* Top Symbols */}
-        {dashboardSections.showTopSymbols && topSymbols.length > 0 && (
-          <div
-            style={{
-              backgroundColor: "var(--bg-secondary)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "8px",
-              padding: "20px",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "16px" }}>
-              <BarChart3 size={20} color="var(--accent)" />
-              <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Top Symbols</h2>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-              {topSymbols.map((symbol) => (
-                <div
-                  key={symbol.symbol}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "12px",
-                    backgroundColor: "var(--bg-tertiary)",
-                    borderRadius: "6px",
-                  }}
-                >
-                  <div>
-                    <p style={{ fontWeight: "600", marginBottom: "4px" }}>{symbol.symbol}</p>
-                    <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                      {symbol.trade_count} trades
-                    </p>
+        {sectionOrder.map((sectionId) => {
+          // Top Symbols
+          if (sectionId === "topSymbols" && dashboardSections.showTopSymbols && topSymbols.length > 0) {
+            return (
+              <div
+                key="topSymbols"
+                draggable
+                onDragStart={(e) => {
+                  setDraggedSection("topSymbols");
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  if (draggedSection !== "topSymbols") {
+                    setDragOverSection("topSymbols");
+                  }
+                }}
+                onDragLeave={() => {
+                  setDragOverSection(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (draggedSection && draggedSection !== "topSymbols") {
+                    const newOrder = [...sectionOrder];
+                    const draggedIndex = newOrder.indexOf(draggedSection);
+                    const targetIndex = newOrder.indexOf("topSymbols");
+                    newOrder.splice(draggedIndex, 1);
+                    newOrder.splice(targetIndex, 0, draggedSection);
+                    setSectionOrder(newOrder);
+                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                  }
+                  setDraggedSection(null);
+                  setDragOverSection(null);
+                }}
+                onDragEnd={() => {
+                  setDraggedSection(null);
+                  setDragOverSection(null);
+                }}
+                style={{
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "20px",
+                  cursor: "grab",
+                  opacity: draggedSection === "topSymbols" ? 0.5 : 1,
+                  borderColor: dragOverSection === "topSymbols" ? "var(--accent)" : "var(--border-color)",
+                  borderWidth: dragOverSection === "topSymbols" ? "2px" : "1px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
+                    <BarChart3 size={20} color="var(--accent)" />
+                    <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Top Symbols</h2>
                   </div>
-                  <div style={{ textAlign: "right" }}>
-                    <p
-                      style={{
-                        fontWeight: "600",
-                        color: symbol.estimated_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                  <div style={{ position: "relative" }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setSectionMenuPosition({
+                          ...sectionMenuPosition,
+                          topSymbols: {
+                            top: rect.bottom + 4,
+                            right: window.innerWidth - rect.right,
+                          },
+                        });
+                        setOpenSectionSettings(openSectionSettings === "topSymbols" ? null : "topSymbols");
                       }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        padding: "4px",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "4px",
+                      }}
+                      title="Settings"
                     >
-                      ${symbol.estimated_pnl.toFixed(2)}
-                    </p>
-                    <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                      {symbol.trade_count} {symbol.trade_count === 1 ? "trade" : "trades"}
-                    </p>
+                      <Settings size={16} />
+                    </button>
+                    {openSectionSettings === "topSymbols" && createPortal(
+                      <div
+                        data-settings-menu
+                        style={{
+                          position: "fixed",
+                          top: `${sectionMenuPosition.topSymbols.top}px`,
+                          right: `${sectionMenuPosition.topSymbols.right}px`,
+                          backgroundColor: "var(--bg-secondary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "8px",
+                          padding: "8px",
+                          boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                          zIndex: 99999,
+                          minWidth: "120px",
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              const currentIndex = sectionOrder.indexOf("topSymbols");
+                              if (currentIndex > 0) {
+                                const newOrder = [...sectionOrder];
+                                [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
+                                setSectionOrder(newOrder);
+                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                              }
+                              setOpenSectionSettings(null);
+                            }}
+                            disabled={sectionOrder.indexOf("topSymbols") === 0}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: sectionOrder.indexOf("topSymbols") === 0 ? "not-allowed" : "pointer",
+                              color: "var(--text-primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                              opacity: sectionOrder.indexOf("topSymbols") === 0 ? 0.3 : 1,
+                            }}
+                          >
+                            <ChevronUp size={14} />
+                            <span>Move Up</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              const currentIndex = sectionOrder.indexOf("topSymbols");
+                              if (currentIndex < sectionOrder.length - 1) {
+                                const newOrder = [...sectionOrder];
+                                [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
+                                setSectionOrder(newOrder);
+                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                              }
+                              setOpenSectionSettings(null);
+                            }}
+                            disabled={sectionOrder.indexOf("topSymbols") === sectionOrder.length - 1}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: sectionOrder.indexOf("topSymbols") === sectionOrder.length - 1 ? "not-allowed" : "pointer",
+                              color: "var(--text-primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                              opacity: sectionOrder.indexOf("topSymbols") === sectionOrder.length - 1 ? 0.3 : 1,
+                            }}
+                          >
+                            <ChevronDown size={14} />
+                            <span>Move Down</span>
+                          </button>
+                        </div>
+                      </div>,
+                      document.body
+                    )}
                   </div>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  {topSymbols.map((symbol) => (
+                    <div
+                      key={symbol.symbol}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "12px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        borderRadius: "6px",
+                      }}
+                    >
+                      <div>
+                        <p style={{ fontWeight: "600", marginBottom: "4px" }}>{symbol.symbol}</p>
+                        <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                          {symbol.trade_count} trades
+                        </p>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <p
+                          style={{
+                            fontWeight: "600",
+                            color: symbol.estimated_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                          }}
+                        >
+                          ${symbol.estimated_pnl.toFixed(2)}
+                        </p>
+                        <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                          {symbol.trade_count} {symbol.trade_count === 1 ? "trade" : "trades"}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          }
 
-        {/* Strategy Performance */}
-        {dashboardSections.showStrategyPerformance && strategyPerformance.length > 0 && (
-          <div
-            style={{
-              backgroundColor: "var(--bg-secondary)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "8px",
-              padding: "20px",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "16px" }}>
-              <TrendingUpIcon size={20} color="var(--accent)" />
-              <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Strategy Performance</h2>
-            </div>
+          // Strategy Performance
+          if (sectionId === "strategyPerformance" && dashboardSections.showStrategyPerformance && strategyPerformance.length > 0) {
+            return (
+              <div
+                key="strategyPerformance"
+                draggable
+                onDragStart={(e) => {
+                  setDraggedSection("strategyPerformance");
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  if (draggedSection !== "strategyPerformance") {
+                    setDragOverSection("strategyPerformance");
+                  }
+                }}
+                onDragLeave={() => {
+                  setDragOverSection(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (draggedSection && draggedSection !== "strategyPerformance") {
+                    const newOrder = [...sectionOrder];
+                    const draggedIndex = newOrder.indexOf(draggedSection);
+                    const targetIndex = newOrder.indexOf("strategyPerformance");
+                    newOrder.splice(draggedIndex, 1);
+                    newOrder.splice(targetIndex, 0, draggedSection);
+                    setSectionOrder(newOrder);
+                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                  }
+                  setDraggedSection(null);
+                  setDragOverSection(null);
+                }}
+                onDragEnd={() => {
+                  setDraggedSection(null);
+                  setDragOverSection(null);
+                }}
+                style={{
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "20px",
+                  cursor: "grab",
+                  opacity: draggedSection === "strategyPerformance" ? 0.5 : 1,
+                  borderColor: dragOverSection === "strategyPerformance" ? "var(--accent)" : "var(--border-color)",
+                  borderWidth: dragOverSection === "strategyPerformance" ? "2px" : "1px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
+                    <TrendingUpIcon size={20} color="var(--accent)" />
+                    <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Strategy Performance</h2>
+                  </div>
+                  <div style={{ position: "relative" }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setSectionMenuPosition({
+                          ...sectionMenuPosition,
+                          strategyPerformance: {
+                            top: rect.bottom + 4,
+                            right: window.innerWidth - rect.right,
+                          },
+                        });
+                        setOpenSectionSettings(openSectionSettings === "strategyPerformance" ? null : "strategyPerformance");
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        padding: "4px",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "4px",
+                      }}
+                      title="Settings"
+                    >
+                      <Settings size={16} />
+                    </button>
+                    {openSectionSettings === "strategyPerformance" && createPortal(
+                      <div
+                        data-settings-menu
+                        style={{
+                          position: "fixed",
+                          top: `${sectionMenuPosition.strategyPerformance.top}px`,
+                          right: `${sectionMenuPosition.strategyPerformance.right}px`,
+                          backgroundColor: "var(--bg-secondary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "8px",
+                          padding: "8px",
+                          boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                          zIndex: 99999,
+                          minWidth: "120px",
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              const currentIndex = sectionOrder.indexOf("strategyPerformance");
+                              if (currentIndex > 0) {
+                                const newOrder = [...sectionOrder];
+                                [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
+                                setSectionOrder(newOrder);
+                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                              }
+                              setOpenSectionSettings(null);
+                            }}
+                            disabled={sectionOrder.indexOf("strategyPerformance") === 0}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: sectionOrder.indexOf("strategyPerformance") === 0 ? "not-allowed" : "pointer",
+                              color: "var(--text-primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                              opacity: sectionOrder.indexOf("strategyPerformance") === 0 ? 0.3 : 1,
+                            }}
+                          >
+                            <ChevronUp size={14} />
+                            <span>Move Up</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              const currentIndex = sectionOrder.indexOf("strategyPerformance");
+                              if (currentIndex < sectionOrder.length - 1) {
+                                const newOrder = [...sectionOrder];
+                                [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
+                                setSectionOrder(newOrder);
+                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                              }
+                              setOpenSectionSettings(null);
+                            }}
+                            disabled={sectionOrder.indexOf("strategyPerformance") === sectionOrder.length - 1}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: sectionOrder.indexOf("strategyPerformance") === sectionOrder.length - 1 ? "not-allowed" : "pointer",
+                              color: "var(--text-primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                              opacity: sectionOrder.indexOf("strategyPerformance") === sectionOrder.length - 1 ? 0.3 : 1,
+                            }}
+                          >
+                            <ChevronDown size={14} />
+                            <span>Move Down</span>
+                          </button>
+                        </div>
+                      </div>,
+                      document.body
+                    )}
+                  </div>
+                </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
               {strategyPerformance.map((strategy) => (
                 <div
@@ -581,25 +1334,188 @@ export default function Dashboard() {
                   </div>
                 </div>
               ))}
+              </div>
             </div>
-          </div>
-        )}
+            );
+          }
 
-        {/* Recent Trades */}
-        {dashboardSections.showRecentTrades && recentTrades.length > 0 && (
-          <div
-            style={{
-              backgroundColor: "var(--bg-secondary)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "8px",
-              padding: "20px",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "16px" }}>
-              <Clock size={20} color="var(--accent)" />
-              <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Recent Trades</h2>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          // Recent Trades
+          if (sectionId === "recentTrades" && dashboardSections.showRecentTrades && recentTrades.length > 0) {
+            return (
+              <div
+                key="recentTrades"
+                draggable
+                onDragStart={(e) => {
+                  setDraggedSection("recentTrades");
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  if (draggedSection !== "recentTrades") {
+                    setDragOverSection("recentTrades");
+                  }
+                }}
+                onDragLeave={() => {
+                  setDragOverSection(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (draggedSection && draggedSection !== "recentTrades") {
+                    const newOrder = [...sectionOrder];
+                    const draggedIndex = newOrder.indexOf(draggedSection);
+                    const targetIndex = newOrder.indexOf("recentTrades");
+                    newOrder.splice(draggedIndex, 1);
+                    newOrder.splice(targetIndex, 0, draggedSection);
+                    setSectionOrder(newOrder);
+                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                  }
+                  setDraggedSection(null);
+                  setDragOverSection(null);
+                }}
+                onDragEnd={() => {
+                  setDraggedSection(null);
+                  setDragOverSection(null);
+                }}
+                style={{
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "20px",
+                  cursor: "grab",
+                  opacity: draggedSection === "recentTrades" ? 0.5 : 1,
+                  borderColor: dragOverSection === "recentTrades" ? "var(--accent)" : "var(--border-color)",
+                  borderWidth: dragOverSection === "recentTrades" ? "2px" : "1px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
+                    <Clock size={20} color="var(--accent)" />
+                    <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Recent Trades</h2>
+                  </div>
+                  <div style={{ position: "relative" }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setSectionMenuPosition({
+                          ...sectionMenuPosition,
+                          recentTrades: {
+                            top: rect.bottom + 4,
+                            right: window.innerWidth - rect.right,
+                          },
+                        });
+                        setOpenSectionSettings(openSectionSettings === "recentTrades" ? null : "recentTrades");
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        padding: "4px",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "4px",
+                      }}
+                      title="Settings"
+                    >
+                      <Settings size={16} />
+                    </button>
+                    {openSectionSettings === "recentTrades" && createPortal(
+                      <div
+                        data-settings-menu
+                        style={{
+                          position: "fixed",
+                          top: `${sectionMenuPosition.recentTrades.top}px`,
+                          right: `${sectionMenuPosition.recentTrades.right}px`,
+                          backgroundColor: "var(--bg-secondary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "8px",
+                          padding: "8px",
+                          boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                          zIndex: 99999,
+                          minWidth: "120px",
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              const currentIndex = sectionOrder.indexOf("recentTrades");
+                              if (currentIndex > 0) {
+                                const newOrder = [...sectionOrder];
+                                [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
+                                setSectionOrder(newOrder);
+                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                              }
+                              setOpenSectionSettings(null);
+                            }}
+                            disabled={sectionOrder.indexOf("recentTrades") === 0}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: sectionOrder.indexOf("recentTrades") === 0 ? "not-allowed" : "pointer",
+                              color: "var(--text-primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                              opacity: sectionOrder.indexOf("recentTrades") === 0 ? 0.3 : 1,
+                            }}
+                          >
+                            <ChevronUp size={14} />
+                            <span>Move Up</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              const currentIndex = sectionOrder.indexOf("recentTrades");
+                              if (currentIndex < sectionOrder.length - 1) {
+                                const newOrder = [...sectionOrder];
+                                [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
+                                setSectionOrder(newOrder);
+                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                              }
+                              setOpenSectionSettings(null);
+                            }}
+                            disabled={sectionOrder.indexOf("recentTrades") === sectionOrder.length - 1}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: sectionOrder.indexOf("recentTrades") === sectionOrder.length - 1 ? "not-allowed" : "pointer",
+                              color: "var(--text-primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                              opacity: sectionOrder.indexOf("recentTrades") === sectionOrder.length - 1 ? 0.3 : 1,
+                            }}
+                          >
+                            <ChevronDown size={14} />
+                            <span>Move Down</span>
+                          </button>
+                        </div>
+                      </div>,
+                      document.body
+                    )}
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
               {recentTrades.map((trade, idx) => {
                 const isExpanded = expandedRecentTrades.has(idx);
                 return (
@@ -679,9 +1595,12 @@ export default function Dashboard() {
                   </div>
                 );
               })}
-            </div>
-          </div>
-        )}
+                </div>
+              </div>
+            );
+          }
+          return null;
+        })}
       </div>
 
           <MetricsConfigPanel
