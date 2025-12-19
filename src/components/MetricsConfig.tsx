@@ -53,6 +53,7 @@ const defaultMetrics: MetricConfig[] = [
 
 const STORAGE_KEY = "tradebutler_metrics_config";
 const COLOR_RANGE_KEY = "tradebutler_color_range";
+const DASHBOARD_SECTIONS_KEY = "tradebutler_dashboard_sections";
 
 export function useMetricsConfig() {
   const [metrics, setMetrics] = useState<MetricConfig[]>(() => {
@@ -112,6 +113,30 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange }: MetricsC
     }
     return { min: -100, max: 100 };
   });
+  
+  // Dashboard sections state
+  const [dashboardSections, setDashboardSections] = useState(() => {
+    const saved = localStorage.getItem(DASHBOARD_SECTIONS_KEY);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true };
+      }
+    }
+    return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true };
+  });
+  
+  const toggleDashboardSection = (section: string) => {
+    setDashboardSections((prev: any) => {
+      const updated = { ...prev, [section]: !prev[section as keyof typeof prev] };
+      localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(updated));
+      if (onConfigChange) {
+        onConfigChange();
+      }
+      return updated;
+    });
+  };
   
   // Save color range to localStorage
   useEffect(() => {
@@ -177,7 +202,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange }: MetricsC
         >
           <h2 style={{ fontSize: "20px", fontWeight: "600", display: "flex", alignItems: "center", gap: "8px" }}>
             <Settings size={20} />
-            Configure Metrics
+            Configure
           </h2>
           <button
             onClick={onClose}
@@ -319,6 +344,54 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange }: MetricsC
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Dashboard Sections */}
+        <div style={{ marginBottom: "24px" }}>
+          <h3
+            style={{
+              fontSize: "16px",
+              fontWeight: "600",
+              marginBottom: "12px",
+              color: "var(--text-primary)",
+            }}
+          >
+            Dashboard Sections
+          </h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {[
+              { id: "showTopSymbols", label: "Top Symbols" },
+              { id: "showStrategyPerformance", label: "Strategy Performance" },
+              { id: "showRecentTrades", label: "Recent Trades" },
+            ].map((section) => (
+              <label
+                key={section.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "12px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                <span style={{ color: "var(--text-primary)" }}>{section.label}</span>
+                <input
+                  type="checkbox"
+                  checked={dashboardSections[section.id as keyof typeof dashboardSections] as boolean}
+                  onChange={() => toggleDashboardSection(section.id)}
+                  style={{
+                    width: "18px",
+                    height: "18px",
+                    cursor: "pointer",
+                    accentColor: "var(--accent)",
+                  }}
+                />
+              </label>
+            ))}
           </div>
         </div>
 

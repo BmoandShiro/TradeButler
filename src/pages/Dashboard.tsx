@@ -9,6 +9,8 @@ import {
   TrendingUp as TrendingUpIcon,
   BarChart3,
   Clock,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { MetricsConfigPanel, useMetricsConfig } from "../components/MetricsConfig";
 import { format } from "date-fns";
@@ -76,12 +78,13 @@ interface StrategyPerformance {
 }
 
 interface RecentTrade {
-  id: number;
   symbol: string;
-  side: string;
+  entry_timestamp: string;
+  exit_timestamp: string;
   quantity: number;
-  price: number;
-  timestamp: string;
+  entry_price: number;
+  exit_price: number;
+  net_profit_loss: number;
   strategy_name: string | null;
 }
 
@@ -170,11 +173,16 @@ const getMetricColor = (id: string, value: number, colorRange?: { min: number; m
     }
   }
   
+  // Max drawdown should always be red (it represents a loss)
+  if (id === "max_drawdown") {
+    return "var(--loss)";
+  }
+  
   // Dollar-based metrics that should use color range
   const dollarMetrics = [
     "total_profit_loss", "strategy_profit_loss", "average_profit", "average_loss",
     "largest_win", "largest_loss", "average_trade", "total_fees", "net_profit",
-    "max_drawdown", "best_day", "worst_day", "expectancy"
+    "best_day", "worst_day", "expectancy"
   ];
   
   // Apply color range for dollar metrics
@@ -191,8 +199,8 @@ const getMetricColor = (id: string, value: number, colorRange?: { min: number; m
   // Default behavior: positive = green, negative = red, zero = blue
   if (value > 0) {
     // Positive values
-    if (id.includes("loss") || id.includes("losing") || id.includes("drawdown")) {
-      // Loss-related metrics should be red even if positive (like max_drawdown)
+    if (id.includes("loss") || id.includes("losing")) {
+      // Loss-related metrics should be red even if positive
       return "var(--loss)";
     }
     return "var(--profit)";
@@ -205,6 +213,20 @@ const getMetricColor = (id: string, value: number, colorRange?: { min: number; m
   }
 };
 
+const DASHBOARD_SECTIONS_KEY = "tradebutler_dashboard_sections";
+
+interface DashboardSections {
+  showTopSymbols: boolean;
+  showStrategyPerformance: boolean;
+  showRecentTrades: boolean;
+}
+
+const defaultDashboardSections: DashboardSections = {
+  showTopSymbols: true,
+  showStrategyPerformance: true,
+  showRecentTrades: true,
+};
+
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [topSymbols, setTopSymbols] = useState<TopSymbol[]>([]);
@@ -214,6 +236,18 @@ export default function Dashboard() {
   const [showMetricsConfig, setShowMetricsConfig] = useState(false);
   const [configKey, setConfigKey] = useState(0); // Force re-render when config changes
   const metricsConfigHook = useMetricsConfig();
+  const [expandedRecentTrades, setExpandedRecentTrades] = useState<Set<number>>(new Set());
+  const [dashboardSections, setDashboardSections] = useState<DashboardSections>(() => {
+    const saved = localStorage.getItem(DASHBOARD_SECTIONS_KEY);
+    if (saved) {
+      try {
+        return { ...defaultDashboardSections, ...JSON.parse(saved) };
+      } catch {
+        return defaultDashboardSections;
+      }
+    }
+    return defaultDashboardSections;
+  });
   
   // Re-read enabled metrics from localStorage when config changes
   const [enabledMetrics, setEnabledMetrics] = useState(() => metricsConfigHook.getEnabledMetrics());
@@ -257,6 +291,18 @@ export default function Dashboard() {
     loadDashboardData();
   }, []);
 
+  // Re-read dashboard sections from localStorage when config changes
+  useEffect(() => {
+    const saved = localStorage.getItem(DASHBOARD_SECTIONS_KEY);
+    if (saved) {
+      try {
+        setDashboardSections({ ...defaultDashboardSections, ...JSON.parse(saved) });
+      } catch {
+        // Keep current state
+      }
+    }
+  }, [configKey]);
+
   const loadDashboardData = async () => {
     try {
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
@@ -264,7 +310,7 @@ export default function Dashboard() {
         invoke<Metrics>("get_metrics", { pairingMethod }),
         invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod }),
         invoke<StrategyPerformance[]>("get_strategy_performance"),
-        invoke<RecentTrade[]>("get_recent_trades", { limit: 5 }),
+        invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod }),
       ]);
       setMetrics(metricsData);
       
@@ -331,34 +377,34 @@ export default function Dashboard() {
 
   return (
     <div style={{ padding: "30px", overflowY: "auto", height: "100%" }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: "30px",
-        }}
-      >
-        <h1 style={{ fontSize: "32px", fontWeight: "bold" }}>Dashboard</h1>
-        <button
-          onClick={() => setShowMetricsConfig(true)}
-          style={{
-            background: "var(--bg-secondary)",
-            border: "1px solid var(--border-color)",
-            borderRadius: "8px",
-            padding: "10px 16px",
-            color: "var(--text-primary)",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            fontSize: "14px",
-          }}
-        >
-          <Settings size={16} />
-          Configure Metrics
-        </button>
-      </div>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: "30px",
+            }}
+          >
+            <h1 style={{ fontSize: "32px", fontWeight: "bold" }}>Dashboard</h1>
+            <button
+              onClick={() => setShowMetricsConfig(true)}
+              style={{
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "8px",
+                padding: "10px 16px",
+                color: "var(--text-primary)",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                fontSize: "14px",
+              }}
+            >
+              <Settings size={16} />
+              Configure
+            </button>
+          </div>
 
       {/* Metrics Cards */}
       <div
@@ -436,7 +482,7 @@ export default function Dashboard() {
         }}
       >
         {/* Top Symbols */}
-        {topSymbols.length > 0 && (
+        {dashboardSections.showTopSymbols && topSymbols.length > 0 && (
           <div
             style={{
               backgroundColor: "var(--bg-secondary)",
@@ -488,7 +534,7 @@ export default function Dashboard() {
         )}
 
         {/* Strategy Performance */}
-        {strategyPerformance.length > 0 && (
+        {dashboardSections.showStrategyPerformance && strategyPerformance.length > 0 && (
           <div
             style={{
               backgroundColor: "var(--bg-secondary)",
@@ -540,7 +586,7 @@ export default function Dashboard() {
         )}
 
         {/* Recent Trades */}
-        {recentTrades.length > 0 && (
+        {dashboardSections.showRecentTrades && recentTrades.length > 0 && (
           <div
             style={{
               backgroundColor: "var(--bg-secondary)",
@@ -554,42 +600,85 @@ export default function Dashboard() {
               <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Recent Trades</h2>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-              {recentTrades.map((trade) => (
-                <div
-                  key={trade.id}
-                  style={{
-                    padding: "12px",
-                    backgroundColor: "var(--bg-tertiary)",
-                    borderRadius: "6px",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                    <p style={{ fontWeight: "600" }}>{trade.symbol}</p>
-                    <p
+              {recentTrades.map((trade, idx) => {
+                const isExpanded = expandedRecentTrades.has(idx);
+                return (
+                  <div key={`${trade.symbol}-${trade.exit_timestamp}-${idx}`}>
+                    <div
+                      onClick={() => {
+                        const newExpanded = new Set(expandedRecentTrades);
+                        if (isExpanded) {
+                          newExpanded.delete(idx);
+                        } else {
+                          newExpanded.add(idx);
+                        }
+                        setExpandedRecentTrades(newExpanded);
+                      }}
                       style={{
-                        fontSize: "14px",
-                        color: trade.side === "BUY" ? "var(--profit)" : "var(--loss)",
-                        fontWeight: "600",
+                        padding: "12px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        borderRadius: "6px",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
                       }}
                     >
-                      {trade.side}
-                    </p>
+                      {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      <div style={{ flex: 1, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <p style={{ fontWeight: "600" }}>{trade.symbol}</p>
+                        <p
+                          style={{
+                            fontSize: "14px",
+                            fontWeight: "600",
+                            color: trade.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
+                          }}
+                        >
+                          {trade.net_profit_loss >= 0 ? "+" : ""}${trade.net_profit_loss.toFixed(2)}
+                        </p>
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div
+                        style={{
+                          padding: "12px",
+                          paddingLeft: "36px",
+                          backgroundColor: "var(--bg-primary)",
+                          borderBottomLeftRadius: "6px",
+                          borderBottomRightRadius: "6px",
+                          marginTop: "4px",
+                        }}
+                      >
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "12px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <span style={{ color: "var(--text-secondary)" }}>Entry:</span>
+                            <span style={{ color: "var(--text-primary)" }}>
+                              {trade.quantity} @ ${trade.entry_price.toFixed(2)}
+                            </span>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <span style={{ color: "var(--text-secondary)" }}>Exit:</span>
+                            <span style={{ color: "var(--text-primary)" }}>
+                              {trade.quantity} @ ${trade.exit_price.toFixed(2)}
+                            </span>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <span style={{ color: "var(--text-secondary)" }}>Closed:</span>
+                            <span style={{ color: "var(--text-secondary)" }}>
+                              {format(new Date(trade.exit_timestamp), "MMM d, HH:mm")}
+                            </span>
+                          </div>
+                        </div>
+                        {trade.strategy_name && (
+                          <p style={{ fontSize: "11px", color: "var(--accent)", marginTop: "8px" }}>
+                            {trade.strategy_name}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px" }}>
-                    <p style={{ color: "var(--text-secondary)" }}>
-                      {trade.quantity} @ ${trade.price.toFixed(2)}
-                    </p>
-                    <p style={{ color: "var(--text-secondary)" }}>
-                      {format(new Date(trade.timestamp), "MMM d, HH:mm")}
-                    </p>
-                  </div>
-                  {trade.strategy_name && (
-                    <p style={{ fontSize: "11px", color: "var(--accent)", marginTop: "4px" }}>
-                      {trade.strategy_name}
-                    </p>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -597,7 +686,10 @@ export default function Dashboard() {
 
           <MetricsConfigPanel
             isOpen={showMetricsConfig}
-            onClose={() => setShowMetricsConfig(false)}
+            onClose={() => {
+              setShowMetricsConfig(false);
+              setConfigKey(prev => prev + 1); // Refresh dashboard sections
+            }}
             onConfigChange={() => setConfigKey(prev => prev + 1)}
           />
     </div>

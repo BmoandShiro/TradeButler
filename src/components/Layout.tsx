@@ -6,7 +6,8 @@ import {
   BarChart3,
   Calendar,
   Target,
-  Upload
+  Upload,
+  Trash2
 } from "lucide-react";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
@@ -39,6 +40,27 @@ export default function Layout({ children }: LayoutProps) {
       alert("Failed to import CSV: " + error);
     } finally {
       setIsImporting(false);
+    }
+  };
+
+  const handleClearAllData = async () => {
+    const confirmed = window.confirm(
+      "⚠️ WARNING: This will delete ALL trade data!\n\n" +
+      "This action cannot be undone. Are you sure you want to continue?\n\n" +
+      "Click OK to delete all trades, or Cancel to abort."
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await invoke("clear_all_trades");
+      alert("All trade data has been cleared successfully!");
+      window.location.reload();
+    } catch (error) {
+      console.error("Error clearing data:", error);
+      alert("Failed to clear data: " + error);
     }
   };
 
@@ -75,29 +97,52 @@ export default function Layout({ children }: LayoutProps) {
           >
             TradeButler
           </h1>
-          <button
-            onClick={handleImportCSV}
-            disabled={isImporting}
-            style={{
-              width: "100%",
-              padding: "10px",
-              backgroundColor: "var(--accent)",
-              color: "white",
-              border: "none",
-              borderRadius: "6px",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "8px",
-              fontSize: "14px",
-              fontWeight: "500",
-              opacity: isImporting ? 0.6 : 1,
-            }}
-          >
-            <Upload size={16} />
-            {isImporting ? "Importing..." : "Import CSV"}
-          </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <button
+              onClick={handleImportCSV}
+              disabled={isImporting}
+              style={{
+                width: "100%",
+                padding: "10px",
+                backgroundColor: "var(--accent)",
+                color: "white",
+                border: "none",
+                borderRadius: "6px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+                fontSize: "14px",
+                fontWeight: "500",
+                opacity: isImporting ? 0.6 : 1,
+              }}
+            >
+              <Upload size={16} />
+              {isImporting ? "Importing..." : "Import CSV"}
+            </button>
+            <button
+              onClick={handleClearAllData}
+              style={{
+                width: "100%",
+                padding: "10px",
+                backgroundColor: "var(--bg-tertiary)",
+                color: "var(--loss)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+                fontSize: "14px",
+                fontWeight: "500",
+              }}
+            >
+              <Trash2 size={16} />
+              Clear All Data
+            </button>
+          </div>
         </div>
 
         <nav style={{ flex: 1 }}>

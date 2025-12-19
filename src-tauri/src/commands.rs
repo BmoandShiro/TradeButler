@@ -41,6 +41,15 @@ pub struct WebullCsvTrade {
     pub placed_time: String,
     #[serde(rename = "Filled Time")]
     pub filled_time: String,
+    // Optional fee fields - Webull may have different column names
+    #[serde(rename = "Commission")]
+    pub commission: Option<String>,
+    #[serde(rename = "Fees")]
+    pub fees: Option<String>,
+    #[serde(rename = "Fee")]
+    pub fee: Option<String>,
+    #[serde(rename = "Total Fees")]
+    pub total_fees: Option<String>,
 }
 
 fn parse_price(price_str: &str) -> Result<f64, String> {
@@ -179,6 +188,7 @@ pub struct PositionGroup {
 
 // Detect if a symbol is an options contract
 // Options typically have patterns like: SPY251218C00679000 (underlying + date + C/P + strike)
+// Or: ABR251121P00011000
 fn is_options_symbol(symbol: &str) -> bool {
     // Options symbols are typically longer and contain:
     // 1. A 6-digit date (YYMMDD format)
@@ -191,7 +201,12 @@ fn is_options_symbol(symbol: &str) -> bool {
     }
     
     // Check for C or P followed by digits (strike price)
+    // This is the most reliable indicator - options always have C or P
     let has_call_put = symbol.contains('C') || symbol.contains('P');
+    
+    if !has_call_put {
+        return false; // No C or P means it's not an option
+    }
     
     // Check for 6-digit date pattern (YYMMDD) - typically appears before C/P
     let has_date_pattern = symbol.chars()
@@ -202,8 +217,49 @@ fn is_options_symbol(symbol: &str) -> bool {
         });
     
     // Options symbols are typically much longer than stock symbols
-    // and contain both date pattern and C/P indicator
+    // If it has C/P and is long enough OR has a date pattern, it's an option
     has_call_put && (has_date_pattern || symbol.len() > 15)
+}
+
+// Extract underlying symbol from options contract
+// Examples: SPY251218C00679000 -> SPY, ABR251121P00011000 -> ABR
+// For regular stocks, returns the symbol as-is
+fn get_underlying_symbol(symbol: &str) -> String {
+    if !is_options_symbol(symbol) {
+        return symbol.to_string(); // Not an option, return as-is
+    }
+    
+    // Find the position of C or P (call/put indicator)
+    let cp_pos = symbol.find('C').or_else(|| symbol.find('P'));
+    
+    if let Some(cp_pos) = cp_pos {
+        // Look backwards from C/P to find 6 consecutive digits (the date)
+        // The underlying symbol is everything before those 6 digits
+        let before_cp = &symbol[..cp_pos];
+        
+        // Find the last occurrence of 6 consecutive digits
+        let mut date_start = None;
+        let mut consecutive_digits = 0;
+        
+        for (i, ch) in before_cp.char_indices().rev() {
+            if ch.is_ascii_digit() {
+                consecutive_digits += 1;
+                if consecutive_digits == 6 {
+                    date_start = Some(i);
+                    break;
+                }
+            } else {
+                consecutive_digits = 0;
+            }
+        }
+        
+        if let Some(start) = date_start {
+            return symbol[..start].to_string();
+        }
+    }
+    
+    // Fallback: if we can't parse it, return as-is
+    symbol.to_string()
 }
 
 // Pair trades using FIFO method
@@ -529,6 +585,17 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
             // Quantity is the filled amount
             let quantity = webull_trade.filled as f64;
             
+            // Parse fees from any available fee field
+            let fees = webull_trade.commission
+                .or(webull_trade.fees)
+                .or(webull_trade.fee)
+                .or(webull_trade.total_fees)
+                .and_then(|f| {
+                    // Remove any currency symbols and parse
+                    let cleaned = f.trim().replace("$", "").replace(",", "");
+                    cleaned.parse::<f64>().ok()
+                });
+            
             let trade = Trade {
                 id: None,
                 symbol: webull_trade.symbol,
@@ -538,7 +605,7 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
                 timestamp,
                 order_type: webull_trade.time_in_force.unwrap_or_else(|| "DAY".to_string()),
                 status: webull_trade.status,
-                fees: None,
+                fees,
                 notes: webull_trade.name,
                 strategy_id: None,
             };
@@ -920,10 +987,11 @@ pub fn get_symbol_pnl(pairing_method: Option<String>) -> Result<Vec<SymbolPnL>, 
     use std::collections::HashMap;
     let mut symbol_map: HashMap<String, SymbolPnL> = HashMap::new();
     
-    // Calculate P&L for closed positions
+    // Calculate P&L for closed positions, grouped by underlying symbol
     for paired in &paired_trades {
-        let entry = symbol_map.entry(paired.symbol.clone()).or_insert_with(|| SymbolPnL {
-            symbol: paired.symbol.clone(),
+        let underlying = get_underlying_symbol(&paired.symbol);
+        let entry = symbol_map.entry(underlying.clone()).or_insert_with(|| SymbolPnL {
+            symbol: underlying.clone(),
             closed_positions: 0,
             open_position_qty: 0.0,
             total_gross_pnl: 0.0,
@@ -946,7 +1014,7 @@ pub fn get_symbol_pnl(pairing_method: Option<String>) -> Result<Vec<SymbolPnL>, 
         }
     }
     
-    // Calculate open positions
+    // Calculate open positions, grouped by underlying symbol
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
@@ -967,19 +1035,20 @@ pub fn get_symbol_pnl(pairing_method: Option<String>) -> Result<Vec<SymbolPnL>, 
     let mut open_positions: HashMap<String, f64> = HashMap::new();
     for trade_result in trade_iter {
         let (symbol, side, qty) = trade_result.map_err(|e| e.to_string())?;
-        let current_qty = open_positions.get(&symbol).copied().unwrap_or(0.0);
+        let underlying = get_underlying_symbol(&symbol);
+        let current_qty = open_positions.get(&underlying).copied().unwrap_or(0.0);
         if side.to_uppercase() == "BUY" {
-            open_positions.insert(symbol.clone(), current_qty + qty);
+            open_positions.insert(underlying.clone(), current_qty + qty);
         } else if side.to_uppercase() == "SELL" {
-            open_positions.insert(symbol.clone(), (current_qty - qty).max(0.0));
+            open_positions.insert(underlying.clone(), (current_qty - qty).max(0.0));
         }
     }
     
     // Add open positions to results
-    for (symbol, qty) in open_positions {
+    for (underlying, qty) in open_positions {
         if qty > 0.0001 {
-            let entry = symbol_map.entry(symbol.clone()).or_insert_with(|| SymbolPnL {
-                symbol: symbol.clone(),
+            let entry = symbol_map.entry(underlying.clone()).or_insert_with(|| SymbolPnL {
+                symbol: underlying.clone(),
                 closed_positions: 0,
                 open_position_qty: 0.0,
                 total_gross_pnl: 0.0,
@@ -1071,6 +1140,18 @@ pub fn delete_trade(id: i64) -> Result<(), String> {
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     conn.execute("DELETE FROM trades WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_all_trades() -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    // Delete all trades
+    conn.execute("DELETE FROM trades", [])
         .map_err(|e| e.to_string())?;
     
     Ok(())
@@ -1648,48 +1729,41 @@ pub fn get_strategy_performance() -> Result<Vec<StrategyPerformance>, String> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecentTrade {
-    pub id: i64,
     pub symbol: String,
-    pub side: String,
+    pub entry_timestamp: String,
+    pub exit_timestamp: String,
     pub quantity: f64,
-    pub price: f64,
-    pub timestamp: String,
+    pub entry_price: f64,
+    pub exit_price: f64,
+    pub net_profit_loss: f64,
     pub strategy_name: Option<String>,
 }
 
 #[tauri::command]
-pub fn get_recent_trades(limit: Option<i64>) -> Result<Vec<RecentTrade>, String> {
+pub fn get_recent_trades(limit: Option<i64>, pairing_method: Option<String>) -> Result<Vec<RecentTrade>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     let limit = limit.unwrap_or(5);
     
+    // Get all filled trades
     let mut stmt = conn
-        .prepare(
-            "SELECT 
-                t.id,
-                t.symbol,
-                t.side,
-                t.quantity,
-                t.price,
-                t.timestamp,
-                s.name as strategy_name
-            FROM trades t
-            LEFT JOIN strategies s ON t.strategy_id = s.id
-            ORDER BY t.timestamp DESC
-            LIMIT ?1"
-        )
+        .prepare("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades WHERE status = 'Filled' OR status = 'FILLED' ORDER BY timestamp ASC")
         .map_err(|e| e.to_string())?;
     
     let trade_iter = stmt
-        .query_map(params![limit], |row| {
-            Ok(RecentTrade {
-                id: row.get(0)?,
+        .query_map([], |row| {
+            Ok(Trade {
+                id: Some(row.get(0)?),
                 symbol: row.get(1)?,
                 side: row.get(2)?,
                 quantity: row.get(3)?,
                 price: row.get(4)?,
                 timestamp: row.get(5)?,
-                strategy_name: row.get(6)?,
+                order_type: row.get(6)?,
+                status: row.get(7)?,
+                fees: row.get(8)?,
+                notes: row.get(9)?,
+                strategy_id: row.get(10)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1699,6 +1773,48 @@ pub fn get_recent_trades(limit: Option<i64>) -> Result<Vec<RecentTrade>, String>
         trades.push(trade.map_err(|e| e.to_string())?);
     }
     
-    Ok(trades)
+    // Get paired trades
+    let use_fifo = pairing_method.as_deref().unwrap_or("FIFO") == "FIFO";
+    let (paired_trades, _open_trades) = if use_fifo {
+        pair_trades_fifo(trades)
+    } else {
+        pair_trades_lifo(trades)
+    };
+    
+    // Sort by exit timestamp (most recent first) and limit
+    let mut sorted_pairs = paired_trades;
+    sorted_pairs.sort_by(|a, b| b.exit_timestamp.cmp(&a.exit_timestamp));
+    sorted_pairs.truncate(limit as usize);
+    
+    // Convert to RecentTrade format with strategy names
+    let mut recent_trades = Vec::new();
+    for pair in sorted_pairs {
+        // Get strategy name for the pair (use entry trade's strategy)
+        let strategy_name = if let Some(strategy_id) = pair.strategy_id {
+            let mut stmt = conn
+                .prepare("SELECT name FROM strategies WHERE id = ?1")
+                .map_err(|e| e.to_string())?;
+            stmt.query_row(params![strategy_id], |row| {
+                Ok(row.get::<_, Option<String>>(0)?)
+            })
+            .ok()
+            .flatten()
+        } else {
+            None
+        };
+        
+        recent_trades.push(RecentTrade {
+            symbol: pair.symbol,
+            entry_timestamp: pair.entry_timestamp,
+            exit_timestamp: pair.exit_timestamp,
+            quantity: pair.quantity,
+            entry_price: pair.entry_price,
+            exit_price: pair.exit_price,
+            net_profit_loss: pair.net_profit_loss,
+            strategy_name,
+        });
+    }
+    
+    Ok(recent_trades)
 }
 
