@@ -1962,6 +1962,118 @@ pub fn get_strategy_performance(pairing_method: Option<String>, start_date: Opti
     Ok(performance)
 }
 
+#[tauri::command]
+pub fn get_paired_trades_by_strategy(
+    strategy_id: Option<i64>,
+    pairing_method: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+) -> Result<Vec<PairedTrade>, String> {
+    // Get all paired trades
+    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    
+    // Filter by date range if provided
+    let mut filtered = if start_date.is_some() || end_date.is_some() {
+        paired_trades.into_iter().filter(|pair| {
+            let exit_date = &pair.exit_timestamp;
+            let in_range = if let Some(start) = &start_date {
+                exit_date >= start
+            } else {
+                true
+            } && if let Some(end) = &end_date {
+                exit_date <= end
+            } else {
+                true
+            };
+            in_range
+        }).collect::<Vec<_>>()
+    } else {
+        paired_trades
+    };
+    
+    // Get position groups to find the original entry trade's strategy_id for positions with additions
+    let position_groups = get_position_groups(pairing_method.clone(), start_date.clone(), end_date.clone()).map_err(|e| e.to_string())?;
+    
+    // Create a map: trade_id -> position_group_entry_trade_strategy_id
+    use std::collections::HashMap;
+    let mut trade_to_position_strategy: HashMap<i64, Option<i64>> = HashMap::new();
+    for group in &position_groups {
+        let position_strategy_id = group.entry_trade.strategy_id;
+        for trade in &group.position_trades {
+            if let Some(trade_id) = trade.id {
+                trade_to_position_strategy.insert(trade_id, position_strategy_id);
+            }
+        }
+    }
+    
+    // Get entry trade strategy_ids from database
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let entry_trade_ids: Vec<i64> = filtered
+        .iter()
+        .map(|p| p.entry_trade_id)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    
+    let mut entry_trade_strategies: HashMap<i64, Option<i64>> = HashMap::new();
+    if !entry_trade_ids.is_empty() {
+        let mut entry_trade_stmt = conn
+            .prepare("SELECT strategy_id FROM trades WHERE id = ?")
+            .map_err(|e| e.to_string())?;
+        
+        for entry_trade_id in &entry_trade_ids {
+            if let Ok(strategy_id) = entry_trade_stmt.query_row([entry_trade_id], |row| {
+                row.get::<_, Option<i64>>(0)
+            }) {
+                entry_trade_strategies.insert(*entry_trade_id, strategy_id);
+            }
+        }
+    }
+    
+    // Filter by strategy_id
+    if let Some(strategy_id) = strategy_id {
+        filtered = filtered.into_iter().filter(|paired| {
+            // First, try to get strategy_id from position group (for positions with additions)
+            let pair_strategy_id = trade_to_position_strategy
+                .get(&paired.entry_trade_id)
+                .copied()
+                .flatten()
+                // Fallback to direct entry trade lookup
+                .or_else(|| {
+                    entry_trade_strategies
+                        .get(&paired.entry_trade_id)
+                        .copied()
+                        .flatten()
+                })
+                // Final fallback to paired trade's strategy_id
+                .or(paired.strategy_id);
+            
+            pair_strategy_id == Some(strategy_id)
+        }).collect();
+    } else {
+        // Filter for unassigned (strategy_id is None)
+        filtered = filtered.into_iter().filter(|paired| {
+            let pair_strategy_id = trade_to_position_strategy
+                .get(&paired.entry_trade_id)
+                .copied()
+                .flatten()
+                .or_else(|| {
+                    entry_trade_strategies
+                        .get(&paired.entry_trade_id)
+                        .copied()
+                        .flatten()
+                })
+                .or(paired.strategy_id);
+            
+            pair_strategy_id.is_none()
+        }).collect();
+    }
+    
+    Ok(filtered)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecentTrade {
     pub symbol: String,

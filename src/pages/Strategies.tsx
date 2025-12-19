@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, Target } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, ChevronDown, ChevronRight } from "lucide-react";
+import { format } from "date-fns";
 
 interface Strategy {
   id: number;
@@ -9,6 +10,22 @@ interface Strategy {
   notes: string | null;
   created_at: string | null;
   color: string | null;
+}
+
+interface PairedTrade {
+  symbol: string;
+  entry_trade_id: number;
+  exit_trade_id: number;
+  quantity: number;
+  entry_price: number;
+  exit_price: number;
+  entry_timestamp: string;
+  exit_timestamp: string;
+  gross_profit_loss: number;
+  entry_fees: number;
+  exit_fees: number;
+  net_profit_loss: number;
+  strategy_id: number | null;
 }
 
 export default function Strategies() {
@@ -22,6 +39,9 @@ export default function Strategies() {
     notes: "",
     color: "#3b82f6",
   });
+  const [expandedStrategies, setExpandedStrategies] = useState<Set<number>>(new Set());
+  const [strategyPairs, setStrategyPairs] = useState<Map<number, PairedTrade[]>>(new Map());
+  const [loadingPairs, setLoadingPairs] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     loadStrategies();
@@ -93,6 +113,36 @@ export default function Strategies() {
     setFormData({ name: "", description: "", notes: "", color: "#3b82f6" });
     setEditingStrategy(null);
     setShowForm(false);
+  };
+
+  const toggleStrategyExpansion = async (strategyId: number) => {
+    const newExpanded = new Set(expandedStrategies);
+    if (newExpanded.has(strategyId)) {
+      newExpanded.delete(strategyId);
+    } else {
+      newExpanded.add(strategyId);
+      // Load pairs if not already loaded
+      if (!strategyPairs.has(strategyId)) {
+        setLoadingPairs(new Set([...loadingPairs, strategyId]));
+        try {
+          const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+          const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
+            strategyId: strategyId,
+            pairingMethod: pairingMethod,
+            startDate: null,
+            endDate: null,
+          });
+          setStrategyPairs(new Map(strategyPairs.set(strategyId, pairs)));
+        } catch (error) {
+          console.error("Error loading strategy pairs:", error);
+        } finally {
+          const newLoading = new Set(loadingPairs);
+          newLoading.delete(strategyId);
+          setLoadingPairs(newLoading);
+        }
+      }
+    }
+    setExpandedStrategies(newExpanded);
   };
 
   if (loading) {
@@ -278,76 +328,180 @@ export default function Strategies() {
         </div>
       ) : (
         <div style={{ display: "grid", gap: "16px" }}>
-          {strategies.map((strategy) => (
-            <div
-              key={strategy.id}
-              style={{
-                backgroundColor: "var(--bg-secondary)",
-                border: "1px solid var(--border-color)",
-                borderRadius: "8px",
-                padding: "20px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "flex-start",
-              }}
-            >
-              <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "8px" }}>
+          {strategies.map((strategy) => {
+            const isExpanded = expandedStrategies.has(strategy.id);
+            const pairs = strategyPairs.get(strategy.id) || [];
+            const isLoading = loadingPairs.has(strategy.id);
+            
+            return (
+              <div
+                key={strategy.id}
+                style={{
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    padding: "20px",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "8px" }}>
+                      <button
+                        onClick={() => toggleStrategyExpansion(strategy.id)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          padding: "0",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      </button>
+                      <div
+                        style={{
+                          width: "12px",
+                          height: "12px",
+                          borderRadius: "50%",
+                          backgroundColor: strategy.color || "var(--accent)",
+                        }}
+                      />
+                      <h3 style={{ fontSize: "18px", fontWeight: "600" }}>{strategy.name}</h3>
+                    </div>
+                    {strategy.description && (
+                      <p style={{ color: "var(--text-secondary)", marginBottom: "8px", fontSize: "14px" }}>
+                        {strategy.description}
+                      </p>
+                    )}
+                    {strategy.notes && (
+                      <p style={{ color: "var(--text-secondary)", fontSize: "13px", fontStyle: "italic" }}>
+                        {strategy.notes}
+                      </p>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    <button
+                      onClick={() => handleEdit(strategy)}
+                      style={{
+                        background: "var(--bg-tertiary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "6px",
+                        padding: "8px",
+                        color: "var(--text-primary)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                      }}
+                    >
+                      <Edit2 size={16} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(strategy.id)}
+                      style={{
+                        background: "var(--bg-tertiary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "6px",
+                        padding: "8px",
+                        color: "var(--danger)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                      }}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+                {isExpanded && (
                   <div
                     style={{
-                      width: "12px",
-                      height: "12px",
-                      borderRadius: "50%",
-                      backgroundColor: strategy.color || "var(--accent)",
+                      borderTop: "1px solid var(--border-color)",
+                      padding: "20px",
+                      backgroundColor: "var(--bg-tertiary)",
                     }}
-                  />
-                  <h3 style={{ fontSize: "18px", fontWeight: "600" }}>{strategy.name}</h3>
-                </div>
-                {strategy.description && (
-                  <p style={{ color: "var(--text-secondary)", marginBottom: "8px", fontSize: "14px" }}>
-                    {strategy.description}
-                  </p>
-                )}
-                {strategy.notes && (
-                  <p style={{ color: "var(--text-secondary)", fontSize: "13px", fontStyle: "italic" }}>
-                    {strategy.notes}
-                  </p>
+                  >
+                    {isLoading ? (
+                      <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>Loading trade pairs...</p>
+                    ) : pairs.length === 0 ? (
+                      <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>No trade pairs found for this strategy.</p>
+                    ) : (
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                          <thead>
+                            <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                              <th style={{ padding: "8px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                Symbol
+                              </th>
+                              <th style={{ padding: "8px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                Entry Date
+                              </th>
+                              <th style={{ padding: "8px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                Exit Date
+                              </th>
+                              <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                Quantity
+                              </th>
+                              <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                Entry Price
+                              </th>
+                              <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                Exit Price
+                              </th>
+                              <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                P&L
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pairs.map((pair, idx) => (
+                              <tr key={`${pair.entry_trade_id}-${pair.exit_trade_id}-${idx}`} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                <td style={{ padding: "12px", fontSize: "14px" }}>{pair.symbol}</td>
+                                <td style={{ padding: "12px", fontSize: "14px" }}>
+                                  {format(new Date(pair.entry_timestamp), "MMM dd, yyyy HH:mm")}
+                                </td>
+                                <td style={{ padding: "12px", fontSize: "14px" }}>
+                                  {format(new Date(pair.exit_timestamp), "MMM dd, yyyy HH:mm")}
+                                </td>
+                                <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
+                                  {pair.quantity.toFixed(4)}
+                                </td>
+                                <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
+                                  ${pair.entry_price.toFixed(2)}
+                                </td>
+                                <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
+                                  ${pair.exit_price.toFixed(2)}
+                                </td>
+                                <td
+                                  style={{
+                                    padding: "12px",
+                                    fontSize: "14px",
+                                    textAlign: "right",
+                                    fontWeight: "600",
+                                    color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
+                                  }}
+                                >
+                                  ${pair.net_profit_loss.toFixed(2)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
-              <div style={{ display: "flex", gap: "8px" }}>
-                <button
-                  onClick={() => handleEdit(strategy)}
-                  style={{
-                    background: "var(--bg-tertiary)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "6px",
-                    padding: "8px",
-                    color: "var(--text-primary)",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                  }}
-                >
-                  <Edit2 size={16} />
-                </button>
-                <button
-                  onClick={() => handleDelete(strategy.id)}
-                  style={{
-                    background: "var(--bg-tertiary)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "6px",
-                    padding: "8px",
-                    color: "var(--danger)",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                  }}
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

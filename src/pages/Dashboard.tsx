@@ -85,6 +85,22 @@ interface StrategyPerformance {
   estimated_pnl: number;
 }
 
+interface PairedTrade {
+  symbol: string;
+  entry_trade_id: number;
+  exit_trade_id: number;
+  quantity: number;
+  entry_price: number;
+  exit_price: number;
+  entry_timestamp: string;
+  exit_timestamp: string;
+  gross_profit_loss: number;
+  entry_fees: number;
+  exit_fees: number;
+  net_profit_loss: number;
+  strategy_id: number | null;
+}
+
 interface RecentTrade {
   symbol: string;
   entry_timestamp: string;
@@ -260,6 +276,14 @@ export default function Dashboard() {
   const [configKey, setConfigKey] = useState(0); // Force re-render when config changes
   const metricsConfigHook = useMetricsConfig();
   const [expandedRecentTrades, setExpandedRecentTrades] = useState<Set<number>>(new Set());
+  const [expandedStrategies, setExpandedStrategies] = useState<Set<number | string>>(new Set());
+  const [strategyPairs, setStrategyPairs] = useState<Map<number | string, PairedTrade[]>>(new Map());
+  const [loadingStrategyPairs, setLoadingStrategyPairs] = useState<Set<number | string>>(new Set());
+  const [strategyPairsPerPage, setStrategyPairsPerPage] = useState<number>(() => {
+    const saved = localStorage.getItem("tradebutler_strategy_pairs_per_page");
+    return saved ? parseInt(saved, 10) : 20;
+  });
+  const [strategyCurrentPages, setStrategyCurrentPages] = useState<Map<number | string, number>>(new Map());
   const [dashboardSections, setDashboardSections] = useState<DashboardSections>(() => {
     const saved = localStorage.getItem(DASHBOARD_SECTIONS_KEY);
     if (saved) {
@@ -1457,6 +1481,36 @@ export default function Dashboard() {
                             <ChevronDown size={14} />
                             <span>Move Down</span>
                           </button>
+                          <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                          <div style={{ padding: "8px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                            <label style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                              Pairs Per Page:
+                            </label>
+                            <input
+                              type="number"
+                              min="5"
+                              max="100"
+                              step="5"
+                              value={strategyPairsPerPage}
+                              onChange={(e) => {
+                                const value = Math.max(5, Math.min(100, parseInt(e.target.value) || 20));
+                                setStrategyPairsPerPage(value);
+                                localStorage.setItem("tradebutler_strategy_pairs_per_page", value.toString());
+                                // Reset all strategy pages to 1 when changing page size
+                                setStrategyCurrentPages(new Map());
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{
+                                padding: "6px 8px",
+                                backgroundColor: "var(--bg-tertiary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "4px",
+                                color: "var(--text-primary)",
+                                fontSize: "13px",
+                                width: "100%",
+                              }}
+                            />
+                          </div>
                         </div>
                       </div>,
                       document.body
@@ -1464,39 +1518,230 @@ export default function Dashboard() {
                   </div>
                 </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-              {strategyPerformance.map((strategy) => (
-                <div
-                  key={strategy.strategy_id || "unassigned"}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "12px",
-                    backgroundColor: "var(--bg-tertiary)",
-                    borderRadius: "6px",
-                  }}
-                >
-                  <div>
-                    <p style={{ fontWeight: "600", marginBottom: "4px" }}>{strategy.strategy_name}</p>
-                    <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                      {strategy.trade_count} trades
-                    </p>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <p
+              {strategyPerformance.map((strategy) => {
+                const strategyKey = strategy.strategy_id ?? "unassigned";
+                const isExpanded = expandedStrategies.has(strategyKey);
+                const pairs = strategyPairs.get(strategyKey) || [];
+                const isLoading = loadingStrategyPairs.has(strategyKey);
+                
+                return (
+                  <div
+                    key={strategyKey}
+                    style={{
+                      backgroundColor: "var(--bg-tertiary)",
+                      borderRadius: "6px",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      onClick={async () => {
+                        const newExpanded = new Set(expandedStrategies);
+                        if (newExpanded.has(strategyKey)) {
+                          newExpanded.delete(strategyKey);
+                        } else {
+                          newExpanded.add(strategyKey);
+                          // Reset to page 1 when expanding
+                          const newPages = new Map(strategyCurrentPages);
+                          newPages.set(strategyKey, 1);
+                          setStrategyCurrentPages(newPages);
+                          // Load pairs if not already loaded
+                          if (!strategyPairs.has(strategyKey)) {
+                            setLoadingStrategyPairs(new Set([...loadingStrategyPairs, strategyKey]));
+                            try {
+                              const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+                              const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
+                              const startDate = dateRange.start ? dateRange.start.toISOString() : null;
+                              const endDate = dateRange.end ? dateRange.end.toISOString() : null;
+                              const loadedPairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
+                                strategyId: strategy.strategy_id,
+                                pairingMethod: pairingMethod,
+                                startDate: startDate,
+                                endDate: endDate,
+                              });
+                              setStrategyPairs(new Map(strategyPairs.set(strategyKey, loadedPairs)));
+                            } catch (error) {
+                              console.error("Error loading strategy pairs:", error);
+                            } finally {
+                              const newLoading = new Set(loadingStrategyPairs);
+                              newLoading.delete(strategyKey);
+                              setLoadingStrategyPairs(newLoading);
+                            }
+                          }
+                        }
+                        setExpandedStrategies(newExpanded);
+                      }}
                       style={{
-                        fontWeight: "600",
-                        color: strategy.estimated_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "12px",
+                        cursor: "pointer",
                       }}
                     >
-                      ${strategy.estimated_pnl.toFixed(2)}
-                    </p>
-                    <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                      ${(strategy.total_volume / 1000).toFixed(1)}k vol
-                    </p>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1 }}>
+                        {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                        <div>
+                          <p style={{ fontWeight: "600", marginBottom: "4px" }}>{strategy.strategy_name}</p>
+                          <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                            {strategy.trade_count} trades
+                          </p>
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <p
+                          style={{
+                            fontWeight: "600",
+                            color: strategy.estimated_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                          }}
+                        >
+                          ${strategy.estimated_pnl.toFixed(2)}
+                        </p>
+                        <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                          ${(strategy.total_volume / 1000).toFixed(1)}k vol
+                        </p>
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div
+                        style={{
+                          borderTop: "1px solid var(--border-color)",
+                          padding: "16px",
+                          backgroundColor: "var(--bg-secondary)",
+                        }}
+                      >
+                        {isLoading ? (
+                          <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>Loading trade pairs...</p>
+                        ) : pairs.length === 0 ? (
+                          <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>No trade pairs found for this strategy.</p>
+                        ) : (() => {
+                          // Calculate pagination
+                          const currentPage = strategyCurrentPages.get(strategyKey) || 1;
+                          const totalPages = Math.ceil(pairs.length / strategyPairsPerPage);
+                          const startIndex = (currentPage - 1) * strategyPairsPerPage;
+                          const endIndex = startIndex + strategyPairsPerPage;
+                          const paginatedPairs = pairs.slice(startIndex, endIndex);
+                          
+                          return (
+                            <>
+                              <div style={{ overflowX: "auto" }}>
+                                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                                  <thead>
+                                    <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                      <th style={{ padding: "8px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                        Symbol
+                                      </th>
+                                      <th style={{ padding: "8px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                        Entry Date
+                                      </th>
+                                      <th style={{ padding: "8px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                        Exit Date
+                                      </th>
+                                      <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                        Quantity
+                                      </th>
+                                      <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                        Entry Price
+                                      </th>
+                                      <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                        Exit Price
+                                      </th>
+                                      <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                        P&L
+                                      </th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {paginatedPairs.map((pair, idx) => (
+                                      <tr key={`${pair.entry_trade_id}-${pair.exit_trade_id}-${idx}`} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                        <td style={{ padding: "12px", fontSize: "14px" }}>{pair.symbol}</td>
+                                        <td style={{ padding: "12px", fontSize: "14px" }}>
+                                          {format(new Date(pair.entry_timestamp), "MMM dd, yyyy HH:mm")}
+                                        </td>
+                                        <td style={{ padding: "12px", fontSize: "14px" }}>
+                                          {format(new Date(pair.exit_timestamp), "MMM dd, yyyy HH:mm")}
+                                        </td>
+                                        <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
+                                          {pair.quantity.toFixed(4)}
+                                        </td>
+                                        <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
+                                          ${pair.entry_price.toFixed(2)}
+                                        </td>
+                                        <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
+                                          ${pair.exit_price.toFixed(2)}
+                                        </td>
+                                        <td
+                                          style={{
+                                            padding: "12px",
+                                            fontSize: "14px",
+                                            textAlign: "right",
+                                            fontWeight: "600",
+                                            color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
+                                          }}
+                                        >
+                                          ${pair.net_profit_loss.toFixed(2)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {totalPages > 1 && (
+                                <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "12px", marginTop: "16px", paddingTop: "16px", borderTop: "1px solid var(--border-color)" }}>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const newPages = new Map(strategyCurrentPages);
+                                      newPages.set(strategyKey, Math.max(1, currentPage - 1));
+                                      setStrategyCurrentPages(newPages);
+                                    }}
+                                    disabled={currentPage === 1}
+                                    style={{
+                                      padding: "6px 12px",
+                                      backgroundColor: currentPage === 1 ? "var(--bg-tertiary)" : "var(--bg-secondary)",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "4px",
+                                      color: "var(--text-primary)",
+                                      cursor: currentPage === 1 ? "not-allowed" : "pointer",
+                                      fontSize: "13px",
+                                      opacity: currentPage === 1 ? 0.5 : 1,
+                                    }}
+                                  >
+                                    Previous
+                                  </button>
+                                  <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                                    Page {currentPage} of {totalPages}
+                                  </span>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const newPages = new Map(strategyCurrentPages);
+                                      newPages.set(strategyKey, Math.min(totalPages, currentPage + 1));
+                                      setStrategyCurrentPages(newPages);
+                                    }}
+                                    disabled={currentPage === totalPages}
+                                    style={{
+                                      padding: "6px 12px",
+                                      backgroundColor: currentPage === totalPages ? "var(--bg-tertiary)" : "var(--bg-secondary)",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "4px",
+                                      color: "var(--text-primary)",
+                                      cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+                                      fontSize: "13px",
+                                      opacity: currentPage === totalPages ? 0.5 : 1,
+                                    }}
+                                  >
+                                    Next
+                                  </button>
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
               </div>
             </div>
             );

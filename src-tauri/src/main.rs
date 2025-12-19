@@ -44,6 +44,7 @@ fn main() {
             commands::get_top_symbols,
             commands::get_strategy_performance,
             commands::get_recent_trades,
+            commands::get_paired_trades_by_strategy,
             commands::clear_all_trades,
         ])
         .run(tauri::generate_context!())
