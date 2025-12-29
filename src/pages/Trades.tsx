@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
-import { ChevronDown, ChevronRight, TrendingUp, TrendingDown } from "lucide-react";
+import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, BarChart3 } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
+import { TradeChart } from "../components/TradeChart";
 
 interface Trade {
   id: number;
@@ -80,6 +81,7 @@ export default function Trades() {
   const [customEndDate, setCustomEndDate] = useState<string>(() => {
     return localStorage.getItem("tradebutler_trades_custom_end") || "";
   });
+  const [selectedPairForChart, setSelectedPairForChart] = useState<PairedTrade | null>(null);
 
   useEffect(() => {
     loadData();
@@ -558,6 +560,60 @@ export default function Trades() {
                                     </tbody>
                                   </table>
                                 </div>
+                                {/* Add View Chart button for closed positions */}
+                                {group.final_quantity === 0 && group.position_trades.length >= 2 && (
+                                  <div style={{ marginTop: "16px", display: "flex", justifyContent: "flex-end" }}>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        // Find entry and exit trades
+                                        const entryTrade = group.entry_trade;
+                                        const lastTrade = group.position_trades[group.position_trades.length - 1];
+                                        
+                                        // Create a PairedTrade-like object for the chart
+                                        const chartPair: PairedTrade = {
+                                          symbol: entryTrade.symbol,
+                                          entry_trade_id: entryTrade.id,
+                                          exit_trade_id: lastTrade.id,
+                                          quantity: Math.min(entryTrade.quantity, lastTrade.quantity),
+                                          entry_price: entryTrade.price,
+                                          exit_price: lastTrade.price,
+                                          entry_timestamp: entryTrade.timestamp,
+                                          exit_timestamp: lastTrade.timestamp,
+                                          gross_profit_loss: 0, // Not needed for chart
+                                          entry_fees: entryTrade.fees || 0,
+                                          exit_fees: lastTrade.fees || 0,
+                                          net_profit_loss: group.total_pnl,
+                                          strategy_id: entryTrade.strategy_id,
+                                        };
+                                        setSelectedPairForChart(chartPair);
+                                      }}
+                                      style={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: "6px",
+                                        padding: "8px 16px",
+                                        backgroundColor: "var(--accent)",
+                                        border: "none",
+                                        borderRadius: "4px",
+                                        color: "white",
+                                        fontSize: "13px",
+                                        fontWeight: "500",
+                                        cursor: "pointer",
+                                        transition: "opacity 0.2s",
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.currentTarget.style.opacity = "0.8";
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.opacity = "1";
+                                      }}
+                                    >
+                                      <BarChart3 size={16} />
+                                      View Chart
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -831,8 +887,39 @@ export default function Trades() {
                                           {pair.net_profit_loss >= 0 ? "+" : ""}${pair.net_profit_loss.toFixed(2)}
                                         </span>
                                       </div>
-                                      <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                                        Gross: ${pair.gross_profit_loss.toFixed(2)}
+                                      <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                                        <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                                          Gross: ${pair.gross_profit_loss.toFixed(2)}
+                                        </div>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setSelectedPairForChart(pair);
+                                          }}
+                                          style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "6px",
+                                            padding: "6px 12px",
+                                            backgroundColor: "var(--accent)",
+                                            border: "none",
+                                            borderRadius: "4px",
+                                            color: "white",
+                                            fontSize: "12px",
+                                            fontWeight: "500",
+                                            cursor: "pointer",
+                                            transition: "opacity 0.2s",
+                                          }}
+                                          onMouseEnter={(e) => {
+                                            e.currentTarget.style.opacity = "0.8";
+                                          }}
+                                          onMouseLeave={(e) => {
+                                            e.currentTarget.style.opacity = "1";
+                                          }}
+                                        >
+                                          <BarChart3 size={14} />
+                                          View Chart
+                                        </button>
                                       </div>
                                     </div>
                                   </div>
@@ -849,6 +936,16 @@ export default function Trades() {
             </table>
           </div>
         </div>
+      )}
+      {selectedPairForChart && (
+        <TradeChart
+          symbol={selectedPairForChart.symbol}
+          entryTimestamp={selectedPairForChart.entry_timestamp}
+          exitTimestamp={selectedPairForChart.exit_timestamp}
+          entryPrice={selectedPairForChart.entry_price}
+          exitPrice={selectedPairForChart.exit_price}
+          onClose={() => setSelectedPairForChart(null)}
+        />
       )}
     </div>
   );

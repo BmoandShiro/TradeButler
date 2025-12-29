@@ -2203,3 +2203,61 @@ pub fn get_recent_trades(limit: Option<i64>, pairing_method: Option<String>, sta
     Ok(recent_trades)
 }
 
+#[tauri::command]
+pub async fn fetch_chart_data(symbol: String, period1: i64, period2: i64, interval: String) -> Result<serde_json::Value, String> {
+    let url = format!(
+        "https://query1.finance.yahoo.com/v8/finance/chart/{}?period1={}&period2={}&interval={}",
+        symbol, period1, period2, interval
+    );
+    
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    // Retry logic with exponential backoff for rate limiting
+    let max_retries = 3;
+    let mut last_error = None;
+    
+    for attempt in 0..=max_retries {
+        let response = client
+            .get(&url)
+            .header("Accept", "application/json")
+            .header("Accept-Language", "en-US,en;q=0.9")
+            .header("Referer", "https://finance.yahoo.com/")
+            .send()
+            .await;
+        
+        match response {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    let data: serde_json::Value = resp.json().await
+                        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+                    return Ok(data);
+                } else if status.as_u16() == 429 && attempt < max_retries {
+                    // Rate limited - wait with exponential backoff
+                    let delay_ms = 1000 * (2_u64.pow(attempt)); // 1s, 2s, 4s
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                    last_error = Some(format!("Rate limited (429), retrying... (attempt {}/{})", attempt + 1, max_retries + 1));
+                    continue;
+                } else {
+                    return Err(format!("Failed to fetch chart data: {} {}", status, status.canonical_reason().unwrap_or("Unknown")));
+                }
+            }
+            Err(e) => {
+                if attempt < max_retries {
+                    let delay_ms = 1000 * (2_u64.pow(attempt));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                    last_error = Some(format!("Network error: {}, retrying... (attempt {}/{})", e, attempt + 1, max_retries + 1));
+                    continue;
+                } else {
+                    return Err(format!("Network error after {} attempts: {}", max_retries + 1, e));
+                }
+            }
+        }
+    }
+    
+    Err(last_error.unwrap_or_else(|| "Failed to fetch chart data after retries".to_string()))
+}
+

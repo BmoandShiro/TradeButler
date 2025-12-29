@@ -46,6 +46,7 @@ fn main() {
             commands::get_recent_trades,
             commands::get_paired_trades_by_strategy,
             commands::clear_all_trades,
+            commands::fetch_chart_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
