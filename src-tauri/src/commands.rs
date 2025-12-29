@@ -229,40 +229,24 @@ fn is_options_symbol(symbol: &str) -> bool {
 // Examples: SPY251218C00679000 -> SPY, ABR251121P00011000 -> ABR
 // For regular stocks, returns the symbol as-is
 fn get_underlying_symbol(symbol: &str) -> String {
-    if !is_options_symbol(symbol) {
-        return symbol.to_string(); // Not an option, return as-is
+    if symbol.is_empty() {
+        return symbol.to_string();
     }
     
-    // Find the position of C or P (call/put indicator)
-    let cp_pos = symbol.find('C').or_else(|| symbol.find('P'));
+    // Option symbols typically have format: BASESYMBOL + 6DIGITDATE + C/P + STRIKE
+    // Find the first digit in the symbol - everything before it is the base symbol
+    let first_digit_pos = symbol.chars().position(|c| c.is_ascii_digit());
     
-    if let Some(cp_pos) = cp_pos {
-        // Look backwards from C/P to find 6 consecutive digits (the date)
-        // The underlying symbol is everything before those 6 digits
-        let before_cp = &symbol[..cp_pos];
-        
-        // Find the last occurrence of 6 consecutive digits
-        let mut date_start = None;
-        let mut consecutive_digits = 0;
-        
-        for (i, ch) in before_cp.char_indices().rev() {
-            if ch.is_ascii_digit() {
-                consecutive_digits += 1;
-                if consecutive_digits == 6 {
-                    date_start = Some(i);
-                    break;
-                }
-            } else {
-                consecutive_digits = 0;
-            }
-        }
-        
-        if let Some(start) = date_start {
-            return symbol[..start].to_string();
+    if let Some(pos) = first_digit_pos {
+        // Found a digit, extract everything before it as the base symbol
+        let base = &symbol[..pos];
+        // Only return base if it's not empty and looks like a valid symbol (at least 1 char)
+        if !base.is_empty() {
+            return base.to_string();
         }
     }
     
-    // Fallback: if we can't parse it, return as-is
+    // No digits found or empty base - it's already a base symbol (e.g., "SPY", "ABR")
     symbol.to_string()
 }
 

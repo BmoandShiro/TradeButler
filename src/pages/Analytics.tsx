@@ -53,13 +53,35 @@ export default function Analytics() {
     }
   };
 
+  // Extract underlying symbol from options contract
+  // Examples: SPY251218C00679000 -> SPY, ABR251121P00011000 -> ABR
+  // For regular stocks, returns the symbol as-is
+  const getUnderlyingSymbol = (symbol: string): string => {
+    if (!symbol) {
+      return symbol;
+    }
+    
+    // Find the first digit in the symbol - everything before it is the base symbol
+    const firstDigitIndex = symbol.search(/\d/);
+    
+    if (firstDigitIndex > 0) {
+      // Found a digit, extract everything before it as the base symbol
+      return symbol.substring(0, firstDigitIndex);
+    }
+    
+    // No digits found - it's already a base symbol (e.g., "SPY", "ABR")
+    return symbol;
+  };
+
   // Process trades for charts
   const processChartData = () => {
     const symbolCounts: Record<string, number> = {};
     const sideCounts: Record<string, number> = { BUY: 0, SELL: 0 };
 
     trades.forEach((trade) => {
-      symbolCounts[trade.symbol] = (symbolCounts[trade.symbol] || 0) + 1;
+      // Extract underlying symbol for aggregation
+      const underlyingSymbol = getUnderlyingSymbol(trade.symbol);
+      symbolCounts[underlyingSymbol] = (symbolCounts[underlyingSymbol] || 0) + 1;
       if (trade.side === "BUY" || trade.side === "SELL") {
         sideCounts[trade.side]++;
       }
