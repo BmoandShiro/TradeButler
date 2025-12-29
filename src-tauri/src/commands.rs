@@ -1017,7 +1017,43 @@ pub fn get_paired_trades(pairing_method: Option<String>) -> Result<Vec<PairedTra
 
 #[tauri::command]
 pub fn get_symbol_pnl(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>) -> Result<Vec<SymbolPnL>, String> {
-    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    // Get both paired trades and open trades from pairing logic
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn
+        .prepare("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades WHERE status = 'Filled' OR status = 'FILLED' ORDER BY timestamp ASC")
+        .map_err(|e| e.to_string())?;
+    
+    let trade_iter = stmt
+        .query_map([], |row| {
+            Ok(Trade {
+                id: Some(row.get(0)?),
+                symbol: row.get(1)?,
+                side: row.get(2)?,
+                quantity: row.get(3)?,
+                price: row.get(4)?,
+                timestamp: row.get(5)?,
+                order_type: row.get(6)?,
+                status: row.get(7)?,
+                fees: row.get(8)?,
+                notes: row.get(9)?,
+                strategy_id: row.get(10)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut trades = Vec::new();
+    for trade in trade_iter {
+        trades.push(trade.map_err(|e| e.to_string())?);
+    }
+    
+    let use_fifo = pairing_method.as_deref().unwrap_or("FIFO") == "FIFO";
+    let (paired_trades, open_trades) = if use_fifo {
+        pair_trades_fifo(trades)
+    } else {
+        pair_trades_lifo(trades)
+    };
     
     // Filter paired trades by date range if provided
     let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
@@ -1068,39 +1104,22 @@ pub fn get_symbol_pnl(pairing_method: Option<String>, start_date: Option<String>
         }
     }
     
-    // Calculate open positions, grouped by underlying symbol
-    let db_path = get_db_path();
-    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
-    
-    let mut stmt = conn
-        .prepare("SELECT symbol, side, quantity FROM trades WHERE status = 'Filled' OR status = 'FILLED' ORDER BY timestamp ASC")
-        .map_err(|e| e.to_string())?;
-    
-    let trade_iter = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, f64>(2)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?;
-    
+    // Calculate open positions from unpaired trades, grouped by underlying symbol
     let mut open_positions: HashMap<String, f64> = HashMap::new();
-    for trade_result in trade_iter {
-        let (symbol, side, qty) = trade_result.map_err(|e| e.to_string())?;
-        let underlying = get_underlying_symbol(&symbol);
+    for open_trade in &open_trades {
+        let underlying = get_underlying_symbol(&open_trade.symbol);
         let current_qty = open_positions.get(&underlying).copied().unwrap_or(0.0);
-        if side.to_uppercase() == "BUY" {
-            open_positions.insert(underlying.clone(), current_qty + qty);
-        } else if side.to_uppercase() == "SELL" {
-            open_positions.insert(underlying.clone(), (current_qty - qty).max(0.0));
+        if open_trade.side.to_uppercase() == "BUY" {
+            open_positions.insert(underlying.clone(), current_qty + open_trade.quantity);
+        } else if open_trade.side.to_uppercase() == "SELL" {
+            // For short positions, we track negative quantity
+            open_positions.insert(underlying.clone(), current_qty - open_trade.quantity);
         }
     }
     
-    // Add open positions to results
+    // Add open positions to results (only positive quantities for long positions)
     for (underlying, qty) in open_positions {
-        if qty > 0.0001 {
+        if qty.abs() > 0.0001 {
             let entry = symbol_map.entry(underlying.clone()).or_insert_with(|| SymbolPnL {
                 symbol: underlying.clone(),
                 closed_positions: 0,
@@ -1112,7 +1131,9 @@ pub fn get_symbol_pnl(pairing_method: Option<String>, start_date: Option<String>
                 losing_trades: 0,
                 win_rate: 0.0,
             });
-            entry.open_position_qty = qty;
+            // Only show positive quantities (long positions)
+            // Negative quantities represent short positions, but we'll show them as positive for now
+            entry.open_position_qty = qty.abs();
         }
     }
     
