@@ -1,7 +1,21 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { createChart, IChartApi, ISeriesApi, CandlestickData, ColorType, UTCTimestamp, CandlestickSeries } from "lightweight-charts";
+import { createChart, IChartApi, ISeriesApi, CandlestickData, ColorType, UTCTimestamp, CandlestickSeries, SeriesMarker, createSeriesMarkers } from "lightweight-charts";
 import { format } from "date-fns";
 import { invoke } from "@tauri-apps/api/tauri";
+
+interface Trade {
+  id?: number;
+  symbol: string;
+  side: string;
+  quantity: number;
+  price: number;
+  timestamp: string;
+  order_type?: string;
+  status?: string;
+  fees?: number;
+  notes?: string;
+  strategy_id?: number;
+}
 
 interface TradeChartProps {
   symbol: string;
@@ -10,23 +24,17 @@ interface TradeChartProps {
   entryPrice: number;
   exitPrice: number;
   onClose: () => void;
+  positionTrades?: Trade[]; // Optional: all trades that make up this position
 }
 
-interface PriceData {
-  time: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
 
 type Timeframe = "1m" | "5m" | "15m" | "30m" | "1h" | "1d";
 
-export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, exitPrice, onClose }: TradeChartProps) {
+export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, exitPrice, onClose, positionTrades }: TradeChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const markersRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
   const [timeframe, setTimeframe] = useState<Timeframe>("1d");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +48,29 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
   };
 
   const baseSymbol = getBaseSymbol(symbol);
+
+  // Detect if a symbol is an options contract
+  // Options typically have patterns like: SPY251218C00679000 (underlying + date + C/P + strike)
+  const isOptionsSymbol = (sym: string): boolean => {
+    if (sym.length < 10) {
+      return false; // Too short to be an option
+    }
+    
+    // Check for C or P followed by digits (strike price)
+    const hasCallPut = sym.includes('C') || sym.includes('P');
+    
+    if (!hasCallPut) {
+      return false; // No C or P means it's not an option
+    }
+    
+    // Check for 6-digit date pattern (YYMMDD) - typically appears before C/P
+    const hasDatePattern = /\d{6}/.test(sym);
+    
+    // Options symbols are typically much longer than stock symbols
+    return hasCallPut && (hasDatePattern || sym.length > 15);
+  };
+
+  const isOptions = isOptionsSymbol(symbol);
 
   // Define fetchPriceData function using useCallback so it can be called from chart initialization
   const fetchPriceData = useCallback(async () => {
@@ -135,25 +166,208 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
       console.log(`Setting ${candlestickData.length} data points to chart`);
       seriesRef.current.setData(candlestickData);
       console.log('Data set successfully');
+      
+      // Note: Markers will be set separately after data is loaded
 
-      // Add entry and exit price markers
-      seriesRef.current.createPriceLine({
-        price: entryPrice,
-        color: "#26a69a", // Green for entry
-        lineWidth: 2,
-        lineStyle: 0, // Solid
-        axisLabelVisible: true,
-        title: "Entry",
-      });
+      // Create markers for each trade execution if positionTrades is provided
+      const markers: SeriesMarker<UTCTimestamp>[] = [];
+      
+      if (positionTrades && positionTrades.length > 0) {
+        // Sort trades by timestamp
+        const sortedTrades = [...positionTrades].sort((a, b) => 
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+        
+        // Find the closest bar time for each trade to ensure markers align with visible bars
+        const findClosestBarTime = (tradeTimestamp: number): UTCTimestamp => {
+          const tradeTime = Math.floor(tradeTimestamp / 1000);
+          let closestTime = tradeTime;
+          let minDiff = Infinity;
+          
+          // Find the closest candlestick time
+          for (const candle of candlestickData) {
+            const candleTime = typeof candle.time === 'number' ? candle.time : Math.floor(new Date(candle.time as string).getTime() / 1000);
+            const diff = Math.abs(candleTime - tradeTime);
+            if (diff < minDiff) {
+              minDiff = diff;
+              closestTime = candleTime;
+            }
+          }
+          
+          return closestTime as UTCTimestamp;
+        };
+        
+        sortedTrades.forEach((trade) => {
+          const tradeTimestamp = new Date(trade.timestamp).getTime();
+          const tradeTime = findClosestBarTime(tradeTimestamp);
+          const isBuy = trade.side.toUpperCase() === "BUY";
+          
+          // For options: just point to the bar (no text) - tag based on time filled
+          // For stocks: show full details with price
+          const marker: SeriesMarker<UTCTimestamp> = {
+            time: tradeTime,
+            position: isBuy ? 'belowBar' : 'aboveBar',
+            color: isBuy ? '#26a69a' : '#ef5350',
+            shape: isBuy ? 'arrowUp' : 'arrowDown',
+            size: 2, // Larger size for better visibility
+          };
+          
+          // Only add text for stocks (with price details)
+          if (!isOptions) {
+            marker.text = `${trade.side} ${trade.quantity.toFixed(2)} @ $${trade.price.toFixed(2)}`;
+          }
+          
+          markers.push(marker);
+        });
+      } else {
+        // Fallback: show just entry and exit markers if no positionTrades
+        // Find closest bar times to ensure markers align with visible bars
+        const findClosestBarTime = (timestamp: number): UTCTimestamp => {
+          const targetTime = Math.floor(timestamp / 1000);
+          let closestTime = targetTime;
+          let minDiff = Infinity;
+          
+          // Find the closest candlestick time
+          for (const candle of candlestickData) {
+            const candleTime = typeof candle.time === 'number' ? candle.time : Math.floor(new Date(candle.time as string).getTime() / 1000);
+            const diff = Math.abs(candleTime - targetTime);
+            if (diff < minDiff) {
+              minDiff = diff;
+              closestTime = candleTime;
+            }
+          }
+          
+          return closestTime as UTCTimestamp;
+        };
+        
+        const entryTimestampMs = new Date(entryTimestamp).getTime();
+        const exitTimestampMs = new Date(exitTimestamp).getTime();
+        const entryTime = findClosestBarTime(entryTimestampMs);
+        const exitTime = findClosestBarTime(exitTimestampMs);
+        
+        const entryMarker: SeriesMarker<UTCTimestamp> = {
+          time: entryTime,
+          position: 'belowBar',
+          color: '#26a69a',
+          shape: 'arrowUp',
+          size: 2, // Larger size for better visibility
+        };
+        
+        const exitMarker: SeriesMarker<UTCTimestamp> = {
+          time: exitTime,
+          position: 'aboveBar',
+          color: '#ef5350',
+          shape: 'arrowDown',
+          size: 2, // Larger size for better visibility
+        };
+        
+        // Only add text for stocks
+        if (!isOptions) {
+          entryMarker.text = `Entry @ $${entryPrice.toFixed(2)}`;
+          exitMarker.text = `Exit @ $${exitPrice.toFixed(2)}`;
+        }
+        
+        markers.push(entryMarker);
+        markers.push(exitMarker);
+      }
+      
+      // Set markers on the series using the v5.0+ plugin API
+      if (markers.length > 0 && seriesRef.current) {
+        // Debug: Check if marker times match candlestick times
+        const candlestickTimes = candlestickData.map(c => c.time);
+        const allTimesSet = new Set(candlestickTimes);
+        
+        // Check each marker time and fix if needed
+        markers.forEach((marker, idx) => {
+          if (!allTimesSet.has(marker.time)) {
+            // Find the closest candlestick time
+            const closestTime = candlestickTimes.reduce((closest, ct) => {
+              const diff = Math.abs(Number(ct) - Number(marker.time));
+              const closestDiff = Math.abs(Number(closest) - Number(marker.time));
+              return diff < closestDiff ? ct : closest;
+            }, candlestickTimes[0]);
+            
+            console.warn(`Marker ${idx} time ${marker.time} doesn't match any candlestick. Updating to closest: ${closestTime}`);
+            marker.time = closestTime as UTCTimestamp;
+          }
+        });
+        
+        const matchingTimes = markers.map(m => m.time).filter(mt => allTimesSet.has(mt));
+        console.log('Preparing to set markers using createSeriesMarkers plugin:', {
+          markersCount: markers.length,
+          isOptions,
+          markers: markers.map(m => ({ time: m.time, position: m.position, shape: m.shape, color: m.color, hasText: !!m.text })),
+          firstFewCandlestickTimes: candlestickTimes.slice(0, 10),
+          lastFewCandlestickTimes: candlestickTimes.slice(-10),
+          markerTimes: markers.map(m => m.time),
+          matchingTimes: matchingTimes,
+          allTimesMatch: matchingTimes.length === markers.length,
+          candlestickCount: candlestickTimes.length
+        });
+        
+        // Use the v5.0+ plugin API: createSeriesMarkers
+        try {
+          // Create or update the markers instance
+          if (!markersRef.current && seriesRef.current) {
+            console.log('Creating new markers instance using createSeriesMarkers plugin');
+            markersRef.current = createSeriesMarkers(seriesRef.current, markers) as any;
+            console.log('✓ Created markers instance with', markers.length, 'markers');
+          } else if (markersRef.current) {
+            console.log('Updating existing markers instance');
+            (markersRef.current as any).setMarkers(markers);
+            console.log('✓ Updated markers instance with', markers.length, 'markers');
+          }
+        } catch (markerError) {
+          console.error('Failed to create/update markers using plugin:', markerError);
+          console.error('Error details:', markerError);
+        }
+        
+        // Force chart to update/redraw after setting markers
+        if (chartRef.current) {
+          const timeScale = chartRef.current.timeScale();
+          try {
+            timeScale.fitContent();
+            console.log('Called fitContent() to refresh chart with markers');
+          } catch (e) {
+            console.warn('fitContent() not available, trying alternative');
+            const currentRange = timeScale.getVisibleRange();
+            if (currentRange) {
+              timeScale.setVisibleRange({
+                from: currentRange.from,
+                to: currentRange.to
+              });
+            }
+            timeScale.scrollToPosition(0, false);
+          }
+        }
+      } else {
+        console.warn('Cannot set markers:', {
+          markersLength: markers.length,
+          hasSeries: !!seriesRef.current,
+          isOptions
+        });
+      }
 
-      seriesRef.current.createPriceLine({
-        price: exitPrice,
-        color: "#ef5350", // Red for exit
-        lineWidth: 2,
-        lineStyle: 0, // Solid
-        axisLabelVisible: true,
-        title: "Exit",
-      });
+      // Only add entry and exit price lines for stocks (not options, since price doesn't match chart scale)
+      if (!isOptions) {
+        seriesRef.current.createPriceLine({
+          price: entryPrice,
+          color: "#26a69a", // Green for entry
+          lineWidth: 2,
+          lineStyle: 0, // Solid
+          axisLabelVisible: true,
+          title: "Entry",
+        });
+
+        seriesRef.current.createPriceLine({
+          price: exitPrice,
+          color: "#ef5350", // Red for exit
+          lineWidth: 2,
+          lineStyle: 0, // Solid
+          axisLabelVisible: true,
+          title: "Exit",
+        });
+      }
 
       // Set visible range to show entry and exit with some padding
       const entryTime = Math.floor(new Date(entryTimestamp).getTime() / 1000) as UTCTimestamp;
@@ -166,6 +380,31 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
         to: visibleEnd,
       });
 
+      // Update markers AFTER setting visible range to ensure they're in view
+      if (markers.length > 0 && markersRef.current) {
+        setTimeout(() => {
+          try {
+            console.log('Final attempt: Updating markers after visible range is set');
+            (markersRef.current as any).setMarkers(markers);
+            console.log('✓ Final markers updated successfully');
+            
+            // Force a final redraw
+            if (chartRef.current) {
+              const timeScale = chartRef.current.timeScale();
+              try {
+                timeScale.fitContent();
+                console.log('Called fitContent() to refresh chart with markers');
+              } catch (e) {
+                console.warn('fitContent() not available');
+                timeScale.scrollToPosition(0, false);
+              }
+            }
+          } catch (e) {
+            console.error('Final marker update failed:', e);
+          }
+        }, 500);
+      }
+
       setLoading(false);
     } catch (err) {
       console.error("Error fetching price data:", err);
@@ -174,7 +413,7 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
       setLoading(false);
       // Don't throw - just show error message
     }
-  }, [symbol, entryTimestamp, exitTimestamp, entryPrice, exitPrice, timeframe, baseSymbol]);
+  }, [symbol, entryTimestamp, exitTimestamp, entryPrice, exitPrice, timeframe, baseSymbol, positionTrades, isOptions]);
 
   useEffect(() => {
     // Prevent multiple initializations
@@ -250,7 +489,6 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
         // Use safe default hex colors
         const bgColor = getCSSVariable('--bg-secondary', '#1e1e1e');
         const textColor = getCSSVariable('--text-primary', '#ffffff');
-        const borderColor = getCSSVariable('--border-color', '#333333');
         const profitColor = getCSSVariable('--profit', '#26a69a');
         const lossColor = getCSSVariable('--loss', '#ef5350');
 
@@ -267,7 +505,6 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
 
         const finalBgColor = cleanColor(bgColor, '#1e1e1e');
         const finalTextColor = cleanColor(textColor, '#ffffff');
-        const finalBorderColor = cleanColor(borderColor, '#333333');
         const finalProfitColor = cleanColor(profitColor, '#26a69a');
         const finalLossColor = cleanColor(lossColor, '#ef5350');
 

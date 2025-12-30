@@ -633,7 +633,7 @@ export default function Dashboard() {
   };
 
   return (
-      <div style={{ padding: "30px", overflowY: "auto", height: "100%" }}>
+    <div style={{ padding: "30px", overflowY: "auto", height: "100%" }}>
           <div
             style={{
               display: "flex",
@@ -1147,9 +1147,9 @@ export default function Dashboard() {
               >
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
-                    <BarChart3 size={20} color="var(--accent)" />
-                    <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Top Symbols</h2>
+                  <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
+                  <BarChart3 size={20} color="var(--accent)" />
+                  <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Top Symbols</h2>
                   </div>
                   <div style={{ position: "relative" }}>
                     <button
@@ -1362,9 +1362,9 @@ export default function Dashboard() {
               >
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
-                    <TrendingUpIcon size={20} color="var(--accent)" />
-                    <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Strategy Performance</h2>
+                  <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
+                  <TrendingUpIcon size={20} color="var(--accent)" />
+                  <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Strategy Performance</h2>
                   </div>
                   <div style={{ position: "relative" }}>
                     <button
@@ -1525,7 +1525,7 @@ export default function Dashboard() {
                 const isLoading = loadingStrategyPairs.has(strategyKey);
                 
                 return (
-                  <div
+                <div
                     key={strategyKey}
                     style={{
                       backgroundColor: "var(--bg-tertiary)",
@@ -1570,37 +1570,37 @@ export default function Dashboard() {
                         }
                         setExpandedStrategies(newExpanded);
                       }}
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        padding: "12px",
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "12px",
                         cursor: "pointer",
-                      }}
-                    >
+                  }}
+                >
                       <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1 }}>
                         {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                        <div>
-                          <p style={{ fontWeight: "600", marginBottom: "4px" }}>{strategy.strategy_name}</p>
-                          <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                            {strategy.trade_count} trades
-                          </p>
+                  <div>
+                    <p style={{ fontWeight: "600", marginBottom: "4px" }}>{strategy.strategy_name}</p>
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                      {strategy.trade_count} trades
+                    </p>
                         </div>
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        <p
-                          style={{
-                            fontWeight: "600",
-                            color: strategy.estimated_pnl >= 0 ? "var(--profit)" : "var(--loss)",
-                          }}
-                        >
-                          ${strategy.estimated_pnl.toFixed(2)}
-                        </p>
-                        <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                          ${(strategy.total_volume / 1000).toFixed(1)}k vol
-                        </p>
-                      </div>
-                    </div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <p
+                      style={{
+                        fontWeight: "600",
+                        color: strategy.estimated_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                      }}
+                    >
+                      ${strategy.estimated_pnl.toFixed(2)}
+                    </p>
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                      ${(strategy.total_volume / 1000).toFixed(1)}k vol
+                    </p>
+                  </div>
+                </div>
                     {isExpanded && (
                       <div
                         style={{
@@ -1684,7 +1684,7 @@ export default function Dashboard() {
                                     ))}
                                   </tbody>
                                 </table>
-                              </div>
+              </div>
                               {totalPages > 1 && (
                                 <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "12px", marginTop: "16px", paddingTop: "16px", borderTop: "1px solid var(--border-color)" }}>
                                   <button
@@ -1798,9 +1798,9 @@ export default function Dashboard() {
               >
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
-                    <Clock size={20} color="var(--accent)" />
-                    <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Recent Trades</h2>
+                  <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
+                  <Clock size={20} color="var(--accent)" />
+                  <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Recent Trades</h2>
                   </div>
                   <div style={{ position: "relative" }}>
                     <button

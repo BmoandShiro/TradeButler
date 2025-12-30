@@ -82,6 +82,7 @@ export default function Trades() {
     return localStorage.getItem("tradebutler_trades_custom_end") || "";
   });
   const [selectedPairForChart, setSelectedPairForChart] = useState<PairedTrade | null>(null);
+  const [selectedPositionTrades, setSelectedPositionTrades] = useState<Trade[] | undefined>(undefined);
 
   useEffect(() => {
     loadData();
@@ -587,6 +588,8 @@ export default function Trades() {
                                           strategy_id: entryTrade.strategy_id,
                                         };
                                         setSelectedPairForChart(chartPair);
+                                        // Pass all position trades for detailed markers
+                                        setSelectedPositionTrades(group.position_trades);
                                       }}
                                       style={{
                                         display: "flex",
@@ -944,7 +947,11 @@ export default function Trades() {
           exitTimestamp={selectedPairForChart.exit_timestamp}
           entryPrice={selectedPairForChart.entry_price}
           exitPrice={selectedPairForChart.exit_price}
-          onClose={() => setSelectedPairForChart(null)}
+          onClose={() => {
+            setSelectedPairForChart(null);
+            setSelectedPositionTrades(undefined);
+          }}
+          positionTrades={selectedPositionTrades}
         />
       )}
     </div>
