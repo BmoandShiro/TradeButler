@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
-import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, BarChart3, Lock, Unlock } from "lucide-react";
+import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, BarChart3, Lock, Unlock, Search, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { TradeChart } from "../components/TradeChart";
 
@@ -90,6 +90,9 @@ export default function Trades() {
     return saved === "true";
   });
   const [positionGroupNotes, setPositionGroupNotes] = useState<Map<string, string>>(new Map());
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [sortBy, setSortBy] = useState<"date" | "symbol" | "pnl" | "price" | "quantity" | "trades">("date");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
     loadData();
@@ -211,6 +214,57 @@ export default function Trades() {
     }
   };
 
+  const handleSort = (column: "date" | "symbol" | "pnl" | "price" | "quantity" | "trades") => {
+    if (sortBy === column) {
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+    } else {
+      setSortBy(column);
+      setSortDirection("desc");
+    }
+  };
+
+  const SortableHeader = ({ column, label, viewMode }: { column: "date" | "symbol" | "pnl" | "price" | "quantity" | "trades", label: string, viewMode: "Individual" | "Pair" }) => {
+    const isActive = sortBy === column;
+    const showInView = viewMode === "Pair" || column !== "trades";
+    
+    if (!showInView) return null;
+    
+    return (
+      <th
+        onClick={() => handleSort(column)}
+        style={{
+          padding: "12px 16px",
+          textAlign: column === "pnl" || column === "price" || column === "quantity" || column === "trades" ? "right" : "left",
+          fontSize: "12px",
+          fontWeight: "600",
+          color: "var(--text-secondary)",
+          textTransform: "uppercase",
+          cursor: "pointer",
+          userSelect: "none",
+          backgroundColor: isActive ? "var(--bg-secondary)" : "var(--bg-tertiary)",
+          transition: "background-color 0.2s",
+        }}
+        onMouseEnter={(e) => {
+          if (!isActive) {
+            e.currentTarget.style.backgroundColor = "var(--bg-secondary)";
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isActive) {
+            e.currentTarget.style.backgroundColor = "var(--bg-tertiary)";
+          }
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "6px", justifyContent: column === "pnl" || column === "price" || column === "quantity" || column === "trades" ? "flex-end" : "flex-start" }}>
+          <span>{label}</span>
+          {isActive && (
+            sortDirection === "asc" ? <ArrowUp size={14} /> : <ArrowDown size={14} />
+          )}
+        </div>
+      </th>
+    );
+  };
+
   const formatDate = (dateString: string) => {
     try {
       return format(new Date(dateString), "MMM dd, yyyy HH:mm");
@@ -218,6 +272,99 @@ export default function Trades() {
       return dateString;
     }
   };
+
+  // Filter and sort trades for Individual view
+  const filteredAndSortedTrades = useMemo(() => {
+    let filtered = tradesWithPairing.filter((item) => {
+      const trade = item.trade;
+      const searchLower = searchQuery.toLowerCase();
+      return (
+        trade.symbol.toLowerCase().includes(searchLower) ||
+        trade.side.toLowerCase().includes(searchLower) ||
+        trade.order_type.toLowerCase().includes(searchLower) ||
+        trade.status.toLowerCase().includes(searchLower) ||
+        (trade.strategy_id !== null && strategies.find(s => s.id === trade.strategy_id)?.name.toLowerCase().includes(searchLower))
+      );
+    });
+
+    // Sort the filtered trades
+    filtered.sort((a, b) => {
+      const tradeA = a.trade;
+      const tradeB = b.trade;
+      const relevantPairsA = tradeA.side === "BUY" ? a.exit_pairs : a.entry_pairs;
+      const relevantPairsB = tradeB.side === "BUY" ? b.exit_pairs : b.entry_pairs;
+      const totalPnLA = relevantPairsA.reduce((sum, p) => sum + p.net_profit_loss, 0);
+      const totalPnLB = relevantPairsB.reduce((sum, p) => sum + p.net_profit_loss, 0);
+
+      let comparison = 0;
+      switch (sortBy) {
+        case "date":
+          comparison = new Date(tradeA.timestamp).getTime() - new Date(tradeB.timestamp).getTime();
+          break;
+        case "symbol":
+          comparison = tradeA.symbol.localeCompare(tradeB.symbol);
+          break;
+        case "pnl":
+          comparison = totalPnLA - totalPnLB;
+          break;
+        case "price":
+          comparison = tradeA.price - tradeB.price;
+          break;
+        case "quantity":
+          comparison = tradeA.quantity - tradeB.quantity;
+          break;
+        default:
+          comparison = 0;
+      }
+
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+
+    return filtered;
+  }, [tradesWithPairing, searchQuery, sortBy, sortDirection, strategies]);
+
+  // Filter and sort position groups for Pair view
+  const filteredAndSortedPositionGroups = useMemo(() => {
+    let filtered = positionGroups.filter((group) => {
+      const searchLower = searchQuery.toLowerCase();
+      return (
+        group.entry_trade.symbol.toLowerCase().includes(searchLower) ||
+        group.entry_trade.side.toLowerCase().includes(searchLower) ||
+        (group.entry_trade.strategy_id !== null && strategies.find(s => s.id === group.entry_trade.strategy_id)?.name.toLowerCase().includes(searchLower))
+      );
+    });
+
+    // Sort the filtered position groups
+    filtered.sort((a, b) => {
+      let comparison = 0;
+      switch (sortBy) {
+        case "date":
+          comparison = new Date(a.entry_trade.timestamp).getTime() - new Date(b.entry_trade.timestamp).getTime();
+          break;
+        case "symbol":
+          comparison = a.entry_trade.symbol.localeCompare(b.entry_trade.symbol);
+          break;
+        case "pnl":
+          comparison = a.total_pnl - b.total_pnl;
+          break;
+        case "price":
+          comparison = a.entry_trade.price - b.entry_trade.price;
+          break;
+        case "quantity":
+          comparison = a.entry_trade.quantity - b.entry_trade.quantity;
+          break;
+        case "trades":
+          comparison = a.position_trades.length - b.position_trades.length;
+          break;
+        default:
+          comparison = 0;
+      }
+
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+
+    return filtered;
+  }, [positionGroups, searchQuery, sortBy, sortDirection, strategies]);
 
   if (loading) {
     return (
@@ -349,9 +496,82 @@ export default function Trades() {
         />
       </div>
 
+      {/* Search and Sort Controls */}
+      <div style={{ display: "flex", gap: "16px", marginBottom: "20px", flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ position: "relative", flex: "1", minWidth: "200px", maxWidth: "400px" }}>
+          <Search
+            size={18}
+            style={{
+              position: "absolute",
+              left: "12px",
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "var(--text-secondary)",
+            }}
+          />
+          <input
+            type="text"
+            placeholder="Search by symbol, side, type, status, or strategy..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "10px 12px 10px 40px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--text-primary)",
+              fontSize: "14px",
+              outline: "none",
+            }}
+          />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span style={{ fontSize: "14px", color: "var(--text-secondary)" }}>Sort by:</span>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as any)}
+            style={{
+              padding: "10px 12px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--text-primary)",
+              fontSize: "14px",
+              cursor: "pointer",
+              outline: "none",
+            }}
+          >
+            <option value="date">Entry Date</option>
+            <option value="symbol">Symbol</option>
+            <option value="pnl">P&L</option>
+            <option value="price">Entry Price</option>
+            <option value="quantity">Entry Quantity</option>
+            {viewMode === "Pair" && <option value="trades">Trades</option>}
+          </select>
+          <button
+            onClick={() => setSortDirection(sortDirection === "asc" ? "desc" : "asc")}
+            style={{
+              padding: "10px 12px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--text-primary)",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+            title={`Sort ${sortDirection === "asc" ? "Ascending" : "Descending"}`}
+          >
+            <ArrowUpDown size={16} />
+          </button>
+        </div>
+      </div>
+
       {viewMode === "Pair" ? (
         // Pair View Mode - Show only entry trades with position details
-        positionGroups.length === 0 ? (
+        filteredAndSortedPositionGroups.length === 0 ? (
           <div
             style={{
               backgroundColor: "var(--bg-secondary)",
@@ -380,24 +600,12 @@ export default function Trades() {
                   <tr style={{ backgroundColor: "var(--bg-tertiary)", borderBottom: "1px solid var(--border-color)" }}>
                     <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", width: "40px" }}>
                     </th>
-                    <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                      Entry Date
-                    </th>
-                    <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                      Symbol
-                    </th>
-                    <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                      Entry Qty
-                    </th>
-                    <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                      Entry Price
-                    </th>
-                    <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                      Trades
-                    </th>
-                    <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                      P&L
-                    </th>
+                    <SortableHeader column="date" label="Entry Date" viewMode={viewMode} />
+                    <SortableHeader column="symbol" label="Symbol" viewMode={viewMode} />
+                    <SortableHeader column="quantity" label="Entry Qty" viewMode={viewMode} />
+                    <SortableHeader column="price" label="Entry Price" viewMode={viewMode} />
+                    <SortableHeader column="trades" label="Trades" viewMode={viewMode} />
+                    <SortableHeader column="pnl" label="P&L" viewMode={viewMode} />
                     <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                         <span>Strategy</span>
@@ -427,7 +635,7 @@ export default function Trades() {
                   </tr>
                 </thead>
                 <tbody>
-                  {positionGroups.map((group) => {
+                  {filteredAndSortedPositionGroups.map((group) => {
                     const isExpanded = expandedTrades.has(group.entry_trade.id);
                     return (
                       <>
@@ -771,27 +979,17 @@ export default function Trades() {
                 <tr style={{ backgroundColor: "var(--bg-tertiary)", borderBottom: "1px solid var(--border-color)" }}>
                   <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", width: "40px" }}>
                   </th>
-                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                    Date
-                  </th>
-                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                    Symbol
-                  </th>
+                  <SortableHeader column="date" label="Date" viewMode={viewMode} />
+                  <SortableHeader column="symbol" label="Symbol" viewMode={viewMode} />
                   <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
                     Side
                   </th>
-                  <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                    Quantity
-                  </th>
-                  <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                    Price
-                  </th>
+                  <SortableHeader column="quantity" label="Quantity" viewMode={viewMode} />
+                  <SortableHeader column="price" label="Price" viewMode={viewMode} />
                   <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
                     Value
                   </th>
-                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                    P&L
-                  </th>
+                  <SortableHeader column="pnl" label="P&L" viewMode={viewMode} />
                   <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
                     Type
                   </th>
@@ -827,7 +1025,7 @@ export default function Trades() {
                 </tr>
               </thead>
               <tbody>
-                {tradesWithPairing.map((item) => {
+                {filteredAndSortedTrades.map((item) => {
                   const trade = item.trade;
                   // For BUY trades, show pairs where this is the entry (exit_pairs)
                   // For SELL trades, show pairs where this is the exit (entry_pairs)
