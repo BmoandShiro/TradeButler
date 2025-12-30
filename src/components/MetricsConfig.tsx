@@ -35,20 +35,13 @@ const defaultMetrics: MetricConfig[] = [
   { id: "current_win_streak", label: "Win Streak", enabled: true, category: "Performance" },
   { id: "current_loss_streak", label: "Loss Streak", enabled: true, category: "Performance" },
   
-  // Strategy Metrics
-  { id: "strategy_win_rate", label: "Strategy Win Rate", enabled: false, category: "Strategy" },
-  { id: "strategy_winning_trades", label: "Strategy Winning Trades", enabled: false, category: "Strategy" },
-  { id: "strategy_losing_trades", label: "Strategy Losing Trades", enabled: false, category: "Strategy" },
-  { id: "strategy_profit_loss", label: "Strategy P&L", enabled: false, category: "Strategy" },
-  { id: "strategy_consecutive_wins", label: "Strategy Consecutive Wins", enabled: false, category: "Strategy" },
-  { id: "strategy_consecutive_losses", label: "Strategy Consecutive Losses", enabled: false, category: "Strategy" },
-  
   // Advanced Metrics
   { id: "total_fees", label: "Total Fees", enabled: false, category: "Advanced" },
   { id: "net_profit", label: "Net Profit (After Fees)", enabled: false, category: "Advanced" },
   { id: "trades_per_day", label: "Trades Per Day", enabled: false, category: "Advanced" },
   { id: "best_day", label: "Best Day", enabled: false, category: "Advanced" },
   { id: "worst_day", label: "Worst Day", enabled: false, category: "Advanced" },
+  { id: "average_holding_time_seconds", label: "Avg Holding Time", enabled: true, category: "Performance" },
 ];
 
 const STORAGE_KEY = "tradebutler_metrics_config";
@@ -60,7 +53,32 @@ export function useMetricsConfig() {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        // Merge with defaultMetrics to ensure new metrics are included
+        const defaultMap = new Map(defaultMetrics.map(m => [m.id, m]));
+        const savedMap = new Map(parsed.map((m: MetricConfig) => [m.id, m]));
+        
+        // Start with all default metrics
+        const merged: MetricConfig[] = defaultMetrics.map(defaultMetric => {
+          const savedMetric = savedMap.get(defaultMetric.id);
+          if (savedMetric) {
+            // Use saved settings (enabled/disabled) but keep default label/category
+            return {
+              ...defaultMetric,
+              enabled: savedMetric.enabled,
+            };
+          }
+          return defaultMetric;
+        });
+        
+        // Add any old metrics that are no longer in defaults (for backwards compatibility)
+        parsed.forEach((savedMetric: MetricConfig) => {
+          if (!defaultMap.has(savedMetric.id)) {
+            merged.push(savedMetric);
+          }
+        });
+        
+        return merged;
       } catch {
         return defaultMetrics;
       }
@@ -71,6 +89,47 @@ export function useMetricsConfig() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(metrics));
   }, [metrics]);
+
+  // Merge with defaults on mount to ensure new metrics are included
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        const defaultMap = new Map(defaultMetrics.map(m => [m.id, m]));
+        const savedMap = new Map(parsed.map((m: MetricConfig) => [m.id, m]));
+        
+        // Check if any default metrics are missing from saved config
+        const missingDefaults = defaultMetrics.filter(defaultMetric => !savedMap.has(defaultMetric.id));
+        
+        if (missingDefaults.length > 0) {
+          // Merge saved metrics with defaults
+          const merged: MetricConfig[] = defaultMetrics.map(defaultMetric => {
+            const savedMetric = savedMap.get(defaultMetric.id);
+            if (savedMetric) {
+              return {
+                ...defaultMetric,
+                enabled: savedMetric.enabled,
+              };
+            }
+            return defaultMetric;
+          });
+          
+          // Add any old metrics that are no longer in defaults (for backwards compatibility)
+          parsed.forEach((savedMetric: MetricConfig) => {
+            if (!defaultMap.has(savedMetric.id)) {
+              merged.push(savedMetric);
+            }
+          });
+          
+          setMetrics(merged);
+        }
+      } catch {
+        // If parsing fails, use defaults
+        setMetrics(defaultMetrics);
+      }
+    }
+  }, []); // Only run once on mount
 
   const toggleMetric = (id: string) => {
     setMetrics((prev) =>

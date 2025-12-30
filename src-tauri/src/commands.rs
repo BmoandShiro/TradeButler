@@ -136,6 +136,7 @@ pub struct Metrics {
     pub worst_day_date: Option<String>,
     pub largest_win_group_id: Option<i64>,
     pub largest_loss_group_id: Option<i64>,
+    pub average_holding_time_seconds: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1608,6 +1609,50 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
         0.0
     };
     
+    // Calculate average holding time (in seconds)
+    let mut total_holding_time_seconds = 0.0;
+    let mut holding_time_count = 0;
+    
+    for paired in &filtered_paired_trades {
+        // Parse timestamps (ISO 8601 format: "2024-01-15T10:30:00" or with timezone)
+        // Try to parse as ISO 8601
+        let entry_time = paired.entry_timestamp.parse::<chrono::DateTime<chrono::Utc>>()
+            .or_else(|_| {
+                // Try parsing as naive datetime and assume UTC
+                chrono::NaiveDateTime::parse_from_str(&paired.entry_timestamp, "%Y-%m-%dT%H:%M:%S")
+                    .map(|dt| dt.and_utc())
+            })
+            .or_else(|_| {
+                // Try parsing with milliseconds
+                chrono::NaiveDateTime::parse_from_str(&paired.entry_timestamp, "%Y-%m-%dT%H:%M:%S%.f")
+                    .map(|dt| dt.and_utc())
+            });
+        
+        let exit_time = paired.exit_timestamp.parse::<chrono::DateTime<chrono::Utc>>()
+            .or_else(|_| {
+                chrono::NaiveDateTime::parse_from_str(&paired.exit_timestamp, "%Y-%m-%dT%H:%M:%S")
+                    .map(|dt| dt.and_utc())
+            })
+            .or_else(|_| {
+                chrono::NaiveDateTime::parse_from_str(&paired.exit_timestamp, "%Y-%m-%dT%H:%M:%S%.f")
+                    .map(|dt| dt.and_utc())
+            });
+        
+        if let (Ok(entry), Ok(exit)) = (entry_time, exit_time) {
+            let duration = exit.signed_duration_since(entry);
+            if duration.num_seconds() >= 0 {
+                total_holding_time_seconds += duration.num_seconds() as f64;
+                holding_time_count += 1;
+            }
+        }
+    }
+    
+    let average_holding_time_seconds = if holding_time_count > 0 {
+        total_holding_time_seconds / holding_time_count as f64
+    } else {
+        0.0
+    };
+    
     Ok(Metrics {
         total_trades,
         winning_trades,
@@ -1645,6 +1690,7 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
         worst_day_date,
         largest_win_group_id,
         largest_loss_group_id,
+        average_holding_time_seconds,
     })
 }
 

@@ -56,6 +56,7 @@ interface Metrics {
   worst_day_date?: string | null;
   largest_win_group_id?: number | null;
   largest_loss_group_id?: number | null;
+  average_holding_time_seconds: number;
 }
 
 interface TopSymbol {
@@ -133,6 +134,7 @@ const metricIcons: Record<string, any> = {
   strategy_profit_loss: DollarSign,
   strategy_consecutive_wins: TrendingUp,
   strategy_consecutive_losses: TrendingDown,
+  average_holding_time_seconds: Clock,
 };
 
 const formatMetricValue = (id: string, value: number, metrics: Metrics | null): string => {
@@ -179,9 +181,28 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
       return `${((value || 0) * 100).toFixed(1)}%`;
     case "strategy_profit_loss":
       return `$${(value || 0).toFixed(2)}`;
+    case "average_holding_time_seconds":
+      return formatHoldingTime(value || 0);
     default:
       return value.toFixed(2);
   }
+};
+
+const formatHoldingTime = (seconds: number): string => {
+  if (seconds === 0) return "0s";
+  
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (secs > 0 && days === 0 && hours === 0) parts.push(`${secs}s`);
+  
+  return parts.join(" ") || "0s";
 };
 
 const getMetricColor = (id: string, value: number, colorRange?: { min: number; max: number }): string => {
@@ -630,6 +651,7 @@ export default function Dashboard() {
     trades_per_day: metrics?.trades_per_day || 0,
     best_day: metrics?.best_day || 0,
     worst_day: metrics?.worst_day || 0,
+    average_holding_time_seconds: metrics?.average_holding_time_seconds || 0,
   };
 
   return (
