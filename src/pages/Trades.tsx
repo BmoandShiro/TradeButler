@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
-import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, BarChart3 } from "lucide-react";
+import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, BarChart3, Lock, Unlock } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { TradeChart } from "../components/TradeChart";
 
@@ -49,6 +49,7 @@ interface Strategy {
 
 const PAIRING_STORAGE_KEY = "tradebutler_pairing_method";
 const VIEW_MODE_STORAGE_KEY = "tradebutler_view_mode";
+const STRATEGY_LOCK_STORAGE_KEY = "tradebutler_strategy_lock";
 
 interface PositionGroup {
   entry_trade: Trade;
@@ -83,6 +84,10 @@ export default function Trades() {
   });
   const [selectedPairForChart, setSelectedPairForChart] = useState<PairedTrade | null>(null);
   const [selectedPositionTrades, setSelectedPositionTrades] = useState<Trade[] | undefined>(undefined);
+  const [strategyLocked, setStrategyLocked] = useState<boolean>(() => {
+    const saved = localStorage.getItem(STRATEGY_LOCK_STORAGE_KEY);
+    return saved === "true";
+  });
 
   useEffect(() => {
     loadData();
@@ -371,7 +376,30 @@ export default function Trades() {
                       P&L
                     </th>
                     <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                      Strategy
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <span>Strategy</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newLocked = !strategyLocked;
+                            setStrategyLocked(newLocked);
+                            localStorage.setItem(STRATEGY_LOCK_STORAGE_KEY, String(newLocked));
+                          }}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            padding: "2px",
+                            cursor: "pointer",
+                            color: strategyLocked ? "#fbbf24" : "var(--text-secondary)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                          title={strategyLocked ? "Unlock strategies to allow editing" : "Lock strategies to prevent editing"}
+                        >
+                          {strategyLocked ? <Lock size={14} /> : <Unlock size={14} />}
+                        </button>
+                      </div>
                     </th>
                   </tr>
                 </thead>
@@ -431,16 +459,24 @@ export default function Trades() {
                               }}
                               onClick={(e) => e.stopPropagation()}
                               onMouseDown={(e) => e.stopPropagation()}
+                              disabled={strategyLocked && group.entry_trade.strategy_id !== null}
                               style={{
                                 padding: "6px 10px",
-                                backgroundColor: "var(--bg-tertiary)",
+                                backgroundColor: strategyLocked && group.entry_trade.strategy_id !== null 
+                                  ? "var(--bg-secondary)" 
+                                  : "var(--bg-tertiary)",
                                 border: "1px solid var(--border-color)",
                                 borderRadius: "4px",
-                                color: "var(--text-primary)",
+                                color: strategyLocked && group.entry_trade.strategy_id !== null
+                                  ? "var(--text-secondary)"
+                                  : "var(--text-primary)",
                                 fontSize: "13px",
-                                cursor: "pointer",
+                                cursor: strategyLocked && group.entry_trade.strategy_id !== null 
+                                  ? "not-allowed" 
+                                  : "pointer",
                                 minWidth: "120px",
                                 outline: "none",
+                                opacity: strategyLocked && group.entry_trade.strategy_id !== null ? 0.6 : 1,
                               }}
                             >
                               <option value="">Unassigned</option>
@@ -686,7 +722,30 @@ export default function Trades() {
                     Status
                   </th>
                   <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                    Strategy
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <span>Strategy</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const newLocked = !strategyLocked;
+                          setStrategyLocked(newLocked);
+                          localStorage.setItem(STRATEGY_LOCK_STORAGE_KEY, String(newLocked));
+                        }}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          padding: "2px",
+                          cursor: "pointer",
+                          color: strategyLocked ? "var(--accent)" : "var(--text-secondary)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                        title={strategyLocked ? "Unlock strategies to allow editing" : "Lock strategies to prevent editing"}
+                      >
+                        {strategyLocked ? <Lock size={14} /> : <Unlock size={14} />}
+                      </button>
+                    </div>
                   </th>
                 </tr>
               </thead>
@@ -785,16 +844,24 @@ export default function Trades() {
                             }}
                             onClick={(e) => e.stopPropagation()}
                             onMouseDown={(e) => e.stopPropagation()}
+                            disabled={strategyLocked && trade.strategy_id !== null}
                             style={{
                               padding: "6px 10px",
-                              backgroundColor: "var(--bg-tertiary)",
+                              backgroundColor: strategyLocked && trade.strategy_id !== null 
+                                ? "var(--bg-secondary)" 
+                                : "var(--bg-tertiary)",
                               border: "1px solid var(--border-color)",
                               borderRadius: "4px",
-                              color: "var(--text-primary)",
+                              color: strategyLocked && trade.strategy_id !== null
+                                ? "var(--text-secondary)"
+                                : "var(--text-primary)",
                               fontSize: "13px",
-                              cursor: "pointer",
+                              cursor: strategyLocked && trade.strategy_id !== null 
+                                ? "not-allowed" 
+                                : "pointer",
                               minWidth: "120px",
                               outline: "none",
+                              opacity: strategyLocked && trade.strategy_id !== null ? 0.6 : 1,
                             }}
                           >
                             <option value="">Unassigned</option>
