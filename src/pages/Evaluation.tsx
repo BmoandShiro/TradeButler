@@ -208,19 +208,36 @@ export default function Evaluation() {
   }, [metrics]);
 
   // Helper function to get color for heatmap
+  // Uses absolute values: positive = green, negative = red
   const getHeatmapColor = (value: number, max: number, min: number): string => {
     if (value === 0) return "var(--bg-tertiary)";
-    if (max === min) return value > 0 ? "var(--profit)" : "var(--loss)";
     
-    const normalized = (value - min) / (max - min);
-    if (normalized >= 0.5) {
-      // Positive - green scale
-      const intensity = (normalized - 0.5) * 2;
-      return `rgba(34, 197, 94, ${0.3 + intensity * 0.7})`;
+    // Use absolute value to determine color (positive = green, negative = red)
+    if (value > 0) {
+      // Positive - green scale (intensity based on how close to max)
+      const intensity = max > 0 ? Math.min(value / max, 1) : 0.5;
+      return `rgba(34, 197, 94, ${0.1 + intensity * 0.2})`; // Range: 0.1 to 0.3
     } else {
-      // Negative - red scale
-      const intensity = (0.5 - normalized) * 2;
-      return `rgba(239, 68, 68, ${0.3 + intensity * 0.7})`;
+      // Negative - red scale (intensity based on how close to min)
+      const intensity = min < 0 ? Math.min(Math.abs(value) / Math.abs(min), 1) : 0.5;
+      return `rgba(239, 68, 68, ${0.1 + intensity * 0.2})`; // Range: 0.1 to 0.3
+    }
+  };
+
+  // Helper function to get color for win rate heatmap
+  // Win rates: >= 0.5 (50%) = green, < 0.5 = red
+  const getWinRateHeatmapColor = (winRate: number, max: number, min: number): string => {
+    if (winRate === 0) return "var(--bg-tertiary)";
+    
+    // Use 0.5 (50%) as the threshold
+    if (winRate >= 0.5) {
+      // >= 50% - green scale (intensity based on how close to max)
+      const intensity = max >= 0.5 ? Math.min((winRate - 0.5) / (max - 0.5), 1) : 0.5;
+      return `rgba(34, 197, 94, ${0.1 + intensity * 0.2})`; // Range: 0.1 to 0.3
+    } else {
+      // < 50% - red scale (intensity based on how close to 0)
+      const intensity = min < 0.5 ? Math.min((0.5 - winRate) / (0.5 - min), 1) : 0.5;
+      return `rgba(239, 68, 68, ${0.1 + intensity * 0.2})`; // Range: 0.1 to 0.3
     }
   };
 
@@ -361,7 +378,7 @@ export default function Evaluation() {
                     style={{
                       fontSize: "18px",
                       fontWeight: "bold",
-                      color: day.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                      color: day.total_pnl === 0 ? "var(--text-primary)" : day.total_pnl > 0 ? "var(--profit)" : "var(--loss)",
                       marginBottom: "4px",
                     }}
                   >
@@ -386,7 +403,7 @@ export default function Evaluation() {
               const winRateMax = Math.max(...metrics.weekday_performance.map(w => w.win_rate), 0.01);
               const winRateMin = Math.min(...metrics.weekday_performance.map(w => w.win_rate), 0);
               const winRateColor = day.trade_count > 0 
-                ? getHeatmapColor(day.win_rate, winRateMax, winRateMin)
+                ? getWinRateHeatmapColor(day.win_rate, winRateMax, winRateMin)
                 : "var(--bg-tertiary)";
               
               return (
@@ -404,16 +421,29 @@ export default function Evaluation() {
                   <div style={{ fontSize: "12px", fontWeight: "600", marginBottom: "8px" }}>
                     {day.weekday_name.substring(0, 3)}
                   </div>
-                  <div
-                    style={{
-                      fontSize: "18px",
-                      fontWeight: "bold",
-                      color: day.win_rate >= 0.5 ? "var(--profit)" : day.win_rate > 0 ? "var(--text-primary)" : "var(--loss)",
-                      marginBottom: "4px",
-                    }}
-                  >
-                    {(day.win_rate * 100).toFixed(1)}%
-                  </div>
+                  {day.trade_count === 0 ? (
+                    <div
+                      style={{
+                        fontSize: "14px",
+                        fontWeight: "bold",
+                        color: "var(--text-secondary)",
+                        marginBottom: "4px",
+                      }}
+                    >
+                      No Trades
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        fontSize: "18px",
+                        fontWeight: "bold",
+                        color: day.win_rate >= 0.5 ? "var(--profit)" : "var(--loss)",
+                        marginBottom: "4px",
+                      }}
+                    >
+                      {(day.win_rate * 100).toFixed(1)}%
+                    </div>
+                  )}
                   <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
                     {day.trade_count} trades
                   </div>
@@ -497,7 +527,7 @@ export default function Evaluation() {
                     <div
                       style={{
                         fontSize: "11px",
-                        color: day.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                        color: day.total_pnl === 0 ? "var(--text-primary)" : day.total_pnl > 0 ? "var(--profit)" : "var(--loss)",
                         fontWeight: "600",
                       }}
                     >
@@ -561,7 +591,7 @@ export default function Evaluation() {
                     style={{
                       fontSize: "12px",
                       fontWeight: "600",
-                      color: time.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                      color: time.total_pnl === 0 ? "var(--text-primary)" : time.total_pnl > 0 ? "var(--profit)" : "var(--loss)",
                     }}
                   >
                     ${time.total_pnl.toFixed(2)}
@@ -662,7 +692,7 @@ export default function Evaluation() {
                       padding: "12px",
                       textAlign: "right",
                       fontWeight: "600",
-                      color: symbol.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                      color: symbol.total_pnl === 0 ? "var(--text-primary)" : symbol.total_pnl > 0 ? "var(--profit)" : "var(--loss)",
                     }}
                   >
                     ${symbol.total_pnl.toFixed(2)}
@@ -671,7 +701,7 @@ export default function Evaluation() {
                     style={{
                       padding: "12px",
                       textAlign: "right",
-                      color: symbol.average_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                      color: symbol.average_pnl === 0 ? "var(--text-primary)" : symbol.average_pnl > 0 ? "var(--profit)" : "var(--loss)",
                     }}
                   >
                     ${symbol.average_pnl.toFixed(2)}
@@ -744,7 +774,7 @@ export default function Evaluation() {
                         padding: "12px",
                         textAlign: "right",
                         fontWeight: "600",
-                        color: strategy.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                        color: strategy.total_pnl === 0 ? "var(--text-primary)" : strategy.total_pnl > 0 ? "var(--profit)" : "var(--loss)",
                       }}
                     >
                       ${strategy.total_pnl.toFixed(2)}
@@ -753,7 +783,7 @@ export default function Evaluation() {
                       style={{
                         padding: "12px",
                         textAlign: "right",
-                        color: strategy.average_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                        color: strategy.average_pnl === 0 ? "var(--text-primary)" : strategy.average_pnl > 0 ? "var(--profit)" : "var(--loss)",
                       }}
                     >
                       ${strategy.average_pnl.toFixed(2)}
