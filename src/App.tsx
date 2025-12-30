@@ -6,6 +6,7 @@ import Emotions from "./pages/Emotions";
 import Analytics from "./pages/Analytics";
 import CalendarPage from "./pages/Calendar";
 import Strategies from "./pages/Strategies";
+import Evaluation from "./pages/Evaluation";
 
 function App() {
   return (
@@ -18,6 +19,7 @@ function App() {
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/emotions" element={<Emotions />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/evaluation" element={<Evaluation />} />
         </Routes>
       </Layout>
     </Router>

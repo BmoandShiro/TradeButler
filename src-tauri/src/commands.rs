@@ -2,6 +2,7 @@ use crate::database::{get_connection, Trade, EmotionalState, Strategy};
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use chrono::{Timelike, Datelike};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CsvTrade {
@@ -2368,5 +2369,467 @@ pub fn save_pair_notes(entry_trade_id: i64, exit_trade_id: i64, notes: Option<St
     ).map_err(|e| e.to_string())?;
     
     Ok(())
+}
+
+// Evaluation Metrics Structures
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WeekdayPerformance {
+    pub weekday: i32, // 0=Monday, 6=Sunday
+    pub weekday_name: String,
+    pub total_pnl: f64,
+    pub trade_count: i64,
+    pub win_rate: f64,
+    pub average_win: f64,
+    pub average_loss: f64,
+    pub payoff_ratio: f64,
+    pub profit_factor: f64,
+    pub gross_profit: f64,
+    pub gross_loss: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DayOfMonthPerformance {
+    pub day: i32, // 1-31
+    pub total_pnl: f64,
+    pub trade_count: i64,
+    pub win_rate: f64,
+    pub average_win: f64,
+    pub average_loss: f64,
+    pub payoff_ratio: f64,
+    pub profit_factor: f64,
+    pub gross_profit: f64,
+    pub gross_loss: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TimeOfDayPerformance {
+    pub hour: i32, // 0-23 (represents hour bucket, e.g., 9 = 9:00-9:59)
+    pub hour_label: String, // e.g., "9:00-9:59"
+    pub total_pnl: f64,
+    pub trade_count: i64,
+    pub win_rate: f64,
+    pub average_win: f64,
+    pub average_loss: f64,
+    pub payoff_ratio: f64,
+    pub profit_factor: f64,
+    pub gross_profit: f64,
+    pub gross_loss: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SymbolPerformance {
+    pub symbol: String,
+    pub trade_count: i64,
+    pub win_rate: f64,
+    pub total_pnl: f64,
+    pub average_pnl: f64,
+    pub average_win: f64,
+    pub average_loss: f64,
+    pub payoff_ratio: f64,
+    pub profit_factor: f64,
+    pub gross_profit: f64,
+    pub gross_loss: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StrategyPerformanceDetail {
+    pub strategy_id: Option<i64>,
+    pub strategy_name: String,
+    pub trade_count: i64,
+    pub win_rate: f64,
+    pub total_pnl: f64,
+    pub average_pnl: f64,
+    pub average_win: f64,
+    pub average_loss: f64,
+    pub payoff_ratio: f64,
+    pub profit_factor: f64,
+    pub gross_profit: f64,
+    pub gross_loss: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EvaluationMetrics {
+    pub weekday_performance: Vec<WeekdayPerformance>,
+    pub day_of_month_performance: Vec<DayOfMonthPerformance>,
+    pub time_of_day_performance: Vec<TimeOfDayPerformance>,
+    pub symbol_performance: Vec<SymbolPerformance>,
+    pub strategy_performance: Vec<StrategyPerformanceDetail>,
+}
+
+#[tauri::command]
+pub fn get_evaluation_metrics(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>) -> Result<EvaluationMetrics, String> {
+    use std::collections::HashMap;
+    
+    // Get paired trades
+    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    
+    // Filter by date range if provided
+    let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
+        paired_trades.into_iter().filter(|pair| {
+            let exit_date = &pair.exit_timestamp;
+            let in_range = if let Some(start) = &start_date {
+                exit_date >= start
+            } else {
+                true
+            } && if let Some(end) = &end_date {
+                exit_date <= end
+            } else {
+                true
+            };
+            in_range
+        }).collect()
+    } else {
+        paired_trades
+    };
+    
+    // Get position groups to find strategy_id for positions with additions
+    let position_groups = get_position_groups(pairing_method.clone(), start_date.clone(), end_date.clone()).map_err(|e| e.to_string())?;
+    
+    // Create a map: trade_id -> position_group_entry_trade_strategy_id
+    let mut trade_to_position_strategy: HashMap<i64, Option<i64>> = HashMap::new();
+    for group in &position_groups {
+        let position_strategy_id = group.entry_trade.strategy_id;
+        for trade in &group.position_trades {
+            if let Some(trade_id) = trade.id {
+                trade_to_position_strategy.insert(trade_id, position_strategy_id);
+            }
+        }
+    }
+    
+    // Get entry trade strategy_ids from database
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let entry_trade_ids: Vec<i64> = filtered_paired_trades
+        .iter()
+        .map(|p| p.entry_trade_id)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    
+    let mut entry_trade_strategies: HashMap<i64, Option<i64>> = HashMap::new();
+    if !entry_trade_ids.is_empty() {
+        let mut entry_trade_stmt = conn
+            .prepare("SELECT strategy_id FROM trades WHERE id = ?")
+            .map_err(|e| e.to_string())?;
+        
+        for entry_trade_id in &entry_trade_ids {
+            if let Ok(strategy_id) = entry_trade_stmt.query_row([entry_trade_id], |row| {
+                row.get::<_, Option<i64>>(0)
+            }) {
+                entry_trade_strategies.insert(*entry_trade_id, strategy_id);
+            }
+        }
+    }
+    
+    // Get strategy names
+    let mut stmt = conn
+        .prepare("SELECT id, name FROM strategies")
+        .map_err(|e| e.to_string())?;
+    
+    let strategy_iter = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut strategy_names: HashMap<i64, String> = HashMap::new();
+    for strategy_result in strategy_iter {
+        let (id, name) = strategy_result.map_err(|e| e.to_string())?;
+        strategy_names.insert(id, name);
+    }
+    
+    // Helper function to calculate risk metrics
+    fn calculate_risk_metrics(trades: &[&PairedTrade]) -> (f64, f64, f64, f64, f64, f64, f64) {
+        let mut wins = Vec::new();
+        let mut losses = Vec::new();
+        let mut gross_profit = 0.0;
+        let mut gross_loss = 0.0;
+        
+        for trade in trades {
+            let pnl = trade.net_profit_loss;
+            if pnl > 0.0 {
+                wins.push(pnl);
+                gross_profit += pnl;
+            } else if pnl < 0.0 {
+                losses.push(pnl.abs());
+                gross_loss += pnl.abs();
+            }
+        }
+        
+        let trade_count = trades.len() as i64;
+        let win_count = wins.len() as i64;
+        let win_rate = if trade_count > 0 {
+            win_count as f64 / trade_count as f64
+        } else {
+            0.0
+        };
+        
+        let average_win = if !wins.is_empty() {
+            wins.iter().sum::<f64>() / wins.len() as f64
+        } else {
+            0.0
+        };
+        
+        let average_loss = if !losses.is_empty() {
+            losses.iter().sum::<f64>() / losses.len() as f64
+        } else {
+            0.0
+        };
+        
+        let payoff_ratio = if average_loss > 0.0 {
+            average_win / average_loss
+        } else if average_win > 0.0 {
+            f64::INFINITY
+        } else {
+            0.0
+        };
+        
+        let profit_factor = if gross_loss > 0.0 {
+            gross_profit / gross_loss
+        } else if gross_profit > 0.0 {
+            f64::INFINITY
+        } else {
+            0.0
+        };
+        
+        (win_rate, average_win, average_loss, payoff_ratio, profit_factor, gross_profit, gross_loss)
+    }
+    
+    // Weekday Performance
+    let mut weekday_map: HashMap<i32, Vec<&PairedTrade>> = HashMap::new();
+    for pair in &filtered_paired_trades {
+        // Parse exit timestamp to get weekday
+        if let Ok(exit_time) = pair.exit_timestamp.parse::<chrono::DateTime<chrono::Utc>>() {
+            let weekday = exit_time.weekday().num_days_from_monday() as i32; // 0=Monday, 6=Sunday
+            weekday_map.entry(weekday).or_insert_with(Vec::new).push(pair);
+        } else if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(&pair.exit_timestamp, "%Y-%m-%dT%H:%M:%S") {
+            let dt = naive_dt.and_utc();
+            let weekday = dt.weekday().num_days_from_monday() as i32;
+            weekday_map.entry(weekday).or_insert_with(Vec::new).push(pair);
+        }
+    }
+    
+    let mut weekday_performance = Vec::new();
+    let weekday_names = vec!["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+    for weekday in 0..7 {
+        if let Some(trades) = weekday_map.get(&weekday) {
+            let (win_rate, avg_win, avg_loss, payoff, profit_factor, gross_profit, gross_loss) = calculate_risk_metrics(trades);
+            let total_pnl: f64 = trades.iter().map(|t| t.net_profit_loss).sum();
+            weekday_performance.push(WeekdayPerformance {
+                weekday,
+                weekday_name: weekday_names[weekday as usize].to_string(),
+                total_pnl,
+                trade_count: trades.len() as i64,
+                win_rate,
+                average_win: avg_win,
+                average_loss: avg_loss,
+                payoff_ratio: if payoff == f64::INFINITY { 0.0 } else { payoff },
+                profit_factor: if profit_factor == f64::INFINITY { 0.0 } else { profit_factor },
+                gross_profit,
+                gross_loss,
+            });
+        } else {
+            weekday_performance.push(WeekdayPerformance {
+                weekday,
+                weekday_name: weekday_names[weekday as usize].to_string(),
+                total_pnl: 0.0,
+                trade_count: 0,
+                win_rate: 0.0,
+                average_win: 0.0,
+                average_loss: 0.0,
+                payoff_ratio: 0.0,
+                profit_factor: 0.0,
+                gross_profit: 0.0,
+                gross_loss: 0.0,
+            });
+        }
+    }
+    
+    // Day of Month Performance
+    let mut day_of_month_map: HashMap<i32, Vec<&PairedTrade>> = HashMap::new();
+    for pair in &filtered_paired_trades {
+        if let Ok(exit_time) = pair.exit_timestamp.parse::<chrono::DateTime<chrono::Utc>>() {
+            let day = exit_time.day() as i32;
+            day_of_month_map.entry(day).or_insert_with(Vec::new).push(pair);
+        } else if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(&pair.exit_timestamp, "%Y-%m-%dT%H:%M:%S") {
+            let dt = naive_dt.and_utc();
+            let day = dt.day() as i32;
+            day_of_month_map.entry(day).or_insert_with(Vec::new).push(pair);
+        }
+    }
+    
+    let mut day_of_month_performance = Vec::new();
+    for day in 1..=31 {
+        if let Some(trades) = day_of_month_map.get(&day) {
+            let (win_rate, avg_win, avg_loss, payoff, profit_factor, gross_profit, gross_loss) = calculate_risk_metrics(trades);
+            let total_pnl: f64 = trades.iter().map(|t| t.net_profit_loss).sum();
+            day_of_month_performance.push(DayOfMonthPerformance {
+                day,
+                total_pnl,
+                trade_count: trades.len() as i64,
+                win_rate,
+                average_win: avg_win,
+                average_loss: avg_loss,
+                payoff_ratio: if payoff == f64::INFINITY { 0.0 } else { payoff },
+                profit_factor: if profit_factor == f64::INFINITY { 0.0 } else { profit_factor },
+                gross_profit,
+                gross_loss,
+            });
+        } else {
+            day_of_month_performance.push(DayOfMonthPerformance {
+                day,
+                total_pnl: 0.0,
+                trade_count: 0,
+                win_rate: 0.0,
+                average_win: 0.0,
+                average_loss: 0.0,
+                payoff_ratio: 0.0,
+                profit_factor: 0.0,
+                gross_profit: 0.0,
+                gross_loss: 0.0,
+            });
+        }
+    }
+    
+    // Time of Day Performance (hour buckets)
+    let mut time_of_day_map: HashMap<i32, Vec<&PairedTrade>> = HashMap::new();
+    for pair in &filtered_paired_trades {
+        if let Ok(exit_time) = pair.exit_timestamp.parse::<chrono::DateTime<chrono::Utc>>() {
+            let hour = exit_time.hour() as i32;
+            time_of_day_map.entry(hour).or_insert_with(Vec::new).push(pair);
+        } else if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(&pair.exit_timestamp, "%Y-%m-%dT%H:%M:%S") {
+            let dt = naive_dt.and_utc();
+            let hour = dt.hour() as i32;
+            time_of_day_map.entry(hour).or_insert_with(Vec::new).push(pair);
+        }
+    }
+    
+    let mut time_of_day_performance = Vec::new();
+    for hour in 0..24 {
+        if let Some(trades) = time_of_day_map.get(&hour) {
+            let (win_rate, avg_win, avg_loss, payoff, profit_factor, gross_profit, gross_loss) = calculate_risk_metrics(trades);
+            let total_pnl: f64 = trades.iter().map(|t| t.net_profit_loss).sum();
+            time_of_day_performance.push(TimeOfDayPerformance {
+                hour,
+                hour_label: format!("{:02}:00-{:02}:59", hour, hour),
+                total_pnl,
+                trade_count: trades.len() as i64,
+                win_rate,
+                average_win: avg_win,
+                average_loss: avg_loss,
+                payoff_ratio: if payoff == f64::INFINITY { 0.0 } else { payoff },
+                profit_factor: if profit_factor == f64::INFINITY { 0.0 } else { profit_factor },
+                gross_profit,
+                gross_loss,
+            });
+        } else {
+            time_of_day_performance.push(TimeOfDayPerformance {
+                hour,
+                hour_label: format!("{:02}:00-{:02}:59", hour, hour),
+                total_pnl: 0.0,
+                trade_count: 0,
+                win_rate: 0.0,
+                average_win: 0.0,
+                average_loss: 0.0,
+                payoff_ratio: 0.0,
+                profit_factor: 0.0,
+                gross_profit: 0.0,
+                gross_loss: 0.0,
+            });
+        }
+    }
+    
+    // Symbol Performance
+    let mut symbol_map: HashMap<String, Vec<&PairedTrade>> = HashMap::new();
+    for pair in &filtered_paired_trades {
+        let base_symbol = get_underlying_symbol(&pair.symbol);
+        symbol_map.entry(base_symbol).or_insert_with(Vec::new).push(pair);
+    }
+    
+    let mut symbol_performance = Vec::new();
+    for (symbol, trades) in symbol_map {
+        let (win_rate, avg_win, avg_loss, payoff, profit_factor, gross_profit, gross_loss) = calculate_risk_metrics(&trades);
+        let total_pnl: f64 = trades.iter().map(|t| t.net_profit_loss).sum();
+        let average_pnl = if !trades.is_empty() {
+            total_pnl / trades.len() as f64
+        } else {
+            0.0
+        };
+        symbol_performance.push(SymbolPerformance {
+            symbol,
+            trade_count: trades.len() as i64,
+            win_rate,
+            total_pnl,
+            average_pnl,
+            average_win: avg_win,
+            average_loss: avg_loss,
+            payoff_ratio: if payoff == f64::INFINITY { 0.0 } else { payoff },
+            profit_factor: if profit_factor == f64::INFINITY { 0.0 } else { profit_factor },
+            gross_profit,
+            gross_loss,
+        });
+    }
+    symbol_performance.sort_by(|a, b| b.total_pnl.partial_cmp(&a.total_pnl).unwrap_or(std::cmp::Ordering::Equal));
+    
+    // Strategy Performance
+    let mut strategy_map: HashMap<Option<i64>, Vec<&PairedTrade>> = HashMap::new();
+    for pair in &filtered_paired_trades {
+        // Get strategy_id from position group first, then entry trade, then pair
+        let strategy_id = trade_to_position_strategy
+            .get(&pair.entry_trade_id)
+            .copied()
+            .flatten()
+            .or_else(|| {
+                entry_trade_strategies
+                    .get(&pair.entry_trade_id)
+                    .copied()
+                    .flatten()
+            })
+            .or(pair.strategy_id);
+        
+        strategy_map.entry(strategy_id).or_insert_with(Vec::new).push(pair);
+    }
+    
+    let mut strategy_performance = Vec::new();
+    for (strategy_id, trades) in strategy_map {
+        let (win_rate, avg_win, avg_loss, payoff, profit_factor, gross_profit, gross_loss) = calculate_risk_metrics(&trades);
+        let total_pnl: f64 = trades.iter().map(|t| t.net_profit_loss).sum();
+        let average_pnl = if !trades.is_empty() {
+            total_pnl / trades.len() as f64
+        } else {
+            0.0
+        };
+        
+        let strategy_name = if let Some(id) = strategy_id {
+            strategy_names.get(&id).cloned().unwrap_or_else(|| "Unknown".to_string())
+        } else {
+            "Unassigned".to_string()
+        };
+        
+        strategy_performance.push(StrategyPerformanceDetail {
+            strategy_id,
+            strategy_name,
+            trade_count: trades.len() as i64,
+            win_rate,
+            total_pnl,
+            average_pnl,
+            average_win: avg_win,
+            average_loss: avg_loss,
+            payoff_ratio: if payoff == f64::INFINITY { 0.0 } else { payoff },
+            profit_factor: if profit_factor == f64::INFINITY { 0.0 } else { profit_factor },
+            gross_profit,
+            gross_loss,
+        });
+    }
+    strategy_performance.sort_by(|a, b| b.total_pnl.partial_cmp(&a.total_pnl).unwrap_or(std::cmp::Ordering::Equal));
+    
+    Ok(EvaluationMetrics {
+        weekday_performance,
+        day_of_month_performance,
+        time_of_day_performance,
+        symbol_performance,
+        strategy_performance,
+    })
 }
 

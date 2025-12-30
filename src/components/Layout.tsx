@@ -7,7 +7,8 @@ import {
   Calendar,
   Target,
   Upload,
-  Trash2
+  Trash2,
+  TrendingDown
 } from "lucide-react";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
@@ -71,6 +72,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: "/strategies", icon: Target, label: "Strategies" },
     { path: "/emotions", icon: Heart, label: "Emotions" },
     { path: "/analytics", icon: BarChart3, label: "Analytics" },
+    { path: "/evaluation", icon: TrendingDown, label: "Evaluation" },
   ];
 
   return (
