@@ -49,6 +49,7 @@ fn main() {
             commands::fetch_chart_data,
             commands::save_pair_notes,
             commands::get_evaluation_metrics,
+            commands::get_equity_curve,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

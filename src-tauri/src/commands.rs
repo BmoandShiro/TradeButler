@@ -2833,3 +2833,265 @@ pub fn get_evaluation_metrics(pairing_method: Option<String>, start_date: Option
     })
 }
 
+// Equity Curve Structures
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EquityPoint {
+    pub date: String,
+    pub cumulative_pnl: f64,
+    pub daily_pnl: f64,
+    pub peak_equity: f64,
+    pub drawdown: f64,
+    pub drawdown_pct: f64,
+    pub is_winning_streak: bool,
+    pub is_losing_streak: bool,
+    pub is_max_drawdown: bool,
+    pub is_best_surge: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DrawdownMetrics {
+    pub max_drawdown: f64,
+    pub max_drawdown_pct: f64,
+    pub max_drawdown_start: Option<String>,
+    pub max_drawdown_end: Option<String>,
+    pub avg_drawdown: f64,
+    pub longest_drawdown_days: i64,
+    pub longest_drawdown_start: Option<String>,
+    pub longest_drawdown_end: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EquityCurveData {
+    pub equity_points: Vec<EquityPoint>,
+    pub drawdown_metrics: DrawdownMetrics,
+    pub best_surge_start: Option<String>,
+    pub best_surge_end: Option<String>,
+    pub best_surge_value: f64,
+}
+
+#[tauri::command]
+pub fn get_equity_curve(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>) -> Result<EquityCurveData, String> {
+    use std::collections::HashMap;
+    
+    // Get paired trades
+    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    
+    // Filter by date range if provided
+    let mut filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
+        paired_trades.into_iter().filter(|pair| {
+            let exit_date = &pair.exit_timestamp;
+            let in_range = if let Some(start) = &start_date {
+                exit_date >= start
+            } else {
+                true
+            } && if let Some(end) = &end_date {
+                exit_date <= end
+            } else {
+                true
+            };
+            in_range
+        }).collect()
+    } else {
+        paired_trades
+    };
+    
+    // Sort by exit timestamp (chronological order)
+    filtered_paired_trades.sort_by(|a, b| a.exit_timestamp.cmp(&b.exit_timestamp));
+    
+    // Group by date and calculate daily P&L
+    let mut daily_pnl_map: HashMap<String, f64> = HashMap::new();
+    for pair in &filtered_paired_trades {
+        if let Some(date_str) = pair.exit_timestamp.split('T').next() {
+            *daily_pnl_map.entry(date_str.to_string()).or_insert(0.0) += pair.net_profit_loss;
+        }
+    }
+    
+    // Convert to sorted vector of dates
+    let mut dates: Vec<String> = daily_pnl_map.keys().cloned().collect();
+    dates.sort();
+    
+    // Build equity curve
+    let mut equity_points = Vec::new();
+    let mut cumulative_pnl = 0.0;
+    let mut peak_equity = 0.0;
+    let mut max_drawdown = 0.0;
+    let mut max_drawdown_start: Option<String> = None;
+    let mut max_drawdown_end: Option<String> = None;
+    let mut current_drawdown_start: Option<String> = None;
+    let mut longest_drawdown_days = 0;
+    let mut longest_drawdown_start: Option<String> = None;
+    let mut longest_drawdown_end: Option<String> = None;
+    let mut current_drawdown_days = 0;
+    let mut current_drawdown_start_date: Option<String> = None;
+    let mut drawdown_sum = 0.0;
+    let mut drawdown_count = 0;
+    
+    // Track streaks
+    let mut current_streak_type: Option<bool> = None; // true = winning, false = losing
+    let mut current_streak_start: Option<String> = None;
+    let mut winning_streaks: Vec<(String, String)> = Vec::new(); // (start, end)
+    let mut losing_streaks: Vec<(String, String)> = Vec::new();
+    
+    // Track best equity surge
+    let mut best_surge_start: Option<String> = None;
+    let mut best_surge_end: Option<String> = None;
+    let mut best_surge_value = 0.0;
+    let mut surge_start_date: Option<String> = None;
+    let mut surge_start_equity = 0.0;
+    
+    for date in &dates {
+        let daily_pnl = daily_pnl_map.get(date).copied().unwrap_or(0.0);
+        cumulative_pnl += daily_pnl;
+        
+        // Update peak equity
+        if cumulative_pnl > peak_equity {
+            peak_equity = cumulative_pnl;
+            // Reset surge tracking when we hit a new peak
+            surge_start_date = Some(date.clone());
+            surge_start_equity = cumulative_pnl;
+        }
+        
+        // Calculate drawdown
+        let drawdown = peak_equity - cumulative_pnl;
+        let drawdown_pct = if peak_equity > 0.0 {
+            (drawdown / peak_equity) * 100.0
+        } else if peak_equity < 0.0 {
+            (drawdown / peak_equity.abs()) * 100.0
+        } else {
+            0.0
+        };
+        
+        // Track max drawdown
+        if drawdown > max_drawdown {
+            max_drawdown = drawdown;
+            if current_drawdown_start.is_none() {
+                current_drawdown_start = Some(date.clone());
+            }
+            max_drawdown_start = current_drawdown_start.clone();
+            max_drawdown_end = Some(date.clone());
+        }
+        
+        // Track drawdown periods
+        if drawdown > 0.0 {
+            if current_drawdown_start_date.is_none() {
+                current_drawdown_start_date = Some(date.clone());
+            }
+            current_drawdown_days += 1;
+            drawdown_sum += drawdown;
+            drawdown_count += 1;
+        } else {
+            // Drawdown ended
+            if current_drawdown_days > longest_drawdown_days {
+                longest_drawdown_days = current_drawdown_days;
+                longest_drawdown_start = current_drawdown_start_date.clone();
+                longest_drawdown_end = Some(date.clone());
+            }
+            current_drawdown_days = 0;
+            current_drawdown_start_date = None;
+            current_drawdown_start = None;
+        }
+        
+        // Track best equity surge (from a low to a new peak)
+        if let Some(ref surge_start) = surge_start_date {
+            if cumulative_pnl > surge_start_equity {
+                let surge_value = cumulative_pnl - surge_start_equity;
+                if surge_value > best_surge_value {
+                    best_surge_value = surge_value;
+                    best_surge_start = Some(surge_start.clone());
+                    best_surge_end = Some(date.clone());
+                }
+            }
+        }
+        
+        // Track streaks
+        let is_win = daily_pnl > 0.0;
+        let is_loss = daily_pnl < 0.0;
+        
+        if is_win {
+            if current_streak_type == Some(false) {
+                // End losing streak
+                if let Some(start) = current_streak_start.take() {
+                    losing_streaks.push((start, date.clone()));
+                }
+            }
+            if current_streak_type != Some(true) {
+                current_streak_type = Some(true);
+                current_streak_start = Some(date.clone());
+            }
+        } else if is_loss {
+            if current_streak_type == Some(true) {
+                // End winning streak
+                if let Some(start) = current_streak_start.take() {
+                    winning_streaks.push((start, date.clone()));
+                }
+            }
+            if current_streak_type != Some(false) {
+                current_streak_type = Some(false);
+                current_streak_start = Some(date.clone());
+            }
+        }
+        
+        // Check if this date is in max drawdown period
+        let is_max_drawdown = max_drawdown_start.as_ref().map_or(false, |start| {
+            date >= start && max_drawdown_end.as_ref().map_or(false, |end| date <= end)
+        });
+        
+        // Check if this date is in best surge period
+        let is_best_surge = best_surge_start.as_ref().map_or(false, |start| {
+            date >= start && best_surge_end.as_ref().map_or(false, |end| date <= end)
+        });
+        
+        // Check if this date is in a winning/losing streak
+        let is_winning_streak = winning_streaks.iter().any(|(s, e)| date >= s && date <= e) ||
+            (current_streak_type == Some(true) && current_streak_start.as_ref().map_or(false, |s| date >= s));
+        let is_losing_streak = losing_streaks.iter().any(|(s, e)| date >= s && date <= e) ||
+            (current_streak_type == Some(false) && current_streak_start.as_ref().map_or(false, |s| date >= s));
+        
+        equity_points.push(EquityPoint {
+            date: date.clone(),
+            cumulative_pnl,
+            daily_pnl,
+            peak_equity,
+            drawdown,
+            drawdown_pct,
+            is_winning_streak: is_winning_streak || (current_streak_type == Some(true) && current_streak_start.as_ref().map_or(false, |s| date >= s)),
+            is_losing_streak: is_losing_streak || (current_streak_type == Some(false) && current_streak_start.as_ref().map_or(false, |s| date >= s)),
+            is_max_drawdown,
+            is_best_surge,
+        });
+    }
+    
+    // Calculate average drawdown
+    let avg_drawdown = if drawdown_count > 0 {
+        drawdown_sum / drawdown_count as f64
+    } else {
+        0.0
+    };
+    
+    // Calculate max drawdown percentage
+    let max_drawdown_pct = if peak_equity > 0.0 {
+        (max_drawdown / peak_equity) * 100.0
+    } else if peak_equity < 0.0 {
+        (max_drawdown / peak_equity.abs()) * 100.0
+    } else {
+        0.0
+    };
+    
+    Ok(EquityCurveData {
+        equity_points,
+        drawdown_metrics: DrawdownMetrics {
+            max_drawdown,
+            max_drawdown_pct,
+            max_drawdown_start,
+            max_drawdown_end,
+            avg_drawdown,
+            longest_drawdown_days,
+            longest_drawdown_start,
+            longest_drawdown_end,
+        },
+        best_surge_start,
+        best_surge_end,
+        best_surge_value,
+    })
+}
+
