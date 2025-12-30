@@ -1524,6 +1524,14 @@ export default function Dashboard() {
                 const pairs = strategyPairs.get(strategyKey) || [];
                 const isLoading = loadingStrategyPairs.has(strategyKey);
                 
+                // Calculate statistics from pairs (use pairs if loaded, otherwise use strategy data)
+                const totalTrades = pairs.length > 0 ? pairs.length : strategy.trade_count;
+                const totalPnL = pairs.length > 0 
+                  ? pairs.reduce((sum, pair) => sum + pair.net_profit_loss, 0)
+                  : strategy.estimated_pnl;
+                const winningTrades = pairs.filter(pair => pair.net_profit_loss > 0).length;
+                const winPercentage = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+                
                 return (
                 <div
                     key={strategyKey}
@@ -1580,21 +1588,41 @@ export default function Dashboard() {
                 >
                       <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1 }}>
                         {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                  <div>
+                  <div style={{ flex: 1 }}>
                     <p style={{ fontWeight: "600", marginBottom: "4px" }}>{strategy.strategy_name}</p>
-                    <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                      {strategy.trade_count} trades
-                    </p>
+                    {!isExpanded && (
+                      <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
+                        <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                          {totalTrades} trades
+                        </p>
+                        <p style={{ 
+                          fontSize: "12px", 
+                          color: totalPnL >= 0 ? "var(--profit)" : "var(--loss)",
+                          fontWeight: "500"
+                        }}>
+                          ${totalPnL >= 0 ? "+" : ""}{totalPnL.toFixed(2)} P&L
+                        </p>
+                        {pairs.length > 0 && (
+                          <p style={{ 
+                            fontSize: "12px", 
+                            color: winPercentage >= 50 ? "var(--profit)" : winPercentage > 0 ? "var(--text-secondary)" : "var(--loss)",
+                            fontWeight: "500"
+                          }}>
+                            {winPercentage.toFixed(1)}% win
+                          </p>
+                        )}
+                      </div>
+                    )}
                         </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
                     <p
                       style={{
                         fontWeight: "600",
-                        color: strategy.estimated_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                        color: totalPnL >= 0 ? "var(--profit)" : "var(--loss)",
                       }}
                     >
-                      ${strategy.estimated_pnl.toFixed(2)}
+                      ${totalPnL.toFixed(2)}
                     </p>
                     <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
                       ${(strategy.total_volume / 1000).toFixed(1)}k vol

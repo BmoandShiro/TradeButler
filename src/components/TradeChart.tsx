@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { createChart, IChartApi, ISeriesApi, CandlestickData, ColorType, UTCTimestamp, CandlestickSeries, SeriesMarker, createSeriesMarkers } from "lightweight-charts";
 import { format } from "date-fns";
 import { invoke } from "@tauri-apps/api/tauri";
+import { Settings } from "lucide-react";
 
 interface Trade {
   id?: number;
@@ -30,6 +31,27 @@ interface TradeChartProps {
 
 type Timeframe = "1m" | "3m" | "5m" | "15m" | "30m" | "1h" | "1d";
 
+interface ChartSettings {
+  backgroundColor: string;
+  textColor: string;
+  gridColor: string;
+  upColor: string;
+  downColor: string;
+  buyMarkerColor: string;
+  sellMarkerColor: string;
+}
+
+const CHART_SETTINGS_KEY = "tradebutler_chart_settings";
+const defaultSettings: ChartSettings = {
+  backgroundColor: "#1e1e1e",
+  textColor: "#ffffff",
+  gridColor: "#2a2a2a",
+  upColor: "#26a69a",
+  downColor: "#ef5350",
+  buyMarkerColor: "#26a69a",
+  sellMarkerColor: "#ef5350",
+};
+
 export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, exitPrice, onClose, positionTrades }: TradeChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -39,7 +61,21 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [debugInfo, setDebugInfo] = useState<string>("");
+  const [showSettings, setShowSettings] = useState(false);
   const containerReadyRef = useRef(false);
+  
+  // Chart settings from localStorage
+  const [chartSettings, setChartSettings] = useState<ChartSettings>(() => {
+    const saved = localStorage.getItem(CHART_SETTINGS_KEY);
+    if (saved) {
+      try {
+        return { ...defaultSettings, ...JSON.parse(saved) };
+      } catch {
+        return defaultSettings;
+      }
+    }
+    return defaultSettings;
+  });
 
   // Extract base symbol for options
   const getBaseSymbol = (sym: string): string => {
@@ -71,6 +107,16 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
   };
 
   const isOptions = isOptionsSymbol(symbol);
+  
+  // Helper function for color validation (used in multiple places)
+  const cleanColor = useCallback((color: string, defaultColor: string): string => {
+    if (!color || color.trim() === '') return defaultColor;
+    const cleaned = color.trim().replace(/^#/, '');
+    if (/^[0-9A-Fa-f]{6}$/.test(cleaned)) {
+      return `#${cleaned}`;
+    }
+    return defaultColor;
+  }, []);
 
   // Define fetchPriceData function using useCallback so it can be called from chart initialization
   const fetchPriceData = useCallback(async () => {
@@ -257,10 +303,13 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
           
           // For options: just point to the bar (no text) - tag based on time filled
           // For stocks: show full details with price
+          const buyColor = cleanColor(chartSettings.buyMarkerColor, defaultSettings.buyMarkerColor);
+          const sellColor = cleanColor(chartSettings.sellMarkerColor, defaultSettings.sellMarkerColor);
+          
           const marker: SeriesMarker<UTCTimestamp> = {
             time: tradeTime,
             position: isBuy ? 'belowBar' : 'aboveBar',
-            color: isBuy ? '#26a69a' : '#ef5350',
+            color: isBuy ? buyColor : sellColor,
             shape: isBuy ? 'arrowUp' : 'arrowDown',
             size: 2, // Larger size for better visibility
           };
@@ -298,10 +347,13 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
         const entryTime = findClosestBarTime(entryTimestampMs);
         const exitTime = findClosestBarTime(exitTimestampMs);
         
+        const buyColor = cleanColor(chartSettings.buyMarkerColor, defaultSettings.buyMarkerColor);
+        const sellColor = cleanColor(chartSettings.sellMarkerColor, defaultSettings.sellMarkerColor);
+        
         const entryMarker: SeriesMarker<UTCTimestamp> = {
           time: entryTime,
           position: 'belowBar',
-          color: '#26a69a',
+          color: buyColor,
           shape: 'arrowUp',
           size: 2, // Larger size for better visibility
         };
@@ -309,7 +361,7 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
         const exitMarker: SeriesMarker<UTCTimestamp> = {
           time: exitTime,
           position: 'aboveBar',
-          color: '#ef5350',
+          color: sellColor,
           shape: 'arrowDown',
           size: 2, // Larger size for better visibility
         };
@@ -403,9 +455,12 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
 
       // Only add entry and exit price lines for stocks (not options, since price doesn't match chart scale)
       if (!isOptions) {
+        const buyColor = cleanColor(chartSettings.buyMarkerColor, defaultSettings.buyMarkerColor);
+        const sellColor = cleanColor(chartSettings.sellMarkerColor, defaultSettings.sellMarkerColor);
+        
         seriesRef.current.createPriceLine({
           price: entryPrice,
-          color: "#26a69a", // Green for entry
+          color: buyColor,
           lineWidth: 2,
           lineStyle: 0, // Solid
           axisLabelVisible: true,
@@ -414,7 +469,7 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
 
         seriesRef.current.createPriceLine({
           price: exitPrice,
-          color: "#ef5350", // Red for exit
+          color: sellColor,
           lineWidth: 2,
           lineStyle: 0, // Solid
           axisLabelVisible: true,
@@ -466,7 +521,7 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
       setLoading(false);
       // Don't throw - just show error message
     }
-  }, [symbol, entryTimestamp, exitTimestamp, entryPrice, exitPrice, timeframe, baseSymbol, positionTrades, isOptions]);
+  }, [symbol, entryTimestamp, exitTimestamp, entryPrice, exitPrice, timeframe, baseSymbol, positionTrades, isOptions, chartSettings, cleanColor]);
 
   useEffect(() => {
     // Prevent multiple initializations
@@ -522,44 +577,11 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
           return;
         }
 
-        // Get CSS variable values or use defaults
-        // Note: CSS variables might return rgb() format, so we'll use safe defaults
-        const getCSSVariable = (varName: string, defaultValue: string): string => {
-          try {
-            if (typeof window !== 'undefined') {
-              const value = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-              // If it's a hex color, return it; otherwise use default
-              if (value && /^#[0-9A-Fa-f]{6}$/.test(value)) {
-                return value;
-              }
-            }
-          } catch (e) {
-            // Ignore errors, use default
-          }
-          return defaultValue;
-        };
-
-        // Use safe default hex colors
-        const bgColor = getCSSVariable('--bg-secondary', '#1e1e1e');
-        const textColor = getCSSVariable('--text-primary', '#ffffff');
-        const profitColor = getCSSVariable('--profit', '#26a69a');
-        const lossColor = getCSSVariable('--loss', '#ef5350');
-
-        // Ensure valid colors (remove # if present, or use defaults)
-        const cleanColor = (color: string, defaultColor: string): string => {
-          if (!color || color.trim() === '') return defaultColor;
-          // Remove # if present and ensure it's a valid hex
-          const cleaned = color.trim().replace(/^#/, '');
-          if (/^[0-9A-Fa-f]{6}$/.test(cleaned)) {
-            return `#${cleaned}`;
-          }
-          return defaultColor;
-        };
-
-        const finalBgColor = cleanColor(bgColor, '#1e1e1e');
-        const finalTextColor = cleanColor(textColor, '#ffffff');
-        const finalProfitColor = cleanColor(profitColor, '#26a69a');
-        const finalLossColor = cleanColor(lossColor, '#ef5350');
+        // Use chart settings from state (loaded from localStorage)
+        const finalBgColor = cleanColor(chartSettings.backgroundColor, defaultSettings.backgroundColor);
+        const finalTextColor = cleanColor(chartSettings.textColor, defaultSettings.textColor);
+        const finalProfitColor = cleanColor(chartSettings.upColor, defaultSettings.upColor);
+        const finalLossColor = cleanColor(chartSettings.downColor, defaultSettings.downColor);
 
         // Create chart with minimum width (ensure it's a valid number)
         // Use actual container dimensions or fallback to reasonable defaults
@@ -617,6 +639,8 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
             
             let chart: IChartApi;
             try {
+              const gridColor = cleanColor(chartSettings.gridColor, defaultSettings.gridColor);
+              
               // Try creating chart with autoSize first, then disable it
               chart = createChart(container, {
                 width: finalWidth,
@@ -625,6 +649,22 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                 layout: {
                   background: { type: ColorType.Solid, color: finalBgColor },
                   textColor: finalTextColor,
+                },
+                grid: {
+                  vertLines: {
+                    color: gridColor,
+                    style: 1, // Solid line
+                  },
+                  horzLines: {
+                    color: gridColor,
+                    style: 1, // Solid line
+                  },
+                },
+                rightPriceScale: {
+                  borderColor: gridColor,
+                },
+                timeScale: {
+                  borderColor: gridColor,
                 },
               });
               console.log('Chart created successfully');
@@ -895,7 +935,64 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
         series: !!seriesRef.current
       });
     }
-  }, [fetchPriceData, symbol, entryTimestamp, exitTimestamp, entryPrice, exitPrice, timeframe, baseSymbol]);
+  }, [fetchPriceData, symbol, entryTimestamp, exitTimestamp, entryPrice, exitPrice, timeframe, baseSymbol, chartSettings]);
+  
+  // Update chart colors when settings change
+  useEffect(() => {
+    if (chartRef.current && seriesRef.current) {
+      const cleanColor = (color: string, defaultColor: string): string => {
+        if (!color || color.trim() === '') return defaultColor;
+        const cleaned = color.trim().replace(/^#/, '');
+        if (/^[0-9A-Fa-f]{6}$/.test(cleaned)) {
+          return `#${cleaned}`;
+        }
+        return defaultColor;
+      };
+      
+      const gridColor = cleanColor(chartSettings.gridColor, defaultSettings.gridColor);
+      const bgColor = cleanColor(chartSettings.backgroundColor, defaultSettings.backgroundColor);
+      const textColor = cleanColor(chartSettings.textColor, defaultSettings.textColor);
+      const upColor = cleanColor(chartSettings.upColor, defaultSettings.upColor);
+      const downColor = cleanColor(chartSettings.downColor, defaultSettings.downColor);
+      
+      // Update chart layout
+      chartRef.current.applyOptions({
+        layout: {
+          background: { type: ColorType.Solid, color: bgColor },
+          textColor: textColor,
+        },
+        grid: {
+          vertLines: { color: gridColor, style: 1 },
+          horzLines: { color: gridColor, style: 1 },
+        },
+        rightPriceScale: {
+          borderColor: gridColor,
+        },
+        timeScale: {
+          borderColor: gridColor,
+        },
+      });
+      
+      // Update series colors
+      seriesRef.current.applyOptions({
+        upColor: upColor,
+        downColor: downColor,
+        wickUpColor: upColor,
+        wickDownColor: downColor,
+      });
+    }
+  }, [chartSettings, cleanColor]);
+  
+  const handleSettingsChange = (newSettings: Partial<ChartSettings>) => {
+    const updated = { ...chartSettings, ...newSettings };
+    setChartSettings(updated);
+    localStorage.setItem(CHART_SETTINGS_KEY, JSON.stringify(updated));
+  };
+  
+  const resetSettings = () => {
+    setChartSettings(defaultSettings);
+    localStorage.setItem(CHART_SETTINGS_KEY, JSON.stringify(defaultSettings));
+  };
 
   // Safety check - if chart failed to initialize, show error and allow close
   if (error && !chartRef.current) {
@@ -1009,21 +1106,339 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
           <h2 style={{ fontSize: "24px", fontWeight: "600", margin: 0 }}>
             {symbol} - Trade Chart
           </h2>
-          <button
-            onClick={onClose}
-            style={{
-              background: "transparent",
-              border: "1px solid var(--border-color)",
-              borderRadius: "4px",
-              padding: "8px 16px",
-              color: "var(--text-primary)",
-              cursor: "pointer",
-              fontSize: "14px",
-            }}
-          >
-            Close
-          </button>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowSettings(!showSettings);
+              }}
+              style={{
+                background: showSettings ? "var(--bg-tertiary)" : "transparent",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                padding: "8px",
+                color: "var(--text-primary)",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: "32px",
+                height: "32px",
+              }}
+              title="Chart Settings"
+            >
+              <Settings size={16} />
+            </button>
+            <button
+              onClick={onClose}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                padding: "8px 16px",
+                color: "var(--text-primary)",
+                cursor: "pointer",
+                fontSize: "14px",
+              }}
+            >
+              Close
+            </button>
+          </div>
         </div>
+        
+        {showSettings && (
+          <div
+            style={{
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              padding: "20px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "16px",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+              <h3 style={{ fontSize: "18px", fontWeight: "600", margin: 0 }}>Chart Settings</h3>
+              <button
+                onClick={resetSettings}
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                  padding: "4px 12px",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                  fontSize: "12px",
+                }}
+              >
+                Reset to Defaults
+              </button>
+            </div>
+            
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "16px" }}>
+              {/* Background Color */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>
+                  Background Color
+                </label>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <input
+                    type="color"
+                    value={chartSettings.backgroundColor}
+                    onChange={(e) => handleSettingsChange({ backgroundColor: e.target.value })}
+                    style={{
+                      width: "40px",
+                      height: "32px",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      backgroundColor: "transparent",
+                    }}
+                  />
+                  <input
+                    type="text"
+                    value={chartSettings.backgroundColor}
+                    onChange={(e) => handleSettingsChange({ backgroundColor: e.target.value })}
+                    style={{
+                      flex: 1,
+                      padding: "6px 8px",
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      color: "var(--text-primary)",
+                      fontSize: "12px",
+                    }}
+                    placeholder="#1e1e1e"
+                  />
+                </div>
+              </div>
+              
+              {/* Text Color */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>
+                  Text Color
+                </label>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <input
+                    type="color"
+                    value={chartSettings.textColor}
+                    onChange={(e) => handleSettingsChange({ textColor: e.target.value })}
+                    style={{
+                      width: "40px",
+                      height: "32px",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      backgroundColor: "transparent",
+                    }}
+                  />
+                  <input
+                    type="text"
+                    value={chartSettings.textColor}
+                    onChange={(e) => handleSettingsChange({ textColor: e.target.value })}
+                    style={{
+                      flex: 1,
+                      padding: "6px 8px",
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      color: "var(--text-primary)",
+                      fontSize: "12px",
+                    }}
+                    placeholder="#ffffff"
+                  />
+                </div>
+              </div>
+              
+              {/* Grid Color */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>
+                  Grid Lines Color
+                </label>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <input
+                    type="color"
+                    value={chartSettings.gridColor}
+                    onChange={(e) => handleSettingsChange({ gridColor: e.target.value })}
+                    style={{
+                      width: "40px",
+                      height: "32px",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      backgroundColor: "transparent",
+                    }}
+                  />
+                  <input
+                    type="text"
+                    value={chartSettings.gridColor}
+                    onChange={(e) => handleSettingsChange({ gridColor: e.target.value })}
+                    style={{
+                      flex: 1,
+                      padding: "6px 8px",
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      color: "var(--text-primary)",
+                      fontSize: "12px",
+                    }}
+                    placeholder="#2a2a2a"
+                  />
+                </div>
+              </div>
+              
+              {/* Up/Profit Color */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>
+                  Up/Profit Candle Color
+                </label>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <input
+                    type="color"
+                    value={chartSettings.upColor}
+                    onChange={(e) => handleSettingsChange({ upColor: e.target.value })}
+                    style={{
+                      width: "40px",
+                      height: "32px",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      backgroundColor: "transparent",
+                    }}
+                  />
+                  <input
+                    type="text"
+                    value={chartSettings.upColor}
+                    onChange={(e) => handleSettingsChange({ upColor: e.target.value })}
+                    style={{
+                      flex: 1,
+                      padding: "6px 8px",
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      color: "var(--text-primary)",
+                      fontSize: "12px",
+                    }}
+                    placeholder="#26a69a"
+                  />
+                </div>
+              </div>
+              
+              {/* Down/Loss Color */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>
+                  Down/Loss Candle Color
+                </label>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <input
+                    type="color"
+                    value={chartSettings.downColor}
+                    onChange={(e) => handleSettingsChange({ downColor: e.target.value })}
+                    style={{
+                      width: "40px",
+                      height: "32px",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      backgroundColor: "transparent",
+                    }}
+                  />
+                  <input
+                    type="text"
+                    value={chartSettings.downColor}
+                    onChange={(e) => handleSettingsChange({ downColor: e.target.value })}
+                    style={{
+                      flex: 1,
+                      padding: "6px 8px",
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      color: "var(--text-primary)",
+                      fontSize: "12px",
+                    }}
+                    placeholder="#ef5350"
+                  />
+                </div>
+              </div>
+              
+              {/* Buy Marker Color */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>
+                  Buy Marker Color
+                </label>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <input
+                    type="color"
+                    value={chartSettings.buyMarkerColor}
+                    onChange={(e) => handleSettingsChange({ buyMarkerColor: e.target.value })}
+                    style={{
+                      width: "40px",
+                      height: "32px",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      backgroundColor: "transparent",
+                    }}
+                  />
+                  <input
+                    type="text"
+                    value={chartSettings.buyMarkerColor}
+                    onChange={(e) => handleSettingsChange({ buyMarkerColor: e.target.value })}
+                    style={{
+                      flex: 1,
+                      padding: "6px 8px",
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      color: "var(--text-primary)",
+                      fontSize: "12px",
+                    }}
+                    placeholder="#26a69a"
+                  />
+                </div>
+              </div>
+              
+              {/* Sell Marker Color */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>
+                  Sell Marker Color
+                </label>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <input
+                    type="color"
+                    value={chartSettings.sellMarkerColor}
+                    onChange={(e) => handleSettingsChange({ sellMarkerColor: e.target.value })}
+                    style={{
+                      width: "40px",
+                      height: "32px",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      backgroundColor: "transparent",
+                    }}
+                  />
+                  <input
+                    type="text"
+                    value={chartSettings.sellMarkerColor}
+                    onChange={(e) => handleSettingsChange({ sellMarkerColor: e.target.value })}
+                    style={{
+                      flex: 1,
+                      padding: "6px 8px",
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      color: "var(--text-primary)",
+                      fontSize: "12px",
+                    }}
+                    placeholder="#ef5350"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
           <label style={{ fontSize: "14px", color: "var(--text-secondary)" }}>

@@ -333,6 +333,12 @@ export default function Strategies() {
             const pairs = strategyPairs.get(strategy.id) || [];
             const isLoading = loadingPairs.has(strategy.id);
             
+            // Calculate statistics from pairs
+            const totalTrades = pairs.length;
+            const totalPnL = pairs.reduce((sum, pair) => sum + pair.net_profit_loss, 0);
+            const winningTrades = pairs.filter(pair => pair.net_profit_loss > 0).length;
+            const winPercentage = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+            
             return (
               <div
                 key={strategy.id}
@@ -377,6 +383,50 @@ export default function Strategies() {
                       />
                       <h3 style={{ fontSize: "18px", fontWeight: "600" }}>{strategy.name}</h3>
                     </div>
+                    
+                    {/* Statistics row */}
+                    {!isLoading && pairs.length > 0 && (
+                      <div style={{ 
+                        display: "flex", 
+                        gap: "24px", 
+                        marginTop: "12px",
+                        marginLeft: "28px",
+                        flexWrap: "wrap"
+                      }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <span style={{ fontSize: "11px", color: "var(--text-secondary)", textTransform: "uppercase", fontWeight: "500" }}>
+                            Total Trades
+                          </span>
+                          <span style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)" }}>
+                            {totalTrades}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <span style={{ fontSize: "11px", color: "var(--text-secondary)", textTransform: "uppercase", fontWeight: "500" }}>
+                            Total P&L
+                          </span>
+                          <span style={{ 
+                            fontSize: "16px", 
+                            fontWeight: "600", 
+                            color: totalPnL >= 0 ? "var(--profit)" : "var(--loss)" 
+                          }}>
+                            ${totalPnL >= 0 ? "+" : ""}{totalPnL.toFixed(2)}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <span style={{ fontSize: "11px", color: "var(--text-secondary)", textTransform: "uppercase", fontWeight: "500" }}>
+                            Win %
+                          </span>
+                          <span style={{ 
+                            fontSize: "16px", 
+                            fontWeight: "600", 
+                            color: winPercentage >= 50 ? "var(--profit)" : winPercentage > 0 ? "var(--text-primary)" : "var(--loss)"
+                          }}>
+                            {winPercentage.toFixed(1)}%
+                          </span>
+                        </div>
+                      </div>
+                    )}
                     {strategy.description && (
                       <p style={{ color: "var(--text-secondary)", marginBottom: "8px", fontSize: "14px" }}>
                         {strategy.description}
