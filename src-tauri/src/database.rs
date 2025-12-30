@@ -112,6 +112,26 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         [],
     )?;
 
+    // Create pair_notes table for storing notes on trade pairs
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS pair_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entry_trade_id INTEGER NOT NULL,
+            exit_trade_id INTEGER NOT NULL,
+            notes TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(entry_trade_id, exit_trade_id)
+        )",
+        [],
+    )?;
+
+    // Create index for pair_notes
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pair_notes_trades ON pair_notes(entry_trade_id, exit_trade_id)",
+        [],
+    )?;
+
     Ok(())
 }
 

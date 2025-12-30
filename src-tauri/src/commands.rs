@@ -1,5 +1,5 @@
 use crate::database::{get_connection, Trade, EmotionalState, Strategy};
-use rusqlite::params;
+use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -160,6 +160,7 @@ pub struct PairedTrade {
     pub exit_fees: f64,
     pub net_profit_loss: f64,
     pub strategy_id: Option<i64>,
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -332,6 +333,7 @@ fn pair_trades(trades: Vec<Trade>, is_fifo: bool) -> (Vec<PairedTrade>, Vec<Trad
                         exit_fees: prorated_buy_fees,
                         net_profit_loss: net_pnl_adjusted,
                         strategy_id: sell_strategy_id.or(buy_strategy_id),
+                        notes: None,
                     });
                     
                     remaining_buy_qty -= qty_to_close;
@@ -422,6 +424,7 @@ fn pair_trades(trades: Vec<Trade>, is_fifo: bool) -> (Vec<PairedTrade>, Vec<Trad
                         exit_fees: prorated_sell_fees,
                         net_profit_loss: net_pnl_adjusted,
                         strategy_id: buy_strategy_id.or(sell_strategy_id),
+                        notes: None,
                     });
                     
                     remaining_sell_qty -= qty_to_close;
@@ -739,11 +742,14 @@ pub fn get_trades_with_pairing(pairing_method: Option<String>, start_date: Optio
     
     // Get paired trades
     let use_fifo = pairing_method.as_deref().unwrap_or("FIFO") == "FIFO";
-    let (paired_trades, _open_trades) = if use_fifo {
+    let (mut paired_trades, _open_trades) = if use_fifo {
         pair_trades_fifo(all_trades.clone())
     } else {
         pair_trades_lifo(all_trades.clone())
     };
+    
+    // Load notes for paired trades
+    load_pair_notes(&conn, &mut paired_trades).map_err(|e| e.to_string())?;
     
     // Create a map of trade_id -> paired trades
     let mut entry_map: HashMap<i64, Vec<PairedTrade>> = HashMap::new();
@@ -1007,11 +1013,15 @@ pub fn get_paired_trades(pairing_method: Option<String>) -> Result<Vec<PairedTra
     
     // Default to FIFO if not specified
     let use_fifo = pairing_method.as_deref().unwrap_or("FIFO") == "FIFO";
-    let (paired_trades, _open_trades) = if use_fifo {
+    let (mut paired_trades, _open_trades) = if use_fifo {
         pair_trades_fifo(trades)
     } else {
         pair_trades_lifo(trades)
     };
+    
+    // Load notes for paired trades
+    load_pair_notes(&conn, &mut paired_trades).map_err(|e| e.to_string())?;
+    
     Ok(paired_trades)
 }
 
@@ -2259,5 +2269,58 @@ pub async fn fetch_chart_data(symbol: String, period1: i64, period2: i64, interv
     }
     
     Err(last_error.unwrap_or_else(|| "Failed to fetch chart data after retries".to_string()))
+}
+
+// Helper function to load notes for paired trades
+fn load_pair_notes(conn: &Connection, paired_trades: &mut Vec<PairedTrade>) -> Result<(), String> {
+    use std::collections::HashMap;
+    
+    // Create a map of (entry_trade_id, exit_trade_id) -> notes
+    let mut notes_map: HashMap<(i64, i64), String> = HashMap::new();
+    
+    let mut stmt = conn
+        .prepare("SELECT entry_trade_id, exit_trade_id, notes FROM pair_notes")
+        .map_err(|e: rusqlite::Error| e.to_string())?;
+    
+    let notes_iter = stmt
+        .query_map([], |row: &Row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .map_err(|e: rusqlite::Error| e.to_string())?;
+    
+    for note_result in notes_iter {
+        let (entry_id, exit_id, notes): (i64, i64, Option<String>) = note_result.map_err(|e: rusqlite::Error| e.to_string())?;
+        if let Some(notes_str) = notes {
+            notes_map.insert((entry_id, exit_id), notes_str);
+        }
+    }
+    
+    // Update paired trades with notes
+    for pair in paired_trades.iter_mut() {
+        if let Some(notes) = notes_map.get(&(pair.entry_trade_id, pair.exit_trade_id)) {
+            pair.notes = Some(notes.clone());
+        }
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub fn save_pair_notes(entry_trade_id: i64, exit_trade_id: i64, notes: Option<String>) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    // Use INSERT OR REPLACE to update if exists
+    conn.execute(
+        "INSERT OR REPLACE INTO pair_notes (entry_trade_id, exit_trade_id, notes, updated_at) 
+         VALUES (?1, ?2, ?3, datetime('now'))",
+        params![entry_trade_id, exit_trade_id, notes],
+    ).map_err(|e| e.to_string())?;
+    
+    Ok(())
 }
 

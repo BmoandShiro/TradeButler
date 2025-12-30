@@ -33,6 +33,7 @@ interface PairedTrade {
   exit_fees: number;
   net_profit_loss: number;
   strategy_id: number | null;
+  notes?: string | null;
 }
 
 interface TradeWithPairing {
@@ -88,6 +89,7 @@ export default function Trades() {
     const saved = localStorage.getItem(STRATEGY_LOCK_STORAGE_KEY);
     return saved === "true";
   });
+  const [positionGroupNotes, setPositionGroupNotes] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
     loadData();
@@ -124,6 +126,27 @@ export default function Trades() {
       setTradesWithPairing(tradesData);
       setPositionGroups(positionsData);
       setStrategies(strategiesData);
+      
+      // Load notes for closed position groups from paired trades
+      const notesMap = new Map<string, string>();
+      for (const group of positionsData) {
+        if (group.final_quantity === 0 && group.position_trades.length >= 2) {
+          const entryTrade = group.entry_trade;
+          const lastTrade = group.position_trades[group.position_trades.length - 1];
+          const pairKey = `${entryTrade.id}-${lastTrade.id}`;
+          
+          // Try to find notes from paired trades
+          for (const item of tradesData) {
+            for (const pair of [...item.entry_pairs, ...item.exit_pairs]) {
+              if (pair.entry_trade_id === entryTrade.id && pair.exit_trade_id === lastTrade.id && pair.notes) {
+                notesMap.set(pairKey, pair.notes);
+                break;
+              }
+            }
+          }
+        }
+      }
+      setPositionGroupNotes(notesMap);
     } catch (error) {
       console.error("Error loading data:", error);
     } finally {
@@ -597,60 +620,114 @@ export default function Trades() {
                                     </tbody>
                                   </table>
                                 </div>
-                                {/* Add View Chart button for closed positions */}
+                                {/* Add View Chart button and Notes for closed positions */}
                                 {group.final_quantity === 0 && group.position_trades.length >= 2 && (
-                                  <div style={{ marginTop: "16px", display: "flex", justifyContent: "flex-end" }}>
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        // Find entry and exit trades
-                                        const entryTrade = group.entry_trade;
-                                        const lastTrade = group.position_trades[group.position_trades.length - 1];
-                                        
-                                        // Create a PairedTrade-like object for the chart
-                                        const chartPair: PairedTrade = {
-                                          symbol: entryTrade.symbol,
-                                          entry_trade_id: entryTrade.id,
-                                          exit_trade_id: lastTrade.id,
-                                          quantity: Math.min(entryTrade.quantity, lastTrade.quantity),
-                                          entry_price: entryTrade.price,
-                                          exit_price: lastTrade.price,
-                                          entry_timestamp: entryTrade.timestamp,
-                                          exit_timestamp: lastTrade.timestamp,
-                                          gross_profit_loss: 0, // Not needed for chart
-                                          entry_fees: entryTrade.fees || 0,
-                                          exit_fees: lastTrade.fees || 0,
-                                          net_profit_loss: group.total_pnl,
-                                          strategy_id: entryTrade.strategy_id,
-                                        };
-                                        setSelectedPairForChart(chartPair);
-                                        // Pass all position trades for detailed markers
-                                        setSelectedPositionTrades(group.position_trades);
-                                      }}
-                                      style={{
-                                        display: "flex",
-                                        alignItems: "center",
-                                        gap: "6px",
-                                        padding: "8px 16px",
-                                        backgroundColor: "var(--accent)",
-                                        border: "none",
-                                        borderRadius: "4px",
-                                        color: "white",
-                                        fontSize: "13px",
-                                        fontWeight: "500",
-                                        cursor: "pointer",
-                                        transition: "opacity 0.2s",
-                                      }}
-                                      onMouseEnter={(e) => {
-                                        e.currentTarget.style.opacity = "0.8";
-                                      }}
-                                      onMouseLeave={(e) => {
-                                        e.currentTarget.style.opacity = "1";
-                                      }}
-                                    >
-                                      <BarChart3 size={16} />
-                                      View Chart
-                                    </button>
+                                  <div style={{ marginTop: "16px" }}>
+                                    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          // Find entry and exit trades
+                                          const entryTrade = group.entry_trade;
+                                          const lastTrade = group.position_trades[group.position_trades.length - 1];
+                                          
+                                          // Create a PairedTrade-like object for the chart
+                                          const chartPair: PairedTrade = {
+                                            symbol: entryTrade.symbol,
+                                            entry_trade_id: entryTrade.id,
+                                            exit_trade_id: lastTrade.id,
+                                            quantity: Math.min(entryTrade.quantity, lastTrade.quantity),
+                                            entry_price: entryTrade.price,
+                                            exit_price: lastTrade.price,
+                                            entry_timestamp: entryTrade.timestamp,
+                                            exit_timestamp: lastTrade.timestamp,
+                                            gross_profit_loss: 0, // Not needed for chart
+                                            entry_fees: entryTrade.fees || 0,
+                                            exit_fees: lastTrade.fees || 0,
+                                            net_profit_loss: group.total_pnl,
+                                            strategy_id: entryTrade.strategy_id,
+                                            notes: positionGroupNotes.get(`${entryTrade.id}-${lastTrade.id}`) || null,
+                                          };
+                                          setSelectedPairForChart(chartPair);
+                                          // Pass all position trades for detailed markers
+                                          setSelectedPositionTrades(group.position_trades);
+                                        }}
+                                        style={{
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "6px",
+                                          padding: "8px 16px",
+                                          backgroundColor: "var(--accent)",
+                                          border: "none",
+                                          borderRadius: "4px",
+                                          color: "white",
+                                          fontSize: "13px",
+                                          fontWeight: "500",
+                                          cursor: "pointer",
+                                          transition: "opacity 0.2s",
+                                        }}
+                                        onMouseEnter={(e) => {
+                                          e.currentTarget.style.opacity = "0.8";
+                                        }}
+                                        onMouseLeave={(e) => {
+                                          e.currentTarget.style.opacity = "1";
+                                        }}
+                                      >
+                                        <BarChart3 size={16} />
+                                        View Chart
+                                      </button>
+                                    </div>
+                                    <div>
+                                      <label style={{ display: "block", fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                        Notes
+                                      </label>
+                                      <textarea
+                                        value={positionGroupNotes.get(`${group.entry_trade.id}-${group.position_trades[group.position_trades.length - 1].id}`) || ""}
+                                        onChange={(e) => {
+                                          e.stopPropagation();
+                                          const newNotes = e.target.value;
+                                          const entryTrade = group.entry_trade;
+                                          const lastTrade = group.position_trades[group.position_trades.length - 1];
+                                          const pairKey = `${entryTrade.id}-${lastTrade.id}`;
+                                          
+                                          // Update local state
+                                          setPositionGroupNotes((prev) => {
+                                            const newMap = new Map(prev);
+                                            if (newNotes) {
+                                              newMap.set(pairKey, newNotes);
+                                            } else {
+                                              newMap.delete(pairKey);
+                                            }
+                                            return newMap;
+                                          });
+                                          
+                                          // Save to database
+                                          invoke("save_pair_notes", {
+                                            entryTradeId: entryTrade.id,
+                                            exitTradeId: lastTrade.id,
+                                            notes: newNotes || null,
+                                          }).catch((err) => {
+                                            console.error("Failed to save pair notes:", err);
+                                          });
+                                        }}
+                                        onClick={(e) => e.stopPropagation()}
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        placeholder="Add notes for this position..."
+                                        style={{
+                                          width: "100%",
+                                          minHeight: "60px",
+                                          padding: "8px",
+                                          backgroundColor: "var(--bg-tertiary)",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "4px",
+                                          color: "var(--text-primary)",
+                                          fontSize: "13px",
+                                          fontFamily: "inherit",
+                                          resize: "vertical",
+                                          outline: "none",
+                                        }}
+                                      />
+                                    </div>
                                   </div>
                                 )}
                               </div>
@@ -940,56 +1017,120 @@ export default function Trades() {
                                         </div>
                                       </div>
                                     </div>
-                                    <div style={{ gridColumn: "1 / -1", paddingTop: "12px", borderTop: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                      <div>
-                                        <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Net P&L: </span>
-                                        <span
-                                          style={{
-                                            fontSize: "16px",
-                                            fontWeight: "600",
-                                            color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
-                                            display: "flex",
-                                            alignItems: "center",
-                                            gap: "4px",
-                                          }}
-                                        >
-                                          {pair.net_profit_loss >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
-                                          {pair.net_profit_loss >= 0 ? "+" : ""}${pair.net_profit_loss.toFixed(2)}
-                                        </span>
-                                      </div>
-                                      <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-                                        <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                                          Gross: ${pair.gross_profit_loss.toFixed(2)}
+                                    <div style={{ gridColumn: "1 / -1", paddingTop: "12px", borderTop: "1px solid var(--border-color)" }}>
+                                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                                        <div>
+                                          <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Net P&L: </span>
+                                          <span
+                                            style={{
+                                              fontSize: "16px",
+                                              fontWeight: "600",
+                                              color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
+                                              display: "flex",
+                                              alignItems: "center",
+                                              gap: "4px",
+                                            }}
+                                          >
+                                            {pair.net_profit_loss >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                                            {pair.net_profit_loss >= 0 ? "+" : ""}${pair.net_profit_loss.toFixed(2)}
+                                          </span>
                                         </div>
-                                        <button
-                                          onClick={(e) => {
+                                        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                                          <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                                            Gross: ${pair.gross_profit_loss.toFixed(2)}
+                                          </div>
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setSelectedPairForChart(pair);
+                                            }}
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "center",
+                                              gap: "6px",
+                                              padding: "6px 12px",
+                                              backgroundColor: "var(--accent)",
+                                              border: "none",
+                                              borderRadius: "4px",
+                                              color: "white",
+                                              fontSize: "12px",
+                                              fontWeight: "500",
+                                              cursor: "pointer",
+                                              transition: "opacity 0.2s",
+                                            }}
+                                            onMouseEnter={(e) => {
+                                              e.currentTarget.style.opacity = "0.8";
+                                            }}
+                                            onMouseLeave={(e) => {
+                                              e.currentTarget.style.opacity = "1";
+                                            }}
+                                          >
+                                            <BarChart3 size={14} />
+                                            View Chart
+                                          </button>
+                                        </div>
+                                      </div>
+                                      <div style={{ marginTop: "12px" }}>
+                                        <label style={{ display: "block", fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                          Notes
+                                        </label>
+                                        <textarea
+                                          value={pair.notes || ""}
+                                          onChange={(e) => {
                                             e.stopPropagation();
-                                            setSelectedPairForChart(pair);
+                                            const newNotes = e.target.value;
+                                            // Update the pair in the state
+                                            const updatedPairs = relevantPairs.map((p) =>
+                                              p.entry_trade_id === pair.entry_trade_id && p.exit_trade_id === pair.exit_trade_id
+                                                ? { ...p, notes: newNotes }
+                                                : p
+                                            );
+                                            
+                                            // Update the trade's pairs
+                                            setTradesWithPairing((prev) =>
+                                              prev.map((item) => {
+                                                if (trade.side === "BUY") {
+                                                  return { ...item, exit_pairs: item.exit_pairs.map((p) =>
+                                                    p.entry_trade_id === pair.entry_trade_id && p.exit_trade_id === pair.exit_trade_id
+                                                      ? { ...p, notes: newNotes }
+                                                      : p
+                                                  )};
+                                                } else {
+                                                  return { ...item, entry_pairs: item.entry_pairs.map((p) =>
+                                                    p.entry_trade_id === pair.entry_trade_id && p.exit_trade_id === pair.exit_trade_id
+                                                      ? { ...p, notes: newNotes }
+                                                      : p
+                                                  )};
+                                                }
+                                              })
+                                            );
+                                            
+                                            // Save to database
+                                            invoke("save_pair_notes", {
+                                              entryTradeId: pair.entry_trade_id,
+                                              exitTradeId: pair.exit_trade_id,
+                                              notes: newNotes || null,
+                                            }).catch((err) => {
+                                              console.error("Failed to save pair notes:", err);
+                                            });
                                           }}
+                                          onClick={(e) => e.stopPropagation()}
+                                          onMouseDown={(e) => e.stopPropagation()}
+                                          placeholder="Add notes for this trade pair..."
                                           style={{
-                                            display: "flex",
-                                            alignItems: "center",
-                                            gap: "6px",
-                                            padding: "6px 12px",
-                                            backgroundColor: "var(--accent)",
-                                            border: "none",
+                                            width: "100%",
+                                            minHeight: "60px",
+                                            padding: "8px",
+                                            backgroundColor: "var(--bg-tertiary)",
+                                            border: "1px solid var(--border-color)",
                                             borderRadius: "4px",
-                                            color: "white",
-                                            fontSize: "12px",
-                                            fontWeight: "500",
-                                            cursor: "pointer",
-                                            transition: "opacity 0.2s",
+                                            color: "var(--text-primary)",
+                                            fontSize: "13px",
+                                            fontFamily: "inherit",
+                                            resize: "vertical",
+                                            outline: "none",
                                           }}
-                                          onMouseEnter={(e) => {
-                                            e.currentTarget.style.opacity = "0.8";
-                                          }}
-                                          onMouseLeave={(e) => {
-                                            e.currentTarget.style.opacity = "1";
-                                          }}
-                                        >
-                                          <BarChart3 size={14} />
-                                          View Chart
-                                        </button>
+                                        />
                                       </div>
                                     </div>
                                   </div>
