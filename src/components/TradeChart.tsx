@@ -28,7 +28,7 @@ interface TradeChartProps {
 }
 
 
-type Timeframe = "1m" | "5m" | "15m" | "30m" | "1h" | "1d";
+type Timeframe = "1m" | "3m" | "5m" | "15m" | "30m" | "1h" | "1d";
 
 export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, exitPrice, onClose, positionTrades }: TradeChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -90,22 +90,49 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
 
     try {
       console.log('Starting data fetch for symbol:', baseSymbol);
-      // Calculate date range: start 30 days before entry, end 5 days after exit
+      // Calculate date range based on timeframe
+      // For 1m intervals, Yahoo Finance only supports last 7 days, so limit the range
       const entryDate = new Date(entryTimestamp);
       const exitDate = new Date(exitTimestamp);
       const startDate = new Date(entryDate);
-      startDate.setDate(startDate.getDate() - 30);
       const endDate = new Date(exitDate);
-      endDate.setDate(endDate.getDate() + 5);
+      
+      if (timeframe === "1m") {
+        // 1m intervals are limited to last 7 days by Yahoo Finance
+        const now = new Date();
+        const sevenDaysAgo = new Date(now);
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        
+        // Use the more restrictive range
+        startDate.setTime(Math.max(startDate.getTime(), sevenDaysAgo.getTime()));
+        endDate.setTime(Math.min(endDate.getTime(), now.getTime()));
+        
+        // Add small buffer
+        endDate.setDate(endDate.getDate() + 1);
+      } else {
+        // For other timeframes, use wider range
+        startDate.setDate(startDate.getDate() - 30);
+        endDate.setDate(endDate.getDate() + 5);
+      }
 
       // Fetch data from Yahoo Finance API (free, no API key needed)
       const period1 = Math.floor(startDate.getTime() / 1000);
       const period2 = Math.floor(endDate.getTime() / 1000);
       
       // Map timeframe to Yahoo Finance interval
+      // Note: Yahoo Finance supports: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo
+      // - 1m: Only available for recent data (last 7 days) and may not work for all symbols
+      // - 3m: Not directly supported, will try 2m first, then fallback to 5m
+      // - 5m, 15m, 30m, 1h: Available for recent data
+      // - 1d: Available for longer periods
       let interval = "1d";
-      if (timeframe === "1m") interval = "1m";
-      else if (timeframe === "5m") interval = "5m";
+      if (timeframe === "1m") {
+        // 1m has strict limitations - only last 7 days, may fail for some symbols
+        interval = "1m";
+      } else if (timeframe === "3m") {
+        // Yahoo Finance supports 2m but not 3m - try 2m first (closer to 3m than 5m)
+        interval = "2m";
+      } else if (timeframe === "5m") interval = "5m";
       else if (timeframe === "15m") interval = "15m";
       else if (timeframe === "30m") interval = "30m";
       else if (timeframe === "1h") interval = "1h";
@@ -124,7 +151,33 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
         console.log('Data received from Tauri:', data);
       } catch (fetchError) {
         console.error('Tauri fetch error:', fetchError);
-        throw new Error(`Unable to fetch price data: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`);
+        const errorMsg = fetchError instanceof Error ? fetchError.message : String(fetchError);
+        
+        // Provide helpful error messages for common issues
+        if (errorMsg.includes('422') || errorMsg.includes('Unprocessable Entity')) {
+          if (timeframe === "1m") {
+            throw new Error(`1-minute intervals are not available for this symbol or date range. Yahoo Finance only supports 1-minute data for the last 7 days and may not be available for all symbols. Please try 3-minute, 5-minute, or another timeframe.`);
+          } else if (timeframe === "3m") {
+            // If 2m fails, try 5m as fallback
+            console.log('3m interval failed, trying 5m as fallback...');
+            try {
+              const fallbackData = await invoke("fetch_chart_data", {
+                symbol: baseSymbol,
+                period1,
+                period2,
+                interval: "5m",
+              });
+              console.log('Fallback to 5m succeeded');
+              data = fallbackData;
+            } catch (fallbackError) {
+              throw new Error(`Unable to fetch 3-minute data. Yahoo Finance doesn't support 3-minute intervals directly. Please try 2-minute, 5-minute, or another timeframe.`);
+            }
+          } else {
+            throw new Error(`Unable to fetch ${timeframe} data for this symbol. The selected timeframe may not be supported for this symbol or date range. Please try a different timeframe.`);
+          }
+        } else {
+          throw new Error(`Unable to fetch price data: ${errorMsg}`);
+        }
       }
       
       if (!data.chart || !data.chart.result || data.chart.result.length === 0) {
@@ -580,6 +633,12 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
               const timeScale = chart.timeScale();
               const priceScale = chart.priceScale('right');
               console.log('Chart APIs accessed:', { timeScale: !!timeScale, priceScale: !!priceScale });
+              
+              // Configure time scale to show time (not just date) when hovering
+              timeScale.applyOptions({
+                timeVisible: true,
+                secondsVisible: false, // Don't show seconds unless needed for very short timeframes
+              });
             } catch (chartError) {
               const errorMsg = chartError instanceof Error ? chartError.message : String(chartError);
               setError(`Failed to create chart: ${errorMsg}\n\nDebug info:\n${JSON.stringify(debugData, null, 2)}`);
@@ -984,6 +1043,7 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
             }}
           >
             <option value="1m">1 Minute</option>
+            <option value="3m">3 Minutes</option>
             <option value="5m">5 Minutes</option>
             <option value="15m">15 Minutes</option>
             <option value="30m">30 Minutes</option>
