@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceArea } from "recharts";
-import { TrendingUp, TrendingDown } from "lucide-react";
+import { TrendingUp, TrendingDown, Settings } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 
 interface Trade {
@@ -76,10 +77,51 @@ export default function Analytics() {
   const [customEndDate, setCustomEndDate] = useState<string>(() => {
     return localStorage.getItem("tradebutler_analytics_custom_end") || "";
   });
+  const [scaleEvenly, setScaleEvenly] = useState<boolean>(() => {
+    const saved = localStorage.getItem("tradebutler_equity_curve_scale_evenly");
+    return saved === "true";
+  });
+  const [showMaxDrawdown, setShowMaxDrawdown] = useState<boolean>(() => {
+    const saved = localStorage.getItem("tradebutler_equity_curve_show_max_drawdown");
+    return saved !== "false"; // Default to true
+  });
+  const [showEquitySettings, setShowEquitySettings] = useState(false);
+  const equitySettingsRef = useRef<HTMLDivElement>(null);
+  const equitySettingsButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     loadData();
   }, [timeframe, customStartDate, customEndDate]);
+
+  // Close settings menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        equitySettingsRef.current &&
+        !equitySettingsRef.current.contains(target) &&
+        equitySettingsButtonRef.current &&
+        !equitySettingsButtonRef.current.contains(target)
+      ) {
+        setShowEquitySettings(false);
+      }
+    };
+
+    if (showEquitySettings) {
+      setTimeout(() => {
+        document.addEventListener("mousedown", handleClickOutside);
+      }, 0);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [showEquitySettings]);
+
+  useEffect(() => {
+    localStorage.setItem("tradebutler_equity_curve_scale_evenly", scaleEvenly.toString());
+  }, [scaleEvenly]);
+
+  useEffect(() => {
+    localStorage.setItem("tradebutler_equity_curve_show_max_drawdown", showMaxDrawdown.toString());
+  }, [showMaxDrawdown]);
 
   useEffect(() => {
     localStorage.setItem("tradebutler_analytics_timeframe", timeframe);
@@ -138,6 +180,116 @@ export default function Analytics() {
     
     // No digits found - it's already a base symbol (e.g., "SPY", "ABR")
     return symbol;
+  };
+
+  // Fill in missing dates for even scaling
+  const fillMissingDates = (points: EquityPoint[]): EquityPoint[] => {
+    if (points.length === 0) return points;
+
+    const result: EquityPoint[] = [];
+    const dateMap = new Map<string, EquityPoint>();
+    
+    // Create a map of existing points
+    points.forEach(point => {
+      dateMap.set(point.date, point);
+    });
+
+    // Get date range from timeframe, not just from data points
+    const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
+    let startDate: Date;
+    let endDate: Date;
+    
+    if (dateRange.start && dateRange.end) {
+      // Use the timeframe's date range
+      startDate = new Date(dateRange.start);
+      endDate = new Date(dateRange.end);
+      // Ensure we're working with dates, not times
+      startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
+    } else {
+      // Fallback to data range if no timeframe specified (e.g., "All Time")
+      const dates = points.map(p => p.date).sort();
+      if (dates.length > 0) {
+        startDate = new Date(dates[0]);
+        endDate = new Date(dates[dates.length - 1]);
+      } else {
+        return points; // No dates to work with
+      }
+    }
+
+    // Find the first data point to initialize values
+    const sortedPoints = [...points].sort((a, b) => a.date.localeCompare(b.date));
+    const firstPoint = sortedPoints[0];
+    const firstTradeDate = firstPoint?.date || "";
+    
+    // Initialize with zeros (for dates before first trade) or first point's values
+    let lastCumulativePnl = 0;
+    let lastPeakEquity = 0;
+    let lastDrawdown = 0;
+    let lastDrawdownPct = 0;
+    let lastIsWinningStreak = false;
+    let lastIsLosingStreak = false;
+    let lastIsMaxDrawdown = false;
+    let lastIsBestSurge = false;
+
+    // Fill in all dates in the range
+    let currentDate = new Date(startDate);
+    
+    while (currentDate <= endDate) {
+      const dateStr = currentDate.toISOString().split('T')[0];
+      
+      if (dateMap.has(dateStr)) {
+        // Use existing point
+        const point = dateMap.get(dateStr)!;
+        result.push(point);
+        lastCumulativePnl = point.cumulative_pnl;
+        lastPeakEquity = point.peak_equity;
+        lastDrawdown = point.drawdown;
+        lastDrawdownPct = point.drawdown_pct;
+        lastIsWinningStreak = point.is_winning_streak;
+        lastIsLosingStreak = point.is_losing_streak;
+        lastIsMaxDrawdown = point.is_max_drawdown;
+        lastIsBestSurge = point.is_best_surge;
+      } else {
+        // Fill in missing date
+        // For dates before the first trade, use zeros
+        // For dates after the first trade, use previous day's values
+        if (dateStr < firstTradeDate) {
+          // Before any trades - use zeros
+          result.push({
+            date: dateStr,
+            cumulative_pnl: 0,
+            daily_pnl: 0,
+            peak_equity: 0,
+            drawdown: 0,
+            drawdown_pct: 0,
+            is_winning_streak: false,
+            is_losing_streak: false,
+            is_max_drawdown: false,
+            is_best_surge: false,
+          });
+        } else if (result.length > 0 || firstTradeDate) {
+          // After first trade - use previous day's values (flat line)
+          result.push({
+            date: dateStr,
+            cumulative_pnl: lastCumulativePnl,
+            daily_pnl: 0,
+            peak_equity: lastPeakEquity,
+            drawdown: lastDrawdown,
+            drawdown_pct: lastDrawdownPct,
+            is_winning_streak: lastIsWinningStreak,
+            is_losing_streak: lastIsLosingStreak,
+            is_max_drawdown: lastIsMaxDrawdown,
+            is_best_surge: lastIsBestSurge,
+          });
+        }
+      }
+
+      // Move to next day
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    return result;
   };
 
   // Process trades for charts
@@ -230,9 +382,95 @@ export default function Analytics() {
                 padding: "20px",
               }}
             >
-              <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "20px" }}>
-                Equity Curve & Drawdown Analysis
-              </h2>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
+                <h2 style={{ fontSize: "20px", fontWeight: "600" }}>
+                  Equity Curve & Drawdown Analysis
+                </h2>
+                <div style={{ position: "relative" }}>
+                  <button
+                    ref={equitySettingsButtonRef}
+                    onClick={() => setShowEquitySettings(!showEquitySettings)}
+                    style={{
+                      background: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "6px",
+                      padding: "6px",
+                      color: "var(--text-primary)",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                    title="Settings"
+                  >
+                    <Settings size={16} />
+                  </button>
+                  {showEquitySettings && equitySettingsButtonRef.current && (() => {
+                    const rect = equitySettingsButtonRef.current.getBoundingClientRect();
+                    return createPortal(
+                      <div
+                        ref={equitySettingsRef}
+                        data-settings-menu
+                        style={{
+                          position: "fixed",
+                          top: rect.bottom + 8,
+                          right: window.innerWidth - rect.right,
+                          backgroundColor: "var(--bg-secondary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "8px",
+                          padding: "12px",
+                          minWidth: "200px",
+                          zIndex: 1000,
+                          boxShadow: "0 4px 6px rgba(0, 0, 0, 0.1)",
+                        }}
+                      >
+                      <div style={{ marginBottom: "12px", fontSize: "14px", fontWeight: "600" }}>
+                        Chart Settings
+                      </div>
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px",
+                          cursor: "pointer",
+                          fontSize: "14px",
+                          marginBottom: "12px",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={scaleEvenly}
+                          onChange={(e) => setScaleEvenly(e.target.checked)}
+                          style={{ cursor: "pointer" }}
+                        />
+                        <span>Scale evenly (no gaps)</span>
+                      </label>
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px",
+                          cursor: "pointer",
+                          fontSize: "14px",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={showMaxDrawdown}
+                          onChange={(e) => setShowMaxDrawdown(e.target.checked)}
+                          style={{ cursor: "pointer" }}
+                        />
+                        <span>Show max drawdown highlight</span>
+                      </label>
+                      <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "8px" }}>
+                        Fill in missing dates to show continuous time scale
+                      </div>
+                      </div>,
+                      document.body
+                    );
+                  })()}
+                </div>
+              </div>
               
               {/* Drawdown Metrics */}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px", marginBottom: "20px" }}>
@@ -277,11 +515,16 @@ export default function Analytics() {
               
               {/* Equity Curve Chart */}
               <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={equityCurve.equity_points.map(point => ({
-                  ...point,
-                  winning_streak_pnl: point.is_winning_streak ? point.cumulative_pnl : null,
-                  losing_streak_pnl: point.is_losing_streak ? point.cumulative_pnl : null,
-                }))}>
+                <LineChart data={
+                  // Always fill dates when a specific timeframe is selected (not "all")
+                  // This ensures the chart shows the full date range on the X-axis
+                  // For "All Time", only fill if scaleEvenly is enabled
+                  timeframe !== "all" 
+                    ? fillMissingDates(equityCurve.equity_points)
+                    : scaleEvenly 
+                      ? fillMissingDates(equityCurve.equity_points)
+                      : equityCurve.equity_points
+                }>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                   <XAxis 
                     dataKey="date" 
@@ -305,10 +548,9 @@ export default function Analytics() {
                     formatter={(value: any) => [`$${Number(value).toFixed(2)}`, "Cumulative P&L"]}
                     labelFormatter={(label) => `Date: ${label}`}
                   />
-                  <Legend />
                   
                   {/* Highlight max drawdown zone */}
-                  {equityCurve.drawdown_metrics.max_drawdown_start && equityCurve.drawdown_metrics.max_drawdown_end && (
+                  {showMaxDrawdown && equityCurve.drawdown_metrics.max_drawdown_start && equityCurve.drawdown_metrics.max_drawdown_end && (
                     <ReferenceArea
                       x1={equityCurve.drawdown_metrics.max_drawdown_start}
                       x2={equityCurve.drawdown_metrics.max_drawdown_end}
@@ -329,7 +571,7 @@ export default function Analytics() {
                     />
                   )}
                   
-                  {/* Cumulative P&L Line */}
+                  {/* Single Cumulative P&L Line */}
                   <Line
                     type="monotone"
                     dataKey="cumulative_pnl"
@@ -337,28 +579,6 @@ export default function Analytics() {
                     strokeWidth={2}
                     dot={false}
                     name="Cumulative P&L"
-                  />
-                  
-                  {/* Winning streak overlay */}
-                  <Line
-                    type="monotone"
-                    dataKey="winning_streak_pnl"
-                    stroke="rgba(34, 197, 94, 0.6)"
-                    strokeWidth={6}
-                    dot={false}
-                    name="Winning Streak"
-                    connectNulls={false}
-                  />
-                  
-                  {/* Losing streak overlay */}
-                  <Line
-                    type="monotone"
-                    dataKey="losing_streak_pnl"
-                    stroke="rgba(239, 68, 68, 0.6)"
-                    strokeWidth={6}
-                    dot={false}
-                    name="Losing Streak"
-                    connectNulls={false}
                   />
                 </LineChart>
               </ResponsiveContainer>
