@@ -31,6 +31,8 @@ import {
   ChevronRight,
   ChevronUp,
   GripVertical,
+  Copy,
+  Trash2,
 } from "lucide-react";
 import { MetricsConfigPanel, useMetricsConfig } from "../components/MetricsConfig";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
@@ -93,6 +95,15 @@ interface SymbolPnL {
   winning_trades: number;
   losing_trades: number;
   win_rate: number;
+}
+
+interface Strategy {
+  id: number;
+  name: string;
+  description: string | null;
+  notes: string | null;
+  created_at: string | null;
+  color: string | null;
 }
 
 interface StrategyPerformance {
@@ -278,6 +289,13 @@ const getMetricColor = (id: string, value: number, colorRange?: { min: number; m
 const DASHBOARD_SECTIONS_KEY = "tradebutler_dashboard_sections";
 const DASHBOARD_SECTION_ORDER_KEY = "tradebutler_dashboard_section_order";
 const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
+const METRIC_INSTANCES_KEY = "tradebutler_metric_instances";
+
+interface MetricInstance {
+  instanceId: string; // e.g., "strategy_win_rate_1", "strategy_win_rate_2"
+  baseMetricId: string; // e.g., "strategy_win_rate"
+  strategyFilterId: number | null; // Strategy filter for this instance
+}
 
 interface DashboardSections {
   showTopSymbols: boolean;
@@ -481,6 +499,12 @@ function SortableMetricCard({
   sortedMetrics,
   enabledMetrics,
   setMetricCardOrder,
+  strategies,
+  strategyFilterForMetrics,
+  setStrategyFilterForMetrics,
+  duplicateMetricInstance,
+  removeMetricInstance,
+  setMetricInstances,
 }: {
   id: string;
   metric: any;
@@ -502,6 +526,12 @@ function SortableMetricCard({
   sortedMetrics: any[];
   enabledMetrics: any[];
   setMetricCardOrder: React.Dispatch<React.SetStateAction<string[]>>;
+  strategies: Strategy[];
+  strategyFilterForMetrics: Record<string, number | null>;
+  setStrategyFilterForMetrics: React.Dispatch<React.SetStateAction<Record<string, number | null>>>;
+  duplicateMetricInstance: (instanceId: string) => void;
+  removeMetricInstance: (instanceId: string) => void;
+  setMetricInstances: React.Dispatch<React.SetStateAction<MetricInstance[]>>;
 }) {
   const {
     attributes,
@@ -559,11 +589,12 @@ function SortableMetricCard({
       <div 
         style={{ 
           flex: 1, 
-          pointerEvents: (metric.id === "best_day" || metric.id === "worst_day" || metric.id === "largest_win" || metric.id === "largest_loss") ? "auto" : "none",
-          cursor: (metric.id === "best_day" || metric.id === "worst_day" || metric.id === "largest_win" || metric.id === "largest_loss") ? "pointer" : "default",
+          pointerEvents: ((metric as any).baseMetricId === "best_day" || (metric as any).baseMetricId === "worst_day" || (metric as any).baseMetricId === "largest_win" || (metric as any).baseMetricId === "largest_loss") ? "auto" : "none",
+          cursor: ((metric as any).baseMetricId === "best_day" || (metric as any).baseMetricId === "worst_day" || (metric as any).baseMetricId === "largest_win" || (metric as any).baseMetricId === "largest_loss") ? "pointer" : "default",
         }}
         onClick={async (e) => {
-          if (metric.id === "best_day" && metrics?.best_day_date) {
+          const baseMetricId = (metric as any).baseMetricId || metric.id;
+          if (baseMetricId === "best_day" && metrics?.best_day_date) {
             e.stopPropagation();
             setTimeframe("custom");
             setCustomStartDate(metrics.best_day_date);
@@ -571,7 +602,7 @@ function SortableMetricCard({
             localStorage.setItem("tradebutler_dashboard_timeframe", "custom");
             localStorage.setItem("tradebutler_dashboard_custom_start", metrics.best_day_date);
             localStorage.setItem("tradebutler_dashboard_custom_end", metrics.best_day_date);
-          } else if (metric.id === "worst_day" && metrics?.worst_day_date) {
+          } else if (baseMetricId === "worst_day" && metrics?.worst_day_date) {
             e.stopPropagation();
             setTimeframe("custom");
             setCustomStartDate(metrics.worst_day_date);
@@ -579,7 +610,7 @@ function SortableMetricCard({
             localStorage.setItem("tradebutler_dashboard_timeframe", "custom");
             localStorage.setItem("tradebutler_dashboard_custom_start", metrics.worst_day_date);
             localStorage.setItem("tradebutler_dashboard_custom_end", metrics.worst_day_date);
-          } else if (metric.id === "largest_win" && metrics?.largest_win_group_id) {
+          } else if (baseMetricId === "largest_win" && metrics?.largest_win_group_id) {
             e.stopPropagation();
             setSelectedPositionGroupId(metrics.largest_win_group_id);
             setShowPositionGroupModal(true);
@@ -593,7 +624,7 @@ function SortableMetricCard({
             } catch (error) {
               console.error("Error loading position group:", error);
             }
-          } else if (metric.id === "largest_loss" && metrics?.largest_loss_group_id) {
+          } else if (baseMetricId === "largest_loss" && metrics?.largest_loss_group_id) {
             e.stopPropagation();
             setSelectedPositionGroupId(metrics.largest_loss_group_id);
             setShowPositionGroupModal(true);
@@ -617,7 +648,17 @@ function SortableMetricCard({
             marginBottom: "4px",
           }}
         >
-          {metric.label}
+          {(() => {
+            const baseMetricId = (metric as any).baseMetricId || metric.id;
+            const selectedStrategyId = strategyFilterForMetrics[metric.id] ?? strategyFilterForMetrics[baseMetricId];
+            if (selectedStrategyId !== null && selectedStrategyId !== undefined) {
+              const strategy = strategies.find(s => s.id === selectedStrategyId);
+              if (strategy) {
+                return `${metric.label} (${strategy.name})`;
+              }
+            }
+            return metric.label;
+          })()}
         </p>
         <p
           style={{
@@ -626,7 +667,7 @@ function SortableMetricCard({
             color: color,
           }}
         >
-          {formatMetricValue(metric.id, value, metrics)}
+          {formatMetricValue((metric as any).baseMetricId || metric.id, value, metrics)}
         </p>
       </div>
       <div style={{ position: "relative", flexShrink: 0 }}>
@@ -682,7 +723,7 @@ function SortableMetricCard({
           >
             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
               {/* Metric Description */}
-              {metricDescriptions[metric.id] && (
+              {metricDescriptions[(metric as any).baseMetricId || metric.id] && (
                 <div
                   style={{
                     padding: "12px",
@@ -708,7 +749,7 @@ function SortableMetricCard({
                       marginBottom: "8px",
                     }}
                   >
-                    {metricDescriptions[metric.id].description}
+                    {metricDescriptions[(metric as any).baseMetricId || metric.id].description}
                   </div>
                   <div
                     style={{
@@ -719,7 +760,7 @@ function SortableMetricCard({
                       borderTop: "1px solid var(--border-color)",
                     }}
                   >
-                    <strong>Calculation:</strong> {metricDescriptions[metric.id].calculation}
+                    <strong>Calculation:</strong> {metricDescriptions[(metric as any).baseMetricId || metric.id].calculation}
                   </div>
                 </div>
               )}
@@ -815,6 +856,118 @@ function SortableMetricCard({
                 <ChevronDown size={14} />
                 <span>Move Down</span>
               </button>
+              <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+              <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  duplicateMetricInstance(metric.id);
+                  setOpenMetricSettings(null);
+                }}
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                  padding: "6px 8px",
+                  cursor: "pointer",
+                  color: "var(--text-primary)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  fontSize: "13px",
+                }}
+              >
+                <Copy size={14} />
+                <span>Duplicate</span>
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  removeMetricInstance(metric.id);
+                  setOpenMetricSettings(null);
+                }}
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                  padding: "6px 8px",
+                  cursor: "pointer",
+                  color: "var(--loss)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  fontSize: "13px",
+                }}
+              >
+                <Trash2 size={14} />
+                <span>Remove</span>
+              </button>
+              {/* Strategy Selector for Strategy Metrics */}
+              {[
+                "strategy_win_rate",
+                "strategy_winning_trades",
+                "strategy_losing_trades",
+                "strategy_profit_loss",
+                "strategy_consecutive_wins",
+                "strategy_consecutive_losses",
+              ].includes((metric as any).baseMetricId || metric.id) && (
+                <>
+                  <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                  <div style={{ padding: "8px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                    <label style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                      Filter by Strategy:
+                    </label>
+                    <select
+                      value={strategyFilterForMetrics[metric.id] ?? strategyFilterForMetrics[(metric as any).baseMetricId] ?? ""}
+                      onChange={(e) => {
+                        const value = e.target.value === "" ? null : parseInt(e.target.value, 10);
+                        setStrategyFilterForMetrics((prev: Record<string, number | null>) => {
+                          const updated: Record<string, number | null> = { ...prev, [metric.id]: value };
+                          // Also update base metric if this is the first instance
+                          const baseMetricId = (metric as any).baseMetricId;
+                          if (metric.id === baseMetricId && baseMetricId) {
+                            updated[baseMetricId] = value;
+                          }
+                          localStorage.setItem("tradebutler_strategy_filter_for_metrics", JSON.stringify(updated));
+                          return updated;
+                        });
+                        
+                        // Update instance strategy filter
+                        setMetricInstances((prev: MetricInstance[]) => {
+                          const updated = prev.map((inst: MetricInstance) => 
+                            inst.instanceId === metric.id 
+                              ? { ...inst, strategyFilterId: value }
+                              : inst
+                          );
+                          localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+                          return updated;
+                        });
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      style={{
+                        padding: "6px 8px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "4px",
+                        color: "var(--text-primary)",
+                        fontSize: "13px",
+                        width: "100%",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <option value="">All Strategies</option>
+                      {strategies.map((strategy: Strategy) => (
+                        <option key={strategy.id} value={strategy.id}>
+                          {strategy.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
             </div>
           </div>,
           document.body
@@ -824,12 +977,211 @@ function SortableMetricCard({
   );
 }
 
+// Global function to reset metric instances (can be called from browser console)
+if (typeof window !== 'undefined') {
+  (window as any).resetMetricInstances = () => {
+    localStorage.removeItem(METRIC_INSTANCES_KEY);
+    localStorage.removeItem(METRIC_CARDS_ORDER_KEY);
+    localStorage.removeItem("tradebutler_strategy_filter_for_metrics");
+    console.log("Metric instances reset. Please refresh the page.");
+    return true;
+  };
+}
+
 export default function Dashboard() {
+  const metricsConfigHook = useMetricsConfig();
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [topSymbols, setTopSymbols] = useState<TopSymbol[]>([]);
   const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformance[]>([]);
   const [recentTrades, setRecentTrades] = useState<RecentTrade[]>([]);
   const [trades, setTrades] = useState<RecentTrade[]>([]);
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [strategyFilterForMetrics, setStrategyFilterForMetrics] = useState<Record<string, number | null>>(() => {
+    const saved = localStorage.getItem("tradebutler_strategy_filter_for_metrics");
+    return saved ? JSON.parse(saved) : {};
+  });
+  
+  // Metric instances system - track multiple instances of the same metric type
+  const [metricInstances, setMetricInstances] = useState<MetricInstance[]>(() => {
+    const saved = localStorage.getItem(METRIC_INSTANCES_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        // Safety check: limit instances per metric to prevent performance issues
+        const MAX_INSTANCES_PER_METRIC = 10;
+        const instanceCounts: Record<string, number> = {};
+        const cleaned: MetricInstance[] = [];
+        
+        for (const inst of parsed) {
+          if (!inst || !inst.baseMetricId || !inst.instanceId) continue; // Skip invalid entries
+          const count = (instanceCounts[inst.baseMetricId] || 0) + 1;
+          if (count <= MAX_INSTANCES_PER_METRIC) {
+            instanceCounts[inst.baseMetricId] = count;
+            cleaned.push(inst);
+          }
+        }
+        
+        // If we had to clean up, save the cleaned version
+        if (cleaned.length !== parsed.length) {
+          console.warn(`Cleaned up metric instances: ${parsed.length} -> ${cleaned.length}`);
+          localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(cleaned));
+        }
+        
+        return cleaned;
+      } catch {
+        // If corrupted, clear it
+        localStorage.removeItem(METRIC_INSTANCES_KEY);
+        return [];
+      }
+    }
+    // Initialize: create one instance for each enabled metric
+    const enabled = metricsConfigHook.getEnabledMetrics();
+    return enabled.map(m => ({
+      instanceId: m.id,
+      baseMetricId: m.id,
+      strategyFilterId: null,
+    }));
+  });
+  
+  // Helper to get next instance ID for a base metric
+  const getNextInstanceId = (baseMetricId: string): string => {
+    const existingInstances = metricInstances.filter(m => m.baseMetricId === baseMetricId);
+    if (existingInstances.length === 0) {
+      return baseMetricId; // First instance uses base ID
+    }
+    // Find the highest number suffix
+    let maxNum = 0;
+    existingInstances.forEach(inst => {
+      if (inst.instanceId === baseMetricId) {
+        maxNum = Math.max(maxNum, 1);
+      } else {
+        const match = inst.instanceId.match(new RegExp(`^${baseMetricId}_(\\d+)$`));
+        if (match) {
+          maxNum = Math.max(maxNum, parseInt(match[1], 10));
+        }
+      }
+    });
+    return `${baseMetricId}_${maxNum + 1}`;
+  };
+  
+  // Helper to duplicate a metric instance
+  const duplicateMetricInstance = (instanceId: string) => {
+    const instance = metricInstances.find(m => m.instanceId === instanceId);
+    if (!instance) return;
+    
+    // Limit instances per metric to prevent performance issues
+    const MAX_INSTANCES_PER_METRIC = 10;
+    const instancesOfBase = metricInstances.filter(m => m.baseMetricId === instance.baseMetricId);
+    if (instancesOfBase.length >= MAX_INSTANCES_PER_METRIC) {
+      alert(`Maximum of ${MAX_INSTANCES_PER_METRIC} instances per metric allowed. Please remove some instances first.`);
+      return;
+    }
+    
+    const newInstanceId = getNextInstanceId(instance.baseMetricId);
+    const newInstance: MetricInstance = {
+      instanceId: newInstanceId,
+      baseMetricId: instance.baseMetricId,
+      strategyFilterId: instance.strategyFilterId,
+    };
+    
+    const updatedInstances = [...metricInstances, newInstance];
+    setMetricInstances(updatedInstances);
+    localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updatedInstances));
+    
+    // Add to metric card order
+    setMetricCardOrder(prev => {
+      const newOrder = [...prev, newInstanceId];
+      localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+      return newOrder;
+    });
+    
+    // Copy strategy filter if exists
+    if (instance.strategyFilterId !== null) {
+      setStrategyFilterForMetrics(prev => {
+        const updated = { ...prev, [newInstanceId]: instance.strategyFilterId };
+        localStorage.setItem("tradebutler_strategy_filter_for_metrics", JSON.stringify(updated));
+        return updated;
+      });
+    }
+    
+    setConfigKey(prev => prev + 1);
+  };
+  
+  // Helper to remove a metric instance
+  const removeMetricInstance = (instanceId: string) => {
+    const instance = metricInstances.find(m => m.instanceId === instanceId);
+    if (!instance) return;
+    
+    // Don't allow removing the last instance of a base metric
+    const instancesOfBase = metricInstances.filter(m => m.baseMetricId === instance.baseMetricId);
+    if (instancesOfBase.length <= 1) {
+      // If it's the last instance, disable the base metric instead
+      metricsConfigHook.toggleMetric(instance.baseMetricId);
+      setConfigKey(prev => prev + 1);
+      return;
+    }
+    
+    const updatedInstances = metricInstances.filter(m => m.instanceId !== instanceId);
+    setMetricInstances(updatedInstances);
+    localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updatedInstances));
+    
+    // Remove from metric card order
+    setMetricCardOrder(prev => {
+      const newOrder = prev.filter(id => id !== instanceId);
+      localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+      return newOrder;
+    });
+    
+    // Remove strategy filter if exists
+    setStrategyFilterForMetrics(prev => {
+      const updated = { ...prev };
+      delete updated[instanceId];
+      localStorage.setItem("tradebutler_strategy_filter_for_metrics", JSON.stringify(updated));
+      return updated;
+    });
+    
+    setConfigKey(prev => prev + 1);
+  };
+  
+  // Helper to add a new instance of a base metric
+  const addMetricInstance = (baseMetricId: string) => {
+    // Ensure base metric is enabled first
+    const allMetrics = metricsConfigHook.metrics;
+    const baseMetric = allMetrics.find(m => m.id === baseMetricId);
+    if (!baseMetric) return;
+    
+    // Limit instances per metric to prevent performance issues
+    const MAX_INSTANCES_PER_METRIC = 10;
+    const instancesOfBase = metricInstances.filter(m => m.baseMetricId === baseMetricId);
+    if (instancesOfBase.length >= MAX_INSTANCES_PER_METRIC) {
+      alert(`Maximum of ${MAX_INSTANCES_PER_METRIC} instances per metric allowed. Please remove some instances first.`);
+      return;
+    }
+    
+    if (!baseMetric.enabled) {
+      metricsConfigHook.toggleMetric(baseMetricId);
+    }
+    
+    const newInstanceId = getNextInstanceId(baseMetricId);
+    const newInstance: MetricInstance = {
+      instanceId: newInstanceId,
+      baseMetricId: baseMetricId,
+      strategyFilterId: null,
+    };
+    
+    const updatedInstances = [...metricInstances, newInstance];
+    setMetricInstances(updatedInstances);
+    localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updatedInstances));
+    
+    // Add to metric card order
+    setMetricCardOrder(prev => {
+      const newOrder = [...prev, newInstanceId];
+      localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+      return newOrder;
+    });
+    
+    setConfigKey(prev => prev + 1);
+  };
   const [expandedTrades, setExpandedTrades] = useState<Set<number>>(new Set());
   const [tradesPerPage, setTradesPerPage] = useState<number>(() => {
     const saved = localStorage.getItem("tradebutler_trades_per_page");
@@ -839,7 +1191,6 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [showMetricsConfig, setShowMetricsConfig] = useState(false);
   const [configKey, setConfigKey] = useState(0); // Force re-render when config changes
-  const metricsConfigHook = useMetricsConfig();
   const [expandedRecentTrades, setExpandedRecentTrades] = useState<Set<number>>(new Set());
   const [expandedStrategies, setExpandedStrategies] = useState<Set<number | string>>(new Set());
   const [strategyPairs, setStrategyPairs] = useState<Map<number | string, PairedTrade[]>>(new Map());
@@ -905,18 +1256,18 @@ export default function Dashboard() {
     
     if (over && active.id !== over.id) {
       setMetricCardOrder((items) => {
-        const currentIds = enabledMetrics.map(m => m.id);
+        const currentInstanceIds = metricInstances.map(inst => inst.instanceId);
         let newOrder = [...items];
         
-        // Ensure all enabled metrics are in the order
-        currentIds.forEach(id => {
+        // Ensure all instance IDs are in the order
+        currentInstanceIds.forEach(id => {
           if (!newOrder.includes(id)) {
             newOrder.push(id);
           }
         });
         
-        // Remove any IDs that are no longer enabled
-        newOrder = newOrder.filter(id => currentIds.includes(id));
+        // Remove any IDs that are no longer valid instances
+        newOrder = newOrder.filter(id => currentInstanceIds.includes(id));
         
         const oldIndex = newOrder.indexOf(active.id as string);
         const newIndex = newOrder.indexOf(over.id as string);
@@ -1000,6 +1351,46 @@ export default function Dashboard() {
   // Re-read enabled metrics from localStorage when config changes
   const [enabledMetrics, setEnabledMetrics] = useState(() => metricsConfigHook.getEnabledMetrics());
   
+  // Sync metric instances with enabled metrics
+  useEffect(() => {
+    const allMetrics = metricsConfigHook.metrics;
+    const enabled = allMetrics.filter(m => m.enabled);
+    
+    setMetricInstances(prevInstances => {
+      const updated: MetricInstance[] = [];
+      
+      // For each enabled base metric, ensure at least one instance exists
+      enabled.forEach(baseMetric => {
+        const instances = prevInstances.filter(m => m.baseMetricId === baseMetric.id);
+        if (instances.length === 0) {
+          // Create first instance
+          updated.push({
+            instanceId: baseMetric.id,
+            baseMetricId: baseMetric.id,
+            strategyFilterId: null,
+          });
+        } else {
+          // Keep existing instances
+          updated.push(...instances);
+        }
+      });
+      
+      // Remove instances for disabled base metrics
+      const filtered = updated.filter(inst => 
+        enabled.some(m => m.id === inst.baseMetricId)
+      );
+      
+      if (JSON.stringify(filtered) !== JSON.stringify(prevInstances)) {
+        localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(filtered));
+        return filtered;
+      }
+      
+      return prevInstances;
+    });
+    
+    setEnabledMetrics(enabled);
+  }, [configKey, metricsConfigHook]);
+  
   useEffect(() => {
     // Re-read from localStorage when configKey changes (includes color range changes)
     const saved = localStorage.getItem("tradebutler_metrics_config");
@@ -1009,28 +1400,52 @@ export default function Dashboard() {
         const enabled = allMetrics.filter((m: any) => m.enabled);
         setEnabledMetrics(enabled);
         
-        // Initialize or update metric card order
-        const currentOrder = localStorage.getItem(METRIC_CARDS_ORDER_KEY);
+        // Sync instances
+        const currentInstances = JSON.parse(localStorage.getItem(METRIC_INSTANCES_KEY) || "[]");
         const enabledIds = enabled.map((m: any) => m.id);
         
+        // Ensure each enabled metric has at least one instance
+        const updatedInstances: MetricInstance[] = [];
+        enabled.forEach((baseMetric: any) => {
+          const existing = currentInstances.filter((inst: MetricInstance) => inst.baseMetricId === baseMetric.id);
+          if (existing.length > 0) {
+            updatedInstances.push(...existing);
+          } else {
+            updatedInstances.push({
+              instanceId: baseMetric.id,
+              baseMetricId: baseMetric.id,
+              strategyFilterId: null,
+            });
+          }
+        });
+        
+        // Remove instances for disabled metrics
+        const filteredInstances = updatedInstances.filter(inst => enabledIds.includes(inst.baseMetricId));
+        setMetricInstances(filteredInstances);
+        localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(filteredInstances));
+        
+        // Initialize or update metric card order based on instances
+        const currentOrder = localStorage.getItem(METRIC_CARDS_ORDER_KEY);
+        const instanceIds = filteredInstances.map(inst => inst.instanceId);
+        
         if (!currentOrder || currentOrder === "[]") {
-          // Initialize with current enabled metrics
-          setMetricCardOrder(enabledIds);
-          localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(enabledIds));
+          // Initialize with current instances
+          setMetricCardOrder(instanceIds);
+          localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(instanceIds));
         } else {
-          // Update order to include any new metrics and remove disabled ones
+          // Update order to include any new instances and remove deleted ones
           const savedOrder: string[] = JSON.parse(currentOrder);
           const newOrder = [...savedOrder];
           
-          // Add any missing metric IDs to the end
-          enabledIds.forEach((id: string) => {
+          // Add any missing instance IDs to the end
+          instanceIds.forEach((id: string) => {
             if (!newOrder.includes(id)) {
               newOrder.push(id);
             }
           });
           
-          // Remove any IDs that are no longer enabled
-          const filteredOrder = newOrder.filter((id: string) => enabledIds.includes(id));
+          // Remove any IDs that are no longer valid instances
+          const filteredOrder = newOrder.filter((id: string) => instanceIds.includes(id));
           
           if (JSON.stringify(filteredOrder) !== JSON.stringify(metricCardOrder)) {
             setMetricCardOrder(filteredOrder);
@@ -1040,36 +1455,50 @@ export default function Dashboard() {
       } catch {
         const enabled = metricsConfigHook.getEnabledMetrics();
         setEnabledMetrics(enabled);
-        const order = enabled.map(m => m.id);
+        const instances = enabled.map(m => ({
+          instanceId: m.id,
+          baseMetricId: m.id,
+          strategyFilterId: null,
+        }));
+        setMetricInstances(instances);
+        localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(instances));
+        const order = instances.map(inst => inst.instanceId);
         setMetricCardOrder(order);
         localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(order));
       }
     } else {
       const enabled = metricsConfigHook.getEnabledMetrics();
       setEnabledMetrics(enabled);
-      const order = enabled.map(m => m.id);
+      const instances = enabled.map(m => ({
+        instanceId: m.id,
+        baseMetricId: m.id,
+        strategyFilterId: null,
+      }));
+      setMetricInstances(instances);
+      localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(instances));
+      const order = instances.map(inst => inst.instanceId);
       setMetricCardOrder(order);
       localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(order));
     }
   }, [configKey, metricsConfigHook]);
 
-  // Sync metric card order when enabled metrics change
+  // Sync metric card order when instances change
   useEffect(() => {
-    const enabledIds = enabledMetrics.map(m => m.id);
-    if (enabledIds.length === 0) return;
+    const instanceIds = metricInstances.map(inst => inst.instanceId);
+    if (instanceIds.length === 0) return;
     
     setMetricCardOrder(prevOrder => {
       const newOrder = [...prevOrder];
       
-      // Add any missing metric IDs to the end
-      enabledIds.forEach(id => {
+      // Add any missing instance IDs to the end
+      instanceIds.forEach(id => {
         if (!newOrder.includes(id)) {
           newOrder.push(id);
         }
       });
       
-      // Remove any IDs that are no longer enabled
-      const filteredOrder = newOrder.filter(id => enabledIds.includes(id));
+      // Remove any IDs that are no longer valid instances
+      const filteredOrder = newOrder.filter(id => instanceIds.includes(id));
       
       // Only update if order actually changed
       if (JSON.stringify(filteredOrder) !== JSON.stringify(prevOrder)) {
@@ -1078,11 +1507,30 @@ export default function Dashboard() {
       }
       return prevOrder;
     });
-  }, [enabledMetrics]); // Only run when enabledMetrics changes
+  }, [metricInstances]); // Only run when metricInstances changes
+
+  // Create display metrics from instances
+  const displayMetrics = useMemo(() => {
+    return metricInstances
+      .filter(inst => {
+        // Only show instances whose base metric is enabled
+        return enabledMetrics.some(m => m.id === inst.baseMetricId);
+      })
+      .map(inst => {
+        const baseMetric = enabledMetrics.find(m => m.id === inst.baseMetricId);
+        if (!baseMetric) return null;
+        return {
+          ...baseMetric,
+          id: inst.instanceId, // Use instance ID instead of base ID
+          baseMetricId: inst.baseMetricId, // Keep reference to base
+        };
+      })
+      .filter((m): m is any => m !== null);
+  }, [metricInstances, enabledMetrics]);
 
   // Sort metrics by saved order using useMemo
   const sortedMetrics = useMemo(() => {
-    return [...enabledMetrics].sort((a, b) => {
+    return [...displayMetrics].sort((a, b) => {
       const aIndex = metricCardOrder.indexOf(a.id);
       const bIndex = metricCardOrder.indexOf(b.id);
       
@@ -1096,7 +1544,7 @@ export default function Dashboard() {
       // If neither is in the order, maintain original order
       return 0;
     });
-  }, [enabledMetrics, metricCardOrder]);
+  }, [displayMetrics, metricCardOrder]);
   
   // Listen for color range changes - use a ref to track previous value
   const prevColorRangeRef = useRef<string>("");
@@ -1181,14 +1629,16 @@ export default function Dashboard() {
       const startDate = dateRange.start ? dateRange.start.toISOString() : null;
       const endDate = dateRange.end ? dateRange.end.toISOString() : null;
       
-      const [metricsData, pnlData, strategiesData, tradesData, allTradesData] = await Promise.all([
+      const [metricsData, pnlData, strategiesData, tradesData, allTradesData, strategiesList] = await Promise.all([
         invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate }),
         invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate }),
         invoke<StrategyPerformance[]>("get_strategy_performance", { pairingMethod, startDate, endDate }),
         invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate }),
         invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate }),
+        invoke<Strategy[]>("get_strategies"),
       ]);
       setMetrics(metricsData);
+      setStrategies(strategiesList);
       
       // Convert SymbolPnL to TopSymbol format for display
       const topSymbolsData = pnlData
@@ -1214,6 +1664,133 @@ export default function Dashboard() {
     }
   };
 
+  // Calculate strategy-filtered metrics
+  const [filteredStrategyMetrics, setFilteredStrategyMetrics] = useState<Record<string, number>>({});
+  
+  useEffect(() => {
+    let cancelled = false;
+    
+    const calculateFilteredMetrics = async () => {
+      const strategyMetrics = [
+        "strategy_win_rate",
+        "strategy_winning_trades",
+        "strategy_losing_trades",
+        "strategy_profit_loss",
+        "strategy_consecutive_wins",
+        "strategy_consecutive_losses",
+      ];
+      
+      const newFilteredMetrics: Record<string, number> = {};
+      
+      // Group instances by strategy ID to batch API calls
+      const instancesByStrategy = new Map<number, Array<{ instance: MetricInstance; baseMetricId: string }>>();
+      
+      for (const instance of metricInstances) {
+        if (!strategyMetrics.includes(instance.baseMetricId)) continue;
+        
+        const selectedStrategyId = strategyFilterForMetrics[instance.instanceId] ?? strategyFilterForMetrics[instance.baseMetricId];
+        // If null or undefined, explicitly don't add to newFilteredMetrics (will use global metrics instead)
+        if (selectedStrategyId === null || selectedStrategyId === undefined) {
+          continue;
+        }
+        
+        if (!instancesByStrategy.has(selectedStrategyId)) {
+          instancesByStrategy.set(selectedStrategyId, []);
+        }
+        instancesByStrategy.get(selectedStrategyId)!.push({ instance, baseMetricId: instance.baseMetricId });
+      }
+      
+      // Process in batches to avoid too many simultaneous API calls
+      const BATCH_SIZE = 3;
+      const strategyIds = Array.from(instancesByStrategy.keys());
+      
+      for (let i = 0; i < strategyIds.length; i += BATCH_SIZE) {
+        if (cancelled) return;
+        
+        const batch = strategyIds.slice(i, i + BATCH_SIZE);
+        const batchPromises = batch.map(async (selectedStrategyId) => {
+          try {
+            const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+            const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
+            const startDate = dateRange.start ? dateRange.start.toISOString() : null;
+            const endDate = dateRange.end ? dateRange.end.toISOString() : null;
+            
+            const filteredPairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
+              strategyId: selectedStrategyId,
+              pairingMethod,
+              startDate,
+              endDate,
+            });
+            
+            // Calculate metrics for all instances using this strategy
+            const instances = instancesByStrategy.get(selectedStrategyId)!;
+            for (const { instance, baseMetricId } of instances) {
+              if (baseMetricId === "strategy_win_rate") {
+                const winning = filteredPairs.filter(p => p.net_profit_loss > 0).length;
+                const total = filteredPairs.length;
+                newFilteredMetrics[instance.instanceId] = total > 0 ? (winning / total) * 100 : 0;
+              } else if (baseMetricId === "strategy_winning_trades") {
+                newFilteredMetrics[instance.instanceId] = filteredPairs.filter(p => p.net_profit_loss > 0).length;
+              } else if (baseMetricId === "strategy_losing_trades") {
+                newFilteredMetrics[instance.instanceId] = filteredPairs.filter(p => p.net_profit_loss < 0).length;
+              } else if (baseMetricId === "strategy_profit_loss") {
+                newFilteredMetrics[instance.instanceId] = filteredPairs.reduce((sum, p) => sum + p.net_profit_loss, 0);
+              } else if (baseMetricId === "strategy_consecutive_wins") {
+                let maxStreak = 0;
+                let currentStreak = 0;
+                for (const pair of filteredPairs) {
+                  if (pair.net_profit_loss > 0) {
+                    currentStreak++;
+                    maxStreak = Math.max(maxStreak, currentStreak);
+                  } else {
+                    currentStreak = 0;
+                  }
+                }
+                newFilteredMetrics[instance.instanceId] = maxStreak;
+              } else if (baseMetricId === "strategy_consecutive_losses") {
+                let maxStreak = 0;
+                let currentStreak = 0;
+                for (const pair of filteredPairs) {
+                  if (pair.net_profit_loss < 0) {
+                    currentStreak++;
+                    maxStreak = Math.max(maxStreak, currentStreak);
+                  } else {
+                    currentStreak = 0;
+                  }
+                }
+                newFilteredMetrics[instance.instanceId] = maxStreak;
+              }
+            }
+          } catch (error) {
+            console.error(`Error calculating filtered metrics for strategy ${selectedStrategyId}:`, error);
+            // Set fallback values for all instances using this strategy
+            const instances = instancesByStrategy.get(selectedStrategyId)!;
+            for (const { instance } of instances) {
+              newFilteredMetrics[instance.instanceId] = metrics?.[instance.baseMetricId as keyof Metrics] as number || 0;
+            }
+          }
+        });
+        
+        await Promise.all(batchPromises);
+        
+        // Small delay between batches to prevent overwhelming the backend
+        if (i + BATCH_SIZE < strategyIds.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+      
+      if (!cancelled) {
+        setFilteredStrategyMetrics(newFilteredMetrics);
+      }
+    };
+    
+    calculateFilteredMetrics();
+    
+    return () => {
+      cancelled = true;
+    };
+  }, [strategyFilterForMetrics, timeframe, customStartDate, customEndDate, metrics, metricInstances]);
+
   if (loading) {
     return (
       <div style={{ padding: "40px", textAlign: "center" }}>
@@ -1237,12 +1814,24 @@ export default function Dashboard() {
     consecutive_losses: metrics?.consecutive_losses || 0,
     current_win_streak: metrics?.current_win_streak || 0,
     current_loss_streak: metrics?.current_loss_streak || 0,
-    strategy_win_rate: metrics?.strategy_win_rate || 0,
-    strategy_winning_trades: metrics?.strategy_winning_trades || 0,
-    strategy_losing_trades: metrics?.strategy_losing_trades || 0,
-    strategy_profit_loss: metrics?.strategy_profit_loss || 0,
-    strategy_consecutive_wins: metrics?.strategy_consecutive_wins || 0,
-    strategy_consecutive_losses: metrics?.strategy_consecutive_losses || 0,
+    strategy_win_rate: filteredStrategyMetrics.strategy_win_rate !== undefined 
+      ? filteredStrategyMetrics.strategy_win_rate 
+      : (metrics?.strategy_win_rate || 0),
+    strategy_winning_trades: filteredStrategyMetrics.strategy_winning_trades !== undefined 
+      ? filteredStrategyMetrics.strategy_winning_trades 
+      : (metrics?.strategy_winning_trades || 0),
+    strategy_losing_trades: filteredStrategyMetrics.strategy_losing_trades !== undefined 
+      ? filteredStrategyMetrics.strategy_losing_trades 
+      : (metrics?.strategy_losing_trades || 0),
+    strategy_profit_loss: filteredStrategyMetrics.strategy_profit_loss !== undefined 
+      ? filteredStrategyMetrics.strategy_profit_loss 
+      : (metrics?.strategy_profit_loss || 0),
+    strategy_consecutive_wins: filteredStrategyMetrics.strategy_consecutive_wins !== undefined 
+      ? filteredStrategyMetrics.strategy_consecutive_wins 
+      : (metrics?.strategy_consecutive_wins || 0),
+    strategy_consecutive_losses: filteredStrategyMetrics.strategy_consecutive_losses !== undefined 
+      ? filteredStrategyMetrics.strategy_consecutive_losses 
+      : (metrics?.strategy_consecutive_losses || 0),
     expectancy: metrics?.expectancy || 0,
     profit_factor: metrics?.profit_factor || 0,
     average_trade: metrics?.average_trade || 0,
@@ -1331,9 +1920,13 @@ export default function Dashboard() {
         }}
       >
         {sortedMetrics.map((metric) => {
-          const value = metricValues[metric.id] || 0;
-          const Icon = metricIcons[metric.id] || Activity;
-          const color = getMetricColor(metric.id, value);
+          // Get base metric ID for value lookup
+          const baseMetricId = (metric as any).baseMetricId || metric.id;
+          const value = filteredStrategyMetrics[metric.id] !== undefined 
+            ? filteredStrategyMetrics[metric.id]
+            : (metricValues[baseMetricId] || 0);
+          const Icon = metricIcons[baseMetricId] || Activity;
+          const color = getMetricColor(baseMetricId, value);
 
           return (
             <SortableMetricCard
@@ -1358,6 +1951,12 @@ export default function Dashboard() {
               sortedMetrics={sortedMetrics}
               enabledMetrics={enabledMetrics}
               setMetricCardOrder={setMetricCardOrder}
+              strategies={strategies}
+              strategyFilterForMetrics={strategyFilterForMetrics}
+              setStrategyFilterForMetrics={setStrategyFilterForMetrics}
+              duplicateMetricInstance={duplicateMetricInstance}
+              removeMetricInstance={removeMetricInstance}
+              setMetricInstances={setMetricInstances}
             />
           );
         })}
@@ -2027,7 +2626,7 @@ export default function Dashboard() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        e.preventDefault();
+                  e.preventDefault();
                         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                         setSectionMenuPosition({
                           ...sectionMenuPosition,
@@ -2079,14 +2678,14 @@ export default function Dashboard() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              e.preventDefault();
+                  e.preventDefault();
                               const currentIndex = sectionOrder.indexOf("recentTrades");
                               if (currentIndex > 0) {
-                                const newOrder = [...sectionOrder];
+                    const newOrder = [...sectionOrder];
                                 [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
-                                setSectionOrder(newOrder);
-                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                              }
+                    setSectionOrder(newOrder);
+                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                  }
                               setOpenSectionSettings(null);
                             }}
                             disabled={sectionOrder.indexOf("recentTrades") === 0}
@@ -2121,9 +2720,9 @@ export default function Dashboard() {
                               setOpenSectionSettings(null);
                             }}
                             disabled={sectionOrder.indexOf("recentTrades") === sectionOrder.length - 1}
-                            style={{
+                style={{
                               background: "transparent",
-                              border: "1px solid var(--border-color)",
+                  border: "1px solid var(--border-color)",
                               borderRadius: "4px",
                               padding: "6px 8px",
                               cursor: sectionOrder.indexOf("recentTrades") === sectionOrder.length - 1 ? "not-allowed" : "pointer",
@@ -2225,7 +2824,7 @@ export default function Dashboard() {
                 );
               })}
                 </div>
-                  </div>
+              </div>
                 )}
               </SortableSection>
             );
@@ -2591,7 +3190,7 @@ export default function Dashboard() {
           }
           return null;
         })}
-          </div>
+      </div>
         </SortableContext>
       </DndContext>
 
@@ -2602,6 +3201,7 @@ export default function Dashboard() {
               setConfigKey(prev => prev + 1); // Refresh dashboard sections
             }}
             onConfigChange={() => setConfigKey(prev => prev + 1)}
+            onAddMetricInstance={addMetricInstance}
           />
         
         {/* Position Group Detail Modal */}

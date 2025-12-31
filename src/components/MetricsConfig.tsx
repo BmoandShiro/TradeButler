@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Settings } from "lucide-react";
+import { Settings, Plus } from "lucide-react";
 
 export interface MetricConfig {
   id: string;
@@ -61,11 +61,11 @@ export function useMetricsConfig() {
         // Start with all default metrics
         const merged: MetricConfig[] = defaultMetrics.map(defaultMetric => {
           const savedMetric = savedMap.get(defaultMetric.id);
-          if (savedMetric) {
+          if (savedMetric && typeof savedMetric === 'object' && 'enabled' in savedMetric) {
             // Use saved settings (enabled/disabled) but keep default label/category
             return {
               ...defaultMetric,
-              enabled: savedMetric.enabled,
+              enabled: (savedMetric as MetricConfig).enabled,
             };
           }
           return defaultMetric;
@@ -95,7 +95,7 @@ export function useMetricsConfig() {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
-        const parsed = JSON.parse(saved);
+        const parsed: MetricConfig[] = JSON.parse(saved);
         const defaultMap = new Map(defaultMetrics.map(m => [m.id, m]));
         const savedMap = new Map(parsed.map((m: MetricConfig) => [m.id, m]));
         
@@ -155,9 +155,10 @@ interface MetricsConfigPanelProps {
   isOpen: boolean;
   onClose: () => void;
   onConfigChange?: () => void; // Callback when config changes
+  onAddMetricInstance?: (baseMetricId: string) => void; // Callback to add new metric instance
 }
 
-export function MetricsConfigPanel({ isOpen, onClose, onConfigChange }: MetricsConfigPanelProps) {
+export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetricInstance }: MetricsConfigPanelProps) {
   const { metrics, toggleMetric, resetToDefaults } = useMetricsConfig();
   
   // Color range state
@@ -470,7 +471,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange }: MetricsC
               </h3>
               <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                 {categoryMetrics.map((metric) => (
-                  <label
+                  <div
                     key={metric.id}
                     style={{
                       display: "flex",
@@ -479,23 +480,58 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange }: MetricsC
                       padding: "12px",
                       backgroundColor: "var(--bg-tertiary)",
                       borderRadius: "6px",
-                      cursor: "pointer",
                       border: "1px solid var(--border-color)",
+                      gap: "8px",
                     }}
                   >
-                    <span style={{ color: "var(--text-primary)" }}>{metric.label}</span>
-                    <input
-                      type="checkbox"
-                      checked={metric.enabled}
-                      onChange={() => toggleMetric(metric.id)}
+                    <label
                       style={{
-                        width: "18px",
-                        height: "18px",
+                        display: "flex",
+                        alignItems: "center",
+                        flex: 1,
                         cursor: "pointer",
-                        accentColor: "var(--accent)",
                       }}
-                    />
-                  </label>
+                    >
+                      <input
+                        type="checkbox"
+                        checked={metric.enabled}
+                        onChange={() => toggleMetric(metric.id)}
+                        style={{
+                          width: "18px",
+                          height: "18px",
+                          cursor: "pointer",
+                          accentColor: "var(--accent)",
+                          marginRight: "12px",
+                        }}
+                      />
+                      <span style={{ color: "var(--text-primary)" }}>{metric.label}</span>
+                    </label>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (onAddMetricInstance) {
+                          onAddMetricInstance(metric.id);
+                        }
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "4px",
+                        padding: "4px 8px",
+                        cursor: "pointer",
+                        color: "var(--text-primary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: "16px",
+                        minWidth: "32px",
+                        height: "32px",
+                      }}
+                      title="Add new instance"
+                    >
+                      <Plus size={16} />
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>
