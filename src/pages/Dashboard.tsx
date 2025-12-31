@@ -2,6 +2,23 @@ import { useEffect, useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  rectSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
   TrendingUp,
   TrendingDown,
   DollarSign,
@@ -280,6 +297,328 @@ type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades" | "trades
 
 const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades"];
 
+// Sortable Metric Card Component
+function SortableMetricCard({
+  id,
+  metric,
+  value,
+  Icon,
+  color,
+  metrics,
+  formatMetricValue,
+  setTimeframe,
+  setCustomStartDate,
+  setCustomEndDate,
+  setSelectedPositionGroupId,
+  setShowPositionGroupModal,
+  setSelectedPositionGroup,
+  openMetricSettings,
+  setOpenMetricSettings,
+  metricMenuPosition,
+  setMetricMenuPosition,
+  sortedMetrics,
+  enabledMetrics,
+  setMetricCardOrder,
+}: {
+  id: string;
+  metric: any;
+  value: number;
+  Icon: any;
+  color: string;
+  metrics: Metrics | null;
+  formatMetricValue: (id: string, value: number, metrics: Metrics | null) => string;
+  setTimeframe: (timeframe: Timeframe) => void;
+  setCustomStartDate: (date: string) => void;
+  setCustomEndDate: (date: string) => void;
+  setSelectedPositionGroupId: (id: number | null) => void;
+  setShowPositionGroupModal: (show: boolean) => void;
+  setSelectedPositionGroup: (group: any) => void;
+  openMetricSettings: string | null;
+  setOpenMetricSettings: (id: string | null) => void;
+  metricMenuPosition: { top: number; right: number };
+  setMetricMenuPosition: (pos: { top: number; right: number }) => void;
+  sortedMetrics: any[];
+  enabledMetrics: any[];
+  setMetricCardOrder: React.Dispatch<React.SetStateAction<string[]>>;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        backgroundColor: "var(--bg-secondary)",
+        border: "1px solid var(--border-color)",
+        borderRadius: "8px",
+        padding: "20px",
+        display: "flex",
+        alignItems: "center",
+        gap: "16px",
+        cursor: isDragging ? "grabbing" : "grab",
+        userSelect: "none",
+        WebkitUserSelect: "none",
+        width: "100%",
+        height: "100px",
+        ...style,
+      }}
+    >
+      <div {...attributes} {...listeners} style={{ cursor: "grab", flexShrink: 0 }}>
+        <GripVertical size={16} color="var(--text-secondary)" />
+      </div>
+      <div
+        style={{
+          width: "48px",
+          height: "48px",
+          borderRadius: "8px",
+          backgroundColor: `${color}20`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: color,
+          flexShrink: 0,
+          pointerEvents: "none",
+        }}
+      >
+        <Icon size={24} />
+      </div>
+      <div 
+        style={{ 
+          flex: 1, 
+          pointerEvents: (metric.id === "best_day" || metric.id === "worst_day" || metric.id === "largest_win" || metric.id === "largest_loss") ? "auto" : "none",
+          cursor: (metric.id === "best_day" || metric.id === "worst_day" || metric.id === "largest_win" || metric.id === "largest_loss") ? "pointer" : "default",
+        }}
+        onClick={async (e) => {
+          if (metric.id === "best_day" && metrics?.best_day_date) {
+            e.stopPropagation();
+            setTimeframe("custom");
+            setCustomStartDate(metrics.best_day_date);
+            setCustomEndDate(metrics.best_day_date);
+            localStorage.setItem("tradebutler_dashboard_timeframe", "custom");
+            localStorage.setItem("tradebutler_dashboard_custom_start", metrics.best_day_date);
+            localStorage.setItem("tradebutler_dashboard_custom_end", metrics.best_day_date);
+          } else if (metric.id === "worst_day" && metrics?.worst_day_date) {
+            e.stopPropagation();
+            setTimeframe("custom");
+            setCustomStartDate(metrics.worst_day_date);
+            setCustomEndDate(metrics.worst_day_date);
+            localStorage.setItem("tradebutler_dashboard_timeframe", "custom");
+            localStorage.setItem("tradebutler_dashboard_custom_start", metrics.worst_day_date);
+            localStorage.setItem("tradebutler_dashboard_custom_end", metrics.worst_day_date);
+          } else if (metric.id === "largest_win" && metrics?.largest_win_group_id) {
+            e.stopPropagation();
+            setSelectedPositionGroupId(metrics.largest_win_group_id);
+            setShowPositionGroupModal(true);
+            try {
+              const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+              const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null });
+              const group = groups.find(g => g.entry_trade.id === metrics.largest_win_group_id);
+              if (group) {
+                setSelectedPositionGroup(group);
+              }
+            } catch (error) {
+              console.error("Error loading position group:", error);
+            }
+          } else if (metric.id === "largest_loss" && metrics?.largest_loss_group_id) {
+            e.stopPropagation();
+            setSelectedPositionGroupId(metrics.largest_loss_group_id);
+            setShowPositionGroupModal(true);
+            try {
+              const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+              const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null });
+              const group = groups.find(g => g.entry_trade.id === metrics.largest_loss_group_id);
+              if (group) {
+                setSelectedPositionGroup(group);
+              }
+            } catch (error) {
+              console.error("Error loading position group:", error);
+            }
+          }
+        }}
+      >
+        <p
+          style={{
+            fontSize: "14px",
+            color: "var(--text-secondary)",
+            marginBottom: "4px",
+          }}
+        >
+          {metric.label}
+        </p>
+        <p
+          style={{
+            fontSize: "24px",
+            fontWeight: "bold",
+            color: color,
+          }}
+        >
+          {formatMetricValue(metric.id, value, metrics)}
+        </p>
+      </div>
+      <div style={{ position: "relative", flexShrink: 0 }}>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setMetricMenuPosition({
+              top: rect.bottom + 4,
+              right: window.innerWidth - rect.right,
+            });
+            setOpenMetricSettings(openMetricSettings === metric.id ? null : metric.id);
+          }}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+          }}
+          style={{
+            background: "transparent",
+            border: "none",
+            padding: "4px",
+            cursor: "pointer",
+            color: "var(--text-secondary)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: "4px",
+            pointerEvents: "auto",
+          }}
+          title="Settings"
+        >
+          <Settings size={16} />
+        </button>
+        {openMetricSettings === metric.id && createPortal(
+          <div
+            data-settings-menu
+            style={{
+              position: "fixed",
+              top: `${metricMenuPosition.top}px`,
+              right: `${metricMenuPosition.right}px`,
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              padding: "8px",
+              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+              zIndex: 99999,
+              minWidth: "120px",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
+                  if (currentIndex > 0) {
+                    setMetricCardOrder(prevOrder => {
+                      const currentIds = enabledMetrics.map(m => m.id);
+                      let newOrder = [...prevOrder];
+                      
+                      currentIds.forEach(id => {
+                        if (!newOrder.includes(id)) {
+                          newOrder.push(id);
+                        }
+                      });
+                      
+                      newOrder = newOrder.filter(id => currentIds.includes(id));
+                      
+                      const metricIndex = newOrder.indexOf(metric.id);
+                      if (metricIndex > 0) {
+                        [newOrder[metricIndex - 1], newOrder[metricIndex]] = [newOrder[metricIndex], newOrder[metricIndex - 1]];
+                        localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+                        return newOrder;
+                      }
+                      return prevOrder;
+                    });
+                  }
+                }}
+                disabled={sortedMetrics.findIndex(m => m.id === metric.id) === 0}
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                  padding: "6px 8px",
+                  cursor: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? "not-allowed" : "pointer",
+                  color: "var(--text-primary)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  fontSize: "13px",
+                  opacity: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? 0.3 : 1,
+                }}
+              >
+                <ChevronUp size={14} />
+                <span>Move Up</span>
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
+                  if (currentIndex < sortedMetrics.length - 1) {
+                    setMetricCardOrder(prevOrder => {
+                      const currentIds = enabledMetrics.map(m => m.id);
+                      let newOrder = [...prevOrder];
+                      
+                      currentIds.forEach(id => {
+                        if (!newOrder.includes(id)) {
+                          newOrder.push(id);
+                        }
+                      });
+                      
+                      newOrder = newOrder.filter(id => currentIds.includes(id));
+                      
+                      const metricIndex = newOrder.indexOf(metric.id);
+                      if (metricIndex < newOrder.length - 1) {
+                        [newOrder[metricIndex], newOrder[metricIndex + 1]] = [newOrder[metricIndex + 1], newOrder[metricIndex]];
+                        localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+                        return newOrder;
+                      }
+                      return prevOrder;
+                    });
+                  }
+                }}
+                disabled={sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1}
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                  padding: "6px 8px",
+                  cursor: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? "not-allowed" : "pointer",
+                  color: "var(--text-primary)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  fontSize: "13px",
+                  opacity: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? 0.3 : 1,
+                }}
+              >
+                <ChevronDown size={14} />
+                <span>Move Down</span>
+              </button>
+            </div>
+          </div>,
+          document.body
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [topSymbols, setTopSymbols] = useState<TopSymbol[]>([]);
@@ -345,9 +684,50 @@ export default function Dashboard() {
     }
     return [];
   });
-  const [draggedMetric, setDraggedMetric] = useState<string | null>(null);
-  const [dragOverMetric, setDragOverMetric] = useState<string | null>(null);
-  const draggedMetricRef = useRef<string | null>(null);
+  // @dnd-kit sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // Require 8px of movement before drag starts
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+  
+  // Handle drag end for metrics
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    
+    if (over && active.id !== over.id) {
+      setMetricCardOrder((items) => {
+        const currentIds = enabledMetrics.map(m => m.id);
+        let newOrder = [...items];
+        
+        // Ensure all enabled metrics are in the order
+        currentIds.forEach(id => {
+          if (!newOrder.includes(id)) {
+            newOrder.push(id);
+          }
+        });
+        
+        // Remove any IDs that are no longer enabled
+        newOrder = newOrder.filter(id => currentIds.includes(id));
+        
+        const oldIndex = newOrder.indexOf(active.id as string);
+        const newIndex = newOrder.indexOf(over.id as string);
+        
+        if (oldIndex !== -1 && newIndex !== -1) {
+          const finalOrder = arrayMove(newOrder, oldIndex, newIndex);
+          localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        }
+        
+        return newOrder;
+      });
+    }
+  };
   const [openMetricSettings, setOpenMetricSettings] = useState<string | null>(null);
   const [openSectionSettings, setOpenSectionSettings] = useState<SectionId | null>(null);
   const [metricMenuPosition, setMetricMenuPosition] = useState({ top: 0, right: 0 });
@@ -710,403 +1090,57 @@ export default function Dashboard() {
           </div>
 
       {/* Metrics Cards */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-          gap: "20px",
-          marginBottom: "30px",
-        }}
-        onDragOver={(e) => {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "move";
-        }}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
       >
-        {sortedMetrics.map((metric) => {
+        <SortableContext
+          items={sortedMetrics.map(m => m.id)}
+          strategy={rectSortingStrategy}
+        >
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+              gap: "20px",
+              marginBottom: "30px",
+            }}
+          >
+            {sortedMetrics.map((metric) => {
           const value = metricValues[metric.id] || 0;
           const Icon = metricIcons[metric.id] || Activity;
           const color = getMetricColor(metric.id, value);
 
           return (
-            <div
+            <SortableMetricCard
               key={metric.id}
-              draggable={true}
-              onDragStart={(e) => {
-                // Prevent drag if starting from a button
-                const target = e.target as HTMLElement;
-                if (target.tagName === 'BUTTON' || target.closest('button')) {
-                  e.preventDefault();
-                  return false;
-                }
-                
-                draggedMetricRef.current = metric.id;
-                setDraggedMetric(metric.id);
-                e.dataTransfer.effectAllowed = "move";
-                e.dataTransfer.setData("text/plain", metric.id);
-                e.dataTransfer.setData("application/json", JSON.stringify({ type: "metric", id: metric.id }));
-              }}
-              onDragEnter={(e) => {
-                e.preventDefault();
-                const dragged = draggedMetricRef.current || draggedMetric;
-                if (dragged && dragged !== metric.id) {
-                  setDragOverMetric(metric.id);
-                }
-              }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-                const dragged = draggedMetricRef.current || draggedMetric;
-                if (dragged && dragged !== metric.id) {
-                  setDragOverMetric(metric.id);
-                }
-              }}
-              onDragLeave={(e) => {
-                // Check if we're actually leaving the element
-                const rect = e.currentTarget.getBoundingClientRect();
-                const x = e.clientX;
-                const y = e.clientY;
-                if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-                  setDragOverMetric(null);
-                }
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                // Try multiple ways to get the dragged metric ID
-                let dragged: string | null = null;
-                try {
-                  const jsonData = e.dataTransfer.getData("application/json");
-                  if (jsonData) {
-                    const parsed = JSON.parse(jsonData);
-                    if (parsed.type === "metric" && parsed.id) {
-                      dragged = parsed.id;
-                    }
-                  }
-                } catch {}
-                
-                if (!dragged) {
-                  dragged = e.dataTransfer.getData("text/plain") || draggedMetricRef.current || draggedMetric;
-                }
-                
-                if (!dragged || dragged === metric.id) {
-                  draggedMetricRef.current = null;
-                  setDraggedMetric(null);
-                  setDragOverMetric(null);
-                  return;
-                }
-                
-                setMetricCardOrder(prevOrder => {
-                  const currentIds = enabledMetrics.map(m => m.id);
-                  let newOrder = [...prevOrder];
-                  
-                  // Ensure all enabled metrics are in the order
-                  currentIds.forEach(id => {
-                    if (!newOrder.includes(id)) {
-                      newOrder.push(id);
-                    }
-                  });
-                  
-                  // Remove any IDs that are no longer enabled
-                  newOrder = newOrder.filter(id => currentIds.includes(id));
-                  
-                  // Reorder: move draggedMetric to the position of metric.id
-                  const draggedIndex = newOrder.indexOf(dragged);
-                  const targetIndex = newOrder.indexOf(metric.id);
-                  
-                  if (draggedIndex !== -1 && targetIndex !== -1 && draggedIndex !== targetIndex) {
-                    // Remove dragged item from its current position
-                    newOrder.splice(draggedIndex, 1);
-                    // Calculate new target index (may have shifted after removal)
-                    const newTargetIndex = draggedIndex < targetIndex ? targetIndex - 1 : targetIndex;
-                    // Insert it at the target position
-                    newOrder.splice(newTargetIndex, 0, dragged);
-                    
-                    // Save to localStorage
-                    localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
-                    return newOrder;
-                  }
-                  return prevOrder;
-                });
-                draggedMetricRef.current = null;
-                setDraggedMetric(null);
-                setDragOverMetric(null);
-              }}
-              onDragEnd={() => {
-                draggedMetricRef.current = null;
-                setDraggedMetric(null);
-                setDragOverMetric(null);
-              }}
-              style={{
-                backgroundColor: "var(--bg-secondary)",
-                border: "1px solid var(--border-color)",
-                borderRadius: "8px",
-                padding: "20px",
-                display: "flex",
-                alignItems: "center",
-                gap: "16px",
-                cursor: draggedMetric === metric.id ? "grabbing" : "grab",
-                opacity: draggedMetric === metric.id ? 0.5 : 1,
-                borderColor: dragOverMetric === metric.id ? "var(--accent)" : "var(--border-color)",
-                borderWidth: dragOverMetric === metric.id ? "2px" : "1px",
-                userSelect: "none",
-                WebkitUserSelect: "none",
-                width: "100%",
-                height: "100px",
-                transition: "border-color 0.2s, opacity 0.2s, transform 0.2s",
-                transform: draggedMetric === metric.id ? "scale(0.95)" : dragOverMetric === metric.id ? "scale(1.02)" : "scale(1)",
-              }}
-            >
-              <GripVertical 
-                size={16} 
-                color="var(--text-secondary)" 
-                style={{ cursor: "grab", flexShrink: 0, pointerEvents: "none" }} 
-              />
-              <div
-                style={{
-                  width: "48px",
-                  height: "48px",
-                  borderRadius: "8px",
-                  backgroundColor: `${color}20`,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: color,
-                  flexShrink: 0,
-                  pointerEvents: "none",
-                }}
-              >
-                <Icon size={24} />
-              </div>
-              <div 
-                style={{ 
-                  flex: 1, 
-                  pointerEvents: (metric.id === "best_day" || metric.id === "worst_day" || metric.id === "largest_win" || metric.id === "largest_loss") ? "auto" : "none",
-                  cursor: (metric.id === "best_day" || metric.id === "worst_day" || metric.id === "largest_win" || metric.id === "largest_loss") ? "pointer" : "default",
-                }}
-                onClick={async (e) => {
-                  if (metric.id === "best_day" && metrics?.best_day_date) {
-                    e.stopPropagation();
-                    // Set timeframe to that specific day
-                    setTimeframe("custom");
-                    setCustomStartDate(metrics.best_day_date);
-                    setCustomEndDate(metrics.best_day_date);
-                    localStorage.setItem("tradebutler_dashboard_timeframe", "custom");
-                    localStorage.setItem("tradebutler_dashboard_custom_start", metrics.best_day_date);
-                    localStorage.setItem("tradebutler_dashboard_custom_end", metrics.best_day_date);
-                  } else if (metric.id === "worst_day" && metrics?.worst_day_date) {
-                    e.stopPropagation();
-                    // Set timeframe to that specific day
-                    setTimeframe("custom");
-                    setCustomStartDate(metrics.worst_day_date);
-                    setCustomEndDate(metrics.worst_day_date);
-                    localStorage.setItem("tradebutler_dashboard_timeframe", "custom");
-                    localStorage.setItem("tradebutler_dashboard_custom_start", metrics.worst_day_date);
-                    localStorage.setItem("tradebutler_dashboard_custom_end", metrics.worst_day_date);
-                  } else if (metric.id === "largest_win" && metrics?.largest_win_group_id) {
-                    e.stopPropagation();
-                    // Show position group details
-                    setSelectedPositionGroupId(metrics.largest_win_group_id);
-                    setShowPositionGroupModal(true);
-                    // Load position group details
-                    try {
-                      const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-                      const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null });
-                      const group = groups.find(g => g.entry_trade.id === metrics.largest_win_group_id);
-                      if (group) {
-                        setSelectedPositionGroup(group);
-                      }
-                    } catch (error) {
-                      console.error("Error loading position group:", error);
-                    }
-                  } else if (metric.id === "largest_loss" && metrics?.largest_loss_group_id) {
-                    e.stopPropagation();
-                    // Show position group details
-                    setSelectedPositionGroupId(metrics.largest_loss_group_id);
-                    setShowPositionGroupModal(true);
-                    // Load position group details
-                    try {
-                      const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-                      const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null });
-                      const group = groups.find(g => g.entry_trade.id === metrics.largest_loss_group_id);
-                      if (group) {
-                        setSelectedPositionGroup(group);
-                      }
-                    } catch (error) {
-                      console.error("Error loading position group:", error);
-                    }
-                  }
-                }}
-              >
-                <p
-                  style={{
-                    fontSize: "14px",
-                    color: "var(--text-secondary)",
-                    marginBottom: "4px",
-                  }}
-                >
-                  {metric.label}
-                </p>
-                <p
-                  style={{
-                    fontSize: "24px",
-                    fontWeight: "bold",
-                    color: color,
-                  }}
-                >
-                  {formatMetricValue(metric.id, value, metrics)}
-                </p>
-              </div>
-              <div style={{ position: "relative", flexShrink: 0 }}>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                    setMetricMenuPosition({
-                      top: rect.bottom + 4,
-                      right: window.innerWidth - rect.right,
-                    });
-                    setOpenMetricSettings(openMetricSettings === metric.id ? null : metric.id);
-                  }}
-                  onMouseDown={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                  }}
-                  style={{
-                    background: "transparent",
-                    border: "none",
-                    padding: "4px",
-                    cursor: "pointer",
-                    color: "var(--text-secondary)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    borderRadius: "4px",
-                    pointerEvents: "auto",
-                  }}
-                  title="Settings"
-                >
-                  <Settings size={16} />
-                </button>
-                {openMetricSettings === metric.id && createPortal(
-                  <div
-                    data-settings-menu
-                    style={{
-                      position: "fixed",
-                      top: `${metricMenuPosition.top}px`,
-                      right: `${metricMenuPosition.right}px`,
-                      backgroundColor: "var(--bg-secondary)",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: "8px",
-                      padding: "8px",
-                      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
-                      zIndex: 99999,
-                      minWidth: "120px",
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    onMouseDown={(e) => e.stopPropagation()}
-                  >
-                    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                          const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
-                          if (currentIndex > 0) {
-                            setMetricCardOrder(prevOrder => {
-                              const currentIds = enabledMetrics.map(m => m.id);
-                              let newOrder = [...prevOrder];
-                              
-                              currentIds.forEach(id => {
-                                if (!newOrder.includes(id)) {
-                                  newOrder.push(id);
-                                }
-                              });
-                              
-                              newOrder = newOrder.filter(id => currentIds.includes(id));
-                              
-                              const metricIndex = newOrder.indexOf(metric.id);
-                              if (metricIndex > 0) {
-                                [newOrder[metricIndex - 1], newOrder[metricIndex]] = [newOrder[metricIndex], newOrder[metricIndex - 1]];
-                                localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
-                                return newOrder;
-                              }
-                              return prevOrder;
-                            });
-                          }
-                        }}
-                        disabled={sortedMetrics.findIndex(m => m.id === metric.id) === 0}
-                        style={{
-                          background: "transparent",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "4px",
-                          padding: "6px 8px",
-                          cursor: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? "not-allowed" : "pointer",
-                          color: "var(--text-primary)",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "8px",
-                          fontSize: "13px",
-                          opacity: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? 0.3 : 1,
-                        }}
-                      >
-                        <ChevronUp size={14} />
-                        <span>Move Up</span>
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                          const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
-                          if (currentIndex < sortedMetrics.length - 1) {
-                            setMetricCardOrder(prevOrder => {
-                              const currentIds = enabledMetrics.map(m => m.id);
-                              let newOrder = [...prevOrder];
-                              
-                              currentIds.forEach(id => {
-                                if (!newOrder.includes(id)) {
-                                  newOrder.push(id);
-                                }
-                              });
-                              
-                              newOrder = newOrder.filter(id => currentIds.includes(id));
-                              
-                              const metricIndex = newOrder.indexOf(metric.id);
-                              if (metricIndex < newOrder.length - 1) {
-                                [newOrder[metricIndex], newOrder[metricIndex + 1]] = [newOrder[metricIndex + 1], newOrder[metricIndex]];
-                                localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
-                                return newOrder;
-                              }
-                              return prevOrder;
-                            });
-                          }
-                        }}
-                        disabled={sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1}
-                        style={{
-                          background: "transparent",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "4px",
-                          padding: "6px 8px",
-                          cursor: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? "not-allowed" : "pointer",
-                          color: "var(--text-primary)",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "8px",
-                          fontSize: "13px",
-                          opacity: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? 0.3 : 1,
-                        }}
-                      >
-                        <ChevronDown size={14} />
-                        <span>Move Down</span>
-                      </button>
-                    </div>
-                  </div>,
-                  document.body
-                )}
-              </div>
-            </div>
+              id={metric.id}
+              metric={metric}
+              value={value}
+              Icon={Icon}
+              color={color}
+              metrics={metrics}
+              formatMetricValue={formatMetricValue}
+              setTimeframe={setTimeframe}
+              setCustomStartDate={setCustomStartDate}
+              setCustomEndDate={setCustomEndDate}
+              setSelectedPositionGroupId={setSelectedPositionGroupId}
+              setShowPositionGroupModal={setShowPositionGroupModal}
+              setSelectedPositionGroup={setSelectedPositionGroup}
+              openMetricSettings={openMetricSettings}
+              setOpenMetricSettings={setOpenMetricSettings}
+              metricMenuPosition={metricMenuPosition}
+              setMetricMenuPosition={setMetricMenuPosition}
+              sortedMetrics={sortedMetrics}
+              enabledMetrics={enabledMetrics}
+              setMetricCardOrder={setMetricCardOrder}
+            />
           );
         })}
-      </div>
+          </div>
+        </SortableContext>
+      </DndContext>
 
       {/* Dashboard Stats Grid */}
       <div
@@ -2066,7 +2100,7 @@ export default function Dashboard() {
                 draggable
                 onDragStart={(e) => {
                   setDraggedSection("trades");
-                  draggedMetricRef.current = null;
+                  e.dataTransfer.effectAllowed = "move";
                 }}
                 onDragOver={(e) => {
                   e.preventDefault();
