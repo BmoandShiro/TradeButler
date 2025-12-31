@@ -3095,3 +3095,297 @@ pub fn get_equity_curve(pairing_method: Option<String>, start_date: Option<Strin
     })
 }
 
+// Distribution & Concentration Structures
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HistogramBin {
+    pub bin_start: f64,
+    pub bin_end: f64,
+    pub count: i64,
+    pub total_pnl: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ConcentrationStats {
+    pub total_trades: i64,
+    pub profitable_trades_count: i64,
+    pub losing_trades_count: i64,
+    pub top_k: i64,
+    pub profit_share_top: f64,
+    pub loss_share_top: f64,
+    pub mean_return: f64,
+    pub median_return: f64,
+    pub stability_score: f64,
+    pub insights: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DistributionConcentrationData {
+    pub histogram: Vec<HistogramBin>,
+    pub concentration: ConcentrationStats,
+}
+
+#[tauri::command]
+pub fn get_distribution_concentration(
+    pairing_method: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    concentration_percent: Option<f64>,
+) -> Result<DistributionConcentrationData, String> {
+    // Get paired trades
+    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    
+    // Filter by date range if provided
+    let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
+        paired_trades.into_iter().filter(|pair| {
+            let exit_date = &pair.exit_timestamp;
+            let in_range = if let Some(start) = &start_date {
+                exit_date >= start
+            } else {
+                true
+            } && if let Some(end) = &end_date {
+                exit_date <= end
+            } else {
+                true
+            };
+            in_range
+        }).collect()
+    } else {
+        paired_trades
+    };
+    
+    if filtered_paired_trades.is_empty() {
+        return Ok(DistributionConcentrationData {
+            histogram: Vec::new(),
+            concentration: ConcentrationStats {
+                total_trades: 0,
+                profitable_trades_count: 0,
+                losing_trades_count: 0,
+                top_k: 0,
+                profit_share_top: 0.0,
+                loss_share_top: 0.0,
+                mean_return: 0.0,
+                median_return: 0.0,
+                stability_score: 100.0,
+                insights: vec!["No trades in the selected timeframe.".to_string()],
+            },
+        });
+    }
+    
+    // Extract PnL values
+    let pnl_values: Vec<f64> = filtered_paired_trades.iter().map(|p| p.net_profit_loss).collect();
+    
+    // Calculate mean and median
+    let total_pnl: f64 = pnl_values.iter().sum();
+    let mean_return = total_pnl / pnl_values.len() as f64;
+    
+    let mut sorted_pnl = pnl_values.clone();
+    sorted_pnl.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_return = if sorted_pnl.is_empty() {
+        0.0
+    } else if sorted_pnl.len() % 2 == 0 {
+        (sorted_pnl[sorted_pnl.len() / 2 - 1] + sorted_pnl[sorted_pnl.len() / 2]) / 2.0
+    } else {
+        sorted_pnl[sorted_pnl.len() / 2]
+    };
+    
+    // Build histogram
+    let min_pnl = sorted_pnl.first().copied().unwrap_or(0.0);
+    let max_pnl = sorted_pnl.last().copied().unwrap_or(0.0);
+    let range = max_pnl - min_pnl;
+    
+    // Use 20 bins, or fewer if range is small
+    let num_bins = if range > 0.0 {
+        (20.0_f64.min(range / 10.0).max(1.0)) as usize
+    } else {
+        1
+    };
+    
+    let bin_width = if range > 0.0 && num_bins > 1 {
+        range / num_bins as f64
+    } else {
+        1.0
+    };
+    
+    // Create bins centered around 0
+    let mut histogram = Vec::new();
+    if num_bins > 1 {
+        // Find the bin that contains 0
+        let zero_bin_index = ((-min_pnl) / bin_width).floor() as i32;
+        let start_bin = zero_bin_index - (num_bins as i32 / 2);
+        
+        for i in 0..num_bins {
+            let bin_start = min_pnl + (start_bin + i as i32) as f64 * bin_width;
+            let bin_end = bin_start + bin_width;
+            
+            let count = pnl_values.iter()
+                .filter(|&&pnl| pnl >= bin_start && (i == num_bins - 1 || pnl < bin_end))
+                .count() as i64;
+            
+            let total_pnl_in_bin: f64 = pnl_values.iter()
+                .filter(|&&pnl| pnl >= bin_start && (i == num_bins - 1 || pnl < bin_end))
+                .sum();
+            
+            histogram.push(HistogramBin {
+                bin_start,
+                bin_end,
+                count,
+                total_pnl: total_pnl_in_bin,
+            });
+        }
+    } else {
+        // Single bin
+        histogram.push(HistogramBin {
+            bin_start: min_pnl,
+            bin_end: max_pnl,
+            count: pnl_values.len() as i64,
+            total_pnl,
+        });
+    }
+    
+    // Calculate concentration
+    let concentration_percent = concentration_percent.unwrap_or(10.0).max(5.0).min(30.0);
+    let top_fraction = concentration_percent / 100.0;
+    let n = filtered_paired_trades.len();
+    let min_absolute = if n < 30 { 3 } else { 5 };
+    let k = (n as f64 * top_fraction).round() as i64;
+    let k = k.max(min_absolute).min(n as i64);
+    
+    // Separate profitable and losing trades
+    let mut profitable_trades: Vec<f64> = pnl_values.iter().filter(|&&pnl| pnl > 0.0).copied().collect();
+    let mut losing_trades: Vec<f64> = pnl_values.iter().filter(|&&pnl| pnl < 0.0).copied().collect();
+    
+    profitable_trades.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    losing_trades.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    
+    let total_profit_all: f64 = profitable_trades.iter().sum();
+    let total_loss_all: f64 = losing_trades.iter().map(|x| x.abs()).sum();
+    
+    let k_profit = k.min(profitable_trades.len() as i64);
+    let k_loss = k.min(losing_trades.len() as i64);
+    
+    let top_profit_trades: f64 = profitable_trades.iter().take(k_profit as usize).sum();
+    let top_loss_trades: f64 = losing_trades.iter().take(k_loss as usize).map(|x| x.abs()).sum();
+    
+    let profit_share_top = if total_profit_all > 0.0 {
+        top_profit_trades / total_profit_all
+    } else {
+        0.0
+    };
+    
+    let loss_share_top = if total_loss_all > 0.0 {
+        top_loss_trades / total_loss_all
+    } else {
+        0.0
+    };
+    
+    // Calculate stability score
+    const PROFIT_THRESHOLD: f64 = 0.4;
+    const LOSS_THRESHOLD: f64 = 0.4;
+    
+    let profit_penalty = if profit_share_top <= PROFIT_THRESHOLD {
+        0.0
+    } else {
+        ((profit_share_top - PROFIT_THRESHOLD) / (1.0 - PROFIT_THRESHOLD)).min(1.0)
+    };
+    
+    let loss_penalty = if loss_share_top <= LOSS_THRESHOLD {
+        0.0
+    } else {
+        ((loss_share_top - LOSS_THRESHOLD) / (1.0 - LOSS_THRESHOLD)).min(1.0)
+    };
+    
+    let mean_median_gap = (mean_return - median_return).abs();
+    let gap_scale = if mean_return != 0.0 {
+        mean_return.abs()
+    } else {
+        1.0
+    };
+    let gap_penalty = (mean_median_gap / gap_scale.max(1.0)).min(1.0);
+    
+    let instability_score = profit_penalty * 0.5 + loss_penalty * 0.3 + gap_penalty * 0.2;
+    let stability_score = (1.0 - instability_score) * 100.0;
+    
+    // Generate insights
+    let mut insights = Vec::new();
+    
+    if n < 30 {
+        insights.push("Limited data: results may be noisy with fewer than 30 trades.".to_string());
+    }
+    
+    // Profit concentration insights
+    if profit_share_top < 0.2 {
+        insights.push(format!(
+            "Your profits are well distributed. The top {}% of trades account for {:.1}% of total profit, indicating good consistency.",
+            concentration_percent, profit_share_top * 100.0
+        ));
+    } else if profit_share_top <= 0.4 {
+        insights.push(format!(
+            "Your profits show moderate concentration. The top {}% of trades generate {:.1}% of total profit.",
+            concentration_percent, profit_share_top * 100.0
+        ));
+    } else if profit_share_top <= 0.7 {
+        insights.push(format!(
+            "A small percentage of your trades generates a large share of profits. The top {}% of trades produce {:.1}% of your total profit. Consider systematizing the conditions of your best trades.",
+            concentration_percent, profit_share_top * 100.0
+        ));
+    } else {
+        insights.push(format!(
+            "Severe profit concentration: the top {}% of trades generate {:.1}% of total profit. Your winners are doing the heavy lifting. Without them, your equity curve would be much flatter.",
+            concentration_percent, profit_share_top * 100.0
+        ));
+    }
+    
+    // Loss concentration insights
+    if loss_share_top < 0.2 {
+        insights.push(format!(
+            "Your losses are well distributed. The worst {}% of trades account for {:.1}% of total loss.",
+            concentration_percent, loss_share_top * 100.0
+        ));
+    } else if loss_share_top <= 0.5 {
+        insights.push(format!(
+            "Your losses show moderate concentration. The worst {}% of trades account for {:.1}% of total loss.",
+            concentration_percent, loss_share_top * 100.0
+        ));
+    } else if loss_share_top <= 0.7 {
+        insights.push(format!(
+            "A relatively small group of bad trades is responsible for most of your drawdowns. The worst {}% of losing trades account for {:.1}% of total loss. Tightening risk controls could significantly stabilize your equity.",
+            concentration_percent, loss_share_top * 100.0
+        ));
+    } else {
+        insights.push(format!(
+            "Severe loss concentration: the worst {}% of trades cause {:.1}% of total loss. Consider hard stop rules, daily loss limits, or reducing position size on lower conviction trades.",
+            concentration_percent, loss_share_top * 100.0
+        ));
+    }
+    
+    // Mean vs median insights
+    if mean_return != 0.0 && (mean_return.abs() / median_return.abs().max(0.01)) >= 1.5 {
+        insights.push("Median and average returns differ significantly, suggesting performance is skewed by a small set of large winners or losers.".to_string());
+    } else if (mean_return - median_return).abs() < (mean_return.abs() * 0.1) {
+        insights.push("Median and average returns are closely aligned, indicating consistent returns rather than rare outlier events.".to_string());
+    }
+    
+    // Overall stability insight
+    if stability_score >= 80.0 {
+        insights.push("Your performance is broadly supported by many trades rather than a few outliers. This is a sign of a robust and repeatable process.".to_string());
+    } else if stability_score < 50.0 {
+        insights.push("Your results show high variance and instability. Focus on replicating your best setups while strictly capping downside on worst trades.".to_string());
+    }
+    
+    Ok(DistributionConcentrationData {
+        histogram,
+        concentration: ConcentrationStats {
+            total_trades: n as i64,
+            profitable_trades_count: profitable_trades.len() as i64,
+            losing_trades_count: losing_trades.len() as i64,
+            top_k: k,
+            profit_share_top,
+            loss_share_top,
+            mean_return,
+            median_return,
+            stability_score,
+            insights,
+        },
+    })
+}
+

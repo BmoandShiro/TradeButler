@@ -1,6 +1,9 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
+import { Settings } from "lucide-react";
+import { createPortal } from "react-dom";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 interface WeekdayPerformance {
   weekday: number;
@@ -80,8 +83,34 @@ interface EvaluationMetrics {
   strategy_performance: StrategyPerformanceDetail[];
 }
 
+interface HistogramBin {
+  bin_start: number;
+  bin_end: number;
+  count: number;
+  total_pnl: number;
+}
+
+interface ConcentrationStats {
+  total_trades: number;
+  profitable_trades_count: number;
+  losing_trades_count: number;
+  top_k: number;
+  profit_share_top: number;
+  loss_share_top: number;
+  mean_return: number;
+  median_return: number;
+  stability_score: number;
+  insights: string[];
+}
+
+interface DistributionConcentrationData {
+  histogram: HistogramBin[];
+  concentration: ConcentrationStats;
+}
+
 export default function Evaluation() {
   const [metrics, setMetrics] = useState<EvaluationMetrics | null>(null);
+  const [concentrationData, setConcentrationData] = useState<DistributionConcentrationData | null>(null);
   const [loading, setLoading] = useState(true);
   const [timeframe, setTimeframe] = useState<Timeframe>(() => {
     const saved = localStorage.getItem("tradebutler_evaluation_timeframe");
@@ -93,20 +122,36 @@ export default function Evaluation() {
   const [customEndDate, setCustomEndDate] = useState<string>(() => {
     return localStorage.getItem("tradebutler_evaluation_custom_end") || "";
   });
+  const [concentrationPercent, setConcentrationPercent] = useState<number>(() => {
+    const saved = localStorage.getItem("tradebutler_concentration_percent");
+    return saved ? parseFloat(saved) : 10;
+  });
+  const [showConcentrationSettings, setShowConcentrationSettings] = useState(false);
+  const concentrationSettingsButtonRef = useRef<HTMLButtonElement>(null);
+  const concentrationSettingsRef = useRef<HTMLDivElement>(null);
 
   const loadEvaluationData = async () => {
     try {
       setLoading(true);
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-      const { startDate, endDate } = getTimeframeDates(timeframe, customStartDate, customEndDate);
+      const { start, end } = getTimeframeDates(timeframe, customStartDate, customEndDate);
       
-      const data = await invoke<EvaluationMetrics>("get_evaluation_metrics", {
-        pairingMethod,
-        startDate: startDate || null,
-        endDate: endDate || null,
-      });
+      const [data, concentration] = await Promise.all([
+        invoke<EvaluationMetrics>("get_evaluation_metrics", {
+          pairingMethod,
+          startDate: start ? start.toISOString() : null,
+          endDate: end ? end.toISOString() : null,
+        }),
+        invoke<DistributionConcentrationData>("get_distribution_concentration", {
+          pairingMethod,
+          startDate: start ? start.toISOString() : null,
+          endDate: end ? end.toISOString() : null,
+          concentrationPercent: concentrationPercent,
+        }),
+      ]);
       
       setMetrics(data);
+      setConcentrationData(concentration);
     } catch (error) {
       console.error("Error loading evaluation data:", error);
     } finally {
@@ -116,7 +161,36 @@ export default function Evaluation() {
 
   useEffect(() => {
     loadEvaluationData();
-  }, [timeframe, customStartDate, customEndDate]);
+  }, [timeframe, customStartDate, customEndDate, concentrationPercent]);
+
+  // Click outside handler for concentration settings
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        showConcentrationSettings &&
+        concentrationSettingsRef.current &&
+        !concentrationSettingsRef.current.contains(target) &&
+        concentrationSettingsButtonRef.current &&
+        !concentrationSettingsButtonRef.current.contains(target)
+      ) {
+        // Check if the click is on an input field inside the settings panel
+        const isInput = (target as HTMLElement).tagName === "INPUT" || 
+                       (target as HTMLElement).tagName === "LABEL" ||
+                       concentrationSettingsRef.current.querySelector("input")?.contains(target);
+        
+        if (!isInput) {
+          setShowConcentrationSettings(false);
+        }
+      }
+    };
+
+    if (showConcentrationSettings) {
+      // Use a slight delay to allow input focus events to complete
+      document.addEventListener("mousedown", handleClickOutside, true);
+      return () => document.removeEventListener("mousedown", handleClickOutside, true);
+    }
+  }, [showConcentrationSettings]);
 
   // Generate insights
   const insights = useMemo(() => {
@@ -806,6 +880,334 @@ export default function Evaluation() {
           </table>
         </div>
       </div>
+
+      {/* Distribution & Concentration Indicator */}
+      {concentrationData && (
+        <div
+          style={{
+            backgroundColor: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "8px",
+            padding: "20px",
+            marginBottom: "30px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
+            <div>
+              <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "8px" }}>
+                Distribution & Concentration Indicator
+              </h2>
+              <p style={{ fontSize: "14px", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                This indicator shows whether your equity is built from many consistent trades or a small number of outsized "lottery" trades.
+              </p>
+              <p style={{ fontSize: "14px", color: "var(--text-secondary)" }}>
+                It answers: How are my trade results distributed? What percentage of my trades generates most of my profit or losses?
+              </p>
+            </div>
+            <div style={{ position: "relative" }}>
+              <button
+                ref={concentrationSettingsButtonRef}
+                onClick={() => setShowConcentrationSettings(!showConcentrationSettings)}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "6px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+                title="Settings"
+              >
+                <Settings size={16} />
+              </button>
+              {showConcentrationSettings && concentrationSettingsButtonRef.current && (() => {
+                const rect = concentrationSettingsButtonRef.current!.getBoundingClientRect();
+                return createPortal(
+                  <div
+                    ref={concentrationSettingsRef}
+                    data-settings-menu
+                    style={{
+                      position: "fixed",
+                      top: rect.bottom + 8,
+                      right: window.innerWidth - rect.right,
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                      padding: "12px",
+                      minWidth: "200px",
+                      zIndex: 1000,
+                      boxShadow: "0 4px 6px rgba(0, 0, 0, 0.1)",
+                    }}
+                  >
+                    <div style={{ marginBottom: "12px", fontSize: "14px", fontWeight: "600" }}>
+                      Concentration Settings
+                    </div>
+                    <label style={{ display: "block", marginBottom: "8px", fontSize: "14px" }}>
+                      Top % of trades used for analysis:
+                      <select
+                        value={concentrationPercent}
+                        onChange={(e) => {
+                          const value = parseInt(e.target.value, 10);
+                          setConcentrationPercent(value);
+                          localStorage.setItem("tradebutler_concentration_percent", value.toString());
+                        }}
+                        onFocus={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        style={{
+                          marginTop: "4px",
+                          width: "100%",
+                          padding: "6px",
+                          backgroundColor: "var(--bg-tertiary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "4px",
+                          color: "var(--text-primary)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {Array.from({ length: 26 }, (_, i) => i + 5).map((value) => (
+                          <option key={value} value={value}>
+                            {value}%
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                      Default: 10%
+                    </div>
+                  </div>,
+                  document.body
+                );
+              })()}
+            </div>
+          </div>
+
+          {/* Histogram */}
+          {concentrationData.histogram.length > 0 && (
+            <div style={{ marginBottom: "30px" }}>
+              <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px" }}>
+                Distribution of Returns
+              </h3>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={concentrationData.histogram.map(bin => ({
+                  range: `$${bin.bin_start.toFixed(0)} - $${bin.bin_end.toFixed(0)}`,
+                  count: bin.count,
+                  total_pnl: bin.total_pnl,
+                }))}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                  <XAxis 
+                    dataKey="range" 
+                    angle={-45}
+                    textAnchor="end"
+                    height={80}
+                    tick={{ fill: "var(--text-secondary)", fontSize: 12 }}
+                  />
+                  <YAxis tick={{ fill: "var(--text-secondary)", fontSize: 12 }} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      color: "var(--text-primary)",
+                    }}
+                  />
+                  <Bar dataKey="count" fill="var(--text-primary)" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Concentration Summary */}
+          <div style={{ marginBottom: "30px" }}>
+            <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px" }}>
+              Concentration Summary
+            </h3>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+              <div
+                style={{
+                  backgroundColor: "var(--bg-tertiary)",
+                  padding: "16px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                <div style={{ fontSize: "14px", color: "var(--text-secondary)", marginBottom: "8px" }}>
+                  Profit Concentration
+                </div>
+                <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--profit)" }}>
+                  Top {concentrationPercent}% of winning trades generate{" "}
+                  {(concentrationData.concentration.profit_share_top * 100).toFixed(1)}% of total profit
+                </div>
+              </div>
+              <div
+                style={{
+                  backgroundColor: "var(--bg-tertiary)",
+                  padding: "16px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                <div style={{ fontSize: "14px", color: "var(--text-secondary)", marginBottom: "8px" }}>
+                  Loss Concentration
+                </div>
+                <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--loss)" }}>
+                  Worst {concentrationPercent}% of losing trades account for{" "}
+                  {(concentrationData.concentration.loss_share_top * 100).toFixed(1)}% of total loss
+                </div>
+              </div>
+            </div>
+
+            {/* Stability Score */}
+            <div
+              style={{
+                backgroundColor: "var(--bg-tertiary)",
+                padding: "16px",
+                borderRadius: "6px",
+                border: "1px solid var(--border-color)",
+                marginBottom: "16px",
+              }}
+            >
+              <div style={{ fontSize: "14px", color: "var(--text-secondary)", marginBottom: "8px" }}>
+                Stability Score
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+                <div style={{ fontSize: "32px", fontWeight: "700", color: "var(--text-primary)" }}>
+                  {concentrationData.concentration.stability_score.toFixed(0)}/100
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div
+                    style={{
+                      width: "100%",
+                      height: "8px",
+                      backgroundColor: "var(--bg-secondary)",
+                      borderRadius: "4px",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${concentrationData.concentration.stability_score}%`,
+                        height: "100%",
+                        backgroundColor:
+                          concentrationData.concentration.stability_score >= 80
+                            ? "var(--profit)"
+                            : concentrationData.concentration.stability_score >= 50
+                            ? "#fbbf24"
+                            : "var(--loss)",
+                        transition: "width 0.3s",
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "8px" }}>
+                {concentrationData.concentration.stability_score >= 80
+                  ? "Very stable - performance is broadly supported by many trades"
+                  : concentrationData.concentration.stability_score >= 50
+                  ? "Moderate stability - some concentration risk present"
+                  : "High variance - results depend heavily on a few trades"}
+              </div>
+            </div>
+
+            {/* Statistics */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px" }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                  Total Trades
+                </div>
+                <div style={{ fontSize: "18px", fontWeight: "600" }}>
+                  {concentrationData.concentration.total_trades}
+                </div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                  Mean Return
+                </div>
+                <div
+                  style={{
+                    fontSize: "18px",
+                    fontWeight: "600",
+                    color:
+                      concentrationData.concentration.mean_return === 0
+                        ? "var(--text-primary)"
+                        : concentrationData.concentration.mean_return > 0
+                        ? "var(--profit)"
+                        : "var(--loss)",
+                  }}
+                >
+                  ${concentrationData.concentration.mean_return.toFixed(2)}
+                </div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                  Median Return
+                </div>
+                <div
+                  style={{
+                    fontSize: "18px",
+                    fontWeight: "600",
+                    color:
+                      concentrationData.concentration.median_return === 0
+                        ? "var(--text-primary)"
+                        : concentrationData.concentration.median_return > 0
+                        ? "var(--profit)"
+                        : "var(--loss)",
+                  }}
+                >
+                  ${concentrationData.concentration.median_return.toFixed(2)}
+                </div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                  Top Trades Quantity
+                </div>
+                <div style={{ fontSize: "18px", fontWeight: "600" }}>
+                  {concentrationData.concentration.top_k}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Insights */}
+          {concentrationData.concentration.insights.length > 0 && (
+            <div>
+              <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px" }}>
+                Insights
+              </h3>
+              <div
+                style={{
+                  backgroundColor: "var(--bg-tertiary)",
+                  padding: "16px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                {concentrationData.concentration.insights.map((insight, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      marginBottom: idx < concentrationData.concentration.insights.length - 1 ? "12px" : "0",
+                      paddingBottom: idx < concentrationData.concentration.insights.length - 1 ? "12px" : "0",
+                      borderBottom:
+                        idx < concentrationData.concentration.insights.length - 1
+                          ? "1px solid var(--border-color)"
+                          : "none",
+                      fontSize: "14px",
+                      lineHeight: "1.5",
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    {insight}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
