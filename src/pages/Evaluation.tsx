@@ -1278,20 +1278,28 @@ export default function Evaluation() {
             >
               <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
                 <li style={{ marginBottom: "8px", fontSize: "14px" }}>
-                  Win rate overall: <strong>{(tiltData.baseline_win_rate * 100).toFixed(1)}%</strong>
+                  Win rate overall: <strong style={{ color: (tiltData.baseline_win_rate * 100) >= 50 ? "var(--profit)" : "var(--loss)" }}>{(tiltData.baseline_win_rate * 100).toFixed(1)}%</strong>
                 </li>
                 <li style={{ marginBottom: "8px", fontSize: "14px" }}>
-                  Win rate after a loss: <strong>{(tiltData.win_rate_after_loss * 100).toFixed(1)}%</strong>
+                  Win rate after a loss: <strong style={{ color: (tiltData.win_rate_after_loss * 100) >= 50 ? "var(--profit)" : "var(--loss)" }}>{(tiltData.win_rate_after_loss * 100).toFixed(1)}%</strong>
                 </li>
                 <li style={{ marginBottom: "8px", fontSize: "14px" }}>
-                  Win rate after 2 losses: <strong>{(tiltData.win_rate_after_2_losses * 100).toFixed(1)}%</strong>
+                  Win rate after 2 losses: <strong style={{ color: (tiltData.win_rate_after_2_losses * 100) >= 50 ? "var(--profit)" : "var(--loss)" }}>{(tiltData.win_rate_after_2_losses * 100).toFixed(1)}%</strong>
                 </li>
                 <li style={{ marginBottom: "8px", fontSize: "14px" }}>
-                  Probability of another loss after a loss: <strong>{(tiltData.prob_loss_after_loss * 100).toFixed(1)}%</strong>
+                  Probability of another loss after a loss: <strong style={{ color: (tiltData.prob_loss_after_loss * 100) >= 50 ? "var(--loss)" : "var(--profit)" }}>{(tiltData.prob_loss_after_loss * 100).toFixed(1)}%</strong>
                 </li>
                 <li style={{ marginBottom: "8px", fontSize: "14px" }}>
                   Average loss growth after losing:{" "}
-                  <strong>
+                  <strong
+                    style={{
+                      color: tiltData.avg_loss_normally !== 0 && tiltData.avg_loss_after_loss !== 0
+                        ? (((Math.abs(tiltData.avg_loss_after_loss) - Math.abs(tiltData.avg_loss_normally)) / Math.abs(tiltData.avg_loss_normally)) * 100) >= 50
+                          ? "var(--loss)"
+                          : "var(--profit)"
+                        : "var(--text-primary)"
+                    }}
+                  >
                     {tiltData.avg_loss_normally !== 0 && tiltData.avg_loss_after_loss !== 0
                       ? `${(((Math.abs(tiltData.avg_loss_after_loss) - Math.abs(tiltData.avg_loss_normally)) / Math.abs(tiltData.avg_loss_normally)) * 100).toFixed(1)}%`
                       : "N/A"}
