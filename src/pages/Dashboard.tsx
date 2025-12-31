@@ -328,6 +328,138 @@ function SortableSection({
   );
 }
 
+// Metric descriptions mapping
+const metricDescriptions: Record<string, { description: string; calculation: string }> = {
+  total_trades: {
+    description: "The total number of closed trade pairs (positions) during the selected timeframe.",
+    calculation: "Count of all paired trades (entry + exit) that have been closed."
+  },
+  total_volume: {
+    description: "The total dollar volume of all trades executed during the selected timeframe.",
+    calculation: "Sum of (quantity × price) for all trades."
+  },
+  total_profit_loss: {
+    description: "The total net profit or loss from all closed positions, including fees.",
+    calculation: "Sum of net_profit_loss for all paired trades (gross P&L minus entry and exit fees)."
+  },
+  win_rate: {
+    description: "The percentage of closed trades that resulted in a profit.",
+    calculation: "Winning trades ÷ Total trades × 100%"
+  },
+  winning_trades: {
+    description: "The number of closed trades that resulted in a profit.",
+    calculation: "Count of paired trades where net_profit_loss > 0"
+  },
+  losing_trades: {
+    description: "The number of closed trades that resulted in a loss.",
+    calculation: "Count of paired trades where net_profit_loss < 0"
+  },
+  average_profit: {
+    description: "The average profit per winning trade.",
+    calculation: "Total profit from winning trades ÷ Number of winning trades"
+  },
+  average_loss: {
+    description: "The average loss per losing trade.",
+    calculation: "Total loss from losing trades ÷ Number of losing trades"
+  },
+  largest_win: {
+    description: "The single largest profit from a closed position (complete position, including all adds and closes).",
+    calculation: "Maximum total_pnl from all position groups"
+  },
+  largest_loss: {
+    description: "The single largest loss from a closed position (complete position, including all adds and closes).",
+    calculation: "Minimum (most negative) total_pnl from all position groups"
+  },
+  average_trade: {
+    description: "The average profit or loss per trade across all closed positions.",
+    calculation: "Total P&L ÷ Total number of trades"
+  },
+  profit_factor: {
+    description: "A ratio comparing total gross profit to total gross loss. Values above 1.0 indicate profitability.",
+    calculation: "Total gross profit ÷ Total gross loss"
+  },
+  expectancy: {
+    description: "The expected value per trade, indicating average profit per trade over time.",
+    calculation: "(Win Rate × Average Win) - (Loss Rate × Average Loss)"
+  },
+  max_drawdown: {
+    description: "The largest peak-to-trough decline in equity during the selected timeframe.",
+    calculation: "Maximum difference between peak equity and subsequent equity low"
+  },
+  sharpe_ratio: {
+    description: "A measure of risk-adjusted return (currently not implemented).",
+    calculation: "Not yet implemented"
+  },
+  risk_reward_ratio: {
+    description: "The ratio of average win to average loss, indicating the risk/reward profile.",
+    calculation: "Average Win ÷ Average Loss"
+  },
+  consecutive_wins: {
+    description: "The longest streak of consecutive winning trades in your history.",
+    calculation: "Maximum consecutive count of trades with net_profit_loss > 0"
+  },
+  consecutive_losses: {
+    description: "The longest streak of consecutive losing trades in your history.",
+    calculation: "Maximum consecutive count of trades with net_profit_loss < 0"
+  },
+  current_win_streak: {
+    description: "The current number of consecutive winning trades (from most recent trades).",
+    calculation: "Count of consecutive winning trades starting from the most recent trade"
+  },
+  current_loss_streak: {
+    description: "The current number of consecutive losing trades (from most recent trades).",
+    calculation: "Count of consecutive losing trades starting from the most recent trade"
+  },
+  total_fees: {
+    description: "The total amount paid in trading fees (entry fees + exit fees) for all closed positions.",
+    calculation: "Sum of (entry_fees + exit_fees) for all paired trades"
+  },
+  net_profit: {
+    description: "Total profit or loss after accounting for all fees (same as Total P&L).",
+    calculation: "Total P&L (already includes fees in net_profit_loss calculation)"
+  },
+  trades_per_day: {
+    description: "The average number of trades executed per trading day during the selected timeframe.",
+    calculation: "Total trades ÷ Number of trading days with trades"
+  },
+  best_day: {
+    description: "The single best trading day by net profit during the selected timeframe.",
+    calculation: "Maximum daily P&L from all trading days"
+  },
+  worst_day: {
+    description: "The single worst trading day by net loss during the selected timeframe.",
+    calculation: "Minimum (most negative) daily P&L from all trading days"
+  },
+  average_holding_time_seconds: {
+    description: "The average amount of time positions are held open before being closed.",
+    calculation: "Sum of (exit_timestamp - entry_timestamp) for all paired trades ÷ Number of trades"
+  },
+  strategy_win_rate: {
+    description: "The win rate for trades assigned to strategies (excluding unassigned trades).",
+    calculation: "Strategy winning trades ÷ (Strategy winning trades + Strategy losing trades) × 100%"
+  },
+  strategy_winning_trades: {
+    description: "The number of winning trades that are assigned to strategies.",
+    calculation: "Count of strategy-assigned trades where net_profit_loss > 0"
+  },
+  strategy_losing_trades: {
+    description: "The number of losing trades that are assigned to strategies.",
+    calculation: "Count of strategy-assigned trades where net_profit_loss < 0"
+  },
+  strategy_profit_loss: {
+    description: "The total profit or loss from all trades assigned to strategies.",
+    calculation: "Sum of net_profit_loss for all strategy-assigned trades"
+  },
+  strategy_consecutive_wins: {
+    description: "The longest streak of consecutive winning trades for strategy-assigned trades.",
+    calculation: "Maximum consecutive count of strategy trades with net_profit_loss > 0"
+  },
+  strategy_consecutive_losses: {
+    description: "The longest streak of consecutive losing trades for strategy-assigned trades.",
+    calculation: "Maximum consecutive count of strategy trades with net_profit_loss < 0"
+  },
+};
+
 function SortableMetricCard({
   id,
   metric,
@@ -539,15 +671,58 @@ function SortableMetricCard({
               backgroundColor: "var(--bg-secondary)",
               border: "1px solid var(--border-color)",
               borderRadius: "8px",
-              padding: "8px",
+              padding: "0",
               boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
               zIndex: 99999,
-              minWidth: "120px",
+              minWidth: "280px",
+              maxWidth: "400px",
             }}
             onClick={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
           >
             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              {/* Metric Description */}
+              {metricDescriptions[metric.id] && (
+                <div
+                  style={{
+                    padding: "12px",
+                    borderBottom: "1px solid var(--border-color)",
+                    marginBottom: "4px",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: "600",
+                      color: "var(--text-primary)",
+                      marginBottom: "8px",
+                    }}
+                  >
+                    {metric.label}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "11px",
+                      color: "var(--text-secondary)",
+                      lineHeight: "1.5",
+                      marginBottom: "8px",
+                    }}
+                  >
+                    {metricDescriptions[metric.id].description}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "10px",
+                      color: "var(--text-secondary)",
+                      fontStyle: "italic",
+                      paddingTop: "8px",
+                      borderTop: "1px solid var(--border-color)",
+                    }}
+                  >
+                    <strong>Calculation:</strong> {metricDescriptions[metric.id].calculation}
+                  </div>
+                </div>
+              )}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
