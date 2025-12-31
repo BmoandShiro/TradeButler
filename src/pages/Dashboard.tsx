@@ -649,8 +649,8 @@ function SortableMetricCard({
           }}
         >
           {(() => {
-            const baseMetricId = (metric as any).baseMetricId || metric.id;
-            const selectedStrategyId = strategyFilterForMetrics[metric.id] ?? strategyFilterForMetrics[baseMetricId];
+            // Only use instanceId for the filter - never fall back to baseMetricId
+            const selectedStrategyId = strategyFilterForMetrics[metric.id];
             if (selectedStrategyId !== null && selectedStrategyId !== undefined) {
               const strategy = strategies.find(s => s.id === selectedStrategyId);
               if (strategy) {
@@ -920,16 +920,12 @@ function SortableMetricCard({
                       Filter by Strategy:
                     </label>
                     <select
-                      value={strategyFilterForMetrics[metric.id] ?? strategyFilterForMetrics[(metric as any).baseMetricId] ?? ""}
+                      value={strategyFilterForMetrics[metric.id] ?? ""}
                       onChange={(e) => {
                         const value = e.target.value === "" ? null : parseInt(e.target.value, 10);
+                        // Only update the specific instance, never the baseMetricId
                         setStrategyFilterForMetrics((prev: Record<string, number | null>) => {
                           const updated: Record<string, number | null> = { ...prev, [metric.id]: value };
-                          // Also update base metric if this is the first instance
-                          const baseMetricId = (metric as any).baseMetricId;
-                          if (metric.id === baseMetricId && baseMetricId) {
-                            updated[baseMetricId] = value;
-                          }
                           localStorage.setItem("tradebutler_strategy_filter_for_metrics", JSON.stringify(updated));
                           return updated;
                         });
@@ -1688,7 +1684,8 @@ export default function Dashboard() {
       for (const instance of metricInstances) {
         if (!strategyMetrics.includes(instance.baseMetricId)) continue;
         
-        const selectedStrategyId = strategyFilterForMetrics[instance.instanceId] ?? strategyFilterForMetrics[instance.baseMetricId];
+        // Only use instanceId for the filter - never fall back to baseMetricId
+        const selectedStrategyId = strategyFilterForMetrics[instance.instanceId];
         // If null or undefined, explicitly don't add to newFilteredMetrics (will use global metrics instead)
         if (selectedStrategyId === null || selectedStrategyId === undefined) {
           continue;
