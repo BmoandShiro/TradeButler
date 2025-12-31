@@ -159,7 +159,7 @@ interface MetricsConfigPanelProps {
 }
 
 export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetricInstance }: MetricsConfigPanelProps) {
-  const { metrics, toggleMetric, resetToDefaults } = useMetricsConfig();
+  const { metrics, resetToDefaults } = useMetricsConfig();
   
   // Color range state
   const [colorRange, setColorRange] = useState(() => {
@@ -484,28 +484,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
                       gap: "8px",
                     }}
                   >
-                    <label
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        flex: 1,
-                        cursor: "pointer",
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={metric.enabled}
-                        onChange={() => toggleMetric(metric.id)}
-                        style={{
-                          width: "18px",
-                          height: "18px",
-                          cursor: "pointer",
-                          accentColor: "var(--accent)",
-                          marginRight: "12px",
-                        }}
-                      />
-                      <span style={{ color: "var(--text-primary)" }}>{metric.label}</span>
-                    </label>
+                    <span style={{ color: "var(--text-primary)", flex: 1 }}>{metric.label}</span>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
