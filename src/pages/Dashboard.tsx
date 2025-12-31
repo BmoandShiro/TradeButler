@@ -298,6 +298,36 @@ type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades" | "trades
 const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades"];
 
 // Sortable Metric Card Component
+// SortableSection component for dashboard sections
+function SortableSection({
+  id,
+  children,
+}: {
+  id: SectionId;
+  children: (props: { dragHandleProps: any; isDragging: boolean }) => React.ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      {children({ dragHandleProps: { ...attributes, ...listeners }, isDragging })}
+    </div>
+  );
+}
+
 function SortableMetricCard({
   id,
   metric,
@@ -671,8 +701,6 @@ export default function Dashboard() {
     }
     return defaultSectionOrder;
   });
-  const [draggedSection, setDraggedSection] = useState<SectionId | null>(null);
-  const [dragOverSection, setDragOverSection] = useState<SectionId | null>(null);
   const [metricCardOrder, setMetricCardOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem(METRIC_CARDS_ORDER_KEY);
     if (saved) {
@@ -725,6 +753,26 @@ export default function Dashboard() {
         }
         
         return newOrder;
+      });
+    }
+  };
+
+  // Handle drag end for sections
+  const handleSectionDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    
+    if (over && active.id !== over.id) {
+      setSectionOrder((items) => {
+        const oldIndex = items.indexOf(active.id as SectionId);
+        const newIndex = items.indexOf(over.id as SectionId);
+        
+        if (oldIndex !== -1 && newIndex !== -1) {
+          const finalOrder = arrayMove(items, oldIndex, newIndex);
+          localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        }
+        
+        return items;
       });
     }
   };
@@ -1099,15 +1147,15 @@ export default function Dashboard() {
           items={sortedMetrics.map(m => m.id)}
           strategy={rectSortingStrategy}
         >
-          <div
-            style={{
-              display: "grid",
+      <div
+        style={{
+          display: "grid",
               gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-              gap: "20px",
-              marginBottom: "30px",
-            }}
-          >
-            {sortedMetrics.map((metric) => {
+          gap: "20px",
+          marginBottom: "30px",
+        }}
+      >
+        {sortedMetrics.map((metric) => {
           const value = metricValues[metric.id] || 0;
           const Icon = metricIcons[metric.id] || Activity;
           const color = getMetricColor(metric.id, value);
@@ -1138,11 +1186,20 @@ export default function Dashboard() {
             />
           );
         })}
-          </div>
+      </div>
         </SortableContext>
       </DndContext>
 
       {/* Dashboard Stats Grid */}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleSectionDragEnd}
+      >
+        <SortableContext
+          items={sectionOrder}
+          strategy={rectSortingStrategy}
+        >
       <div
         style={{
           display: "grid",
@@ -1155,55 +1212,22 @@ export default function Dashboard() {
           // Top Symbols
           if (sectionId === "topSymbols" && dashboardSections.showTopSymbols && topSymbols.length > 0) {
             return (
-              <div
-                key="topSymbols"
-                draggable
-                onDragStart={(e) => {
-                  setDraggedSection("topSymbols");
-                  e.dataTransfer.effectAllowed = "move";
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  if (draggedSection !== "topSymbols") {
-                    setDragOverSection("topSymbols");
-                  }
-                }}
-                onDragLeave={() => {
-                  setDragOverSection(null);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (draggedSection && draggedSection !== "topSymbols") {
-                    const newOrder = [...sectionOrder];
-                    const draggedIndex = newOrder.indexOf(draggedSection);
-                    const targetIndex = newOrder.indexOf("topSymbols");
-                    newOrder.splice(draggedIndex, 1);
-                    newOrder.splice(targetIndex, 0, draggedSection);
-                    setSectionOrder(newOrder);
-                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                  }
-                  setDraggedSection(null);
-                  setDragOverSection(null);
-                }}
-                onDragEnd={() => {
-                  setDraggedSection(null);
-                  setDragOverSection(null);
-                }}
-                style={{
-                  backgroundColor: "var(--bg-secondary)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                  padding: "20px",
-                  cursor: "grab",
-                  opacity: draggedSection === "topSymbols" ? 0.5 : 1,
-                  borderColor: dragOverSection === "topSymbols" ? "var(--accent)" : "var(--border-color)",
-                  borderWidth: dragOverSection === "topSymbols" ? "2px" : "1px",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
+              <SortableSection key="topSymbols" id="topSymbols">
+                {({ dragHandleProps, isDragging }) => (
+                  <div
+                    style={{
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                      padding: "20px",
+                      cursor: isDragging ? "grabbing" : "grab",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <div {...dragHandleProps} style={{ cursor: "grab" }}>
+                          <GripVertical size={16} color="var(--text-secondary)" />
+                        </div>
                   <BarChart3 size={20} color="var(--accent)" />
                   <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Top Symbols</h2>
                   </div>
@@ -1211,7 +1235,7 @@ export default function Dashboard() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        e.preventDefault();
+                  e.preventDefault();
                         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                         setSectionMenuPosition({
                           ...sectionMenuPosition,
@@ -1263,14 +1287,14 @@ export default function Dashboard() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              e.preventDefault();
+                  e.preventDefault();
                               const currentIndex = sectionOrder.indexOf("topSymbols");
                               if (currentIndex > 0) {
-                                const newOrder = [...sectionOrder];
+                    const newOrder = [...sectionOrder];
                                 [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
-                                setSectionOrder(newOrder);
-                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                              }
+                    setSectionOrder(newOrder);
+                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                  }
                               setOpenSectionSettings(null);
                             }}
                             disabled={sectionOrder.indexOf("topSymbols") === 0}
@@ -1305,9 +1329,9 @@ export default function Dashboard() {
                               setOpenSectionSettings(null);
                             }}
                             disabled={sectionOrder.indexOf("topSymbols") === sectionOrder.length - 1}
-                            style={{
+                style={{
                               background: "transparent",
-                              border: "1px solid var(--border-color)",
+                  border: "1px solid var(--border-color)",
                               borderRadius: "4px",
                               padding: "6px 8px",
                               cursor: sectionOrder.indexOf("topSymbols") === sectionOrder.length - 1 ? "not-allowed" : "pointer",
@@ -1364,61 +1388,30 @@ export default function Dashboard() {
                   ))}
                 </div>
               </div>
+                )}
+              </SortableSection>
             );
           }
 
           // Strategy Performance
           if (sectionId === "strategyPerformance" && dashboardSections.showStrategyPerformance && strategyPerformance.length > 0) {
             return (
-              <div
-                key="strategyPerformance"
-                draggable
-                onDragStart={(e) => {
-                  setDraggedSection("strategyPerformance");
-                  e.dataTransfer.effectAllowed = "move";
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  if (draggedSection !== "strategyPerformance") {
-                    setDragOverSection("strategyPerformance");
-                  }
-                }}
-                onDragLeave={() => {
-                  setDragOverSection(null);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (draggedSection && draggedSection !== "strategyPerformance") {
-                    const newOrder = [...sectionOrder];
-                    const draggedIndex = newOrder.indexOf(draggedSection);
-                    const targetIndex = newOrder.indexOf("strategyPerformance");
-                    newOrder.splice(draggedIndex, 1);
-                    newOrder.splice(targetIndex, 0, draggedSection);
-                    setSectionOrder(newOrder);
-                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                  }
-                  setDraggedSection(null);
-                  setDragOverSection(null);
-                }}
-                onDragEnd={() => {
-                  setDraggedSection(null);
-                  setDragOverSection(null);
-                }}
-                style={{
-                  backgroundColor: "var(--bg-secondary)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                  padding: "20px",
-                  cursor: "grab",
-                  opacity: draggedSection === "strategyPerformance" ? 0.5 : 1,
-                  borderColor: dragOverSection === "strategyPerformance" ? "var(--accent)" : "var(--border-color)",
-                  borderWidth: dragOverSection === "strategyPerformance" ? "2px" : "1px",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
+              <SortableSection key="strategyPerformance" id="strategyPerformance">
+                {({ dragHandleProps, isDragging }) => (
+                  <div
+                    style={{
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                      padding: "20px",
+                      cursor: isDragging ? "grabbing" : "grab",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <div {...dragHandleProps} style={{ cursor: "grab" }}>
+                          <GripVertical size={16} color="var(--text-secondary)" />
+                        </div>
                   <TrendingUpIcon size={20} color="var(--accent)" />
                   <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Strategy Performance</h2>
                   </div>
@@ -1426,7 +1419,7 @@ export default function Dashboard() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        e.preventDefault();
+                  e.preventDefault();
                         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                         setSectionMenuPosition({
                           ...sectionMenuPosition,
@@ -1478,14 +1471,14 @@ export default function Dashboard() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              e.preventDefault();
+                  e.preventDefault();
                               const currentIndex = sectionOrder.indexOf("strategyPerformance");
                               if (currentIndex > 0) {
-                                const newOrder = [...sectionOrder];
+                    const newOrder = [...sectionOrder];
                                 [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
-                                setSectionOrder(newOrder);
-                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                              }
+                    setSectionOrder(newOrder);
+                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                  }
                               setOpenSectionSettings(null);
                             }}
                             disabled={sectionOrder.indexOf("strategyPerformance") === 0}
@@ -1520,9 +1513,9 @@ export default function Dashboard() {
                               setOpenSectionSettings(null);
                             }}
                             disabled={sectionOrder.indexOf("strategyPerformance") === sectionOrder.length - 1}
-                            style={{
+                style={{
                               background: "transparent",
-                              border: "1px solid var(--border-color)",
+                  border: "1px solid var(--border-color)",
                               borderRadius: "4px",
                               padding: "6px 8px",
                               cursor: sectionOrder.indexOf("strategyPerformance") === sectionOrder.length - 1 ? "not-allowed" : "pointer",
@@ -1648,7 +1641,7 @@ export default function Dashboard() {
                     <p style={{ fontWeight: "600", marginBottom: "4px" }}>{strategy.strategy_name}</p>
                     {!isExpanded && (
                       <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
-                        <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
                           {totalTrades} trades
                         </p>
                         <p style={{ 
@@ -1816,7 +1809,7 @@ export default function Dashboard() {
                                   >
                                     Next
                                   </button>
-                                </div>
+            </div>
                               )}
                             </>
                           );
@@ -1827,62 +1820,31 @@ export default function Dashboard() {
                 );
               })}
               </div>
-            </div>
+                  </div>
+                )}
+              </SortableSection>
             );
           }
 
           // Recent Trades
           if (sectionId === "recentTrades" && dashboardSections.showRecentTrades && recentTrades.length > 0) {
             return (
-              <div
-                key="recentTrades"
-                draggable
-                onDragStart={(e) => {
-                  setDraggedSection("recentTrades");
-                  e.dataTransfer.effectAllowed = "move";
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  if (draggedSection !== "recentTrades") {
-                    setDragOverSection("recentTrades");
-                  }
-                }}
-                onDragLeave={() => {
-                  setDragOverSection(null);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (draggedSection && draggedSection !== "recentTrades") {
-                    const newOrder = [...sectionOrder];
-                    const draggedIndex = newOrder.indexOf(draggedSection);
-                    const targetIndex = newOrder.indexOf("recentTrades");
-                    newOrder.splice(draggedIndex, 1);
-                    newOrder.splice(targetIndex, 0, draggedSection);
-                    setSectionOrder(newOrder);
-                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                  }
-                  setDraggedSection(null);
-                  setDragOverSection(null);
-                }}
-                onDragEnd={() => {
-                  setDraggedSection(null);
-                  setDragOverSection(null);
-                }}
-                style={{
-                  backgroundColor: "var(--bg-secondary)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                  padding: "20px",
-                  cursor: "grab",
-                  opacity: draggedSection === "recentTrades" ? 0.5 : 1,
-                  borderColor: dragOverSection === "recentTrades" ? "var(--accent)" : "var(--border-color)",
-                  borderWidth: dragOverSection === "recentTrades" ? "2px" : "1px",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
+              <SortableSection key="recentTrades" id="recentTrades">
+                {({ dragHandleProps, isDragging }) => (
+                  <div
+                    style={{
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                      padding: "20px",
+                      cursor: isDragging ? "grabbing" : "grab",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <div {...dragHandleProps} style={{ cursor: "grab" }}>
+                          <GripVertical size={16} color="var(--text-secondary)" />
+                        </div>
                   <Clock size={20} color="var(--accent)" />
                   <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Recent Trades</h2>
                   </div>
@@ -2088,62 +2050,31 @@ export default function Dashboard() {
                 );
               })}
                 </div>
-              </div>
+                  </div>
+                )}
+              </SortableSection>
             );
           }
           
           // Trades Section
           if (sectionId === "trades" && dashboardSections.showTrades) {
             return (
-              <div
-                key="trades"
-                draggable
-                onDragStart={(e) => {
-                  setDraggedSection("trades");
-                  e.dataTransfer.effectAllowed = "move";
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  if (draggedSection && draggedSection !== "trades") {
-                    setDragOverSection("trades");
-                  }
-                }}
-                onDragLeave={() => {
-                  setDragOverSection(null);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (draggedSection && draggedSection !== "trades") {
-                    const dragged = draggedSection;
-                    const newOrder = [...sectionOrder];
-                    const draggedIndex = newOrder.indexOf(dragged);
-                    const targetIndex = newOrder.indexOf("trades");
-                    newOrder.splice(draggedIndex, 1);
-                    newOrder.splice(targetIndex, 0, dragged);
-                    setSectionOrder(newOrder);
-                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                  }
-                  setDraggedSection(null);
-                  setDragOverSection(null);
-                }}
-                onDragEnd={() => {
-                  setDraggedSection(null);
-                  setDragOverSection(null);
-                }}
-                style={{
-                  backgroundColor: "var(--bg-secondary)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                  padding: "20px",
-                  cursor: "grab",
-                  opacity: draggedSection === "trades" ? 0.5 : 1,
-                  borderColor: dragOverSection === "trades" ? "var(--accent)" : "var(--border-color)",
-                  borderWidth: dragOverSection === "trades" ? "2px" : "1px",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <GripVertical size={16} color="var(--text-secondary)" style={{ cursor: "grab" }} />
+              <SortableSection key="trades" id="trades">
+                {({ dragHandleProps, isDragging }) => (
+                  <div
+                    style={{
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                      padding: "20px",
+                      cursor: isDragging ? "grabbing" : "grab",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <div {...dragHandleProps} style={{ cursor: "grab" }}>
+                          <GripVertical size={16} color="var(--text-secondary)" />
+                        </div>
                     <Activity size={20} color="var(--accent)" />
                     <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Trades</h2>
                   </div>
@@ -2309,86 +2240,86 @@ export default function Dashboard() {
                     const endIndex = startIndex + tradesPerPage;
                     const paginatedTrades = trades.slice(startIndex, endIndex);
                     
-                    return (
+                return (
                       <>
                         {paginatedTrades.map((trade, idx) => {
                           const actualIndex = startIndex + idx;
                           const isExpanded = expandedTrades.has(actualIndex);
                           return (
                             <div key={`${trade.symbol}-${trade.exit_timestamp}-${actualIndex}`}>
-                              <div
-                                onClick={() => {
+                    <div
+                      onClick={() => {
                                   const newExpanded = new Set(expandedTrades);
-                                  if (isExpanded) {
+                        if (isExpanded) {
                                     newExpanded.delete(actualIndex);
-                                  } else {
+                        } else {
                                     newExpanded.add(actualIndex);
-                                  }
+                        }
                                   setExpandedTrades(newExpanded);
-                                }}
-                            style={{
-                              padding: "12px",
-                              backgroundColor: "var(--bg-tertiary)",
-                              borderRadius: "6px",
-                              cursor: "pointer",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "8px",
-                            }}
-                          >
-                            {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                            <div style={{ flex: 1, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                              <p style={{ fontWeight: "600" }}>{trade.symbol}</p>
-                              <p
-                                style={{
-                                  fontSize: "14px",
-                                  fontWeight: "600",
-                                  color: trade.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
-                                }}
-                              >
-                                {trade.net_profit_loss >= 0 ? "+" : ""}${trade.net_profit_loss.toFixed(2)}
-                              </p>
-                            </div>
+                      }}
+                      style={{
+                        padding: "12px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        borderRadius: "6px",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                      }}
+                    >
+                      {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      <div style={{ flex: 1, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <p style={{ fontWeight: "600" }}>{trade.symbol}</p>
+                        <p
+                          style={{
+                            fontSize: "14px",
+                            fontWeight: "600",
+                            color: trade.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
+                          }}
+                        >
+                          {trade.net_profit_loss >= 0 ? "+" : ""}${trade.net_profit_loss.toFixed(2)}
+                        </p>
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div
+                        style={{
+                          padding: "12px",
+                          paddingLeft: "36px",
+                          backgroundColor: "var(--bg-primary)",
+                          borderBottomLeftRadius: "6px",
+                          borderBottomRightRadius: "6px",
+                          marginTop: "4px",
+                        }}
+                      >
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "12px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <span style={{ color: "var(--text-secondary)" }}>Entry:</span>
+                            <span style={{ color: "var(--text-primary)" }}>
+                              {trade.quantity} @ ${trade.entry_price.toFixed(2)}
+                            </span>
                           </div>
-                          {isExpanded && (
-                            <div
-                              style={{
-                                padding: "12px",
-                                paddingLeft: "36px",
-                                backgroundColor: "var(--bg-primary)",
-                                borderBottomLeftRadius: "6px",
-                                borderBottomRightRadius: "6px",
-                                marginTop: "4px",
-                              }}
-                            >
-                              <div style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "12px" }}>
-                                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                  <span style={{ color: "var(--text-secondary)" }}>Entry:</span>
-                                  <span style={{ color: "var(--text-primary)" }}>
-                                    {trade.quantity} @ ${trade.entry_price.toFixed(2)}
-                                  </span>
-                                </div>
-                                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                  <span style={{ color: "var(--text-secondary)" }}>Exit:</span>
-                                  <span style={{ color: "var(--text-primary)" }}>
-                                    {trade.quantity} @ ${trade.exit_price.toFixed(2)}
-                                  </span>
-                                </div>
-                                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                  <span style={{ color: "var(--text-secondary)" }}>Closed:</span>
-                                  <span style={{ color: "var(--text-secondary)" }}>
-                                    {format(new Date(trade.exit_timestamp), "MMM d, HH:mm")}
-                                  </span>
-                                </div>
-                              </div>
-                              {trade.strategy_name && (
-                                <p style={{ fontSize: "11px", color: "var(--accent)", marginTop: "8px" }}>
-                                  {trade.strategy_name}
-                                </p>
-                              )}
-                            </div>
-                          )}
-                            </div>
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <span style={{ color: "var(--text-secondary)" }}>Exit:</span>
+                            <span style={{ color: "var(--text-primary)" }}>
+                              {trade.quantity} @ ${trade.exit_price.toFixed(2)}
+                            </span>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <span style={{ color: "var(--text-secondary)" }}>Closed:</span>
+                            <span style={{ color: "var(--text-secondary)" }}>
+                              {format(new Date(trade.exit_timestamp), "MMM d, HH:mm")}
+                            </span>
+                          </div>
+                        </div>
+                        {trade.strategy_name && (
+                          <p style={{ fontSize: "11px", color: "var(--accent)", marginTop: "8px" }}>
+                            {trade.strategy_name}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
                           );
                         })}
                         {/* Pagination Controls */}
@@ -2450,9 +2381,9 @@ export default function Dashboard() {
                                   >
                                     {pageNum}
                                   </button>
-                                );
-                              })}
-                            </div>
+                );
+              })}
+                </div>
                             <button
                               onClick={() => setCurrentTradesPage(prev => Math.min(totalPages, prev + 1))}
                               disabled={currentTradesPage === totalPages}
@@ -2478,12 +2409,16 @@ export default function Dashboard() {
                     );
                   })()}
                 </div>
-              </div>
+                  </div>
+                )}
+              </SortableSection>
             );
           }
           return null;
         })}
-      </div>
+          </div>
+        </SortableContext>
+      </DndContext>
 
           <MetricsConfigPanel
             isOpen={showMetricsConfig}
