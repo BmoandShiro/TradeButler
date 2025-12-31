@@ -70,6 +70,14 @@ rustc --version
 cargo --version
 ```
 
+## Optional Requirements
+
+### Internet Connectivity (Optional)
+- **Required for:** Stock chart features (Yahoo Finance API)
+- **Note:** The app works fully offline for trade analytics and metrics
+- Charts will only work with an active internet connection
+- No API keys required for basic chart functionality
+
 ## Troubleshooting
 
 ### "cargo: command not found"
@@ -84,4 +92,9 @@ cargo --version
 ### Port 1420 already in use
 - Close any other instances of the app
 - Or change the port in `vite.config.ts`
+
+### Chart features not working
+- Ensure you have an active internet connection
+- Check if Yahoo Finance is accessible from your network
+- Some symbols may not have intraday data available (daily data will be used as fallback)
 

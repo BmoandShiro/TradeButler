@@ -16,7 +16,8 @@ A local-first trading analytics and metrics application with emotional state tra
 - **Frontend**: React + TypeScript + Vite
 - **Backend**: Tauri (Rust)
 - **Database**: SQLite (local)
-- **Charts**: Recharts
+- **Charts**: Recharts (analytics), Lightweight Charts (interactive stock charts)
+- **Drag & Drop**: @dnd-kit (dashboard customization)
 
 ## Getting Started
 
@@ -81,11 +82,13 @@ See `example-trades.csv` for a sample file format.
 
 ## Roadmap
 
-- [ ] Enhanced P&L calculation with trade pairing
-- [ ] Advanced charting and visualization
+- [x] Enhanced P&L calculation with trade pairing (FIFO/LIFO)
+- [x] Advanced charting and visualization (equity curve, drawdown analysis, interactive stock charts)
+- [x] Trade filtering and search
+- [x] Strategy assignment and performance tracking
+- [x] Evaluation metrics (weekday/time-of-day performance, tilt analysis, concentration metrics)
 - [ ] Trading group networking features
 - [ ] Export functionality
-- [ ] Trade filtering and search
 - [ ] Performance optimization
 
 ## License
