@@ -1259,7 +1259,7 @@ export default function Evaluation() {
           </div>
 
           {/* Speedometer Gauge */}
-          <div style={{ display: "flex", justifyContent: "center", marginTop: "100px", marginBottom: "20px" }}>
+          <div style={{ display: "flex", justifyContent: "center", marginTop: "120px", marginBottom: "-10px" }}>
             <TiltGauge tiltScore={tiltData.tilt_score} tiltCategory={tiltData.tilt_category} />
           </div>
 
