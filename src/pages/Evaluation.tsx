@@ -108,9 +108,32 @@ interface DistributionConcentrationData {
   concentration: ConcentrationStats;
 }
 
+interface StreakStats {
+  k: number;
+  sample_size: number;
+  win_rate_after_k_losses: number;
+  avg_pnl_after_k_losses: number;
+}
+
+interface TiltStats {
+  baseline_win_rate: number;
+  win_rate_after_loss: number;
+  win_rate_after_win: number;
+  win_rate_after_2_losses: number;
+  avg_loss_normally: number;
+  avg_loss_after_loss: number;
+  prob_loss_after_loss: number;
+  tilt_score: number;
+  recommended_streak: number | null;
+  streak_stats: StreakStats[];
+  coaching_lines: string[];
+  tilt_category: string;
+}
+
 export default function Evaluation() {
   const [metrics, setMetrics] = useState<EvaluationMetrics | null>(null);
   const [concentrationData, setConcentrationData] = useState<DistributionConcentrationData | null>(null);
+  const [tiltData, setTiltData] = useState<TiltStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [timeframe, setTimeframe] = useState<Timeframe>(() => {
     const saved = localStorage.getItem("tradebutler_evaluation_timeframe");
@@ -136,7 +159,7 @@ export default function Evaluation() {
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
       const { start, end } = getTimeframeDates(timeframe, customStartDate, customEndDate);
       
-      const [data, concentration] = await Promise.all([
+      const [data, concentration, tilt] = await Promise.all([
         invoke<EvaluationMetrics>("get_evaluation_metrics", {
           pairingMethod,
           startDate: start ? start.toISOString() : null,
@@ -148,10 +171,16 @@ export default function Evaluation() {
           endDate: end ? end.toISOString() : null,
           concentrationPercent: concentrationPercent,
         }),
+        invoke<TiltStats>("get_tilt_metric", {
+          pairingMethod,
+          startDate: start ? start.toISOString() : null,
+          endDate: end ? end.toISOString() : null,
+        }),
       ]);
       
       setMetrics(data);
       setConcentrationData(concentration);
+      setTiltData(tilt);
     } catch (error) {
       console.error("Error loading evaluation data:", error);
     } finally {
@@ -1208,6 +1237,289 @@ export default function Evaluation() {
           )}
         </div>
       )}
+
+      {/* Tilt-A-Metric */}
+      {tiltData && (
+        <div
+          style={{
+            backgroundColor: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "8px",
+            padding: "20px",
+            marginBottom: "10px",
+          }}
+        >
+          <div style={{ marginBottom: "8px" }}>
+            <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "8px" }}>
+              Tilt-A-Metric
+            </h2>
+            <p style={{ fontSize: "14px", color: "var(--text-secondary)" }}>
+              Measures emotional trading after losses
+            </p>
+          </div>
+
+          {/* Speedometer Gauge */}
+          <div style={{ display: "flex", justifyContent: "center", marginTop: "100px", marginBottom: "20px" }}>
+            <TiltGauge tiltScore={tiltData.tilt_score} tiltCategory={tiltData.tilt_category} />
+          </div>
+
+          {/* Key Stats */}
+          <div style={{ marginBottom: "30px" }}>
+            <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px" }}>
+              Key Statistics
+            </h3>
+            <div
+              style={{
+                backgroundColor: "var(--bg-tertiary)",
+                padding: "16px",
+                borderRadius: "6px",
+                border: "1px solid var(--border-color)",
+              }}
+            >
+              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                <li style={{ marginBottom: "8px", fontSize: "14px" }}>
+                  Win rate overall: <strong>{(tiltData.baseline_win_rate * 100).toFixed(1)}%</strong>
+                </li>
+                <li style={{ marginBottom: "8px", fontSize: "14px" }}>
+                  Win rate after a loss: <strong>{(tiltData.win_rate_after_loss * 100).toFixed(1)}%</strong>
+                </li>
+                <li style={{ marginBottom: "8px", fontSize: "14px" }}>
+                  Win rate after 2 losses: <strong>{(tiltData.win_rate_after_2_losses * 100).toFixed(1)}%</strong>
+                </li>
+                <li style={{ marginBottom: "8px", fontSize: "14px" }}>
+                  Probability of another loss after a loss: <strong>{(tiltData.prob_loss_after_loss * 100).toFixed(1)}%</strong>
+                </li>
+                <li style={{ marginBottom: "8px", fontSize: "14px" }}>
+                  Average loss growth after losing:{" "}
+                  <strong>
+                    {tiltData.avg_loss_normally !== 0 && tiltData.avg_loss_after_loss !== 0
+                      ? `${(((Math.abs(tiltData.avg_loss_after_loss) - Math.abs(tiltData.avg_loss_normally)) / Math.abs(tiltData.avg_loss_normally)) * 100).toFixed(1)}%`
+                      : "N/A"}
+                  </strong>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Daily Rule */}
+          <div style={{ marginBottom: "30px" }}>
+            <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px" }}>
+              Daily Rule
+            </h3>
+            <div
+              style={{
+                backgroundColor: "var(--bg-tertiary)",
+                padding: "16px",
+                borderRadius: "6px",
+                border: "1px solid var(--border-color)",
+              }}
+            >
+              {tiltData.recommended_streak !== null ? (
+                <p style={{ fontSize: "14px", margin: 0 }}>
+                  <strong>Suggested safety rule:</strong> Stop trading for the day after{" "}
+                  <strong>{tiltData.recommended_streak}</strong> consecutive losing trades.
+                </p>
+              ) : (
+                <p style={{ fontSize: "14px", margin: 0 }}>
+                  No strong streak-based cutoff detected. Use a daily loss cap and monitor your behavior after losses.
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Coaching Lines */}
+          {tiltData.coaching_lines.length > 0 && (
+            <div>
+              <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px" }}>
+                Insights & Recommendations
+              </h3>
+              <div
+                style={{
+                  backgroundColor: "var(--bg-tertiary)",
+                  padding: "16px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                {tiltData.coaching_lines.map((line, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      marginBottom: idx < tiltData.coaching_lines.length - 1 ? "12px" : "0",
+                      paddingBottom: idx < tiltData.coaching_lines.length - 1 ? "12px" : "0",
+                      borderBottom:
+                        idx < tiltData.coaching_lines.length - 1
+                          ? "1px solid var(--border-color)"
+                          : "none",
+                      fontSize: "14px",
+                      lineHeight: "1.5",
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    {line}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Tilt Gauge Component
+function TiltGauge({ tiltScore, tiltCategory }: { tiltScore: number; tiltCategory: string }) {
+  const radius = 100;
+  const centerX = 120;
+  const centerY = 40; // Move centerY up so arc is at the top of the container
+  
+  // For a semi-circle speedometer, the arc center is at the bottom
+  // The arc curves upward from left to right (like the letter "n")
+  const arcCenterX = centerX;
+  const arcCenterY = centerY + radius; // Center of the circle is below the arc
+  
+  // Angle range: from 180 degrees (score 0, left) to 0 degrees (score 10, right)
+  // Convert score to angle: 0 -> 180°, 10 -> 0°
+  const angle = 180 - (tiltScore / 10) * 180;
+  
+  // Calculate section boundaries in degrees
+  // Green: 0-4 -> 180° to 108° (0 to 4 out of 10)
+  // Yellow: 5-6 -> 108° to 72° (5 to 6 out of 10)
+  // Red: 7-10 -> 72° to 0° (7 to 10 out of 10)
+  const greenEndAngle = 180 - (4 / 10) * 180; // 108°
+  const yellowEndAngle = 180 - (6 / 10) * 180; // 72°
+
+  // Calculate needle endpoint (needle points from center upward toward arc)
+  const needleLength = 80;
+  const angleRad = (angle * Math.PI) / 180;
+  const needleEndX = arcCenterX + needleLength * Math.cos(angleRad);
+  const needleEndY = arcCenterY + needleLength * Math.sin(angleRad);
+
+  // Color based on tilt score
+  const gaugeColor =
+    tiltScore <= 4
+      ? "var(--profit)"
+      : tiltScore <= 6
+      ? "#fbbf24"
+      : "var(--loss)";
+
+  // Calculate arc endpoints for each section
+  // Start point (left, score 0): angle 180°
+  const startAngle = 180;
+  const startRad = (startAngle * Math.PI) / 180;
+  const startX = arcCenterX + radius * Math.cos(startRad);
+  const startY = arcCenterY + radius * Math.sin(startRad);
+  
+  // End point (right, score 10): angle 0°
+  const endAngle = 0;
+  const endRad = (endAngle * Math.PI) / 180;
+  const endX = arcCenterX + radius * Math.cos(endRad);
+  const endY = arcCenterY + radius * Math.sin(endRad);
+  
+  // Convert section boundaries to radians and calculate points on the arc
+  const greenEndRad = (greenEndAngle * Math.PI) / 180;
+  const yellowEndRad = (yellowEndAngle * Math.PI) / 180;
+  
+  // Calculate points on the arc
+  const greenEndX = arcCenterX + radius * Math.cos(greenEndRad);
+  const greenEndY = arcCenterY + radius * Math.sin(greenEndRad);
+  const yellowEndX = arcCenterX + radius * Math.cos(yellowEndRad);
+  const yellowEndY = arcCenterY + radius * Math.sin(yellowEndRad);
+
+  return (
+    <div style={{ position: "relative", width: "240px", height: "180px" }}>
+      <svg 
+        width="240" 
+        height="180" 
+        style={{ 
+          overflow: "visible",
+          transform: "rotate(180deg) scaleX(-1)",
+          transformOrigin: "center center"
+        }}
+      >
+        {/* Semi-circle arc background (full half-circle) */}
+        <path
+          d={`M ${startX} ${startY} A ${radius} ${radius} 0 0 0 ${endX} ${endY}`}
+          fill="none"
+          stroke="var(--bg-tertiary)"
+          strokeWidth="20"
+        />
+        {/* Green section (0-4) */}
+        <path
+          d={`M ${startX} ${startY} A ${radius} ${radius} 0 0 0 ${greenEndX} ${greenEndY}`}
+          fill="none"
+          stroke="var(--profit)"
+          strokeWidth="20"
+          strokeLinecap="round"
+        />
+        {/* Yellow section (5-6) - from green end to yellow end */}
+        <path
+          d={`M ${greenEndX} ${greenEndY} A ${radius} ${radius} 0 0 0 ${yellowEndX} ${yellowEndY}`}
+          fill="none"
+          stroke="#fbbf24"
+          strokeWidth="20"
+          strokeLinecap="round"
+        />
+        {/* Red section (7-10) - from yellow end to final end */}
+        <path
+          d={`M ${yellowEndX} ${yellowEndY} A ${radius} ${radius} 0 0 0 ${endX} ${endY}`}
+          fill="none"
+          stroke="var(--loss)"
+          strokeWidth="20"
+          strokeLinecap="round"
+        />
+        {/* Needle */}
+        <line
+          x1={arcCenterX}
+          y1={arcCenterY}
+          x2={needleEndX}
+          y2={needleEndY}
+          stroke={gaugeColor}
+          strokeWidth="3"
+          strokeLinecap="round"
+        />
+        {/* Center dot */}
+        <circle cx={arcCenterX} cy={arcCenterY} r="6" fill={gaugeColor} />
+      </svg>
+      {/* Score display - positioned below the gauge arc */}
+      <div
+        style={{
+          position: "absolute",
+          top: `${centerY + radius + -75}px`,
+          left: "50%",
+          transform: "translateX(-50%)",
+          textAlign: "center",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "24px",
+            fontWeight: "700",
+            color: gaugeColor,
+            marginBottom: "8px",
+          }}
+        >
+          {tiltScore.toFixed(1)} / 10
+        </div>
+        {/* Tilt Category */}
+        <div
+          style={{
+            display: "inline-block",
+            padding: "8px 20px",
+            borderRadius: "6px",
+            backgroundColor: "var(--bg-tertiary)",
+            border: "1px solid var(--border-color)",
+            fontSize: "14px",
+            fontWeight: "600",
+            color: gaugeColor,
+            whiteSpace: "nowrap",
+            minWidth: "160px",
+          }}
+        >
+          {tiltCategory}
+        </div>
+      </div>
     </div>
   );
 }

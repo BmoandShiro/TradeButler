@@ -3389,3 +3389,333 @@ pub fn get_distribution_concentration(
     })
 }
 
+// Tilt-A-Metric Structures
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StreakStats {
+    pub k: i32,
+    pub sample_size: i64,
+    pub win_rate_after_k_losses: f64,
+    pub avg_pnl_after_k_losses: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TiltStats {
+    pub baseline_win_rate: f64,
+    pub win_rate_after_loss: f64,
+    pub win_rate_after_win: f64,
+    pub win_rate_after_2_losses: f64,
+    pub avg_loss_normally: f64,
+    pub avg_loss_after_loss: f64,
+    pub prob_loss_after_loss: f64,
+    pub tilt_score: f64,
+    pub recommended_streak: Option<i32>,
+    pub streak_stats: Vec<StreakStats>,
+    pub coaching_lines: Vec<String>,
+    pub tilt_category: String,
+}
+
+#[tauri::command]
+pub fn get_tilt_metric(
+    pairing_method: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+) -> Result<TiltStats, String> {
+    // Get paired trades
+    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    
+    // Filter by date range if provided
+    let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
+        paired_trades.into_iter().filter(|pair| {
+            let exit_date = &pair.exit_timestamp;
+            let in_range = if let Some(start) = &start_date {
+                exit_date >= start
+            } else {
+                true
+            } && if let Some(end) = &end_date {
+                exit_date <= end
+            } else {
+                true
+            };
+            in_range
+        }).collect()
+    } else {
+        paired_trades
+    };
+    
+    // Sort by exit timestamp to ensure chronological order
+    let mut sorted_trades = filtered_paired_trades;
+    sorted_trades.sort_by(|a, b| a.exit_timestamp.cmp(&b.exit_timestamp));
+    
+    if sorted_trades.len() < 10 {
+        return Ok(TiltStats {
+            baseline_win_rate: 0.0,
+            win_rate_after_loss: 0.0,
+            win_rate_after_win: 0.0,
+            win_rate_after_2_losses: 0.0,
+            avg_loss_normally: 0.0,
+            avg_loss_after_loss: 0.0,
+            prob_loss_after_loss: 0.0,
+            tilt_score: 0.0,
+            recommended_streak: None,
+            streak_stats: Vec::new(),
+            coaching_lines: vec!["Not enough trade history to evaluate tilt yet. Need at least 10 trades.".to_string()],
+            tilt_category: "Insufficient Data".to_string(),
+        });
+    }
+    
+    // Extract PnL values
+    let pnl_values: Vec<f64> = sorted_trades.iter().map(|p| p.net_profit_loss).collect();
+    
+    // Calculate baseline stats
+    let total_trades = pnl_values.len();
+    let wins: Vec<f64> = pnl_values.iter().filter(|&&pnl| pnl > 0.0).copied().collect();
+    let losses: Vec<f64> = pnl_values.iter().filter(|&&pnl| pnl < 0.0).copied().collect();
+    
+    let wins_count = wins.len();
+    let losses_count = losses.len();
+    let baseline_win_rate = if total_trades > 0 {
+        wins_count as f64 / total_trades as f64
+    } else {
+        0.0
+    };
+    
+    let avg_loss_normally = if losses_count > 0 {
+        losses.iter().sum::<f64>() / losses_count as f64
+    } else {
+        0.0
+    };
+    
+    // Calculate win rate after a loss
+    let mut after_loss_wins = 0;
+    let mut after_loss_total = 0;
+    let mut after_loss_losses: Vec<f64> = Vec::new();
+    
+    for i in 1..pnl_values.len() {
+        if pnl_values[i - 1] < 0.0 && pnl_values[i] != 0.0 {
+            after_loss_total += 1;
+            if pnl_values[i] > 0.0 {
+                after_loss_wins += 1;
+            } else if pnl_values[i] < 0.0 {
+                after_loss_losses.push(pnl_values[i]);
+            }
+        }
+    }
+    
+    let win_rate_after_loss = if after_loss_total > 0 {
+        after_loss_wins as f64 / after_loss_total as f64
+    } else {
+        baseline_win_rate
+    };
+    
+    let avg_loss_after_loss = if !after_loss_losses.is_empty() {
+        after_loss_losses.iter().sum::<f64>() / after_loss_losses.len() as f64
+    } else {
+        avg_loss_normally
+    };
+    
+    let prob_loss_after_loss = if after_loss_total > 0 {
+        after_loss_losses.len() as f64 / after_loss_total as f64
+    } else {
+        0.0
+    };
+    
+    // Calculate win rate after a win
+    let mut after_win_wins = 0;
+    let mut after_win_total = 0;
+    
+    for i in 1..pnl_values.len() {
+        if pnl_values[i - 1] > 0.0 && pnl_values[i] != 0.0 {
+            after_win_total += 1;
+            if pnl_values[i] > 0.0 {
+                after_win_wins += 1;
+            }
+        }
+    }
+    
+    let win_rate_after_win = if after_win_total > 0 {
+        after_win_wins as f64 / after_win_total as f64
+    } else {
+        baseline_win_rate
+    };
+    
+    // Calculate win rate after 2 losses
+    let mut after_2_losses_wins = 0;
+    let mut after_2_losses_total = 0;
+    
+    for i in 2..pnl_values.len() {
+        if pnl_values[i - 2] < 0.0 && pnl_values[i - 1] < 0.0 && pnl_values[i] != 0.0 {
+            after_2_losses_total += 1;
+            if pnl_values[i] > 0.0 {
+                after_2_losses_wins += 1;
+            }
+        }
+    }
+    
+    let win_rate_after_2_losses = if after_2_losses_total > 0 {
+        after_2_losses_wins as f64 / after_2_losses_total as f64
+    } else {
+        baseline_win_rate
+    };
+    
+    // Calculate streak stats for k in {1, 2, 3, 4}
+    let mut streak_stats = Vec::new();
+    
+    for k in 1..=4 {
+        let mut after_k_losses_wins = 0;
+        let mut after_k_losses_total = 0;
+        let mut after_k_losses_pnl: Vec<f64> = Vec::new();
+        
+        for i in k..pnl_values.len() {
+            let mut all_losses = true;
+            for j in (i - k)..i {
+                if pnl_values[j] >= 0.0 {
+                    all_losses = false;
+                    break;
+                }
+            }
+            
+            if all_losses && pnl_values[i] != 0.0 {
+                after_k_losses_total += 1;
+                after_k_losses_pnl.push(pnl_values[i]);
+                if pnl_values[i] > 0.0 {
+                    after_k_losses_wins += 1;
+                }
+            }
+        }
+        
+        let win_rate_after_k = if after_k_losses_total > 0 {
+            after_k_losses_wins as f64 / after_k_losses_total as f64
+        } else {
+            0.0
+        };
+        
+        let avg_pnl_after_k = if !after_k_losses_pnl.is_empty() {
+            after_k_losses_pnl.iter().sum::<f64>() / after_k_losses_pnl.len() as f64
+        } else {
+            0.0
+        };
+        
+        streak_stats.push(StreakStats {
+            k: k as i32,
+            sample_size: after_k_losses_total as i64,
+            win_rate_after_k_losses: win_rate_after_k,
+            avg_pnl_after_k_losses: avg_pnl_after_k,
+        });
+    }
+    
+    // Find recommended stop loss streak
+    const MIN_SAMPLE: i64 = 20;
+    const WIN_DROP_THRESHOLD: f64 = 0.15;
+    
+    let mut recommended_streak: Option<i32> = None;
+    
+    for stat in &streak_stats {
+        if stat.sample_size >= MIN_SAMPLE {
+            let win_drop = baseline_win_rate - stat.win_rate_after_k_losses;
+            let ev_bad = stat.avg_pnl_after_k_losses < 0.0;
+            
+            if win_drop >= WIN_DROP_THRESHOLD && ev_bad {
+                recommended_streak = Some(stat.k);
+                break;
+            }
+        }
+    }
+    
+    // Calculate tilt score
+    const MAX_DROP: f64 = 0.5;
+    
+    let drop_after_loss = (baseline_win_rate - win_rate_after_loss).max(0.0);
+    let severity_after_loss = (drop_after_loss / MAX_DROP).min(1.0).max(0.0);
+    let score1 = severity_after_loss * 3.0;
+    
+    let drop_after_2_losses = (baseline_win_rate - win_rate_after_2_losses).max(0.0);
+    let severity_after_2_losses = (drop_after_2_losses / MAX_DROP).min(1.0).max(0.0);
+    let score2 = severity_after_2_losses * 3.0;
+    
+    let mut score3 = 0.0;
+    if avg_loss_normally < 0.0 && avg_loss_after_loss < 0.0 {
+        let normal_mag = avg_loss_normally.abs();
+        let after_mag = avg_loss_after_loss.abs();
+        if after_mag > normal_mag {
+            let ratio = after_mag / normal_mag;
+            let severity = ((ratio - 1.0) / 1.0).min(1.0).max(0.0);
+            score3 = severity * 2.0;
+        }
+    }
+    
+    let severity_loss_chain = prob_loss_after_loss.min(1.0).max(0.0);
+    let score4 = severity_loss_chain * 2.0;
+    
+    let tilt_raw = score1 + score2 + score3 + score4;
+    let tilt_score = tilt_raw.min(10.0).max(0.0);
+    
+    // Determine tilt category
+    let tilt_category = if tilt_score <= 3.0 {
+        "Calm & Disciplined"
+    } else if tilt_score <= 7.0 {
+        "Moderate Tilt Risk"
+    } else {
+        "High Tilt / Severe Tilt"
+    }.to_string();
+    
+    // Generate coaching lines
+    let mut coaching_lines = Vec::new();
+    
+    if tilt_score <= 3.0 && recommended_streak.is_none() {
+        coaching_lines.push("Your performance after losing trades is similar to your baseline. There is no strong evidence of emotional tilt.".to_string());
+        coaching_lines.push(format!(
+            "You win approximately {:.1}% overall and {:.1}% after a loss. Loss severity does not increase meaningfully after losing.",
+            baseline_win_rate * 100.0,
+            win_rate_after_loss * 100.0
+        ));
+        coaching_lines.push("A fixed 'stop after N losses' rule is optional for you. A standard daily loss cap is likely sufficient.".to_string());
+    } else if tilt_score > 3.0 && tilt_score <= 7.0 {
+        coaching_lines.push("Your performance degrades after losing trades, but not catastrophically.".to_string());
+        coaching_lines.push(format!(
+            "Your win rate drops from {:.1}% to {:.1}% after a loss, and the chance of another loss after losing is {:.1}%.",
+            baseline_win_rate * 100.0,
+            win_rate_after_loss * 100.0,
+            prob_loss_after_loss * 100.0
+        ));
+        if let Some(streak) = recommended_streak {
+            coaching_lines.push(format!(
+                "Based on your history, you should strongly consider stopping for the day after {} losing trades in a row. Beyond this streak, your expected PnL is consistently negative.",
+                streak
+            ));
+        } else {
+            coaching_lines.push("There is no single streak length that stands out as a clear cutoff, but you should pay attention to your behavior after losses and enforce a daily loss cap.".to_string());
+        }
+    } else {
+        coaching_lines.push("Your trading shows strong signs of emotional tilt after losses.".to_string());
+        coaching_lines.push(format!(
+            "Your win rate falls from {:.1}% to {:.1}% after a loss, and to {:.1}% after two losses in a row.",
+            baseline_win_rate * 100.0,
+            win_rate_after_loss * 100.0,
+            win_rate_after_2_losses * 100.0
+        ));
+        coaching_lines.push("Your average loss becomes larger after losing, which suggests revenge trading or loss of discipline.".to_string());
+        if let Some(streak) = recommended_streak {
+            coaching_lines.push(format!(
+                "Recommendation: set a hard rule to stop trading for the day after {} consecutive losing trades.",
+                streak
+            ));
+        }
+        coaching_lines.push("Also consider using a fixed maximum daily loss and reducing position size immediately after a loss.".to_string());
+    }
+    
+    Ok(TiltStats {
+        baseline_win_rate,
+        win_rate_after_loss,
+        win_rate_after_win,
+        win_rate_after_2_losses,
+        avg_loss_normally,
+        avg_loss_after_loss,
+        prob_loss_after_loss,
+        tilt_score,
+        recommended_streak,
+        streak_stats,
+        coaching_lines,
+        tilt_category,
+    })
+}
+
