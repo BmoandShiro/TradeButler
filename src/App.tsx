@@ -7,6 +7,7 @@ import Analytics from "./pages/Analytics";
 import CalendarPage from "./pages/Calendar";
 import Strategies from "./pages/Strategies";
 import Evaluation from "./pages/Evaluation";
+import AverageDownCalculator from "./pages/AverageDownCalculator";
 
 function App() {
   return (
@@ -20,6 +21,7 @@ function App() {
           <Route path="/emotions" element={<Emotions />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/evaluation" element={<Evaluation />} />
+          <Route path="/average-down-calculator" element={<AverageDownCalculator />} />
         </Routes>
       </Layout>
     </Router>
