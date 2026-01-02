@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Plus, Trash2, Calculator } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Plus, Trash2, Calculator, X, ChevronUp, ChevronDown } from "lucide-react";
 
 interface PurchaseRow {
   id: string;
@@ -7,18 +7,40 @@ interface PurchaseRow {
   price: string;
 }
 
+const STORAGE_KEY = "tradebutler_average_down_calculator_data";
+const DEFAULT_ROWS: PurchaseRow[] = [
+  { id: "1", shares: "", price: "" },
+  { id: "2", shares: "", price: "" },
+  { id: "3", shares: "", price: "" },
+  { id: "4", shares: "", price: "" },
+  { id: "5", shares: "", price: "" },
+];
+
 export default function AverageDownCalculator() {
-  const [rows, setRows] = useState<PurchaseRow[]>([
-    { id: "1", shares: "", price: "" },
-    { id: "2", shares: "", price: "" },
-    { id: "3", shares: "", price: "" },
-    { id: "4", shares: "", price: "" },
-    { id: "5", shares: "", price: "" },
-  ]);
+  const [rows, setRows] = useState<PurchaseRow[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        // Ensure we have at least one row
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch {
+        // If parsing fails, use defaults
+      }
+    }
+    return DEFAULT_ROWS;
+  });
 
   const [averagePrice, setAveragePrice] = useState<number | null>(null);
   const [totalShares, setTotalShares] = useState<number>(0);
   const [totalCost, setTotalCost] = useState<number>(0);
+
+  // Save to localStorage whenever rows change
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(rows));
+  }, [rows]);
 
   const addRow = () => {
     const newId = Date.now().toString();
@@ -35,6 +57,24 @@ export default function AverageDownCalculator() {
     setRows(
       rows.map((row) => (row.id === id ? { ...row, [field]: value } : row))
     );
+  };
+
+  const incrementValue = (id: string, field: "shares" | "price", step: number = 1) => {
+    const row = rows.find((r) => r.id === id);
+    if (!row) return;
+    
+    const currentValue = parseFloat(row[field]) || 0;
+    const newValue = (currentValue + step).toFixed(field === "price" ? 2 : 0);
+    updateRow(id, field, newValue);
+  };
+
+  const decrementValue = (id: string, field: "shares" | "price", step: number = 1) => {
+    const row = rows.find((r) => r.id === id);
+    if (!row) return;
+    
+    const currentValue = parseFloat(row[field]) || 0;
+    const newValue = Math.max(0, currentValue - step).toFixed(field === "price" ? 2 : 0);
+    updateRow(id, field, newValue);
   };
 
   const calculateAverage = () => {
@@ -63,33 +103,89 @@ export default function AverageDownCalculator() {
     }
   };
 
+  const clearAll = () => {
+    const confirmed = window.confirm(
+      "Are you sure you want to clear all data? This action cannot be undone."
+    );
+    if (confirmed) {
+      setRows(DEFAULT_ROWS);
+      setAveragePrice(null);
+      setTotalShares(0);
+      setTotalCost(0);
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  };
+
   return (
-    <div
-      style={{
-        padding: "32px",
-        maxWidth: "900px",
-        margin: "0 auto",
-      }}
-    >
+    <>
+      <style>{`
+        /* Hide default number input spinners */
+        input[type="number"] {
+          -moz-appearance: textfield; /* Firefox */
+        }
+        
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+      `}</style>
+      <div
+        style={{
+          padding: "32px",
+          maxWidth: "900px",
+          margin: "0 auto",
+        }}
+      >
       <div
         style={{
           marginBottom: "24px",
         }}
       >
-        <h1
+        <div
           style={{
-            fontSize: "28px",
-            fontWeight: "bold",
-            color: "var(--text-primary)",
-            marginBottom: "12px",
             display: "flex",
             alignItems: "center",
-            gap: "12px",
+            justifyContent: "space-between",
+            marginBottom: "12px",
           }}
         >
-          <Calculator size={28} />
-          Average Down Calculator
-        </h1>
+          <h1
+            style={{
+              fontSize: "28px",
+              fontWeight: "bold",
+              color: "var(--text-primary)",
+              display: "flex",
+              alignItems: "center",
+              gap: "12px",
+              margin: 0,
+            }}
+          >
+            <Calculator size={28} />
+            Average Down Calculator
+          </h1>
+          <button
+            onClick={clearAll}
+            style={{
+              padding: "8px 16px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--loss)",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "8px",
+              fontSize: "14px",
+              fontWeight: "500",
+            }}
+            title="Clear all data"
+          >
+            <X size={16} />
+            Clear
+          </button>
+        </div>
         <p
           style={{
             fontSize: "14px",
@@ -171,23 +267,71 @@ export default function AverageDownCalculator() {
             >
               {index + 1}.
             </div>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              placeholder="0"
-              value={row.shares}
-              onChange={(e) => updateRow(row.id, "shares", e.target.value)}
-              style={{
-                padding: "10px 12px",
-                backgroundColor: "var(--bg-primary)",
-                border: "1px solid var(--border-color)",
-                borderRadius: "6px",
-                color: "var(--text-primary)",
-                fontSize: "14px",
-                width: "100%",
-              }}
-            />
+            <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="0"
+                value={row.shares}
+                onChange={(e) => updateRow(row.id, "shares", e.target.value)}
+                style={{
+                  padding: "10px 36px 10px 12px",
+                  backgroundColor: "var(--bg-primary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  width: "100%",
+                }}
+              />
+              <div
+                style={{
+                  position: "absolute",
+                  right: "4px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "2px",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => incrementValue(row.id, "shares", 1)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    padding: "2px",
+                    cursor: "pointer",
+                    color: "var(--accent)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    lineHeight: 1,
+                  }}
+                  title="Increase"
+                >
+                  <ChevronUp size={14} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => decrementValue(row.id, "shares", 1)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    padding: "2px",
+                    cursor: "pointer",
+                    color: "var(--accent)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    lineHeight: 1,
+                  }}
+                  title="Decrease"
+                >
+                  <ChevronDown size={14} />
+                </button>
+              </div>
+            </div>
             <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
               <span
                 style={{
@@ -196,6 +340,7 @@ export default function AverageDownCalculator() {
                   color: "var(--text-secondary)",
                   fontSize: "14px",
                   fontWeight: "500",
+                  zIndex: 1,
                 }}
               >
                 $
@@ -208,7 +353,7 @@ export default function AverageDownCalculator() {
                 value={row.price}
                 onChange={(e) => updateRow(row.id, "price", e.target.value)}
                 style={{
-                  padding: "10px 12px 10px 28px",
+                  padding: "10px 36px 10px 28px",
                   backgroundColor: "var(--bg-primary)",
                   border: "1px solid var(--border-color)",
                   borderRadius: "6px",
@@ -217,6 +362,52 @@ export default function AverageDownCalculator() {
                   width: "100%",
                 }}
               />
+              <div
+                style={{
+                  position: "absolute",
+                  right: "4px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "2px",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => incrementValue(row.id, "price", 0.01)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    padding: "2px",
+                    cursor: "pointer",
+                    color: "var(--accent)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    lineHeight: 1,
+                  }}
+                  title="Increase"
+                >
+                  <ChevronUp size={14} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => decrementValue(row.id, "price", 0.01)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    padding: "2px",
+                    cursor: "pointer",
+                    color: "var(--accent)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    lineHeight: 1,
+                  }}
+                  title="Decrease"
+                >
+                  <ChevronDown size={14} />
+                </button>
+              </div>
             </div>
             <button
               onClick={() => removeRow(row.id)}
@@ -401,7 +592,8 @@ export default function AverageDownCalculator() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 
