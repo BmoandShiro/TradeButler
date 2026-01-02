@@ -9,7 +9,8 @@ import {
   Upload,
   Trash2,
   TrendingDown,
-  Calculator
+  Calculator,
+  DollarSign
 } from "lucide-react";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
@@ -75,6 +76,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: "/analytics", icon: BarChart3, label: "Analytics" },
     { path: "/evaluation", icon: TrendingDown, label: "Evaluation" },
     { path: "/average-down-calculator", icon: Calculator, label: "Average Down Calculator" },
+    { path: "/dividend-calculator", icon: DollarSign, label: "Dividend Calculator" },
   ];
 
   return (

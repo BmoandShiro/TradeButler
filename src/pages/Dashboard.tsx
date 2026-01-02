@@ -2098,7 +2098,7 @@ export default function Dashboard() {
                                 localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
                               }
                               setOpenSectionSettings(null);
-                            }}
+                }}
                             disabled={sectionOrder.indexOf("topSymbols") === sectionOrder.length - 1}
                 style={{
                               background: "transparent",
@@ -2282,7 +2282,7 @@ export default function Dashboard() {
                                 localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
                               }
                               setOpenSectionSettings(null);
-                            }}
+                }}
                             disabled={sectionOrder.indexOf("strategyPerformance") === sectionOrder.length - 1}
                 style={{
                               background: "transparent",
@@ -2414,7 +2414,7 @@ export default function Dashboard() {
                       <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
                     <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
                           {totalTrades} trades
-                        </p>
+                    </p>
                         <p style={{ 
                           fontSize: "12px", 
                           color: totalPnL >= 0 ? "var(--profit)" : "var(--loss)",
@@ -2715,7 +2715,7 @@ export default function Dashboard() {
                                 localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
                               }
                               setOpenSectionSettings(null);
-                            }}
+                }}
                             disabled={sectionOrder.indexOf("recentTrades") === sectionOrder.length - 1}
                 style={{
                               background: "transparent",

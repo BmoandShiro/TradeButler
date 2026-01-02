@@ -2318,6 +2318,93 @@ pub async fn fetch_chart_data(symbol: String, period1: i64, period2: i64, interv
     Err(last_error.unwrap_or_else(|| "Failed to fetch chart data after retries".to_string()))
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StockQuote {
+    pub symbol: String,
+    pub current_price: Option<f64>,
+    pub dividend_yield: Option<f64>,
+    pub dividend_rate: Option<f64>,
+    pub dividend_frequency: Option<String>,
+    pub trailing_annual_dividend_rate: Option<f64>,
+    pub trailing_annual_dividend_yield: Option<f64>,
+}
+
+#[tauri::command]
+pub async fn fetch_stock_quote(symbol: String) -> Result<StockQuote, String> {
+    let url = format!(
+        "https://query1.finance.yahoo.com/v8/finance/chart/{}?interval=1d&range=1d",
+        symbol
+    );
+    
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .header("Referer", "https://finance.yahoo.com/")
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("Failed to fetch stock data: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+    
+    // Extract quote data from Yahoo Finance response
+    let result = data.get("chart")
+        .and_then(|c| c.get("result"))
+        .and_then(|r| r.get(0))
+        .ok_or_else(|| "Invalid response format".to_string())?;
+    
+    let meta = result.get("meta")
+        .ok_or_else(|| "Missing meta data".to_string())?;
+    
+    let current_price = meta.get("regularMarketPrice")
+        .and_then(|p| p.as_f64())
+        .or_else(|| meta.get("previousClose").and_then(|p| p.as_f64()));
+    
+    // Try to get dividend data from various fields
+    let dividend_yield = meta.get("dividendYield")
+        .and_then(|d| d.as_f64())
+        .or_else(|| meta.get("trailingAnnualDividendYield").and_then(|d| d.as_f64()));
+    
+    let dividend_rate = meta.get("dividendRate")
+        .and_then(|d| d.as_f64())
+        .or_else(|| meta.get("trailingAnnualDividendRate").and_then(|d| d.as_f64()));
+    
+    let trailing_annual_dividend_rate = meta.get("trailingAnnualDividendRate")
+        .and_then(|d| d.as_f64());
+    
+    let trailing_annual_dividend_yield = meta.get("trailingAnnualDividendYield")
+        .and_then(|d| d.as_f64());
+    
+    // Determine dividend frequency (Yahoo Finance doesn't always provide this directly)
+    // We'll try to infer from available data or default to Quarterly
+    let dividend_frequency = if dividend_rate.is_some() || dividend_yield.is_some() {
+        // Most US stocks pay quarterly, but we can't be 100% sure
+        Some("Quarterly".to_string())
+    } else {
+        None
+    };
+    
+    Ok(StockQuote {
+        symbol: symbol.to_uppercase(),
+        current_price,
+        dividend_yield,
+        dividend_rate,
+        dividend_frequency,
+        trailing_annual_dividend_rate,
+        trailing_annual_dividend_yield,
+    })
+}
+
 // Helper function to load notes for paired trades
 fn load_pair_notes(conn: &Connection, paired_trades: &mut Vec<PairedTrade>) -> Result<(), String> {
     use std::collections::HashMap;

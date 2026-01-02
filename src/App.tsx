@@ -8,6 +8,7 @@ import CalendarPage from "./pages/Calendar";
 import Strategies from "./pages/Strategies";
 import Evaluation from "./pages/Evaluation";
 import AverageDownCalculator from "./pages/AverageDownCalculator";
+import DividendCalculator from "./pages/DividendCalculator";
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/evaluation" element={<Evaluation />} />
           <Route path="/average-down-calculator" element={<AverageDownCalculator />} />
+          <Route path="/dividend-calculator" element={<DividendCalculator />} />
         </Routes>
       </Layout>
     </Router>

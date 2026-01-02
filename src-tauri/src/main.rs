@@ -52,6 +52,7 @@ fn main() {
             commands::get_equity_curve,
             commands::get_distribution_concentration,
             commands::get_tilt_metric,
+            commands::fetch_stock_quote,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

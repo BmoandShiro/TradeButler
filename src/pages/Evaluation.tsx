@@ -161,7 +161,7 @@ export default function Evaluation() {
       
       const [data, concentration, tilt] = await Promise.all([
         invoke<EvaluationMetrics>("get_evaluation_metrics", {
-          pairingMethod,
+        pairingMethod,
           startDate: start ? start.toISOString() : null,
           endDate: end ? end.toISOString() : null,
         }),
@@ -455,41 +455,41 @@ export default function Evaluation() {
           <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px", color: "var(--text-secondary)" }}>
             Total Net P&L by Weekday
           </h3>
-          <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
-            {metrics.weekday_performance.map((day) => {
-              const color = getHeatmapColor(day.total_pnl, weekdayMax, weekdayMin);
-              const isBest = day.total_pnl === weekdayMax && day.trade_count > 0;
-              const isWorst = day.total_pnl === weekdayMin && day.trade_count > 0;
-              
-              return (
+        <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
+          {metrics.weekday_performance.map((day) => {
+            const color = getHeatmapColor(day.total_pnl, weekdayMax, weekdayMin);
+            const isBest = day.total_pnl === weekdayMax && day.trade_count > 0;
+            const isWorst = day.total_pnl === weekdayMin && day.trade_count > 0;
+            
+            return (
+              <div
+                key={day.weekday}
+                style={{
+                  flex: 1,
+                  padding: "16px",
+                  backgroundColor: color,
+                  borderRadius: "6px",
+                  textAlign: "center",
+                  border: isBest ? "2px solid var(--profit)" : isWorst ? "2px solid var(--loss)" : "1px solid var(--border-color)",
+                  position: "relative",
+                }}
+              >
+                <div style={{ fontSize: "12px", fontWeight: "600", marginBottom: "8px" }}>
+                  {day.weekday_name.substring(0, 3)}
+                </div>
                 <div
-                  key={day.weekday}
                   style={{
-                    flex: 1,
-                    padding: "16px",
-                    backgroundColor: color,
-                    borderRadius: "6px",
-                    textAlign: "center",
-                    border: isBest ? "2px solid var(--profit)" : isWorst ? "2px solid var(--loss)" : "1px solid var(--border-color)",
-                    position: "relative",
+                    fontSize: "18px",
+                    fontWeight: "bold",
+                      color: day.total_pnl === 0 ? "var(--text-primary)" : day.total_pnl > 0 ? "var(--profit)" : "var(--loss)",
+                    marginBottom: "4px",
                   }}
                 >
-                  <div style={{ fontSize: "12px", fontWeight: "600", marginBottom: "8px" }}>
-                    {day.weekday_name.substring(0, 3)}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "18px",
-                      fontWeight: "bold",
-                      color: day.total_pnl === 0 ? "var(--text-primary)" : day.total_pnl > 0 ? "var(--profit)" : "var(--loss)",
-                      marginBottom: "4px",
-                    }}
-                  >
-                    ${day.total_pnl.toFixed(2)}
-                  </div>
-                  <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
-                    {day.trade_count} trades
-                  </div>
+                  ${day.total_pnl.toFixed(2)}
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                  {day.trade_count} trades
+                </div>
                 </div>
               );
             })}
@@ -547,12 +547,12 @@ export default function Evaluation() {
                       {(day.win_rate * 100).toFixed(1)}%
                     </div>
                   )}
-                  <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
                     {day.trade_count} trades
-                  </div>
                 </div>
-              );
-            })}
+              </div>
+            );
+          })}
           </div>
         </div>
         <div style={{ marginTop: "16px", padding: "12px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
