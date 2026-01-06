@@ -149,6 +149,7 @@ echo.
 
 REM If prerequisites are missing, exit
 if %ALL_GOOD% EQU 0 (
+    echo.
     echo ========================================
     echo   Setup incomplete. Please install
     echo   missing prerequisites and try again.
@@ -158,7 +159,9 @@ if %ALL_GOOD% EQU 0 (
     echo   • Node.js: https://nodejs.org/
     echo   • Rust: https://rustup.rs/
     echo   • Visual C++ Build Tools: https://visualstudio.microsoft.com/visual-cpp-build-tools/
-    pause
+    echo.
+    echo Press any key to exit...
+    pause >nul
     exit /b 1
 )
 
@@ -172,7 +175,9 @@ call npm install
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo [ERROR] npm install failed. Please check the error messages above.
-    pause
+    echo.
+    echo Press any key to exit...
+    pause >nul
     exit /b 1
 )
 
@@ -188,5 +193,6 @@ echo Or use the convenience scripts:
 echo   dev.ps1    (PowerShell)
 echo   dev.bat    (Command Prompt)
 echo.
-pause
+echo Press any key to exit...
+pause >nul
 
