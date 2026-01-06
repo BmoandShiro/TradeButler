@@ -29,9 +29,28 @@ if (Test-Command "node") {
     }
 } else {
     Write-Host "  ✗ Node.js not found!" -ForegroundColor Red
-    Write-Host "    Please install Node.js from: https://nodejs.org/" -ForegroundColor Yellow
-    Write-Host "    After installing, restart your terminal and run this script again." -ForegroundColor Yellow
-    $allGood = $false
+    Write-Host "    Attempting to install Node.js..." -ForegroundColor Yellow
+    
+    # Try winget first
+    if (Test-Command "winget") {
+        Write-Host "    Using winget to install Node.js..." -ForegroundColor Cyan
+        winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "    ✓ Node.js installed! Please restart your terminal and run this script again." -ForegroundColor Green
+            Write-Host "    (The PATH needs to be refreshed for Node.js to be available)" -ForegroundColor Yellow
+            $allGood = $false
+        } else {
+            Write-Host "    ✗ winget installation failed. Trying alternative method..." -ForegroundColor Yellow
+        }
+    }
+    
+    # If winget failed or not available, provide manual instructions
+    if (-not (Test-Command "node")) {
+        Write-Host "    Please install Node.js manually from: https://nodejs.org/" -ForegroundColor Yellow
+        Write-Host "    Or run: winget install OpenJS.NodeJS.LTS" -ForegroundColor Yellow
+        Write-Host "    After installing, restart your terminal and run this script again." -ForegroundColor Yellow
+        $allGood = $false
+    }
 }
 
 Write-Host ""
@@ -56,10 +75,56 @@ if (Test-Command "rustc") {
     Write-Host "  ✓ Rust found: $rustVersion" -ForegroundColor Green
 } else {
     Write-Host "  ✗ Rust not found!" -ForegroundColor Red
-    Write-Host "    Please install Rust from: https://rustup.rs/" -ForegroundColor Yellow
-    Write-Host "    Or run: winget install Rustlang.Rustup" -ForegroundColor Yellow
-    Write-Host "    After installing, restart your terminal and run this script again." -ForegroundColor Yellow
-    $allGood = $false
+    Write-Host "    Attempting to install Rust..." -ForegroundColor Yellow
+    
+    # Try winget first
+    if (Test-Command "winget") {
+        Write-Host "    Using winget to install Rust..." -ForegroundColor Cyan
+        winget install Rustlang.Rustup --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "    ✓ Rust installed! Please restart your terminal and run this script again." -ForegroundColor Green
+            Write-Host "    (The PATH needs to be refreshed for Rust to be available)" -ForegroundColor Yellow
+            $allGood = $false
+        } else {
+            Write-Host "    ✗ winget installation failed. Trying rustup installer..." -ForegroundColor Yellow
+            
+            # Try downloading and running rustup-init.exe
+            $rustupUrl = "https://win.rustup.rs/x86_64"
+            $rustupPath = "$env:TEMP\rustup-init.exe"
+            try {
+                Write-Host "    Downloading Rust installer..." -ForegroundColor Cyan
+                Invoke-WebRequest -Uri $rustupUrl -OutFile $rustupPath -UseBasicParsing
+                Write-Host "    Running Rust installer (this may take a few minutes)..." -ForegroundColor Cyan
+                Start-Process -FilePath $rustupPath -ArgumentList "-y" -Wait -NoNewWindow
+                Remove-Item $rustupPath -ErrorAction SilentlyContinue
+                Write-Host "    ✓ Rust installed! Please restart your terminal and run this script again." -ForegroundColor Green
+                Write-Host "    (The PATH needs to be refreshed for Rust to be available)" -ForegroundColor Yellow
+                $allGood = $false
+            } catch {
+                Write-Host "    ✗ Automatic installation failed: $_" -ForegroundColor Red
+                Write-Host "    Please install Rust manually from: https://rustup.rs/" -ForegroundColor Yellow
+                $allGood = $false
+            }
+        }
+    } else {
+        # No winget, try direct download
+        $rustupUrl = "https://win.rustup.rs/x86_64"
+        $rustupPath = "$env:TEMP\rustup-init.exe"
+        try {
+            Write-Host "    Downloading Rust installer..." -ForegroundColor Cyan
+            Invoke-WebRequest -Uri $rustupUrl -OutFile $rustupPath -UseBasicParsing
+            Write-Host "    Running Rust installer (this may take a few minutes)..." -ForegroundColor Cyan
+            Start-Process -FilePath $rustupPath -ArgumentList "-y" -Wait -NoNewWindow
+            Remove-Item $rustupPath -ErrorAction SilentlyContinue
+            Write-Host "    ✓ Rust installed! Please restart your terminal and run this script again." -ForegroundColor Green
+            Write-Host "    (The PATH needs to be refreshed for Rust to be available)" -ForegroundColor Yellow
+            $allGood = $false
+        } catch {
+            Write-Host "    ✗ Automatic installation failed: $_" -ForegroundColor Red
+            Write-Host "    Please install Rust manually from: https://rustup.rs/" -ForegroundColor Yellow
+            $allGood = $false
+        }
+    }
 }
 
 Write-Host ""

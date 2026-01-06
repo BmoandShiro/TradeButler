@@ -17,9 +17,30 @@ if %ERRORLEVEL% EQU 0 (
     echo   [OK] Node.js found: %NODE_VERSION%
 ) else (
     echo   [ERROR] Node.js not found!
-    echo     Please install Node.js from: https://nodejs.org/
-    echo     After installing, restart your terminal and run this script again.
-    set ALL_GOOD=0
+    echo     Attempting to install Node.js...
+    
+    REM Try winget first
+    where winget >nul 2>&1
+    if %ERRORLEVEL% EQU 0 (
+        echo     Using winget to install Node.js...
+        winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
+        if %ERRORLEVEL% EQU 0 (
+            echo     [OK] Node.js installed! Please restart your terminal and run this script again.
+            echo     (The PATH needs to be refreshed for Node.js to be available)
+            set ALL_GOOD=0
+        ) else (
+            echo     [ERROR] winget installation failed.
+            echo     Please install Node.js manually from: https://nodejs.org/
+            echo     Or run: winget install OpenJS.NodeJS.LTS
+            echo     After installing, restart your terminal and run this script again.
+            set ALL_GOOD=0
+        )
+    ) else (
+        echo     Please install Node.js manually from: https://nodejs.org/
+        echo     Or run: winget install OpenJS.NodeJS.LTS
+        echo     After installing, restart your terminal and run this script again.
+        set ALL_GOOD=0
+    )
 )
 
 echo.
@@ -46,10 +67,51 @@ if %ERRORLEVEL% EQU 0 (
     echo   [OK] Rust found: %RUST_VERSION%
 ) else (
     echo   [ERROR] Rust not found!
-    echo     Please install Rust from: https://rustup.rs/
-    echo     Or run: winget install Rustlang.Rustup
-    echo     After installing, restart your terminal and run this script again.
-    set ALL_GOOD=0
+    echo     Attempting to install Rust...
+    
+    REM Try winget first
+    where winget >nul 2>&1
+    if %ERRORLEVEL% EQU 0 (
+        echo     Using winget to install Rust...
+        winget install Rustlang.Rustup --silent --accept-package-agreements --accept-source-agreements
+        if %ERRORLEVEL% EQU 0 (
+            echo     [OK] Rust installed! Please restart your terminal and run this script again.
+            echo     (The PATH needs to be refreshed for Rust to be available)
+            set ALL_GOOD=0
+        ) else (
+            echo     [ERROR] winget installation failed. Trying rustup installer...
+            echo     Downloading Rust installer...
+            powershell -Command "Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile '%TEMP%\rustup-init.exe' -UseBasicParsing"
+            if exist "%TEMP%\rustup-init.exe" (
+                echo     Running Rust installer (this may take a few minutes)...
+                "%TEMP%\rustup-init.exe" -y
+                del "%TEMP%\rustup-init.exe" >nul 2>&1
+                echo     [OK] Rust installed! Please restart your terminal and run this script again.
+                echo     (The PATH needs to be refreshed for Rust to be available)
+                set ALL_GOOD=0
+            ) else (
+                echo     [ERROR] Automatic installation failed.
+                echo     Please install Rust manually from: https://rustup.rs/
+                set ALL_GOOD=0
+            )
+        )
+    ) else (
+        REM No winget, try direct download
+        echo     Downloading Rust installer...
+        powershell -Command "Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile '%TEMP%\rustup-init.exe' -UseBasicParsing"
+        if exist "%TEMP%\rustup-init.exe" (
+            echo     Running Rust installer (this may take a few minutes)...
+            "%TEMP%\rustup-init.exe" -y
+            del "%TEMP%\rustup-init.exe" >nul 2>&1
+            echo     [OK] Rust installed! Please restart your terminal and run this script again.
+            echo     (The PATH needs to be refreshed for Rust to be available)
+            set ALL_GOOD=0
+        ) else (
+            echo     [ERROR] Automatic installation failed.
+            echo     Please install Rust manually from: https://rustup.rs/
+            set ALL_GOOD=0
+        )
+    )
 )
 
 echo.
