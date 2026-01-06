@@ -1,76 +1,149 @@
 # TradeButler Setup Script
-# This script sets up the development environment permanently
+# This script checks prerequisites and installs all dependencies
 
-Write-Host "🔧 TradeButler Development Environment Setup" -ForegroundColor Cyan
-Write-Host "==========================================`n" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "  TradeButler Setup Script" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
 
-# Check if Rust/Cargo is installed
-Write-Host "Checking for Rust/Cargo..." -ForegroundColor Yellow
-$cargoPath = "$env:USERPROFILE\.cargo\bin"
+$ErrorActionPreference = "Stop"
+$allGood = $true
 
-if (Test-Path "$cargoPath\cargo.exe") {
-    Write-Host "✅ Rust/Cargo is installed" -ForegroundColor Green
-    $cargoVersion = & "$cargoPath\cargo.exe" --version
-    Write-Host "   $cargoVersion" -ForegroundColor Gray
-} else {
-    Write-Host "❌ Rust/Cargo not found!" -ForegroundColor Red
-    Write-Host "   Please install Rust from: https://rustup.rs/" -ForegroundColor Yellow
-    Write-Host "   After installation, run this script again." -ForegroundColor Yellow
-    exit 1
-}
-
-# Check if Cargo is in PATH
-$currentPath = [System.Environment]::GetEnvironmentVariable("Path", [System.EnvironmentVariableTarget]::User)
-if ($currentPath -notlike "*$cargoPath*") {
-    Write-Host "`n📦 Adding Cargo to PATH permanently..." -ForegroundColor Yellow
-    
-    # Add to user PATH
-    $newPath = $currentPath
-    if ($newPath -and -not $newPath.EndsWith(";")) {
-        $newPath += ";"
-    }
-    $newPath += $cargoPath
-    
-    [System.Environment]::SetEnvironmentVariable(
-        "Path",
-        $newPath,
-        [System.EnvironmentVariableTarget]::User
-    )
-    
-    Write-Host "✅ Cargo added to PATH!" -ForegroundColor Green
-    Write-Host "   Note: You may need to restart your terminal/IDE for changes to take effect." -ForegroundColor Yellow
-} else {
-    Write-Host "`n✅ Cargo is already in PATH" -ForegroundColor Green
+# Function to check if a command exists
+function Test-Command {
+    param([string]$Command)
+    $null = Get-Command $Command -ErrorAction SilentlyContinue
+    return $?
 }
 
 # Check Node.js
-Write-Host "`nChecking for Node.js..." -ForegroundColor Yellow
-try {
+Write-Host "Checking Node.js..." -ForegroundColor Yellow
+if (Test-Command "node") {
     $nodeVersion = node --version
-    Write-Host "✅ Node.js found: $nodeVersion" -ForegroundColor Green
-} catch {
-    Write-Host "❌ Node.js not found!" -ForegroundColor Red
-    Write-Host "   Please install Node.js from: https://nodejs.org/" -ForegroundColor Yellow
+    Write-Host "  ✓ Node.js found: $nodeVersion" -ForegroundColor Green
+    
+    # Check if version is 18 or higher
+    $majorVersion = [int]($nodeVersion -replace 'v(\d+)\..*', '$1')
+    if ($majorVersion -lt 18) {
+        Write-Host "  ⚠ Warning: Node.js version 18+ recommended. Current: $nodeVersion" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  ✗ Node.js not found!" -ForegroundColor Red
+    Write-Host "    Please install Node.js from: https://nodejs.org/" -ForegroundColor Yellow
+    Write-Host "    After installing, restart your terminal and run this script again." -ForegroundColor Yellow
+    $allGood = $false
+}
+
+Write-Host ""
+
+# Check npm
+Write-Host "Checking npm..." -ForegroundColor Yellow
+if (Test-Command "npm") {
+    $npmVersion = npm --version
+    Write-Host "  ✓ npm found: $npmVersion" -ForegroundColor Green
+} else {
+    Write-Host "  ✗ npm not found!" -ForegroundColor Red
+    Write-Host "    npm should come with Node.js. Please reinstall Node.js." -ForegroundColor Yellow
+    $allGood = $false
+}
+
+Write-Host ""
+
+# Check Rust
+Write-Host "Checking Rust..." -ForegroundColor Yellow
+if (Test-Command "rustc") {
+    $rustVersion = rustc --version
+    Write-Host "  ✓ Rust found: $rustVersion" -ForegroundColor Green
+} else {
+    Write-Host "  ✗ Rust not found!" -ForegroundColor Red
+    Write-Host "    Please install Rust from: https://rustup.rs/" -ForegroundColor Yellow
+    Write-Host "    Or run: winget install Rustlang.Rustup" -ForegroundColor Yellow
+    Write-Host "    After installing, restart your terminal and run this script again." -ForegroundColor Yellow
+    $allGood = $false
+}
+
+Write-Host ""
+
+# Check Cargo
+Write-Host "Checking Cargo..." -ForegroundColor Yellow
+if (Test-Command "cargo") {
+    $cargoVersion = cargo --version
+    Write-Host "  ✓ Cargo found: $cargoVersion" -ForegroundColor Green
+} else {
+    Write-Host "  ✗ Cargo not found!" -ForegroundColor Red
+    
+    # Try to add Cargo to PATH if Rust is installed
+    $cargoPath = "$env:USERPROFILE\.cargo\bin"
+    if (Test-Path $cargoPath) {
+        Write-Host "  → Cargo found but not in PATH. Adding to PATH..." -ForegroundColor Yellow
+        try {
+            $currentPath = [System.Environment]::GetEnvironmentVariable("Path", [System.EnvironmentVariableTarget]::User)
+            if ($currentPath -notlike "*$cargoPath*") {
+                [System.Environment]::SetEnvironmentVariable(
+                    "Path",
+                    "$currentPath;$cargoPath",
+                    [System.EnvironmentVariableTarget]::User
+                )
+                Write-Host "  ✓ Added Cargo to PATH. Please restart your terminal." -ForegroundColor Green
+                Write-Host "    After restarting, run this script again to continue." -ForegroundColor Yellow
+                $allGood = $false
+            }
+        } catch {
+            Write-Host "  ✗ Failed to add Cargo to PATH automatically." -ForegroundColor Red
+            Write-Host "    Please manually add this to your PATH: $cargoPath" -ForegroundColor Yellow
+            Write-Host "    See REQUIREMENTS.md for instructions." -ForegroundColor Yellow
+            $allGood = $false
+        }
+    } else {
+        Write-Host "    Cargo should come with Rust. Please reinstall Rust." -ForegroundColor Yellow
+        $allGood = $false
+    }
+}
+
+Write-Host ""
+
+# If prerequisites are missing, exit
+if (-not $allGood) {
+    Write-Host "========================================" -ForegroundColor Red
+    Write-Host "  Setup incomplete. Please install" -ForegroundColor Red
+    Write-Host "  missing prerequisites and try again." -ForegroundColor Red
+    Write-Host "========================================" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Quick links:" -ForegroundColor Cyan
+    Write-Host "  • Node.js: https://nodejs.org/" -ForegroundColor White
+    Write-Host "  • Rust: https://rustup.rs/" -ForegroundColor White
+    Write-Host "  • Visual C++ Build Tools: https://visualstudio.microsoft.com/visual-cpp-build-tools/" -ForegroundColor White
     exit 1
 }
 
 # Install npm dependencies
-Write-Host "`n📦 Installing npm dependencies..." -ForegroundColor Yellow
-if (-not (Test-Path "node_modules")) {
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "  Installing npm dependencies..." -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+
+try {
     npm install
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "❌ Failed to install dependencies" -ForegroundColor Red
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host ""
+        Write-Host "========================================" -ForegroundColor Green
+        Write-Host "  ✓ Setup complete!" -ForegroundColor Green
+        Write-Host "========================================" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "You can now run the app with:" -ForegroundColor Cyan
+        Write-Host "  npm run tauri:dev" -ForegroundColor White
+        Write-Host ""
+        Write-Host "Or use the convenience scripts:" -ForegroundColor Cyan
+        Write-Host "  .\dev.ps1    (PowerShell)" -ForegroundColor White
+        Write-Host "  dev.bat      (Command Prompt)" -ForegroundColor White
+        Write-Host ""
+    } else {
+        Write-Host ""
+        Write-Host "✗ npm install failed. Please check the error messages above." -ForegroundColor Red
         exit 1
     }
-    Write-Host "✅ Dependencies installed" -ForegroundColor Green
-} else {
-    Write-Host "✅ Dependencies already installed" -ForegroundColor Green
+} catch {
+    Write-Host ""
+    Write-Host "✗ Error installing dependencies: $_" -ForegroundColor Red
+    exit 1
 }
-
-Write-Host "`n🎉 Setup complete!" -ForegroundColor Green
-Write-Host "`nYou can now run:" -ForegroundColor Cyan
-Write-Host "   npm run tauri:dev    (to start development)" -ForegroundColor White
-Write-Host "   npm run tauri:build  (to build for production)" -ForegroundColor White
-Write-Host "`nOr use the convenience scripts:" -ForegroundColor Cyan
-Write-Host "   .\dev.ps1  or  dev.bat" -ForegroundColor White
-
