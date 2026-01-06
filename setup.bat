@@ -265,7 +265,10 @@ if %ALL_GOOD% EQU 0 (
             echo Quick links:
             echo   • Node.js: https://nodejs.org/
             echo   • Rust: https://rustup.rs/
-            echo   • Visual C++ Build Tools: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+            echo   • Visual C++ Build Tools (REQUIRED for Rust):
+            echo     https://visualstudio.microsoft.com/visual-cpp-build-tools/
+            echo     NOTE: You do NOT need full Visual Studio, just the Build Tools!
+            echo     Select "C++ build tools" workload during installation.
             echo.
         )
     )

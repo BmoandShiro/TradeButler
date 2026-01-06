@@ -13,9 +13,16 @@
 - **Note:** After installing Rust, Cargo will be installed automatically at `%USERPROFILE%\.cargo\bin`
 
 ### 3. Microsoft Visual C++ Build Tools (Windows only)
-- **Required for:** Compiling Rust code on Windows
+- **Required for:** Compiling Rust code on Windows (provides `link.exe` that Rust needs)
 - **Download:** https://visualstudio.microsoft.com/visual-cpp-build-tools/
-- **Or install:** Visual Studio with C++ workload
+- **Note:** You do NOT need the full Visual Studio - just the Build Tools (much smaller download ~3GB vs ~10GB+)
+- **Installation:** 
+  1. Download the installer from the link above
+  2. Run the installer
+  3. Select "C++ build tools" workload
+  4. Make sure "MSVC v143 - VS 2022 C++ x64/x86 build tools" is checked
+  5. Click Install
+- **Alternative:** If you already have Visual Studio installed, make sure the "Desktop development with C++" workload is installed
 
 ## Quick Setup
 
