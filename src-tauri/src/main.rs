@@ -53,6 +53,9 @@ fn main() {
             commands::get_distribution_concentration,
             commands::get_tilt_metric,
             commands::fetch_stock_quote,
+            commands::get_strategy_checklist,
+            commands::save_strategy_checklist_item,
+            commands::delete_strategy_checklist_item,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2458,6 +2458,89 @@ pub fn save_pair_notes(entry_trade_id: i64, exit_trade_id: i64, notes: Option<St
     Ok(())
 }
 
+// Strategy Checklist Structures
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StrategyChecklistItem {
+    pub id: Option<i64>,
+    pub strategy_id: i64,
+    pub item_text: String,
+    pub is_checked: bool,
+    pub item_order: i64,
+}
+
+#[tauri::command]
+pub fn get_strategy_checklist(strategy_id: i64) -> Result<Vec<StrategyChecklistItem>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn
+        .prepare("SELECT id, strategy_id, item_text, is_checked, item_order FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY item_order ASC, id ASC")
+        .map_err(|e| e.to_string())?;
+    
+    let items_iter = stmt
+        .query_map(params![strategy_id], |row| {
+            Ok(StrategyChecklistItem {
+                id: Some(row.get(0)?),
+                strategy_id: row.get(1)?,
+                item_text: row.get(2)?,
+                is_checked: row.get::<_, i64>(3)? != 0,
+                item_order: row.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut items = Vec::new();
+    for item_result in items_iter {
+        items.push(item_result.map_err(|e| e.to_string())?);
+    }
+    
+    Ok(items)
+}
+
+#[tauri::command]
+pub fn save_strategy_checklist_item(
+    id: Option<i64>,
+    strategy_id: i64,
+    item_text: String,
+    is_checked: bool,
+    item_order: i64,
+) -> Result<i64, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let checked_int = if is_checked { 1 } else { 0 };
+    
+    if let Some(item_id) = id {
+        // Update existing item
+        conn.execute(
+            "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, updated_at = datetime('now') WHERE id = ?4",
+            params![item_text, checked_int, item_order, item_id],
+        ).map_err(|e| e.to_string())?;
+        Ok(item_id)
+    } else {
+        // Insert new item
+        conn.execute(
+            "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, created_at, updated_at) 
+             VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))",
+            params![strategy_id, item_text, checked_int, item_order],
+        ).map_err(|e| e.to_string())?;
+        Ok(conn.last_insert_rowid())
+    }
+}
+
+#[tauri::command]
+pub fn delete_strategy_checklist_item(id: i64) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    conn.execute(
+        "DELETE FROM strategy_checklists WHERE id = ?1",
+        params![id],
+    ).map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
 // Evaluation Metrics Structures
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WeekdayPerformance {

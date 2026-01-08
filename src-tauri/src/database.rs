@@ -132,6 +132,27 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         [],
     )?;
 
+    // Create strategy_checklists table for storing strategy checklist items
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS strategy_checklists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id INTEGER NOT NULL,
+            item_text TEXT NOT NULL,
+            is_checked INTEGER NOT NULL DEFAULT 0,
+            item_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (strategy_id) REFERENCES strategies(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+
+    // Create index for strategy_checklists
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_strategy_checklists_strategy ON strategy_checklists(strategy_id)",
+        [],
+    )?;
+
     Ok(())
 }
 

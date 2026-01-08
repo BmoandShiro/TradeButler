@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, Target, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, ChevronDown, ChevronRight, CheckSquare, X } from "lucide-react";
 import { format } from "date-fns";
 
 interface Strategy {
@@ -28,6 +28,14 @@ interface PairedTrade {
   strategy_id: number | null;
 }
 
+interface ChecklistItem {
+  id: number | null;
+  strategy_id: number;
+  item_text: string;
+  is_checked: boolean;
+  item_order: number;
+}
+
 export default function Strategies() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,6 +50,10 @@ export default function Strategies() {
   const [expandedStrategies, setExpandedStrategies] = useState<Set<number>>(new Set());
   const [strategyPairs, setStrategyPairs] = useState<Map<number, PairedTrade[]>>(new Map());
   const [loadingPairs, setLoadingPairs] = useState<Set<number>>(new Set());
+  const [strategyChecklists, setStrategyChecklists] = useState<Map<number, ChecklistItem[]>>(new Map());
+  const [showChecklistForStrategy, setShowChecklistForStrategy] = useState<number | null>(null);
+  const [editingChecklistItem, setEditingChecklistItem] = useState<ChecklistItem | null>(null);
+  const [newChecklistItemText, setNewChecklistItemText] = useState("");
 
   useEffect(() => {
     loadStrategies();
@@ -141,8 +153,97 @@ export default function Strategies() {
           setLoadingPairs(newLoading);
         }
       }
+      // Load checklist if not already loaded
+      if (!strategyChecklists.has(strategyId)) {
+        try {
+          const checklist = await invoke<ChecklistItem[]>("get_strategy_checklist", {
+            strategyId: strategyId,
+          });
+          setStrategyChecklists(new Map(strategyChecklists.set(strategyId, checklist)));
+        } catch (error) {
+          console.error("Error loading strategy checklist:", error);
+        }
+      }
     }
     setExpandedStrategies(newExpanded);
+  };
+
+  const loadChecklist = async (strategyId: number) => {
+    try {
+      const checklist = await invoke<ChecklistItem[]>("get_strategy_checklist", {
+        strategyId: strategyId,
+      });
+      setStrategyChecklists(new Map(strategyChecklists.set(strategyId, checklist)));
+    } catch (error) {
+      console.error("Error loading strategy checklist:", error);
+    }
+  };
+
+  const handleChecklistToggle = async (item: ChecklistItem) => {
+    try {
+      await invoke("save_strategy_checklist_item", {
+        id: item.id,
+        strategyId: item.strategy_id,
+        itemText: item.item_text,
+        isChecked: !item.is_checked,
+        itemOrder: item.item_order,
+      });
+      await loadChecklist(item.strategy_id);
+    } catch (error) {
+      console.error("Error updating checklist item:", error);
+    }
+  };
+
+  const handleAddChecklistItem = async (strategyId: number) => {
+    if (!newChecklistItemText.trim()) return;
+    
+    try {
+      const checklist = strategyChecklists.get(strategyId) || [];
+      const maxOrder = checklist.length > 0 
+        ? Math.max(...checklist.map(item => item.item_order)) 
+        : -1;
+      
+      await invoke("save_strategy_checklist_item", {
+        id: null,
+        strategyId: strategyId,
+        itemText: newChecklistItemText.trim(),
+        isChecked: false,
+        itemOrder: maxOrder + 1,
+      });
+      setNewChecklistItemText("");
+      await loadChecklist(strategyId);
+    } catch (error) {
+      console.error("Error adding checklist item:", error);
+    }
+  };
+
+  const handleEditChecklistItem = async (item: ChecklistItem, newText: string) => {
+    if (!newText.trim()) return;
+    
+    try {
+      await invoke("save_strategy_checklist_item", {
+        id: item.id,
+        strategyId: item.strategy_id,
+        itemText: newText.trim(),
+        isChecked: item.is_checked,
+        itemOrder: item.item_order,
+      });
+      setEditingChecklistItem(null);
+      await loadChecklist(item.strategy_id);
+    } catch (error) {
+      console.error("Error updating checklist item:", error);
+    }
+  };
+
+  const handleDeleteChecklistItem = async (item: ChecklistItem) => {
+    if (!item.id) return;
+    
+    try {
+      await invoke("delete_strategy_checklist_item", { id: item.id });
+      await loadChecklist(item.strategy_id);
+    } catch (error) {
+      console.error("Error deleting checklist item:", error);
+    }
   };
 
   if (loading) {
@@ -438,7 +539,32 @@ export default function Strategies() {
                       </p>
                     )}
                   </div>
-                  <div style={{ display: "flex", gap: "8px" }}>
+                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                    <select
+                      value={showChecklistForStrategy === strategy.id ? "checklist" : "trades"}
+                      onChange={(e) => {
+                        if (e.target.value === "checklist") {
+                          setShowChecklistForStrategy(strategy.id);
+                          if (!strategyChecklists.has(strategy.id)) {
+                            loadChecklist(strategy.id);
+                          }
+                        } else {
+                          setShowChecklistForStrategy(null);
+                        }
+                      }}
+                      style={{
+                        padding: "6px 12px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "6px",
+                        color: "var(--text-primary)",
+                        fontSize: "13px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <option value="trades">View Trades</option>
+                      <option value="checklist">Strategy Checklist</option>
+                    </select>
                     <button
                       onClick={() => handleEdit(strategy)}
                       style={{
@@ -479,73 +605,283 @@ export default function Strategies() {
                       backgroundColor: "var(--bg-tertiary)",
                     }}
                   >
-                    {isLoading ? (
-                      <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>Loading trade pairs...</p>
-                    ) : pairs.length === 0 ? (
-                      <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>No trade pairs found for this strategy.</p>
-                    ) : (
-                      <div style={{ overflowX: "auto" }}>
-                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                          <thead>
-                            <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
-                              <th style={{ padding: "8px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                                Symbol
-                              </th>
-                              <th style={{ padding: "8px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                                Entry Date
-                              </th>
-                              <th style={{ padding: "8px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                                Exit Date
-                              </th>
-                              <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                                Quantity
-                              </th>
-                              <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                                Entry Price
-                              </th>
-                              <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                                Exit Price
-                              </th>
-                              <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                                P&L
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {pairs.map((pair, idx) => (
-                              <tr key={`${pair.entry_trade_id}-${pair.exit_trade_id}-${idx}`} style={{ borderBottom: "1px solid var(--border-color)" }}>
-                                <td style={{ padding: "12px", fontSize: "14px" }}>{pair.symbol}</td>
-                                <td style={{ padding: "12px", fontSize: "14px" }}>
-                                  {format(new Date(pair.entry_timestamp), "MMM dd, yyyy HH:mm")}
-                                </td>
-                                <td style={{ padding: "12px", fontSize: "14px" }}>
-                                  {format(new Date(pair.exit_timestamp), "MMM dd, yyyy HH:mm")}
-                                </td>
-                                <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
-                                  {pair.quantity.toFixed(4)}
-                                </td>
-                                <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
-                                  ${pair.entry_price.toFixed(2)}
-                                </td>
-                                <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
-                                  ${pair.exit_price.toFixed(2)}
-                                </td>
-                                <td
-                                  style={{
-                                    padding: "12px",
-                                    fontSize: "14px",
-                                    textAlign: "right",
-                                    fontWeight: "600",
-                                    color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
-                                  }}
-                                >
-                                  ${pair.net_profit_loss.toFixed(2)}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                    {showChecklistForStrategy === strategy.id ? (
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+                          <CheckSquare size={20} style={{ color: "var(--accent)" }} />
+                          <h3 style={{ fontSize: "16px", fontWeight: "600" }}>Strategy Checklist</h3>
+                        </div>
+                        <div style={{ marginBottom: "16px" }}>
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <input
+                              type="text"
+                              value={newChecklistItemText}
+                              onChange={(e) => setNewChecklistItemText(e.target.value)}
+                              onKeyPress={(e) => {
+                                if (e.key === "Enter") {
+                                  handleAddChecklistItem(strategy.id);
+                                }
+                              }}
+                              placeholder="Add a new checklist item..."
+                              style={{
+                                flex: 1,
+                                padding: "8px 12px",
+                                backgroundColor: "var(--bg-secondary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "6px",
+                                color: "var(--text-primary)",
+                                fontSize: "14px",
+                              }}
+                            />
+                            <button
+                              onClick={() => handleAddChecklistItem(strategy.id)}
+                              style={{
+                                background: "var(--accent)",
+                                border: "none",
+                                borderRadius: "6px",
+                                padding: "8px 16px",
+                                color: "white",
+                                cursor: "pointer",
+                                fontSize: "14px",
+                                fontWeight: "500",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "6px",
+                              }}
+                            >
+                              <Plus size={16} />
+                              Add
+                            </button>
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                          {(strategyChecklists.get(strategy.id) || []).map((item) => (
+                            <div
+                              key={item.id || `temp-${item.item_order}`}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "12px",
+                                padding: "12px",
+                                backgroundColor: "var(--bg-secondary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "6px",
+                              }}
+                            >
+                              <div
+                                onClick={() => handleChecklistToggle(item)}
+                                style={{
+                                  width: "20px",
+                                  height: "20px",
+                                  minWidth: "20px",
+                                  border: "2px solid var(--border-color)",
+                                  borderRadius: "4px",
+                                  backgroundColor: item.is_checked ? "var(--accent)" : "var(--bg-tertiary)",
+                                  cursor: "pointer",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  transition: "all 0.2s ease",
+                                  position: "relative",
+                                }}
+                              >
+                                {item.is_checked && (
+                                  <svg
+                                    width="12"
+                                    height="12"
+                                    viewBox="0 0 12 12"
+                                    fill="none"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                  >
+                                    <path
+                                      d="M10 3L4.5 8.5L2 6"
+                                      stroke="white"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </svg>
+                                )}
+                              </div>
+                              {editingChecklistItem?.id === item.id ? (
+                                <div style={{ flex: 1, display: "flex", gap: "8px", alignItems: "center" }}>
+                                  <input
+                                    type="text"
+                                    defaultValue={item.item_text}
+                                    onBlur={(e) => {
+                                      if (e.target.value.trim() && e.target.value !== item.item_text) {
+                                        handleEditChecklistItem(item, e.target.value);
+                                      } else {
+                                        setEditingChecklistItem(null);
+                                      }
+                                    }}
+                                    onKeyPress={(e) => {
+                                      if (e.key === "Enter") {
+                                        const newText = (e.target as HTMLInputElement).value;
+                                        if (newText.trim() && newText !== item.item_text) {
+                                          handleEditChecklistItem(item, newText);
+                                        } else {
+                                          setEditingChecklistItem(null);
+                                        }
+                                      } else if (e.key === "Escape") {
+                                        setEditingChecklistItem(null);
+                                      }
+                                    }}
+                                    autoFocus
+                                    style={{
+                                      flex: 1,
+                                      padding: "6px 10px",
+                                      backgroundColor: "var(--bg-tertiary)",
+                                      border: "1px solid var(--accent)",
+                                      borderRadius: "4px",
+                                      color: "var(--text-primary)",
+                                      fontSize: "14px",
+                                    }}
+                                  />
+                                  <button
+                                    onClick={() => setEditingChecklistItem(null)}
+                                    style={{
+                                      background: "none",
+                                      border: "none",
+                                      color: "var(--text-secondary)",
+                                      cursor: "pointer",
+                                      padding: "4px",
+                                      display: "flex",
+                                      alignItems: "center",
+                                    }}
+                                  >
+                                    <X size={16} />
+                                  </button>
+                                </div>
+                              ) : (
+                                <>
+                                  <span
+                                    style={{
+                                      flex: 1,
+                                      fontSize: "14px",
+                                      textDecoration: item.is_checked ? "line-through" : "none",
+                                      opacity: item.is_checked ? 0.6 : 1,
+                                      color: item.is_checked ? "var(--text-secondary)" : "var(--text-primary)",
+                                      cursor: "pointer",
+                                    }}
+                                    onClick={() => setEditingChecklistItem(item)}
+                                  >
+                                    {item.item_text}
+                                  </span>
+                                  <div style={{ display: "flex", gap: "4px" }}>
+                                    <button
+                                      onClick={() => setEditingChecklistItem(item)}
+                                      style={{
+                                        background: "none",
+                                        border: "none",
+                                        color: "var(--text-secondary)",
+                                        cursor: "pointer",
+                                        padding: "4px",
+                                        display: "flex",
+                                        alignItems: "center",
+                                      }}
+                                      title="Edit"
+                                    >
+                                      <Edit2 size={14} />
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteChecklistItem(item)}
+                                      style={{
+                                        background: "none",
+                                        border: "none",
+                                        color: "var(--danger)",
+                                        cursor: "pointer",
+                                        padding: "4px",
+                                        display: "flex",
+                                        alignItems: "center",
+                                      }}
+                                      title="Delete"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          ))}
+                          {(!strategyChecklists.get(strategy.id) || strategyChecklists.get(strategy.id)!.length === 0) && (
+                            <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "20px", fontSize: "14px" }}>
+                              No checklist items yet. Add one above to get started.
+                            </p>
+                          )}
+                        </div>
                       </div>
+                    ) : (
+                      <>
+                        {isLoading ? (
+                          <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>Loading trade pairs...</p>
+                        ) : pairs.length === 0 ? (
+                          <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>No trade pairs found for this strategy.</p>
+                        ) : (
+                          <div style={{ overflowX: "auto" }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                              <thead>
+                                <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                  <th style={{ padding: "8px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                    Symbol
+                                  </th>
+                                  <th style={{ padding: "8px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                    Entry Date
+                                  </th>
+                                  <th style={{ padding: "8px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                    Exit Date
+                                  </th>
+                                  <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                    Quantity
+                                  </th>
+                                  <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                    Entry Price
+                                  </th>
+                                  <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                    Exit Price
+                                  </th>
+                                  <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                                    P&L
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {pairs.map((pair, idx) => (
+                                  <tr key={`${pair.entry_trade_id}-${pair.exit_trade_id}-${idx}`} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                    <td style={{ padding: "12px", fontSize: "14px" }}>{pair.symbol}</td>
+                                    <td style={{ padding: "12px", fontSize: "14px" }}>
+                                      {format(new Date(pair.entry_timestamp), "MMM dd, yyyy HH:mm")}
+                                    </td>
+                                    <td style={{ padding: "12px", fontSize: "14px" }}>
+                                      {format(new Date(pair.exit_timestamp), "MMM dd, yyyy HH:mm")}
+                                    </td>
+                                    <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
+                                      {pair.quantity.toFixed(4)}
+                                    </td>
+                                    <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
+                                      ${pair.entry_price.toFixed(2)}
+                                    </td>
+                                    <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
+                                      ${pair.exit_price.toFixed(2)}
+                                    </td>
+                                    <td
+                                      style={{
+                                        padding: "12px",
+                                        fontSize: "14px",
+                                        textAlign: "right",
+                                        fontWeight: "600",
+                                        color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
+                                      }}
+                                    >
+                                      ${pair.net_profit_loss.toFixed(2)}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 )}
