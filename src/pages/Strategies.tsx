@@ -950,13 +950,38 @@ export default function Strategies() {
             {/* Tab Content */}
             <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
               {activeTab === "notes" && (selectedStrategy !== null || isCreating) && (
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "20px" }}>
-                  <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "16px" }}>Strategy Details</h3>
-                  <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "24px" }}>
+                  <div style={{ marginBottom: "20px" }}>
+                    <h3 style={{ 
+                      fontSize: "20px", 
+                      fontWeight: "600", 
+                      marginBottom: "8px",
+                      color: "var(--text-primary)"
+                    }}>
+                      Strategy Details
+                    </h3>
+                    <p style={{ 
+                      fontSize: "13px", 
+                      color: "var(--text-secondary)",
+                      margin: 0
+                    }}>
+                      Document your trading strategy, rules, and insights with rich text formatting
+                    </p>
+                  </div>
+                  <div style={{ 
+                    flex: 1, 
+                    display: "flex", 
+                    flexDirection: "column", 
+                    overflow: "hidden", 
+                    minHeight: 0,
+                    backgroundColor: "var(--bg-secondary)",
+                    borderRadius: "8px",
+                    padding: "1px"
+                  }}>
                     <RichTextEditor
                       value={isCreating ? newStrategyNotes : (notesContent.get(selectedStrategy || 0) || selectedStrategyData?.notes || "")}
                       onChange={(content: string) => handleNotesChange(isCreating ? null : selectedStrategy, content)}
-                      placeholder="Add your strategy details here. You can format text, add images, and more..."
+                      placeholder="Start writing your strategy details... Use the toolbar above to format your text, add headings, lists, and more."
                       readOnly={!isEditing && !isCreating}
                     />
                   </div>
