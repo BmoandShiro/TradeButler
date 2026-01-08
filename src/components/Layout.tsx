@@ -195,8 +195,10 @@ export default function Layout({ children }: LayoutProps) {
       <main
         style={{
           flex: 1,
-          overflow: "auto",
+          overflow: "hidden",
           backgroundColor: "var(--bg-primary)",
+          display: "flex",
+          flexDirection: "column",
         }}
       >
         {children}

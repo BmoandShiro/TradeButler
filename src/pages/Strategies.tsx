@@ -517,7 +517,7 @@ export default function Strategies() {
   const isLoadingPairs = selectedStrategy ? loadingPairs.has(selectedStrategy) : false;
 
   return (
-    <div style={{ display: "flex", height: "calc(100vh - 60px)", overflow: "hidden" }}>
+    <div style={{ display: "flex", height: "100%", overflow: "hidden", flex: 1 }}>
       {/* Left Panel - Strategy List */}
       <div
         style={{
