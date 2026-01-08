@@ -157,8 +157,6 @@ export default function Strategies() {
   useEffect(() => {
     if (selectedStrategy) {
       loadStrategyData(selectedStrategy);
-      setIsEditing(false);
-      setIsCreating(false);
     }
   }, [selectedStrategy, activeTab]);
 
@@ -212,6 +210,18 @@ export default function Strategies() {
   };
 
   const loadStrategyData = async (strategyId: number) => {
+    // Always sync notes from strategies array to notesContent to ensure they're up to date
+    const strategy = strategies.find((s) => s.id === strategyId);
+    if (strategy) {
+      // Only update if we're not currently editing (to preserve unsaved changes)
+      if (!isEditing || !notesContent.has(strategyId)) {
+        const notesToSet = strategy.notes || "";
+        if (notesContent.get(strategyId) !== notesToSet) {
+          setNotesContent(new Map(notesContent.set(strategyId, notesToSet)));
+        }
+      }
+    }
+    
     // Load trades
     if (activeTab === "trades" && !strategyPairs.has(strategyId)) {
       setLoadingPairs(new Set([...loadingPairs, strategyId]));
@@ -404,6 +414,13 @@ export default function Strategies() {
         description: selectedStrategyData.description || "",
         color: selectedStrategyData.color || "#3b82f6",
       });
+      // Ensure notes are loaded into notesContent for editing
+      if (selectedStrategyData.notes && !notesContent.has(selectedStrategyData.id)) {
+        setNotesContent(new Map(notesContent.set(selectedStrategyData.id, selectedStrategyData.notes)));
+      } else if (!selectedStrategyData.notes) {
+        // Initialize empty notes if none exist
+        setNotesContent(new Map(notesContent.set(selectedStrategyData.id, "")));
+      }
     }
   };
 
@@ -434,6 +451,12 @@ export default function Strategies() {
         description: selectedStrategyData.description || "",
         color: selectedStrategyData.color || "#3b82f6",
       });
+      // Reset notes to original value from database
+      if (selectedStrategyData.notes) {
+        setNotesContent(new Map(notesContent.set(selectedStrategyData.id, selectedStrategyData.notes)));
+      } else {
+        setNotesContent(new Map(notesContent.set(selectedStrategyData.id, "")));
+      }
     }
   };
 
@@ -565,8 +588,11 @@ export default function Strategies() {
                     onClick={() => {
                       setSelectedStrategy(strategy.id);
                       setActiveTab("notes");
-                      setIsEditing(false);
-                      setIsCreating(false);
+                      // Only reset editing/creating when switching to a different strategy
+                      if (selectedStrategy !== strategy.id) {
+                        setIsEditing(false);
+                        setIsCreating(false);
+                      }
                     }}
                     style={{
                       padding: "12px",
@@ -979,6 +1005,7 @@ export default function Strategies() {
                     padding: "1px"
                   }}>
                     <RichTextEditor
+                      key={`${selectedStrategy || 'new'}-${isEditing ? 'edit' : 'view'}`}
                       value={isCreating ? newStrategyNotes : (notesContent.get(selectedStrategy || 0) || selectedStrategyData?.notes || "")}
                       onChange={(content: string) => handleNotesChange(isCreating ? null : selectedStrategy, content)}
                       placeholder="Start writing your strategy details... Use the toolbar above to format your text, add headings, lists, and more."
