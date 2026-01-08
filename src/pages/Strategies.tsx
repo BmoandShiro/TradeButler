@@ -1,6 +1,6 @@
 import { useEffect, useState, Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight } from "lucide-react";
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import {
@@ -69,7 +69,8 @@ function SortableChecklistItem({
   editingText,
   onEditingTextChange,
   onSaveEdit,
-  onCancelEdit
+  onCancelEdit,
+  isGroup = false
 }: { 
   item: ChecklistItem; 
   onDelete: () => void; 
@@ -82,6 +83,7 @@ function SortableChecklistItem({
   onEditingTextChange: (text: string) => void;
   onSaveEdit: () => void;
   onCancelEdit: () => void;
+  isGroup?: boolean;
 }) {
   const {
     attributes,
@@ -105,13 +107,18 @@ function SortableChecklistItem({
         ...style,
         display: "flex",
         alignItems: "center",
-        gap: "8px",
-        padding: "10px",
-        backgroundColor: isSelected ? "var(--accent)" : "var(--bg-tertiary)",
-        border: `1px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
-        borderRadius: "6px",
-        marginBottom: "8px",
-        marginLeft: item.parent_id ? "24px" : "0",
+        gap: isGroup ? "10px" : "8px",
+        padding: isGroup ? "14px 16px" : "12px 14px",
+        backgroundColor: isSelected ? "var(--accent)" : (isGroup ? "var(--bg-secondary)" : "var(--bg-tertiary)"),
+        border: isGroup 
+          ? `2px solid ${isSelected ? "var(--accent)" : "var(--accent)"}`
+          : `1px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
+        borderRadius: isGroup ? "8px" : "6px",
+        marginBottom: isGroup ? "12px" : "8px",
+        marginLeft: item.parent_id ? "0" : "0",
+        boxShadow: isGroup 
+          ? (isSelected ? "0 2px 8px rgba(0, 0, 0, 0.2)" : "0 1px 4px rgba(0, 0, 0, 0.1)")
+          : "none",
       }}
     >
       {isEditing && !isEditingText && (
@@ -132,7 +139,7 @@ function SortableChecklistItem({
             {...listeners}
             style={{
               cursor: "grab",
-              color: "var(--text-secondary)",
+              color: isSelected ? "white" : "var(--text-secondary)",
               display: "flex",
               alignItems: "center",
             }}
@@ -140,6 +147,9 @@ function SortableChecklistItem({
             <GripVertical size={16} />
           </div>
         </>
+      )}
+      {isGroup && !isEditingText && (
+        <Folder size={18} style={{ color: isSelected ? "white" : "var(--accent)", flexShrink: 0 }} />
       )}
       {isEditingText ? (
         <input
@@ -162,7 +172,8 @@ function SortableChecklistItem({
             border: "1px solid var(--accent)",
             borderRadius: "4px",
             color: "var(--text-primary)",
-            fontSize: "14px",
+            fontSize: isGroup ? "15px" : "14px",
+            fontWeight: isGroup ? "600" : "400",
             outline: "none",
           }}
         />
@@ -170,7 +181,8 @@ function SortableChecklistItem({
         <div 
           style={{ 
             flex: 1, 
-            fontSize: "14px", 
+            fontSize: isGroup ? "15px" : "14px",
+            fontWeight: isGroup ? "600" : "400",
             color: isSelected ? "white" : "var(--text-primary)",
             cursor: isEditing ? "text" : "default",
           }}
@@ -300,9 +312,10 @@ function ChecklistSection({
   };
   
   return (
-    <div style={{ marginBottom: "32px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-        <h4 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)" }}>
+    <div style={{ marginBottom: "40px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px", paddingBottom: "12px", borderBottom: "2px solid var(--border-color)" }}>
+        <h4 style={{ fontSize: "18px", fontWeight: "700", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
+          <ListChecks size={18} style={{ color: "var(--accent)" }} />
           {title}
         </h4>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -376,7 +389,8 @@ function ChecklistSection({
             {groups.map((group) => {
               const children = itemsByParent.get(group.id) || [];
               return (
-                <div key={group.id} style={{ marginBottom: "12px" }}>
+                <div key={group.id} style={{ marginBottom: "20px", position: "relative" }}>
+                  {/* Group Header - Enhanced styling */}
                   <SortableChecklistItem
                     item={group}
                     onDelete={() => deleteChecklistItem(selectedStrategy, group.id, type)}
@@ -389,43 +403,71 @@ function ChecklistSection({
                     onEditingTextChange={setEditingItemText}
                     onSaveEdit={() => saveEditedItem(group.id, editingItemText)}
                     onCancelEdit={cancelEditingItem}
+                    isGroup={true}
                   />
-                  {children.map((child) => (
-                    <SortableChecklistItem
-                      key={child.id}
-                      item={child}
-                      onDelete={() => deleteChecklistItem(selectedStrategy, child.id, type)}
-                      isEditing={isEditing}
-                      isSelected={selectedChecklistItems.has(child.id)}
-                      onSelect={(selected) => handleToggleSelect(child.id, selected)}
-                      onEdit={() => startEditingItem(child)}
-                      isEditingText={editingItemId === child.id}
-                      editingText={editingItemText}
-                      onEditingTextChange={setEditingItemText}
-                      onSaveEdit={() => saveEditedItem(child.id, editingItemText)}
-                      onCancelEdit={cancelEditingItem}
-                    />
-                  ))}
+                  {/* Group Children - with visual connection */}
+                  {children.length > 0 && (
+                    <div style={{ 
+                      position: "relative", 
+                      marginLeft: "20px", 
+                      paddingLeft: "24px", 
+                      borderLeft: "2px solid var(--accent)",
+                      opacity: 0.6,
+                    }}>
+                      {children.map((child, index) => (
+                        <div key={child.id} style={{ position: "relative" }}>
+                          {index < children.length - 1 && (
+                            <div style={{
+                              position: "absolute",
+                              left: "-26px",
+                              top: "24px",
+                              width: "2px",
+                              height: "calc(100% + 8px)",
+                              backgroundColor: "var(--accent)",
+                              opacity: 0.4,
+                            }} />
+                          )}
+                          <SortableChecklistItem
+                            item={child}
+                            onDelete={() => deleteChecklistItem(selectedStrategy, child.id, type)}
+                            isEditing={isEditing}
+                            isSelected={selectedChecklistItems.has(child.id)}
+                            onSelect={(selected) => handleToggleSelect(child.id, selected)}
+                            onEdit={() => startEditingItem(child)}
+                            isEditingText={editingItemId === child.id}
+                            editingText={editingItemText}
+                            onEditingTextChange={setEditingItemText}
+                            onSaveEdit={() => saveEditedItem(child.id, editingItemText)}
+                            onCancelEdit={cancelEditingItem}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
             {/* Render regular (ungrouped) items */}
-            {regularItems.map((item) => (
-              <SortableChecklistItem
-                key={item.id}
-                item={item}
-                onDelete={() => deleteChecklistItem(selectedStrategy, item.id, type)}
-                isEditing={isEditing}
-                isSelected={selectedChecklistItems.has(item.id)}
-                onSelect={(selected) => handleToggleSelect(item.id, selected)}
-                onEdit={() => startEditingItem(item)}
-                isEditingText={editingItemId === item.id}
-                editingText={editingItemText}
-                onEditingTextChange={setEditingItemText}
-                onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
-                onCancelEdit={cancelEditingItem}
-              />
-            ))}
+            {regularItems.length > 0 && (
+              <div style={{ marginTop: regularItems.length > 0 && groups.length > 0 ? "24px" : "0" }}>
+                {regularItems.map((item) => (
+                  <SortableChecklistItem
+                    key={item.id}
+                    item={item}
+                    onDelete={() => deleteChecklistItem(selectedStrategy, item.id, type)}
+                    isEditing={isEditing}
+                    isSelected={selectedChecklistItems.has(item.id)}
+                    onSelect={(selected) => handleToggleSelect(item.id, selected)}
+                    onEdit={() => startEditingItem(item)}
+                    isEditingText={editingItemId === item.id}
+                    editingText={editingItemText}
+                    onEditingTextChange={setEditingItemText}
+                    onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
+                    onCancelEdit={cancelEditingItem}
+                  />
+                ))}
+              </div>
+            )}
           </SortableContext>
         </DndContext>
       ) : (
@@ -434,44 +476,68 @@ function ChecklistSection({
           {groups.map((group) => {
             const children = itemsByParent.get(group.id) || [];
             return (
-              <div key={group.id} style={{ marginBottom: "12px" }}>
+              <div key={group.id} style={{ marginBottom: "20px", position: "relative" }}>
                 <div
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: "8px",
-                    padding: "10px",
-                    backgroundColor: "var(--bg-tertiary)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "6px",
-                    marginBottom: "8px",
+                    gap: "10px",
+                    padding: "14px 16px",
+                    backgroundColor: "var(--bg-secondary)",
+                    border: "2px solid var(--accent)",
+                    borderRadius: "8px",
+                    marginBottom: "12px",
                     fontWeight: "600",
+                    boxShadow: "0 1px 4px rgba(0, 0, 0, 0.1)",
                   }}
                 >
-                  <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
+                  <Folder size={18} style={{ color: "var(--accent)", flexShrink: 0 }} />
+                  <div style={{ flex: 1, fontSize: "15px", fontWeight: "600", color: "var(--text-primary)" }}>
                     {group.item_text}
                   </div>
                 </div>
-                {children.map((child) => (
-                  <div
-                    key={child.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      padding: "10px",
-                      backgroundColor: "var(--bg-tertiary)",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: "6px",
-                      marginBottom: "8px",
-                      marginLeft: "24px",
-                    }}
-                  >
-                    <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
-                      {child.item_text}
-                    </div>
+                {children.length > 0 && (
+                  <div style={{ 
+                    position: "relative", 
+                    marginLeft: "20px", 
+                    paddingLeft: "24px", 
+                    borderLeft: "2px solid var(--accent)",
+                    opacity: 0.6,
+                  }}>
+                    {children.map((child, index) => (
+                      <div key={child.id} style={{ position: "relative" }}>
+                        {index < children.length - 1 && (
+                          <div style={{
+                            position: "absolute",
+                            left: "-26px",
+                            top: "24px",
+                            width: "2px",
+                            height: "calc(100% + 8px)",
+                            backgroundColor: "var(--accent)",
+                            opacity: 0.4,
+                          }} />
+                        )}
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            padding: "12px 14px",
+                            backgroundColor: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "6px",
+                            marginBottom: "8px",
+                          }}
+                        >
+                          <ChevronRight size={14} style={{ color: "var(--text-secondary)", opacity: 0.5 }} />
+                          <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
+                            {child.item_text}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
             );
           })}
@@ -483,7 +549,7 @@ function ChecklistSection({
                 display: "flex",
                 alignItems: "center",
                 gap: "8px",
-                padding: "10px",
+                padding: "12px 14px",
                 backgroundColor: "var(--bg-tertiary)",
                 border: "1px solid var(--border-color)",
                 borderRadius: "6px",
@@ -498,7 +564,15 @@ function ChecklistSection({
         </div>
       )}
       {isEditing && (
-        <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+        <div style={{ 
+          display: "flex", 
+          gap: "10px", 
+          marginTop: "16px",
+          padding: "16px",
+          backgroundColor: "var(--bg-secondary)",
+          borderRadius: "8px",
+          border: "1px dashed var(--border-color)",
+        }}>
           <input
             type="text"
             value={currentValue}
@@ -518,13 +592,17 @@ function ChecklistSection({
             placeholder={`Add ${title.toLowerCase()} item...`}
             style={{
               flex: 1,
-              padding: "10px",
-              backgroundColor: "var(--bg-secondary)",
+              padding: "12px 14px",
+              backgroundColor: "var(--bg-primary)",
               border: "1px solid var(--border-color)",
               borderRadius: "6px",
               color: "var(--text-primary)",
               fontSize: "14px",
+              outline: "none",
+              transition: "border-color 0.2s",
             }}
+            onFocus={(e) => e.target.style.borderColor = "var(--accent)"}
+            onBlur={(e) => e.target.style.borderColor = "var(--border-color)"}
           />
           <button
             onClick={() => addChecklistItem(selectedStrategy, type, currentValue)}
@@ -532,14 +610,23 @@ function ChecklistSection({
               background: "var(--accent)",
               border: "none",
               borderRadius: "6px",
-              padding: "10px 16px",
+              padding: "12px 20px",
               color: "white",
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
               gap: "6px",
               fontSize: "14px",
-              fontWeight: "500",
+              fontWeight: "600",
+              transition: "opacity 0.2s, transform 0.2s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.opacity = "0.9";
+              e.currentTarget.style.transform = "translateY(-1px)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.opacity = "1";
+              e.currentTarget.style.transform = "translateY(0)";
             }}
           >
             <Plus size={16} />
@@ -1886,9 +1973,11 @@ export default function Strategies() {
                 const allTypes = [...defaultTypes, ...customTypes.filter(t => !defaultTypes.includes(t))];
 
                 return (
-                  <div style={{ padding: "20px", overflowY: "auto" }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
-                      <h3 style={{ fontSize: "18px", fontWeight: "600" }}>Checklists</h3>
+                  <div style={{ padding: "24px", overflowY: "auto" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "32px", paddingBottom: "16px", borderBottom: "1px solid var(--border-color)" }}>
+                      <h2 style={{ fontSize: "24px", fontWeight: "700", color: "var(--text-primary)", margin: 0 }}>
+                        Checklists
+                      </h2>
                       {isEditing && (
                         <button
                           onClick={() => setShowNewChecklistModal(true)}
