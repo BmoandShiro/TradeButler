@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef, Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight } from "lucide-react";
+import { open } from "@tauri-apps/api/dialog";
+import { readTextFile } from "@tauri-apps/api/fs";
+import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload } from "lucide-react";
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import {
@@ -672,6 +674,9 @@ export default function Strategies() {
   const [strategyToDelete, setStrategyToDelete] = useState<number | null>(null);
   const [showNameRequiredModal, setShowNameRequiredModal] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const [tempChecklists, setTempChecklists] = useState<Map<string, ChecklistItem[]>>(new Map());
+  const [pendingTradeIds, setPendingTradeIds] = useState<number[]>([]);
+  const [isImportingCSV, setIsImportingCSV] = useState(false);
   
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -827,6 +832,35 @@ export default function Strategies() {
 
   const addChecklistItem = async (strategyId: number, type: string, text: string) => {
     if (!text.trim()) return;
+    
+    // If creating (virtual strategy ID), use tempChecklists
+    if (strategyId === -1) {
+      const currentChecklist = new Map(tempChecklists);
+      const items = currentChecklist.get(type) || [];
+      const maxOrder = items.length > 0 ? Math.max(...items.map(i => i.item_order)) : -1;
+      
+      const newItem: ChecklistItem = {
+        id: Date.now(), // Temporary ID
+        strategy_id: -1,
+        item_text: text.trim(),
+        is_checked: false,
+        item_order: maxOrder + 1,
+        checklist_type: type,
+        parent_id: null,
+      };
+
+      const updatedChecklist = new Map(currentChecklist);
+      updatedChecklist.set(type, [...items, newItem]);
+      setTempChecklists(updatedChecklist);
+      // Clear the input field for this type
+      setNewChecklistItem(prev => {
+        const newMap = new Map(prev);
+        newMap.set(type, "");
+        return newMap;
+      });
+      return;
+    }
+    
     try {
       const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
       const items = currentChecklist.get(type) || [];
@@ -868,6 +902,17 @@ export default function Strategies() {
   };
 
   const deleteChecklistItem = async (strategyId: number, itemId: number, type: string) => {
+    // If creating (virtual strategy ID), use tempChecklists
+    if (strategyId === -1) {
+      const currentChecklist = tempChecklists;
+      const items = currentChecklist.get(type) || [];
+      const updatedItems = items.filter(item => item.id !== itemId);
+      const updatedChecklist = new Map(currentChecklist);
+      updatedChecklist.set(type, updatedItems);
+      setTempChecklists(updatedChecklist);
+      return;
+    }
+    
     try {
       await invoke("delete_strategy_checklist_item", { id: itemId });
       const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
@@ -928,6 +973,40 @@ export default function Strategies() {
 
   const groupChecklistItems = async (strategyId: number, type: string, itemIds: number[], groupName: string) => {
     if (itemIds.length === 0 || !groupName.trim()) return;
+    
+    // If creating (virtual strategy ID), use tempChecklists
+    if (strategyId === -1) {
+      const items = tempChecklists.get(type) || [];
+      const selectedItems = items.filter(item => itemIds.includes(item.id));
+      const otherItems = items.filter(item => !itemIds.includes(item.id));
+      
+      // Create group item
+      const groupItem: ChecklistItem = {
+        id: Date.now(),
+        strategy_id: -1,
+        item_text: groupName.trim(),
+        is_checked: false,
+        item_order: items.length > 0 ? Math.max(...items.map(i => i.item_order)) + 1 : 0,
+        checklist_type: type,
+        parent_id: null,
+      };
+      
+      // Update selected items to have group as parent
+      const updatedSelectedItems = selectedItems.map(item => ({
+        ...item,
+        parent_id: groupItem.id,
+      }));
+      
+      const updatedChecklist = new Map(tempChecklists);
+      updatedChecklist.set(type, [...otherItems, groupItem, ...updatedSelectedItems]);
+      setTempChecklists(updatedChecklist);
+      setSelectedChecklistItems(new Set());
+      setShowGroupModal(false);
+      setGroupName("");
+      setPendingGroupAction(null);
+      return;
+    }
+    
     try {
       await invoke<number>("group_checklist_items", {
         itemIds: itemIds,
@@ -965,6 +1044,21 @@ export default function Strategies() {
 
   const ungroupChecklistItems = async (itemIds: number[]) => {
     if (itemIds.length === 0) return;
+    
+    // If creating, update tempChecklists
+    if (isCreating) {
+      const updatedChecklist = new Map(tempChecklists);
+      for (const [type, items] of updatedChecklist.entries()) {
+        const updatedItems = items.map(item => 
+          itemIds.includes(item.id) ? { ...item, parent_id: null } : item
+        );
+        updatedChecklist.set(type, updatedItems);
+      }
+      setTempChecklists(updatedChecklist);
+      setSelectedChecklistItems(new Set());
+      return;
+    }
+    
     try {
       await invoke("ungroup_checklist_items", { itemIds: itemIds });
       setSelectedChecklistItems(new Set());
@@ -984,6 +1078,26 @@ export default function Strategies() {
 
   const saveEditedItem = async (itemId: number, newText: string) => {
     if (!newText.trim()) {
+      setEditingItemId(null);
+      setEditingItemText("");
+      return;
+    }
+    
+    // If creating, update tempChecklists
+    if (isCreating) {
+      const allItems: ChecklistItem[] = [];
+      for (const items of tempChecklists.values()) {
+        allItems.push(...items);
+      }
+      const item = allItems.find(i => i.id === itemId);
+      if (item) {
+        const type = item.checklist_type;
+        const items = tempChecklists.get(type) || [];
+        const updatedItems = items.map(i => i.id === itemId ? { ...i, item_text: newText.trim() } : i);
+        const updatedChecklist = new Map(tempChecklists);
+        updatedChecklist.set(type, updatedItems);
+        setTempChecklists(updatedChecklist);
+      }
       setEditingItemId(null);
       setEditingItemText("");
       return;
@@ -1070,6 +1184,42 @@ export default function Strategies() {
     setActiveTab("notes");
   };
 
+  const handleImportCSVForStrategy = async () => {
+    try {
+      setIsImportingCSV(true);
+      const file = await open({
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+        multiple: false,
+      });
+
+      if (!file) {
+        setIsImportingCSV(false);
+        return;
+      }
+
+      // Handle both string (single file) and array (multiple files) cases
+      const filePath = Array.isArray(file) ? file[0] : file;
+      
+      if (filePath && typeof filePath === "string") {
+        const contents = await readTextFile(filePath);
+        const importedTradeIds = await invoke<number[]>("import_trades_csv", { csvData: contents });
+        if (importedTradeIds && importedTradeIds.length > 0) {
+          setPendingTradeIds(prev => [...prev, ...importedTradeIds]);
+          alert(`Trades imported successfully! ${importedTradeIds.length} trade(s) will be assigned to this strategy when you save.`);
+        } else {
+          alert("No new trades were imported. They may have been duplicates.");
+        }
+      } else {
+        alert("Please select a valid CSV file.");
+      }
+    } catch (error) {
+      console.error("Error importing CSV:", error);
+      alert("Failed to import CSV: " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsImportingCSV(false);
+    }
+  };
+
   const handleSaveNew = async () => {
     if (!editingFormData.name.trim()) {
       setShowNameRequiredModal(true);
@@ -1088,10 +1238,60 @@ export default function Strategies() {
         color: editingFormData.color || null,
       });
 
+      // Assign pending trades to the strategy
+      if (pendingTradeIds.length > 0) {
+        for (const tradeId of pendingTradeIds) {
+          await invoke("update_trade_strategy", { tradeId, strategyId: newStrategyId });
+        }
+      }
+
+      // Save temporary checklist items (preserve parent relationships)
+      if (tempChecklists.size > 0) {
+        const idMap = new Map<number, number>(); // Maps temp ID to new database ID
+        
+        // First pass: Save all items without parents (groups and regular items)
+        for (const [type, items] of tempChecklists.entries()) {
+          const itemsWithoutParents = items.filter(item => !item.parent_id);
+          for (const item of itemsWithoutParents) {
+            const newId = await invoke<number>("save_strategy_checklist_item", {
+              id: null,
+              strategyId: newStrategyId,
+              itemText: item.item_text,
+              isChecked: item.is_checked,
+              itemOrder: item.item_order,
+              checklistType: type,
+              parentId: null,
+            });
+            idMap.set(item.id, newId);
+          }
+        }
+        
+        // Second pass: Save items with parents (children of groups)
+        for (const [type, items] of tempChecklists.entries()) {
+          const itemsWithParents = items.filter(item => item.parent_id);
+          for (const item of itemsWithParents) {
+            const newParentId = idMap.get(item.parent_id!);
+            if (newParentId) {
+              await invoke<number>("save_strategy_checklist_item", {
+                id: null,
+                strategyId: newStrategyId,
+                itemText: item.item_text,
+                isChecked: item.is_checked,
+                itemOrder: item.item_order,
+                checklistType: type,
+                parentId: newParentId,
+              });
+            }
+          }
+        }
+      }
+
       // Reset and reload
       setIsCreating(false);
       setNewStrategyNotes("");
       setEditingFormData({ name: "", description: "", color: "#3b82f6" });
+      setPendingTradeIds([]);
+      setTempChecklists(new Map());
       await loadStrategies();
       setSelectedStrategy(newStrategyId);
     } catch (error) {
@@ -1105,6 +1305,8 @@ export default function Strategies() {
     setEditingFormData({ name: "", description: "", color: "#3b82f6" });
     setNewStrategyNotes("");
     setSelectedStrategy(null);
+    setPendingTradeIds([]);
+    setTempChecklists(new Map());
   };
 
   const handleEditClick = () => {
@@ -1704,9 +1906,9 @@ export default function Strategies() {
             >
               {[
                 { id: "notes" as TabType, label: "Details", icon: FileText },
-                { id: "trades" as TabType, label: "View Trades", icon: TrendingUp, hideWhenCreating: true },
-                { id: "checklists" as TabType, label: "Checklists", icon: ListChecks, hideWhenCreating: true },
-              ].filter(tab => !(isCreating && tab.hideWhenCreating)).map((tab) => {
+                { id: "trades" as TabType, label: "Trades", icon: TrendingUp },
+                { id: "checklists" as TabType, label: "Checklists", icon: ListChecks },
+              ].map((tab) => {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
                 return (
@@ -1779,8 +1981,54 @@ export default function Strategies() {
 
               {activeTab === "trades" && (
                 <div style={{ padding: "20px", overflowY: "auto" }}>
-                  <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "16px" }}>Trades</h3>
-                  {selectedStrategy && strategyStats.has(selectedStrategy) && (() => {
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                    <h3 style={{ fontSize: "18px", fontWeight: "600" }}>Trades</h3>
+                    {isCreating && (
+                      <button
+                        onClick={handleImportCSVForStrategy}
+                        disabled={isImportingCSV}
+                        style={{
+                          background: "var(--accent)",
+                          border: "none",
+                          borderRadius: "6px",
+                          padding: "8px 12px",
+                          color: "white",
+                          cursor: isImportingCSV ? "not-allowed" : "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px",
+                          fontSize: "13px",
+                          fontWeight: "500",
+                          opacity: isImportingCSV ? 0.6 : 1,
+                        }}
+                      >
+                        <Upload size={16} />
+                        {isImportingCSV ? "Importing..." : "Import CSV"}
+                      </button>
+                    )}
+                  </div>
+                  {isCreating ? (
+                    <div style={{ 
+                      padding: "40px", 
+                      textAlign: "center",
+                      backgroundColor: "var(--bg-secondary)",
+                      borderRadius: "8px",
+                      border: "1px dashed var(--border-color)"
+                    }}>
+                      <Upload size={48} style={{ margin: "0 auto 16px", opacity: 0.5, color: "var(--text-secondary)" }} />
+                      <p style={{ color: "var(--text-primary)", fontSize: "16px", marginBottom: "8px", fontWeight: "500" }}>
+                        Import trades for this strategy
+                      </p>
+                      <p style={{ color: "var(--text-secondary)", fontSize: "14px", marginBottom: "20px" }}>
+                        Click "Import CSV" above to upload trades. They will be automatically assigned to this strategy when you save.
+                      </p>
+                      {pendingTradeIds.length > 0 && (
+                        <p style={{ color: "var(--accent)", fontSize: "14px", fontWeight: "500" }}>
+                          {pendingTradeIds.length} trade{pendingTradeIds.length !== 1 ? "s" : ""} ready to be assigned
+                        </p>
+                      )}
+                    </div>
+                  ) : selectedStrategy && strategyStats.has(selectedStrategy) && (() => {
                     const stats = strategyStats.get(selectedStrategy)!;
                     return (
                       <div style={{
@@ -1968,13 +2216,32 @@ export default function Strategies() {
                 </div>
               )}
 
-              {activeTab === "checklists" && selectedStrategy && (() => {
-                const currentChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
+              {activeTab === "checklists" && (selectedStrategy || isCreating) && (() => {
+                const currentChecklist = isCreating 
+                  ? tempChecklists 
+                  : (checklists.get(selectedStrategy || 0) || new Map<string, ChecklistItem[]>());
+                const virtualStrategyId: number = isCreating ? -1 : (selectedStrategy || 0);
                 
                 const handleDragEnd = (type: string, event: DragEndEvent) => {
                   const { active, over } = event;
                   if (!over || active.id === over.id) return;
-                  reorderChecklistItems(selectedStrategy, type, active.id as number, over.id as number);
+                  if (isCreating) {
+                    // Handle reordering in tempChecklists
+                    const items = currentChecklist.get(type) || [];
+                    const oldIndex = items.findIndex(item => item.id === active.id);
+                    const newIndex = items.findIndex(item => item.id === over.id);
+                    if (oldIndex === -1 || newIndex === -1) return;
+                    const reorderedItems = arrayMove(items, oldIndex, newIndex);
+                    const updatedItems = reorderedItems.map((item, index) => ({
+                      ...item,
+                      item_order: index,
+                    }));
+                    const updatedChecklist = new Map(currentChecklist);
+                    updatedChecklist.set(type, updatedItems);
+                    setTempChecklists(updatedChecklist);
+                  } else {
+                    reorderChecklistItems(virtualStrategyId, type, active.id as number, over.id as number);
+                  }
                 };
 
                 // Helper function to get display title for checklist type
@@ -1989,8 +2256,10 @@ export default function Strategies() {
 
                 // Get all checklist types in order: default types first, then custom
                 const defaultTypes = ["entry", "take_profit", "review"];
-                const customTypes = Array.from(customChecklistTypes.get(selectedStrategy) || []);
-                const allTypes = [...defaultTypes, ...customTypes.filter(t => !defaultTypes.includes(t))];
+                const tempCustomTypes = isCreating 
+                  ? Array.from(new Set(Array.from(tempChecklists.keys()).filter(t => !defaultTypes.includes(t))))
+                  : Array.from(customChecklistTypes.get(selectedStrategy || 0) || []);
+                const allTypes = [...defaultTypes, ...tempCustomTypes.filter(t => !defaultTypes.includes(t))];
 
                 return (
                   <div style={{ padding: "24px", overflowY: "auto" }}>
@@ -1998,7 +2267,7 @@ export default function Strategies() {
                       <h2 style={{ fontSize: "24px", fontWeight: "700", color: "var(--text-primary)", margin: 0 }}>
                         Checklists
                       </h2>
-                      {isEditing && (
+                      {(isEditing || isCreating) && (
                         <button
                           onClick={() => setShowNewChecklistModal(true)}
                           style={{
@@ -2029,8 +2298,8 @@ export default function Strategies() {
                             type={type}
                             title={getChecklistTitle(type)}
                             items={currentChecklist.get(type) || []}
-                            selectedStrategy={selectedStrategy}
-                            isEditing={isEditing}
+                            selectedStrategy={virtualStrategyId}
+                            isEditing={isEditing || isCreating}
                             newChecklistItem={newChecklistItem}
                             setNewChecklistItem={setNewChecklistItem}
                             selectedChecklistItems={selectedChecklistItems}
@@ -2050,7 +2319,7 @@ export default function Strategies() {
                             setShowGroupModal={setShowGroupModal}
                             ungroupChecklistItems={ungroupChecklistItems}
                             isCustom={isCustom}
-                            onDeleteChecklist={isCustom ? () => deleteChecklistType(selectedStrategy, type) : undefined}
+                            onDeleteChecklist={isCustom && !isCreating ? () => deleteChecklistType(virtualStrategyId, type) : undefined}
                           />
                         );
                       })}
@@ -2320,21 +2589,29 @@ export default function Strategies() {
               </button>
               <button
                 onClick={() => {
-                  if (selectedStrategy && newChecklistName.trim()) {
-                    const currentChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
+                  if (newChecklistName.trim()) {
                     const typeName = newChecklistName.trim().toLowerCase().replace(/\s+/g, '_');
                     
-                    // Initialize the checklist type in the map
-                    const updatedChecklist = new Map(currentChecklist);
-                    if (!updatedChecklist.has(typeName)) {
-                      updatedChecklist.set(typeName, []);
+                    if (isCreating) {
+                      // Add to tempChecklists when creating
+                      const updatedChecklist = new Map(tempChecklists);
+                      if (!updatedChecklist.has(typeName)) {
+                        updatedChecklist.set(typeName, []);
+                      }
+                      setTempChecklists(updatedChecklist);
+                    } else if (selectedStrategy) {
+                      const currentChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
+                      const updatedChecklist = new Map(currentChecklist);
+                      if (!updatedChecklist.has(typeName)) {
+                        updatedChecklist.set(typeName, []);
+                      }
+                      setChecklists(new Map(checklists.set(selectedStrategy, updatedChecklist)));
+                      
+                      // Add to custom types
+                      const customTypesSet = new Set(customChecklistTypes.get(selectedStrategy) || []);
+                      customTypesSet.add(typeName);
+                      setCustomChecklistTypes(new Map(customChecklistTypes.set(selectedStrategy, customTypesSet)));
                     }
-                    setChecklists(new Map(checklists.set(selectedStrategy, updatedChecklist)));
-                    
-                    // Add to custom types
-                    const customTypesSet = new Set(customChecklistTypes.get(selectedStrategy) || []);
-                    customTypesSet.add(typeName);
-                    setCustomChecklistTypes(new Map(customChecklistTypes.set(selectedStrategy, customTypesSet)));
                     
                     setNewChecklistName("");
                     setShowNewChecklistModal(false);
