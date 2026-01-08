@@ -1,6 +1,6 @@
 import { useEffect, useState, Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp } from "lucide-react";
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import {
@@ -225,6 +225,8 @@ function ChecklistSection({
   setGroupName,
   setShowGroupModal,
   ungroupChecklistItems,
+  isCustom,
+  onDeleteChecklist,
 }: { 
   type: string; 
   title: string; 
@@ -249,6 +251,8 @@ function ChecklistSection({
   setGroupName: Dispatch<SetStateAction<string>>;
   setShowGroupModal: Dispatch<SetStateAction<boolean>>;
   ungroupChecklistItems: (itemIds: number[]) => Promise<void>;
+  isCustom: boolean;
+  onDeleteChecklist?: () => void;
 }) {
   // Organize items: groups (items with no parent_id that have children) and regular items
   const itemIdsSet = new Set(items.map(item => item.id));
@@ -301,46 +305,65 @@ function ChecklistSection({
         <h4 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)" }}>
           {title}
         </h4>
-        {isEditing && hasSelection && (
-          <div style={{ display: "flex", gap: "8px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          {isEditing && hasSelection && (
+            <>
+              <button
+                onClick={handleGroupSelected}
+                style={{
+                  background: "var(--accent)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "6px 12px",
+                  color: "white",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  fontSize: "12px",
+                  fontWeight: "500",
+                }}
+                title="Group Selected"
+              >
+                <FolderPlus size={14} />
+                Group ({selectedItems.length})
+              </button>
+              <button
+                onClick={handleUngroupSelected}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "6px 12px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "12px",
+                  fontWeight: "500",
+                }}
+                title="Ungroup Selected"
+              >
+                Ungroup
+              </button>
+            </>
+          )}
+          {isEditing && isCustom && onDeleteChecklist && (
             <button
-              onClick={handleGroupSelected}
+              onClick={onDeleteChecklist}
               style={{
-                background: "var(--accent)",
+                background: "transparent",
                 border: "none",
-                borderRadius: "6px",
-                padding: "6px 12px",
-                color: "white",
+                color: "var(--danger)",
                 cursor: "pointer",
+                padding: "4px",
                 display: "flex",
                 alignItems: "center",
-                gap: "6px",
-                fontSize: "12px",
-                fontWeight: "500",
               }}
-              title="Group Selected"
+              title="Delete Checklist"
             >
-              <FolderPlus size={14} />
-              Group ({selectedItems.length})
+              <Trash2 size={16} />
             </button>
-            <button
-              onClick={handleUngroupSelected}
-              style={{
-                background: "var(--bg-tertiary)",
-                border: "1px solid var(--border-color)",
-                borderRadius: "6px",
-                padding: "6px 12px",
-                color: "var(--text-primary)",
-                cursor: "pointer",
-                fontSize: "12px",
-                fontWeight: "500",
-              }}
-              title="Ungroup Selected"
-            >
-              Ungroup
-            </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
       {isEditing ? (
         <DndContext
@@ -555,6 +578,7 @@ export default function Strategies() {
   const [customChecklistTypes, setCustomChecklistTypes] = useState<Map<number, Set<string>>>(new Map());
   const [showNewChecklistModal, setShowNewChecklistModal] = useState(false);
   const [newChecklistName, setNewChecklistName] = useState("");
+  const [expandedStats, setExpandedStats] = useState<Set<number>>(new Set());
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
   const [editingItemText, setEditingItemText] = useState<string>("");
   
@@ -764,6 +788,50 @@ export default function Strategies() {
     } catch (error) {
       console.error("Error deleting checklist item:", error);
       alert("Failed to delete checklist item: " + error);
+    }
+  };
+
+  const deleteChecklistType = async (strategyId: number, type: string) => {
+    const defaultTypes = ["entry", "take_profit", "review"];
+    if (defaultTypes.includes(type)) {
+      alert("Cannot delete default checklist types (Entry, Take Profit, or Review)");
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to delete the "${type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')} Checklist"? This will delete all items in this checklist.`)) {
+      return;
+    }
+
+    try {
+      const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
+      const items = currentChecklist.get(type) || [];
+      
+      // Delete all items in this checklist type
+      for (const item of items) {
+        if (item.id) {
+          await invoke("delete_strategy_checklist_item", { id: item.id });
+        }
+      }
+
+      // Remove the checklist type from state
+      const updatedChecklist = new Map(currentChecklist);
+      updatedChecklist.delete(type);
+      setChecklists(new Map(checklists.set(strategyId, updatedChecklist)));
+
+      // Remove from custom types
+      const customTypesSet = new Set(customChecklistTypes.get(strategyId) || []);
+      customTypesSet.delete(type);
+      setCustomChecklistTypes(new Map(customChecklistTypes.set(strategyId, customTypesSet)));
+
+      // Clear the input field for this type
+      setNewChecklistItem(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(type);
+        return newMap;
+      });
+    } catch (error) {
+      console.error("Error deleting checklist type:", error);
+      alert("Failed to delete checklist: " + error);
     }
   };
 
@@ -1173,62 +1241,111 @@ export default function Strategies() {
                     )}
                     {strategy.id && strategyStats.has(strategy.id) && (() => {
                       const stats = strategyStats.get(strategy.id)!;
+                      const hasTrades = stats.totalTrades > 0;
+                      const isCollapsed = expandedStats.has(strategy.id); // expandedStats tracks collapsed state (inverted)
+                      
+                      if (!hasTrades) {
+                        return null;
+                      }
+                      
+                      const toggleStats = (e: React.MouseEvent) => {
+                        e.stopPropagation();
+                        setExpandedStats(prev => {
+                          const newSet = new Set(prev);
+                          if (newSet.has(strategy.id!)) {
+                            newSet.delete(strategy.id!);
+                          } else {
+                            newSet.add(strategy.id!);
+                          }
+                          return newSet;
+                        });
+                      };
+                      
                       return (
-                        <div style={{ 
-                          display: "flex", 
-                          gap: "16px", 
-                          marginTop: "8px",
-                          paddingTop: "8px",
-                          borderTop: `1px solid ${isSelected ? "rgba(255,255,255,0.2)" : "var(--border-color)"}`
-                        }}>
-                          <div>
-                            <div style={{ 
-                              fontSize: "10px", 
-                              color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
-                              marginBottom: "2px"
-                            }}>
-                              TOTAL TRADES
-                            </div>
-                            <div style={{ 
-                              fontSize: "14px", 
-                              fontWeight: "600",
-                              color: isSelected ? "white" : "var(--text-primary)"
-                            }}>
-                              {stats.totalTrades}
-                            </div>
+                        <div>
+                          <div 
+                            style={{ 
+                              display: "flex", 
+                              alignItems: "center", 
+                              justifyContent: "space-between",
+                              marginTop: "8px",
+                              paddingTop: "8px",
+                              borderTop: `1px solid ${isSelected ? "rgba(255,255,255,0.2)" : "var(--border-color)"}`
+                            }}
+                          >
+                            <button
+                              onClick={toggleStats}
+                              style={{
+                                background: "transparent",
+                                border: "none",
+                                color: isSelected ? "rgba(255,255,255,0.7)" : "var(--text-secondary)",
+                                cursor: "pointer",
+                                padding: "2px",
+                                display: "flex",
+                                alignItems: "center",
+                                transition: "transform 0.2s",
+                              }}
+                              title={isCollapsed ? "Show stats" : "Hide stats"}
+                            >
+                              {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                            </button>
                           </div>
-                          <div>
+                          {!isCollapsed && (
                             <div style={{ 
-                              fontSize: "10px", 
-                              color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
-                              marginBottom: "2px"
+                              display: "flex", 
+                              gap: "16px", 
+                              marginTop: "8px",
                             }}>
-                              TOTAL P&L
+                              <div>
+                                <div style={{ 
+                                  fontSize: "10px", 
+                                  color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
+                                  marginBottom: "2px"
+                                }}>
+                                  TOTAL TRADES
+                                </div>
+                                <div style={{ 
+                                  fontSize: "14px", 
+                                  fontWeight: "600",
+                                  color: isSelected ? "white" : "var(--text-primary)"
+                                }}>
+                                  {stats.totalTrades}
+                                </div>
+                              </div>
+                              <div>
+                                <div style={{ 
+                                  fontSize: "10px", 
+                                  color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
+                                  marginBottom: "2px"
+                                }}>
+                                  TOTAL P&L
+                                </div>
+                                <div style={{ 
+                                  fontSize: "14px", 
+                                  fontWeight: "600",
+                                  color: stats.totalPnL >= 0 ? "var(--profit)" : "var(--loss)"
+                                }}>
+                                  ${stats.totalPnL >= 0 ? "+" : ""}{stats.totalPnL.toFixed(2)}
+                                </div>
+                              </div>
+                              <div>
+                                <div style={{ 
+                                  fontSize: "10px", 
+                                  color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
+                                  marginBottom: "2px"
+                                }}>
+                                  WIN %
+                                </div>
+                                <div style={{ 
+                                  fontSize: "14px", 
+                                  fontWeight: "600",
+                                  color: stats.winRate >= 50 ? "var(--profit)" : "var(--loss)"
+                                }}>
+                                  {stats.winRate.toFixed(1)}%
+                                </div>
+                              </div>
                             </div>
-                            <div style={{ 
-                              fontSize: "14px", 
-                              fontWeight: "600",
-                              color: stats.totalPnL >= 0 ? "var(--profit)" : "var(--loss)"
-                            }}>
-                              ${stats.totalPnL >= 0 ? "+" : ""}{stats.totalPnL.toFixed(2)}
-                            </div>
-                          </div>
-                          <div>
-                            <div style={{ 
-                              fontSize: "10px", 
-                              color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
-                              marginBottom: "2px"
-                            }}>
-                              WIN %
-                            </div>
-                            <div style={{ 
-                              fontSize: "14px", 
-                              fontWeight: "600",
-                              color: stats.winRate >= 50 ? "var(--profit)" : "var(--loss)"
-                            }}>
-                              {stats.winRate.toFixed(1)}%
-                            </div>
-                          </div>
+                          )}
                         </div>
                       );
                     })()}
@@ -1795,34 +1912,39 @@ export default function Strategies() {
                       )}
                     </div>
                     <div>
-                      {allTypes.map((type) => (
-                        <ChecklistSection
-                          key={type}
-                          type={type}
-                          title={getChecklistTitle(type)}
-                          items={currentChecklist.get(type) || []}
-                          selectedStrategy={selectedStrategy}
-                          isEditing={isEditing}
-                          newChecklistItem={newChecklistItem}
-                          setNewChecklistItem={setNewChecklistItem}
-                          selectedChecklistItems={selectedChecklistItems}
-                          setSelectedChecklistItems={setSelectedChecklistItems}
-                          editingItemId={editingItemId}
-                          editingItemText={editingItemText}
-                          setEditingItemText={setEditingItemText}
-                          sensors={sensors}
-                          onDragEnd={handleDragEnd}
-                          deleteChecklistItem={deleteChecklistItem}
-                          startEditingItem={startEditingItem}
-                          saveEditedItem={saveEditedItem}
-                          cancelEditingItem={cancelEditingItem}
-                          addChecklistItem={addChecklistItem}
-                          setPendingGroupAction={setPendingGroupAction}
-                          setGroupName={setGroupName}
-                          setShowGroupModal={setShowGroupModal}
-                          ungroupChecklistItems={ungroupChecklistItems}
-                        />
-                      ))}
+                      {allTypes.map((type) => {
+                        const isCustom = !defaultTypes.includes(type);
+                        return (
+                          <ChecklistSection
+                            key={type}
+                            type={type}
+                            title={getChecklistTitle(type)}
+                            items={currentChecklist.get(type) || []}
+                            selectedStrategy={selectedStrategy}
+                            isEditing={isEditing}
+                            newChecklistItem={newChecklistItem}
+                            setNewChecklistItem={setNewChecklistItem}
+                            selectedChecklistItems={selectedChecklistItems}
+                            setSelectedChecklistItems={setSelectedChecklistItems}
+                            editingItemId={editingItemId}
+                            editingItemText={editingItemText}
+                            setEditingItemText={setEditingItemText}
+                            sensors={sensors}
+                            onDragEnd={handleDragEnd}
+                            deleteChecklistItem={deleteChecklistItem}
+                            startEditingItem={startEditingItem}
+                            saveEditedItem={saveEditedItem}
+                            cancelEditingItem={cancelEditingItem}
+                            addChecklistItem={addChecklistItem}
+                            setPendingGroupAction={setPendingGroupAction}
+                            setGroupName={setGroupName}
+                            setShowGroupModal={setShowGroupModal}
+                            ungroupChecklistItems={ungroupChecklistItems}
+                            isCustom={isCustom}
+                            onDeleteChecklist={isCustom ? () => deleteChecklistType(selectedStrategy, type) : undefined}
+                          />
+                        );
+                      })}
                     </div>
                   </div>
                 );
