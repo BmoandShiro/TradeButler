@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus } from "lucide-react";
 import { format } from "date-fns";
@@ -196,6 +196,333 @@ function SortableChecklistItem({
         >
           <X size={16} />
         </button>
+      )}
+    </div>
+  );
+}
+
+function ChecklistSection({ 
+  type, 
+  title, 
+  items,
+  selectedStrategy,
+  isEditing,
+  newChecklistItem,
+  setNewChecklistItem,
+  selectedChecklistItems,
+  setSelectedChecklistItems,
+  editingItemId,
+  editingItemText,
+  setEditingItemText,
+  sensors,
+  onDragEnd,
+  deleteChecklistItem,
+  startEditingItem,
+  saveEditedItem,
+  cancelEditingItem,
+  addChecklistItem,
+  setPendingGroupAction,
+  setGroupName,
+  setShowGroupModal,
+  ungroupChecklistItems,
+}: { 
+  type: "entry" | "take_profit"; 
+  title: string; 
+  items: ChecklistItem[];
+  selectedStrategy: number;
+  isEditing: boolean;
+  newChecklistItem: { entry: string; takeProfit: string };
+  setNewChecklistItem: Dispatch<SetStateAction<{ entry: string; takeProfit: string }>>;
+  selectedChecklistItems: Set<number>;
+  setSelectedChecklistItems: Dispatch<SetStateAction<Set<number>>>;
+  editingItemId: number | null;
+  editingItemText: string;
+  setEditingItemText: Dispatch<SetStateAction<string>>;
+  sensors: ReturnType<typeof useSensors>;
+  onDragEnd: (type: "entry" | "take_profit", event: DragEndEvent) => void;
+  deleteChecklistItem: (strategyId: number, itemId: number, type: "entry" | "take_profit") => void;
+  startEditingItem: (item: ChecklistItem) => void;
+  saveEditedItem: (itemId: number, newText: string) => Promise<void>;
+  cancelEditingItem: () => void;
+  addChecklistItem: (strategyId: number, type: "entry" | "take_profit", text: string) => Promise<void>;
+  setPendingGroupAction: Dispatch<SetStateAction<{ strategyId: number; type: "entry" | "take_profit"; itemIds: number[] } | null>>;
+  setGroupName: Dispatch<SetStateAction<string>>;
+  setShowGroupModal: Dispatch<SetStateAction<boolean>>;
+  ungroupChecklistItems: (itemIds: number[]) => Promise<void>;
+}) {
+  // Organize items: groups (items with no parent_id that have children) and regular items
+  const itemIdsSet = new Set(items.map(item => item.id));
+  const groups = items.filter(item => !item.parent_id && items.some(child => child.parent_id === item.id));
+  const regularItems = items.filter(item => !item.parent_id && !items.some(child => child.parent_id === item.id));
+  const groupedItems = items.filter(item => item.parent_id !== null && itemIdsSet.has(item.parent_id));
+  
+  // Organize by parent
+  const itemsByParent = new Map<number, ChecklistItem[]>();
+  groupedItems.forEach(item => {
+    if (item.parent_id) {
+      const parentId = item.parent_id;
+      if (!itemsByParent.has(parentId)) {
+        itemsByParent.set(parentId, []);
+      }
+      itemsByParent.get(parentId)!.push(item);
+    }
+  });
+  
+  const itemIds = items.map(item => item.id);
+  const fieldKey = type === "entry" ? "entry" : "takeProfit";
+  const currentValue = newChecklistItem[fieldKey];
+  const selectedItems = Array.from(selectedChecklistItems);
+  const hasSelection = selectedItems.length > 0;
+  
+  const handleToggleSelect = (itemId: number, selected: boolean) => {
+    setSelectedChecklistItems(prev => {
+      const newSet = new Set(prev);
+      if (selected) {
+        newSet.add(itemId);
+      } else {
+        newSet.delete(itemId);
+      }
+      return newSet;
+    });
+  };
+  
+  const handleGroupSelected = () => {
+    setPendingGroupAction({ strategyId: selectedStrategy, type, itemIds: selectedItems });
+    setGroupName("");
+    setShowGroupModal(true);
+  };
+  
+  const handleUngroupSelected = () => {
+    ungroupChecklistItems(selectedItems);
+  };
+  
+  return (
+    <div style={{ marginBottom: "32px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+        <h4 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)" }}>
+          {title}
+        </h4>
+        {isEditing && hasSelection && (
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button
+              onClick={handleGroupSelected}
+              style={{
+                background: "var(--accent)",
+                border: "none",
+                borderRadius: "6px",
+                padding: "6px 12px",
+                color: "white",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                fontSize: "12px",
+                fontWeight: "500",
+              }}
+              title="Group Selected"
+            >
+              <FolderPlus size={14} />
+              Group ({selectedItems.length})
+            </button>
+            <button
+              onClick={handleUngroupSelected}
+              style={{
+                background: "var(--bg-tertiary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                padding: "6px 12px",
+                color: "var(--text-primary)",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontWeight: "500",
+              }}
+              title="Ungroup Selected"
+            >
+              Ungroup
+            </button>
+          </div>
+        )}
+      </div>
+      {isEditing ? (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={(e) => onDragEnd(type, e)}
+        >
+          <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
+            {/* Render groups with their children */}
+            {groups.map((group) => {
+              const children = itemsByParent.get(group.id) || [];
+              return (
+                <div key={group.id} style={{ marginBottom: "12px" }}>
+                  <SortableChecklistItem
+                    item={group}
+                    onDelete={() => deleteChecklistItem(selectedStrategy, group.id, type)}
+                    isEditing={isEditing}
+                    isSelected={selectedChecklistItems.has(group.id)}
+                    onSelect={(selected) => handleToggleSelect(group.id, selected)}
+                    onEdit={() => startEditingItem(group)}
+                    isEditingText={editingItemId === group.id}
+                    editingText={editingItemText}
+                    onEditingTextChange={setEditingItemText}
+                    onSaveEdit={() => saveEditedItem(group.id, editingItemText)}
+                    onCancelEdit={cancelEditingItem}
+                  />
+                  {children.map((child) => (
+                    <SortableChecklistItem
+                      key={child.id}
+                      item={child}
+                      onDelete={() => deleteChecklistItem(selectedStrategy, child.id, type)}
+                      isEditing={isEditing}
+                      isSelected={selectedChecklistItems.has(child.id)}
+                      onSelect={(selected) => handleToggleSelect(child.id, selected)}
+                      onEdit={() => startEditingItem(child)}
+                      isEditingText={editingItemId === child.id}
+                      editingText={editingItemText}
+                      onEditingTextChange={setEditingItemText}
+                      onSaveEdit={() => saveEditedItem(child.id, editingItemText)}
+                      onCancelEdit={cancelEditingItem}
+                    />
+                  ))}
+                </div>
+              );
+            })}
+            {/* Render regular (ungrouped) items */}
+            {regularItems.map((item) => (
+              <SortableChecklistItem
+                key={item.id}
+                item={item}
+                onDelete={() => deleteChecklistItem(selectedStrategy, item.id, type)}
+                isEditing={isEditing}
+                isSelected={selectedChecklistItems.has(item.id)}
+                onSelect={(selected) => handleToggleSelect(item.id, selected)}
+                onEdit={() => startEditingItem(item)}
+                isEditingText={editingItemId === item.id}
+                editingText={editingItemText}
+                onEditingTextChange={setEditingItemText}
+                onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
+                onCancelEdit={cancelEditingItem}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
+      ) : (
+        <div>
+          {/* Render groups with their children in view mode */}
+          {groups.map((group) => {
+            const children = itemsByParent.get(group.id) || [];
+            return (
+              <div key={group.id} style={{ marginBottom: "12px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    padding: "10px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    marginBottom: "8px",
+                    fontWeight: "600",
+                  }}
+                >
+                  <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
+                    {group.item_text}
+                  </div>
+                </div>
+                {children.map((child) => (
+                  <div
+                    key={child.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      padding: "10px",
+                      backgroundColor: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "6px",
+                      marginBottom: "8px",
+                      marginLeft: "24px",
+                    }}
+                  >
+                    <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
+                      {child.item_text}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          {/* Render regular items */}
+          {regularItems.map((item) => (
+            <div
+              key={item.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "10px",
+                backgroundColor: "var(--bg-tertiary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                marginBottom: "8px",
+              }}
+            >
+              <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
+                {item.item_text}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {isEditing && (
+        <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+          <input
+            type="text"
+            value={currentValue}
+            onChange={(e) => {
+              const newValue = e.target.value;
+              setNewChecklistItem(prev => ({
+                ...prev,
+                [fieldKey]: newValue,
+              }));
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                addChecklistItem(selectedStrategy, type, currentValue);
+              }
+            }}
+            placeholder={`Add ${title.toLowerCase()} item...`}
+            style={{
+              flex: 1,
+              padding: "10px",
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--text-primary)",
+              fontSize: "14px",
+            }}
+          />
+          <button
+            onClick={() => addChecklistItem(selectedStrategy, type, currentValue)}
+            style={{
+              background: "var(--accent)",
+              border: "none",
+              borderRadius: "6px",
+              padding: "10px 16px",
+              color: "white",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              fontSize: "14px",
+              fontWeight: "500",
+            }}
+          >
+            <Plus size={16} />
+            Add
+          </button>
+        </div>
       )}
     </div>
   );
@@ -1395,286 +1722,6 @@ export default function Strategies() {
                   reorderChecklistItems(selectedStrategy, type, active.id as number, over.id as number);
                 };
 
-                const ChecklistSection = ({ type, title, items }: { type: "entry" | "take_profit"; title: string; items: ChecklistItem[] }) => {
-                  // Organize items: groups (items with no parent_id that have children) and regular items
-                  const itemIdsSet = new Set(items.map(item => item.id));
-                  const groups = items.filter(item => !item.parent_id && items.some(child => child.parent_id === item.id));
-                  const regularItems = items.filter(item => !item.parent_id && !items.some(child => child.parent_id === item.id));
-                  const groupedItems = items.filter(item => item.parent_id !== null && itemIdsSet.has(item.parent_id));
-                  
-                  // Organize by parent
-                  const itemsByParent = new Map<number, ChecklistItem[]>();
-                  groupedItems.forEach(item => {
-                    if (item.parent_id) {
-                      const parentId = item.parent_id;
-                      if (!itemsByParent.has(parentId)) {
-                        itemsByParent.set(parentId, []);
-                      }
-                      itemsByParent.get(parentId)!.push(item);
-                    }
-                  });
-                  
-                  const itemIds = items.map(item => item.id);
-                  const fieldKey = type === "entry" ? "entry" : "takeProfit";
-                  const currentValue = newChecklistItem[fieldKey];
-                  const selectedItems = Array.from(selectedChecklistItems);
-                  const hasSelection = selectedItems.length > 0;
-                  
-                  const handleToggleSelect = (itemId: number, selected: boolean) => {
-                    setSelectedChecklistItems(prev => {
-                      const newSet = new Set(prev);
-                      if (selected) {
-                        newSet.add(itemId);
-                      } else {
-                        newSet.delete(itemId);
-                      }
-                      return newSet;
-                    });
-                  };
-                  
-                  const handleGroupSelected = () => {
-                    setPendingGroupAction({ strategyId: selectedStrategy, type, itemIds: selectedItems });
-                    setGroupName("");
-                    setShowGroupModal(true);
-                  };
-                  
-                  const handleUngroupSelected = () => {
-                    ungroupChecklistItems(selectedItems);
-                  };
-                  
-                  return (
-                    <div style={{ marginBottom: "32px" }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-                        <h4 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)" }}>
-                          {title}
-                        </h4>
-                        {isEditing && hasSelection && (
-                          <div style={{ display: "flex", gap: "8px" }}>
-                            <button
-                              onClick={handleGroupSelected}
-                              style={{
-                                background: "var(--accent)",
-                                border: "none",
-                                borderRadius: "6px",
-                                padding: "6px 12px",
-                                color: "white",
-                                cursor: "pointer",
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "6px",
-                                fontSize: "12px",
-                                fontWeight: "500",
-                              }}
-                              title="Group Selected"
-                            >
-                              <FolderPlus size={14} />
-                              Group ({selectedItems.length})
-                            </button>
-                            <button
-                              onClick={handleUngroupSelected}
-                              style={{
-                                background: "var(--bg-tertiary)",
-                                border: "1px solid var(--border-color)",
-                                borderRadius: "6px",
-                                padding: "6px 12px",
-                                color: "var(--text-primary)",
-                                cursor: "pointer",
-                                fontSize: "12px",
-                                fontWeight: "500",
-                              }}
-                              title="Ungroup Selected"
-                            >
-                              Ungroup
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                      {isEditing ? (
-                        <DndContext
-                          sensors={sensors}
-                          collisionDetection={closestCenter}
-                          onDragEnd={(e) => handleDragEnd(type, e)}
-                        >
-                          <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
-                            {/* Render groups with their children */}
-                            {groups.map((group) => {
-                              const children = itemsByParent.get(group.id) || [];
-                              return (
-                                <div key={group.id} style={{ marginBottom: "12px" }}>
-                                  <SortableChecklistItem
-                                    item={group}
-                                    onDelete={() => deleteChecklistItem(selectedStrategy, group.id, type)}
-                                    isEditing={isEditing}
-                                    isSelected={selectedChecklistItems.has(group.id)}
-                                    onSelect={(selected) => handleToggleSelect(group.id, selected)}
-                                    onEdit={() => startEditingItem(group)}
-                                    isEditingText={editingItemId === group.id}
-                                    editingText={editingItemText}
-                                    onEditingTextChange={setEditingItemText}
-                                    onSaveEdit={() => saveEditedItem(group.id, editingItemText)}
-                                    onCancelEdit={cancelEditingItem}
-                                  />
-                                  {children.map((child) => (
-                                    <SortableChecklistItem
-                                      key={child.id}
-                                      item={child}
-                                      onDelete={() => deleteChecklistItem(selectedStrategy, child.id, type)}
-                                      isEditing={isEditing}
-                                      isSelected={selectedChecklistItems.has(child.id)}
-                                      onSelect={(selected) => handleToggleSelect(child.id, selected)}
-                                      onEdit={() => startEditingItem(child)}
-                                      isEditingText={editingItemId === child.id}
-                                      editingText={editingItemText}
-                                      onEditingTextChange={setEditingItemText}
-                                      onSaveEdit={() => saveEditedItem(child.id, editingItemText)}
-                                      onCancelEdit={cancelEditingItem}
-                                    />
-                                  ))}
-                                </div>
-                              );
-                            })}
-                            {/* Render regular (ungrouped) items */}
-                            {regularItems.map((item) => (
-                              <SortableChecklistItem
-                                key={item.id}
-                                item={item}
-                                onDelete={() => deleteChecklistItem(selectedStrategy, item.id, type)}
-                                isEditing={isEditing}
-                                isSelected={selectedChecklistItems.has(item.id)}
-                                onSelect={(selected) => handleToggleSelect(item.id, selected)}
-                                onEdit={() => startEditingItem(item)}
-                                isEditingText={editingItemId === item.id}
-                                editingText={editingItemText}
-                                onEditingTextChange={setEditingItemText}
-                                onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
-                                onCancelEdit={cancelEditingItem}
-                              />
-                            ))}
-                          </SortableContext>
-                        </DndContext>
-                      ) : (
-                        <div>
-                          {/* Render groups with their children in view mode */}
-                          {groups.map((group) => {
-                            const children = itemsByParent.get(group.id) || [];
-                            return (
-                              <div key={group.id} style={{ marginBottom: "12px" }}>
-                                <div
-                                  style={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    gap: "8px",
-                                    padding: "10px",
-                                    backgroundColor: "var(--bg-tertiary)",
-                                    border: "1px solid var(--border-color)",
-                                    borderRadius: "6px",
-                                    marginBottom: "8px",
-                                    fontWeight: "600",
-                                  }}
-                                >
-                                  <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
-                                    {group.item_text}
-                                  </div>
-                                </div>
-                                {children.map((child) => (
-                                  <div
-                                    key={child.id}
-                                    style={{
-                                      display: "flex",
-                                      alignItems: "center",
-                                      gap: "8px",
-                                      padding: "10px",
-                                      backgroundColor: "var(--bg-tertiary)",
-                                      border: "1px solid var(--border-color)",
-                                      borderRadius: "6px",
-                                      marginBottom: "8px",
-                                      marginLeft: "24px",
-                                    }}
-                                  >
-                                    <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
-                                      {child.item_text}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            );
-                          })}
-                          {/* Render regular items */}
-                          {regularItems.map((item) => (
-                            <div
-                              key={item.id}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "8px",
-                                padding: "10px",
-                                backgroundColor: "var(--bg-tertiary)",
-                                border: "1px solid var(--border-color)",
-                                borderRadius: "6px",
-                                marginBottom: "8px",
-                              }}
-                            >
-                              <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
-                                {item.item_text}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {isEditing && (
-                        <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
-                          <input
-                            key={`${selectedStrategy}-${type}-add-input`}
-                            type="text"
-                            value={currentValue}
-                            onChange={(e) => {
-                              const newValue = e.target.value;
-                              setNewChecklistItem(prev => ({
-                                ...prev,
-                                [fieldKey]: newValue,
-                              }));
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                addChecklistItem(selectedStrategy, type, currentValue);
-                              }
-                            }}
-                            placeholder={`Add ${title.toLowerCase()} item...`}
-                            style={{
-                              flex: 1,
-                              padding: "10px",
-                              backgroundColor: "var(--bg-secondary)",
-                              border: "1px solid var(--border-color)",
-                              borderRadius: "6px",
-                              color: "var(--text-primary)",
-                              fontSize: "14px",
-                            }}
-                          />
-                          <button
-                            onClick={() => addChecklistItem(selectedStrategy, type, currentValue)}
-                            style={{
-                              background: "var(--accent)",
-                              border: "none",
-                              borderRadius: "6px",
-                              padding: "10px 16px",
-                              color: "white",
-                              cursor: "pointer",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "6px",
-                              fontSize: "14px",
-                              fontWeight: "500",
-                            }}
-                          >
-                            <Plus size={16} />
-                            Add
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                };
-
                 return (
                   <div style={{ padding: "20px", overflowY: "auto" }}>
                     <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "24px" }}>Checklists</h3>
@@ -1683,11 +1730,51 @@ export default function Strategies() {
                         type="entry"
                         title="Entry Checklist"
                         items={currentChecklist.entry}
+                        selectedStrategy={selectedStrategy}
+                        isEditing={isEditing}
+                        newChecklistItem={newChecklistItem}
+                        setNewChecklistItem={setNewChecklistItem}
+                        selectedChecklistItems={selectedChecklistItems}
+                        setSelectedChecklistItems={setSelectedChecklistItems}
+                        editingItemId={editingItemId}
+                        editingItemText={editingItemText}
+                        setEditingItemText={setEditingItemText}
+                        sensors={sensors}
+                        onDragEnd={handleDragEnd}
+                        deleteChecklistItem={deleteChecklistItem}
+                        startEditingItem={startEditingItem}
+                        saveEditedItem={saveEditedItem}
+                        cancelEditingItem={cancelEditingItem}
+                        addChecklistItem={addChecklistItem}
+                        setPendingGroupAction={setPendingGroupAction}
+                        setGroupName={setGroupName}
+                        setShowGroupModal={setShowGroupModal}
+                        ungroupChecklistItems={ungroupChecklistItems}
                       />
                       <ChecklistSection
                         type="take_profit"
                         title="Take Profit Checklist"
                         items={currentChecklist.takeProfit}
+                        selectedStrategy={selectedStrategy}
+                        isEditing={isEditing}
+                        newChecklistItem={newChecklistItem}
+                        setNewChecklistItem={setNewChecklistItem}
+                        selectedChecklistItems={selectedChecklistItems}
+                        setSelectedChecklistItems={setSelectedChecklistItems}
+                        editingItemId={editingItemId}
+                        editingItemText={editingItemText}
+                        setEditingItemText={setEditingItemText}
+                        sensors={sensors}
+                        onDragEnd={handleDragEnd}
+                        deleteChecklistItem={deleteChecklistItem}
+                        startEditingItem={startEditingItem}
+                        saveEditedItem={saveEditedItem}
+                        cancelEditingItem={cancelEditingItem}
+                        addChecklistItem={addChecklistItem}
+                        setPendingGroupAction={setPendingGroupAction}
+                        setGroupName={setGroupName}
+                        setShowGroupModal={setShowGroupModal}
+                        ungroupChecklistItems={ungroupChecklistItems}
                       />
                     </div>
                   </div>
