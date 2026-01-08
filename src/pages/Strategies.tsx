@@ -1,4 +1,4 @@
-import { useEffect, useState, Dispatch, SetStateAction } from "react";
+import { useEffect, useState, useRef, Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight } from "lucide-react";
 import { format } from "date-fns";
@@ -670,6 +670,8 @@ export default function Strategies() {
   const [editingItemText, setEditingItemText] = useState<string>("");
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [strategyToDelete, setStrategyToDelete] = useState<number | null>(null);
+  const [showNameRequiredModal, setShowNameRequiredModal] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -1070,7 +1072,11 @@ export default function Strategies() {
 
   const handleSaveNew = async () => {
     if (!editingFormData.name.trim()) {
-      alert("Strategy name is required");
+      setShowNameRequiredModal(true);
+      // Focus the input field after a short delay to ensure the modal doesn't block it
+      setTimeout(() => {
+        nameInputRef.current?.focus();
+      }, 100);
       return;
     }
     try {
@@ -1491,6 +1497,7 @@ export default function Strategies() {
                 />
                 {(isEditing || isCreating) ? (
                   <input
+                    ref={nameInputRef}
                     type="text"
                     value={editingFormData.name}
                     onChange={(e) => setEditingFormData({ ...editingFormData, name: e.target.value })}
@@ -2457,6 +2464,85 @@ export default function Strategies() {
           </div>
         );
       })()}
+
+      {/* Name Required Modal */}
+      {showNameRequiredModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => setShowNameRequiredModal(false)}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "400px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                fontSize: "18px",
+                fontWeight: "600",
+                marginBottom: "12px",
+                color: "var(--text-primary)",
+              }}
+            >
+              Strategy Name Required
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-primary)",
+                marginBottom: "20px",
+                lineHeight: "1.5",
+              }}
+            >
+              Please enter a name for your strategy before saving.
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                onClick={() => {
+                  setShowNameRequiredModal(false);
+                  nameInputRef.current?.focus();
+                }}
+                style={{
+                  background: "var(--accent)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
