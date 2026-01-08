@@ -1239,6 +1239,7 @@ export default function Strategies() {
       });
 
       // Assign pending trades to the strategy
+      const hadPendingTrades = pendingTradeIds.length > 0;
       if (pendingTradeIds.length > 0) {
         for (const tradeId of pendingTradeIds) {
           await invoke("update_trade_strategy", { tradeId, strategyId: newStrategyId });
@@ -1294,6 +1295,17 @@ export default function Strategies() {
       setTempChecklists(new Map());
       await loadStrategies();
       setSelectedStrategy(newStrategyId);
+      
+      // If there were pending trades, switch to trades tab and reload trades
+      if (hadPendingTrades) {
+        setActiveTab("trades");
+        // Clear the cached pairs so they reload
+        const updatedPairs = new Map(strategyPairs);
+        updatedPairs.delete(newStrategyId);
+        setStrategyPairs(updatedPairs);
+        // Load the trades for the new strategy
+        await loadStrategyData(newStrategyId);
+      }
     } catch (error) {
       console.error("Error creating strategy:", error);
       alert("Failed to create strategy: " + error);
