@@ -226,26 +226,26 @@ function ChecklistSection({
   setShowGroupModal,
   ungroupChecklistItems,
 }: { 
-  type: "entry" | "take_profit"; 
+  type: string; 
   title: string; 
   items: ChecklistItem[];
   selectedStrategy: number;
   isEditing: boolean;
-  newChecklistItem: { entry: string; takeProfit: string };
-  setNewChecklistItem: Dispatch<SetStateAction<{ entry: string; takeProfit: string }>>;
+  newChecklistItem: Map<string, string>;
+  setNewChecklistItem: Dispatch<SetStateAction<Map<string, string>>>;
   selectedChecklistItems: Set<number>;
   setSelectedChecklistItems: Dispatch<SetStateAction<Set<number>>>;
   editingItemId: number | null;
   editingItemText: string;
   setEditingItemText: Dispatch<SetStateAction<string>>;
   sensors: ReturnType<typeof useSensors>;
-  onDragEnd: (type: "entry" | "take_profit", event: DragEndEvent) => void;
-  deleteChecklistItem: (strategyId: number, itemId: number, type: "entry" | "take_profit") => void;
+  onDragEnd: (type: string, event: DragEndEvent) => void;
+  deleteChecklistItem: (strategyId: number, itemId: number, type: string) => void;
   startEditingItem: (item: ChecklistItem) => void;
   saveEditedItem: (itemId: number, newText: string) => Promise<void>;
   cancelEditingItem: () => void;
-  addChecklistItem: (strategyId: number, type: "entry" | "take_profit", text: string) => Promise<void>;
-  setPendingGroupAction: Dispatch<SetStateAction<{ strategyId: number; type: "entry" | "take_profit"; itemIds: number[] } | null>>;
+  addChecklistItem: (strategyId: number, type: string, text: string) => Promise<void>;
+  setPendingGroupAction: Dispatch<SetStateAction<{ strategyId: number; type: string; itemIds: number[] } | null>>;
   setGroupName: Dispatch<SetStateAction<string>>;
   setShowGroupModal: Dispatch<SetStateAction<boolean>>;
   ungroupChecklistItems: (itemIds: number[]) => Promise<void>;
@@ -269,8 +269,7 @@ function ChecklistSection({
   });
   
   const itemIds = items.map(item => item.id);
-  const fieldKey = type === "entry" ? "entry" : "takeProfit";
-  const currentValue = newChecklistItem[fieldKey];
+  const currentValue = newChecklistItem.get(type) || "";
   const selectedItems = Array.from(selectedChecklistItems);
   const hasSelection = selectedItems.length > 0;
   
@@ -482,10 +481,11 @@ function ChecklistSection({
             value={currentValue}
             onChange={(e) => {
               const newValue = e.target.value;
-              setNewChecklistItem(prev => ({
-                ...prev,
-                [fieldKey]: newValue,
-              }));
+              setNewChecklistItem(prev => {
+                const newMap = new Map(prev);
+                newMap.set(type, newValue);
+                return newMap;
+              });
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -546,12 +546,15 @@ export default function Strategies() {
   const [loadingPairs, setLoadingPairs] = useState<Set<number>>(new Set());
   const [strategyStats, setStrategyStats] = useState<Map<number, { totalTrades: number; totalPnL: number; winRate: number }>>(new Map());
   const [notesContent, setNotesContent] = useState<Map<number, string>>(new Map());
-  const [checklists, setChecklists] = useState<Map<number, { entry: ChecklistItem[]; takeProfit: ChecklistItem[] }>>(new Map());
-  const [newChecklistItem, setNewChecklistItem] = useState<{ entry: string; takeProfit: string }>({ entry: "", takeProfit: "" });
+  const [checklists, setChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
+  const [newChecklistItem, setNewChecklistItem] = useState<Map<string, string>>(new Map());
   const [selectedChecklistItems, setSelectedChecklistItems] = useState<Set<number>>(new Set());
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [groupName, setGroupName] = useState("");
-  const [pendingGroupAction, setPendingGroupAction] = useState<{ strategyId: number; type: "entry" | "take_profit"; itemIds: number[] } | null>(null);
+  const [pendingGroupAction, setPendingGroupAction] = useState<{ strategyId: number; type: string; itemIds: number[] } | null>(null);
+  const [customChecklistTypes, setCustomChecklistTypes] = useState<Map<number, Set<string>>>(new Map());
+  const [showNewChecklistModal, setShowNewChecklistModal] = useState(false);
+  const [newChecklistName, setNewChecklistName] = useState("");
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
   const [editingItemText, setEditingItemText] = useState<string>("");
   
@@ -665,28 +668,53 @@ export default function Strategies() {
 
   const loadChecklists = async (strategyId: number) => {
     try {
-      const entryItems = await invoke<ChecklistItem[]>("get_strategy_checklist", {
+      // Load all checklist items for this strategy (pass null to get all types)
+      const allItems = await invoke<ChecklistItem[]>("get_strategy_checklist", {
         strategyId: strategyId,
-        checklistType: "entry",
+        checklistType: null,
       });
-      const takeProfitItems = await invoke<ChecklistItem[]>("get_strategy_checklist", {
-        strategyId: strategyId,
-        checklistType: "take_profit",
-      });
-      setChecklists(new Map(checklists.set(strategyId, {
-        entry: entryItems,
-        takeProfit: takeProfitItems,
-      })));
+      
+      // Default checklist types - always include these even if empty
+      const defaultTypes = ["entry", "take_profit", "review"];
+      const checklistMap = new Map<string, ChecklistItem[]>();
+      const customTypesSet = new Set<string>();
+      
+      // Initialize default types
+      for (const type of defaultTypes) {
+        checklistMap.set(type, []);
+      }
+      
+      // Group items by type
+      for (const item of allItems) {
+        const type = item.checklist_type;
+        if (!checklistMap.has(type)) {
+          checklistMap.set(type, []);
+          if (!defaultTypes.includes(type)) {
+            customTypesSet.add(type);
+          }
+        }
+        checklistMap.get(type)!.push(item);
+      }
+      
+      setChecklists(new Map(checklists.set(strategyId, checklistMap)));
+      setCustomChecklistTypes(new Map(customChecklistTypes.set(strategyId, customTypesSet)));
     } catch (error) {
       console.error("Error loading checklists:", error);
+      // Fallback to default structure
+      const checklistMap = new Map<string, ChecklistItem[]>();
+      checklistMap.set("entry", []);
+      checklistMap.set("take_profit", []);
+      checklistMap.set("review", []);
+      setChecklists(new Map(checklists.set(strategyId, checklistMap)));
+      setCustomChecklistTypes(new Map(customChecklistTypes.set(strategyId, new Set())));
     }
   };
 
-  const addChecklistItem = async (strategyId: number, type: "entry" | "take_profit", text: string) => {
+  const addChecklistItem = async (strategyId: number, type: string, text: string) => {
     if (!text.trim()) return;
     try {
-      const currentChecklist = checklists.get(strategyId) || { entry: [], takeProfit: [] };
-      const items = type === "entry" ? currentChecklist.entry : currentChecklist.takeProfit;
+      const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
+      const items = currentChecklist.get(type) || [];
       const maxOrder = items.length > 0 ? Math.max(...items.map(i => i.item_order)) : -1;
       
       const newId = await invoke<number>("save_strategy_checklist_item", {
@@ -709,29 +737,29 @@ export default function Strategies() {
         parent_id: null,
       };
 
-      const updatedChecklist = {
-        ...currentChecklist,
-        [type === "entry" ? "entry" : "takeProfit"]: [...items, newItem],
-      };
+      const updatedChecklist = new Map(currentChecklist);
+      updatedChecklist.set(type, [...items, newItem]);
       setChecklists(new Map(checklists.set(strategyId, updatedChecklist)));
       // Clear the input field for this type
-      setNewChecklistItem(prev => ({ ...prev, [type === "entry" ? "entry" : "takeProfit"]: "" }));
+      setNewChecklistItem(prev => {
+        const newMap = new Map(prev);
+        newMap.set(type, "");
+        return newMap;
+      });
     } catch (error) {
       console.error("Error adding checklist item:", error);
       alert("Failed to add checklist item: " + error);
     }
   };
 
-  const deleteChecklistItem = async (strategyId: number, itemId: number, type: "entry" | "take_profit") => {
+  const deleteChecklistItem = async (strategyId: number, itemId: number, type: string) => {
     try {
       await invoke("delete_strategy_checklist_item", { id: itemId });
-      const currentChecklist = checklists.get(strategyId) || { entry: [], takeProfit: [] };
-      const items = type === "entry" ? currentChecklist.entry : currentChecklist.takeProfit;
+      const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
+      const items = currentChecklist.get(type) || [];
       const updatedItems = items.filter(item => item.id !== itemId);
-      const updatedChecklist = {
-        ...currentChecklist,
-        [type === "entry" ? "entry" : "takeProfit"]: updatedItems,
-      };
+      const updatedChecklist = new Map(currentChecklist);
+      updatedChecklist.set(type, updatedItems);
       setChecklists(new Map(checklists.set(strategyId, updatedChecklist)));
     } catch (error) {
       console.error("Error deleting checklist item:", error);
@@ -739,7 +767,7 @@ export default function Strategies() {
     }
   };
 
-  const groupChecklistItems = async (strategyId: number, type: "entry" | "take_profit", itemIds: number[], groupName: string) => {
+  const groupChecklistItems = async (strategyId: number, type: string, itemIds: number[], groupName: string) => {
     if (itemIds.length === 0 || !groupName.trim()) return;
     try {
       await invoke<number>("group_checklist_items", {
@@ -803,7 +831,12 @@ export default function Strategies() {
     }
     
     try {
-      const item = [...(checklists.get(selectedStrategy || 0)?.entry || []), ...(checklists.get(selectedStrategy || 0)?.takeProfit || [])].find(i => i.id === itemId);
+      const checklistMap = checklists.get(selectedStrategy || 0) || new Map<string, ChecklistItem[]>();
+      const allItems: ChecklistItem[] = [];
+      for (const items of checklistMap.values()) {
+        allItems.push(...items);
+      }
+      const item = allItems.find(i => i.id === itemId);
       if (item && selectedStrategy) {
         await invoke("save_strategy_checklist_item", {
           id: itemId,
@@ -830,9 +863,9 @@ export default function Strategies() {
     setEditingItemText("");
   };
 
-  const reorderChecklistItems = async (strategyId: number, type: "entry" | "take_profit", activeId: number, overId: number) => {
-    const currentChecklist = checklists.get(strategyId) || { entry: [], takeProfit: [] };
-    const items = type === "entry" ? currentChecklist.entry : currentChecklist.takeProfit;
+  const reorderChecklistItems = async (strategyId: number, type: string, activeId: number, overId: number) => {
+    const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
+    const items = currentChecklist.get(type) || [];
     
     const oldIndex = items.findIndex(item => item.id === activeId);
     const newIndex = items.findIndex(item => item.id === overId);
@@ -864,10 +897,8 @@ export default function Strategies() {
       return;
     }
 
-    const updatedChecklist = {
-      ...currentChecklist,
-      [type === "entry" ? "entry" : "takeProfit"]: updatedItems,
-    };
+    const updatedChecklist = new Map(currentChecklist);
+    updatedChecklist.set(type, updatedItems);
     setChecklists(new Map(checklists.set(strategyId, updatedChecklist)));
   };
 
@@ -1714,68 +1745,84 @@ export default function Strategies() {
               )}
 
               {activeTab === "checklists" && selectedStrategy && (() => {
-                const currentChecklist = checklists.get(selectedStrategy) || { entry: [], takeProfit: [] };
+                const currentChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
                 
-                const handleDragEnd = (type: "entry" | "take_profit", event: DragEndEvent) => {
+                const handleDragEnd = (type: string, event: DragEndEvent) => {
                   const { active, over } = event;
                   if (!over || active.id === over.id) return;
                   reorderChecklistItems(selectedStrategy, type, active.id as number, over.id as number);
                 };
 
+                // Helper function to get display title for checklist type
+                const getChecklistTitle = (type: string): string => {
+                  const titleMap: Record<string, string> = {
+                    "entry": "Entry Checklist",
+                    "take_profit": "Take Profit Checklist",
+                    "review": "Review Checklist",
+                  };
+                  return titleMap[type] || type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') + " Checklist";
+                };
+
+                // Get all checklist types in order: default types first, then custom
+                const defaultTypes = ["entry", "take_profit", "review"];
+                const customTypes = Array.from(customChecklistTypes.get(selectedStrategy) || []);
+                const allTypes = [...defaultTypes, ...customTypes.filter(t => !defaultTypes.includes(t))];
+
                 return (
                   <div style={{ padding: "20px", overflowY: "auto" }}>
-                    <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "24px" }}>Checklists</h3>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
+                      <h3 style={{ fontSize: "18px", fontWeight: "600" }}>Checklists</h3>
+                      {isEditing && (
+                        <button
+                          onClick={() => setShowNewChecklistModal(true)}
+                          style={{
+                            background: "var(--accent)",
+                            border: "none",
+                            borderRadius: "6px",
+                            padding: "8px 12px",
+                            color: "white",
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            fontSize: "13px",
+                            fontWeight: "500",
+                          }}
+                        >
+                          <Plus size={16} />
+                          New Checklist
+                        </button>
+                      )}
+                    </div>
                     <div>
-                      <ChecklistSection
-                        type="entry"
-                        title="Entry Checklist"
-                        items={currentChecklist.entry}
-                        selectedStrategy={selectedStrategy}
-                        isEditing={isEditing}
-                        newChecklistItem={newChecklistItem}
-                        setNewChecklistItem={setNewChecklistItem}
-                        selectedChecklistItems={selectedChecklistItems}
-                        setSelectedChecklistItems={setSelectedChecklistItems}
-                        editingItemId={editingItemId}
-                        editingItemText={editingItemText}
-                        setEditingItemText={setEditingItemText}
-                        sensors={sensors}
-                        onDragEnd={handleDragEnd}
-                        deleteChecklistItem={deleteChecklistItem}
-                        startEditingItem={startEditingItem}
-                        saveEditedItem={saveEditedItem}
-                        cancelEditingItem={cancelEditingItem}
-                        addChecklistItem={addChecklistItem}
-                        setPendingGroupAction={setPendingGroupAction}
-                        setGroupName={setGroupName}
-                        setShowGroupModal={setShowGroupModal}
-                        ungroupChecklistItems={ungroupChecklistItems}
-                      />
-                      <ChecklistSection
-                        type="take_profit"
-                        title="Take Profit Checklist"
-                        items={currentChecklist.takeProfit}
-                        selectedStrategy={selectedStrategy}
-                        isEditing={isEditing}
-                        newChecklistItem={newChecklistItem}
-                        setNewChecklistItem={setNewChecklistItem}
-                        selectedChecklistItems={selectedChecklistItems}
-                        setSelectedChecklistItems={setSelectedChecklistItems}
-                        editingItemId={editingItemId}
-                        editingItemText={editingItemText}
-                        setEditingItemText={setEditingItemText}
-                        sensors={sensors}
-                        onDragEnd={handleDragEnd}
-                        deleteChecklistItem={deleteChecklistItem}
-                        startEditingItem={startEditingItem}
-                        saveEditedItem={saveEditedItem}
-                        cancelEditingItem={cancelEditingItem}
-                        addChecklistItem={addChecklistItem}
-                        setPendingGroupAction={setPendingGroupAction}
-                        setGroupName={setGroupName}
-                        setShowGroupModal={setShowGroupModal}
-                        ungroupChecklistItems={ungroupChecklistItems}
-                      />
+                      {allTypes.map((type) => (
+                        <ChecklistSection
+                          key={type}
+                          type={type}
+                          title={getChecklistTitle(type)}
+                          items={currentChecklist.get(type) || []}
+                          selectedStrategy={selectedStrategy}
+                          isEditing={isEditing}
+                          newChecklistItem={newChecklistItem}
+                          setNewChecklistItem={setNewChecklistItem}
+                          selectedChecklistItems={selectedChecklistItems}
+                          setSelectedChecklistItems={setSelectedChecklistItems}
+                          editingItemId={editingItemId}
+                          editingItemText={editingItemText}
+                          setEditingItemText={setEditingItemText}
+                          sensors={sensors}
+                          onDragEnd={handleDragEnd}
+                          deleteChecklistItem={deleteChecklistItem}
+                          startEditingItem={startEditingItem}
+                          saveEditedItem={saveEditedItem}
+                          cancelEditingItem={cancelEditingItem}
+                          addChecklistItem={addChecklistItem}
+                          setPendingGroupAction={setPendingGroupAction}
+                          setGroupName={setGroupName}
+                          setShowGroupModal={setShowGroupModal}
+                          ungroupChecklistItems={ungroupChecklistItems}
+                        />
+                      ))}
                     </div>
                   </div>
                 );
@@ -1911,6 +1958,168 @@ export default function Strategies() {
                   fontSize: "14px",
                   fontWeight: "500",
                   opacity: groupName.trim() ? 1 : 0.6,
+                }}
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Checklist Modal */}
+      {showNewChecklistModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => {
+            setShowNewChecklistModal(false);
+            setNewChecklistName("");
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "400px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                fontSize: "18px",
+                fontWeight: "600",
+                marginBottom: "16px",
+                color: "var(--text-primary)",
+              }}
+            >
+              Create New Checklist
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-secondary)",
+                marginBottom: "16px",
+              }}
+            >
+              Enter a name for the new checklist section:
+            </p>
+            <input
+              type="text"
+              value={newChecklistName}
+              onChange={(e) => setNewChecklistName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newChecklistName.trim()) {
+                  if (selectedStrategy) {
+                    const currentChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
+                    const typeName = newChecklistName.trim().toLowerCase().replace(/\s+/g, '_');
+                    
+                    // Initialize the checklist type in the map
+                    const updatedChecklist = new Map(currentChecklist);
+                    if (!updatedChecklist.has(typeName)) {
+                      updatedChecklist.set(typeName, []);
+                    }
+                    setChecklists(new Map(checklists.set(selectedStrategy, updatedChecklist)));
+                    
+                    // Add to custom types
+                    const customTypesSet = new Set(customChecklistTypes.get(selectedStrategy) || []);
+                    customTypesSet.add(typeName);
+                    setCustomChecklistTypes(new Map(customChecklistTypes.set(selectedStrategy, customTypesSet)));
+                    
+                    setNewChecklistName("");
+                    setShowNewChecklistModal(false);
+                  }
+                } else if (e.key === "Escape") {
+                  setShowNewChecklistModal(false);
+                  setNewChecklistName("");
+                }
+              }}
+              placeholder="Checklist name..."
+              autoFocus
+              style={{
+                width: "100%",
+                padding: "12px",
+                backgroundColor: "var(--bg-primary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                color: "var(--text-primary)",
+                fontSize: "14px",
+                marginBottom: "20px",
+                outline: "none",
+              }}
+            />
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                onClick={() => {
+                  setShowNewChecklistModal(false);
+                  setNewChecklistName("");
+                }}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (selectedStrategy && newChecklistName.trim()) {
+                    const currentChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
+                    const typeName = newChecklistName.trim().toLowerCase().replace(/\s+/g, '_');
+                    
+                    // Initialize the checklist type in the map
+                    const updatedChecklist = new Map(currentChecklist);
+                    if (!updatedChecklist.has(typeName)) {
+                      updatedChecklist.set(typeName, []);
+                    }
+                    setChecklists(new Map(checklists.set(selectedStrategy, updatedChecklist)));
+                    
+                    // Add to custom types
+                    const customTypesSet = new Set(customChecklistTypes.get(selectedStrategy) || []);
+                    customTypesSet.add(typeName);
+                    setCustomChecklistTypes(new Map(customChecklistTypes.set(selectedStrategy, customTypesSet)));
+                    
+                    setNewChecklistName("");
+                    setShowNewChecklistModal(false);
+                  }
+                }}
+                disabled={!newChecklistName.trim()}
+                style={{
+                  background: newChecklistName.trim() ? "var(--accent)" : "var(--bg-tertiary)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: newChecklistName.trim() ? "white" : "var(--text-secondary)",
+                  cursor: newChecklistName.trim() ? "pointer" : "not-allowed",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  opacity: newChecklistName.trim() ? 1 : 0.6,
                 }}
               >
                 Create
