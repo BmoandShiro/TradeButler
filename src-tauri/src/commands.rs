@@ -2466,32 +2466,58 @@ pub struct StrategyChecklistItem {
     pub item_text: String,
     pub is_checked: bool,
     pub item_order: i64,
+    pub checklist_type: String,
 }
 
 #[tauri::command]
-pub fn get_strategy_checklist(strategy_id: i64) -> Result<Vec<StrategyChecklistItem>, String> {
+pub fn get_strategy_checklist(strategy_id: i64, checklist_type: Option<String>) -> Result<Vec<StrategyChecklistItem>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
-    let mut stmt = conn
-        .prepare("SELECT id, strategy_id, item_text, is_checked, item_order FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY item_order ASC, id ASC")
-        .map_err(|e| e.to_string())?;
-    
-    let items_iter = stmt
-        .query_map(params![strategy_id], |row| {
-            Ok(StrategyChecklistItem {
-                id: Some(row.get(0)?),
-                strategy_id: row.get(1)?,
-                item_text: row.get(2)?,
-                is_checked: row.get::<_, i64>(3)? != 0,
-                item_order: row.get(4)?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
-    
     let mut items = Vec::new();
-    for item_result in items_iter {
-        items.push(item_result.map_err(|e| e.to_string())?);
+    
+    if let Some(ct) = checklist_type {
+        let mut stmt = conn
+            .prepare("SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = ?2 ORDER BY item_order ASC, id ASC")
+            .map_err(|e| e.to_string())?;
+        
+        let items_iter = stmt
+            .query_map(params![strategy_id, ct], |row| {
+                Ok(StrategyChecklistItem {
+                    id: Some(row.get(0)?),
+                    strategy_id: row.get(1)?,
+                    item_text: row.get(2)?,
+                    is_checked: row.get::<_, i64>(3)? != 0,
+                    item_order: row.get(4)?,
+                    checklist_type: row.get(5).unwrap_or_else(|_| "entry".to_string()),
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        
+        for item_result in items_iter {
+            items.push(item_result.map_err(|e| e.to_string())?);
+        }
+    } else {
+        let mut stmt = conn
+            .prepare("SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY item_order ASC, id ASC")
+            .map_err(|e| e.to_string())?;
+        
+        let items_iter = stmt
+            .query_map(params![strategy_id], |row| {
+                Ok(StrategyChecklistItem {
+                    id: Some(row.get(0)?),
+                    strategy_id: row.get(1)?,
+                    item_text: row.get(2)?,
+                    is_checked: row.get::<_, i64>(3)? != 0,
+                    item_order: row.get(4)?,
+                    checklist_type: row.get(5).unwrap_or_else(|_| "entry".to_string()),
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        
+        for item_result in items_iter {
+            items.push(item_result.map_err(|e| e.to_string())?);
+        }
     }
     
     Ok(items)
@@ -2504,6 +2530,7 @@ pub fn save_strategy_checklist_item(
     item_text: String,
     is_checked: bool,
     item_order: i64,
+    checklist_type: String,
 ) -> Result<i64, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
@@ -2513,16 +2540,16 @@ pub fn save_strategy_checklist_item(
     if let Some(item_id) = id {
         // Update existing item
         conn.execute(
-            "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, updated_at = datetime('now') WHERE id = ?4",
-            params![item_text, checked_int, item_order, item_id],
+            "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, checklist_type = ?4, updated_at = datetime('now') WHERE id = ?5",
+            params![item_text, checked_int, item_order, checklist_type, item_id],
         ).map_err(|e| e.to_string())?;
         Ok(item_id)
     } else {
         // Insert new item
         conn.execute(
-            "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, created_at, updated_at) 
-             VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))",
-            params![strategy_id, item_text, checked_int, item_order],
+            "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, checklist_type, created_at, updated_at) 
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), datetime('now'))",
+            params![strategy_id, item_text, checked_int, item_order, checklist_type],
         ).map_err(|e| e.to_string())?;
         Ok(conn.last_insert_rowid())
     }

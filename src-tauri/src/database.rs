@@ -140,12 +140,19 @@ pub fn init_database(db_path: &Path) -> Result<()> {
             item_text TEXT NOT NULL,
             is_checked INTEGER NOT NULL DEFAULT 0,
             item_order INTEGER NOT NULL DEFAULT 0,
+            checklist_type TEXT NOT NULL DEFAULT 'entry',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (strategy_id) REFERENCES strategies(id) ON DELETE CASCADE
         )",
         [],
     )?;
+    
+    // Add checklist_type column if it doesn't exist (migration for existing databases)
+    let _ = conn.execute(
+        "ALTER TABLE strategy_checklists ADD COLUMN checklist_type TEXT NOT NULL DEFAULT 'entry'",
+        [],
+    );
 
     // Create index for strategy_checklists
     conn.execute(
