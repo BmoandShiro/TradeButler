@@ -153,6 +153,16 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         "ALTER TABLE strategy_checklists ADD COLUMN checklist_type TEXT NOT NULL DEFAULT 'entry'",
         [],
     );
+    
+    // Add parent_id column for grouping (migration for existing databases)
+    let _ = conn.execute(
+        "ALTER TABLE strategy_checklists ADD COLUMN parent_id INTEGER",
+        [],
+    );
+    
+    // Add foreign key for parent_id if it doesn't exist
+    // Note: SQLite doesn't support adding foreign keys via ALTER TABLE easily,
+    // so we'll handle this in the application logic
 
     // Create index for strategy_checklists
     conn.execute(

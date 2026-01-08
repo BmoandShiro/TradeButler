@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus } from "lucide-react";
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import {
@@ -55,9 +55,34 @@ interface ChecklistItem {
   is_checked: boolean;
   item_order: number;
   checklist_type: string;
+  parent_id: number | null;
 }
 
-function SortableChecklistItem({ item, onDelete }: { item: ChecklistItem; onDelete: () => void }) {
+function SortableChecklistItem({ 
+  item, 
+  onDelete, 
+  isEditing, 
+  isSelected, 
+  onSelect,
+  onEdit,
+  isEditingText,
+  editingText,
+  onEditingTextChange,
+  onSaveEdit,
+  onCancelEdit
+}: { 
+  item: ChecklistItem; 
+  onDelete: () => void; 
+  isEditing: boolean;
+  isSelected: boolean;
+  onSelect: (selected: boolean) => void;
+  onEdit: () => void;
+  isEditingText: boolean;
+  editingText: string;
+  onEditingTextChange: (text: string) => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
+}) {
   const {
     attributes,
     listeners,
@@ -65,7 +90,7 @@ function SortableChecklistItem({ item, onDelete }: { item: ChecklistItem; onDele
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: item.id });
+  } = useSortable({ id: item.id, disabled: !isEditing || isEditingText });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -82,42 +107,96 @@ function SortableChecklistItem({ item, onDelete }: { item: ChecklistItem; onDele
         alignItems: "center",
         gap: "8px",
         padding: "10px",
-        backgroundColor: "var(--bg-tertiary)",
-        border: "1px solid var(--border-color)",
+        backgroundColor: isSelected ? "var(--accent)" : "var(--bg-tertiary)",
+        border: `1px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
         borderRadius: "6px",
         marginBottom: "8px",
+        marginLeft: item.parent_id ? "24px" : "0",
       }}
     >
-      <div
-        {...attributes}
-        {...listeners}
-        style={{
-          cursor: "grab",
-          color: "var(--text-secondary)",
-          display: "flex",
-          alignItems: "center",
-        }}
-      >
-        <GripVertical size={16} />
-      </div>
-      <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
-        {item.item_text}
-      </div>
-      <button
-        onClick={onDelete}
-        style={{
-          background: "transparent",
-          border: "none",
-          color: "var(--danger)",
-          cursor: "pointer",
-          padding: "4px",
-          display: "flex",
-          alignItems: "center",
-        }}
-        title="Delete"
-      >
-        <X size={16} />
-      </button>
+      {isEditing && !isEditingText && (
+        <>
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={(e) => onSelect(e.target.checked)}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              cursor: "pointer",
+              width: "16px",
+              height: "16px",
+            }}
+          />
+          <div
+            {...attributes}
+            {...listeners}
+            style={{
+              cursor: "grab",
+              color: "var(--text-secondary)",
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            <GripVertical size={16} />
+          </div>
+        </>
+      )}
+      {isEditingText ? (
+        <input
+          type="text"
+          value={editingText}
+          onChange={(e) => onEditingTextChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              onSaveEdit();
+            } else if (e.key === "Escape") {
+              onCancelEdit();
+            }
+          }}
+          onBlur={onSaveEdit}
+          autoFocus
+          style={{
+            flex: 1,
+            padding: "6px 8px",
+            backgroundColor: "var(--bg-primary)",
+            border: "1px solid var(--accent)",
+            borderRadius: "4px",
+            color: "var(--text-primary)",
+            fontSize: "14px",
+            outline: "none",
+          }}
+        />
+      ) : (
+        <div 
+          style={{ 
+            flex: 1, 
+            fontSize: "14px", 
+            color: isSelected ? "white" : "var(--text-primary)",
+            cursor: isEditing ? "text" : "default",
+          }}
+          onClick={isEditing ? onEdit : undefined}
+          title={isEditing ? "Click to edit" : undefined}
+        >
+          {item.item_text}
+        </div>
+      )}
+      {isEditing && !isEditingText && (
+        <button
+          onClick={onDelete}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: isSelected ? "white" : "var(--danger)",
+            cursor: "pointer",
+            padding: "4px",
+            display: "flex",
+            alignItems: "center",
+          }}
+          title="Delete"
+        >
+          <X size={16} />
+        </button>
+      )}
     </div>
   );
 }
@@ -142,6 +221,12 @@ export default function Strategies() {
   const [notesContent, setNotesContent] = useState<Map<number, string>>(new Map());
   const [checklists, setChecklists] = useState<Map<number, { entry: ChecklistItem[]; takeProfit: ChecklistItem[] }>>(new Map());
   const [newChecklistItem, setNewChecklistItem] = useState<{ entry: string; takeProfit: string }>({ entry: "", takeProfit: "" });
+  const [selectedChecklistItems, setSelectedChecklistItems] = useState<Set<number>>(new Set());
+  const [showGroupModal, setShowGroupModal] = useState(false);
+  const [groupName, setGroupName] = useState("");
+  const [pendingGroupAction, setPendingGroupAction] = useState<{ strategyId: number; type: "entry" | "take_profit"; itemIds: number[] } | null>(null);
+  const [editingItemId, setEditingItemId] = useState<number | null>(null);
+  const [editingItemText, setEditingItemText] = useState<string>("");
   
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -284,6 +369,7 @@ export default function Strategies() {
         isChecked: false,
         itemOrder: maxOrder + 1,
         checklistType: type,
+        parentId: null,
       });
 
       const newItem: ChecklistItem = {
@@ -293,6 +379,7 @@ export default function Strategies() {
         is_checked: false,
         item_order: maxOrder + 1,
         checklist_type: type,
+        parent_id: null,
       };
 
       const updatedChecklist = {
@@ -300,7 +387,8 @@ export default function Strategies() {
         [type === "entry" ? "entry" : "takeProfit"]: [...items, newItem],
       };
       setChecklists(new Map(checklists.set(strategyId, updatedChecklist)));
-      setNewChecklistItem({ ...newChecklistItem, [type === "entry" ? "entry" : "takeProfit"]: "" });
+      // Clear the input field for this type
+      setNewChecklistItem(prev => ({ ...prev, [type === "entry" ? "entry" : "takeProfit"]: "" }));
     } catch (error) {
       console.error("Error adding checklist item:", error);
       alert("Failed to add checklist item: " + error);
@@ -322,6 +410,97 @@ export default function Strategies() {
       console.error("Error deleting checklist item:", error);
       alert("Failed to delete checklist item: " + error);
     }
+  };
+
+  const groupChecklistItems = async (strategyId: number, type: "entry" | "take_profit", itemIds: number[], groupName: string) => {
+    if (itemIds.length === 0 || !groupName.trim()) return;
+    try {
+      await invoke<number>("group_checklist_items", {
+        itemIds: itemIds,
+        groupName: groupName.trim(),
+        strategyId: strategyId,
+        checklistType: type,
+      });
+      setSelectedChecklistItems(new Set());
+      setShowGroupModal(false);
+      setGroupName("");
+      setPendingGroupAction(null);
+      await loadChecklists(strategyId);
+    } catch (error) {
+      console.error("Error grouping checklist items:", error);
+      alert("Failed to group checklist items: " + error);
+    }
+  };
+
+  const handleGroupModalSubmit = () => {
+    if (pendingGroupAction) {
+      groupChecklistItems(
+        pendingGroupAction.strategyId,
+        pendingGroupAction.type,
+        pendingGroupAction.itemIds,
+        groupName
+      );
+    }
+  };
+
+  const handleGroupModalCancel = () => {
+    setShowGroupModal(false);
+    setGroupName("");
+    setPendingGroupAction(null);
+  };
+
+  const ungroupChecklistItems = async (itemIds: number[]) => {
+    if (itemIds.length === 0) return;
+    try {
+      await invoke("ungroup_checklist_items", { itemIds: itemIds });
+      setSelectedChecklistItems(new Set());
+      if (selectedStrategy) {
+        await loadChecklists(selectedStrategy);
+      }
+    } catch (error) {
+      console.error("Error ungrouping checklist items:", error);
+      alert("Failed to ungroup checklist items: " + error);
+    }
+  };
+
+  const startEditingItem = (item: ChecklistItem) => {
+    setEditingItemId(item.id);
+    setEditingItemText(item.item_text);
+  };
+
+  const saveEditedItem = async (itemId: number, newText: string) => {
+    if (!newText.trim()) {
+      setEditingItemId(null);
+      setEditingItemText("");
+      return;
+    }
+    
+    try {
+      const item = [...(checklists.get(selectedStrategy || 0)?.entry || []), ...(checklists.get(selectedStrategy || 0)?.takeProfit || [])].find(i => i.id === itemId);
+      if (item && selectedStrategy) {
+        await invoke("save_strategy_checklist_item", {
+          id: itemId,
+          strategyId: selectedStrategy,
+          itemText: newText.trim(),
+          isChecked: item.is_checked,
+          itemOrder: item.item_order,
+          checklistType: item.checklist_type,
+          parentId: item.parent_id,
+        });
+        await loadChecklists(selectedStrategy);
+      }
+    } catch (error) {
+      console.error("Error saving checklist item:", error);
+      alert("Failed to save checklist item: " + error);
+    } finally {
+      setEditingItemId(null);
+      setEditingItemText("");
+    }
+  };
+
+  const cancelEditingItem = () => {
+    setEditingItemId(null);
+    setEditingItemText("");
   };
 
   const reorderChecklistItems = async (strategyId: number, type: "entry" | "take_profit", activeId: number, overId: number) => {
@@ -349,6 +528,7 @@ export default function Strategies() {
           isChecked: item.is_checked,
           itemOrder: item.item_order,
           checklistType: type,
+          parentId: item.parent_id,
         });
       }
     } catch (error) {
@@ -1206,106 +1386,313 @@ export default function Strategies() {
                 </div>
               )}
 
-              {activeTab === "checklists" && selectedStrategy && (
-                <div style={{ padding: "20px", overflowY: "auto" }}>
-                  <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "24px" }}>Checklists</h3>
-                  
-                  {(() => {
-                    const currentChecklist = checklists.get(selectedStrategy) || { entry: [], takeProfit: [] };
-                    
-                    const handleDragEnd = (type: "entry" | "take_profit", event: DragEndEvent) => {
-                      const { active, over } = event;
-                      if (!over || active.id === over.id) return;
-                      reorderChecklistItems(selectedStrategy, type, active.id as number, over.id as number);
-                    };
+              {activeTab === "checklists" && selectedStrategy && (() => {
+                const currentChecklist = checklists.get(selectedStrategy) || { entry: [], takeProfit: [] };
+                
+                const handleDragEnd = (type: "entry" | "take_profit", event: DragEndEvent) => {
+                  const { active, over } = event;
+                  if (!over || active.id === over.id) return;
+                  reorderChecklistItems(selectedStrategy, type, active.id as number, over.id as number);
+                };
 
-                    const ChecklistSection = ({ type, title, items }: { type: "entry" | "take_profit"; title: string; items: ChecklistItem[] }) => {
-                      const itemIds = items.map(item => item.id);
-                      return (
-                        <div style={{ marginBottom: "32px" }}>
-                          <h4 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
-                            {title}
-                          </h4>
-                          <DndContext
-                            sensors={sensors}
-                            collisionDetection={closestCenter}
-                            onDragEnd={(e) => handleDragEnd(type, e)}
-                          >
-                            <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
-                              {items.map((item) => (
-                                <SortableChecklistItem
-                                  key={item.id}
-                                  item={item}
-                                  onDelete={() => deleteChecklistItem(selectedStrategy, item.id, type)}
-                                />
-                              ))}
-                            </SortableContext>
-                          </DndContext>
-                          <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
-                            <input
-                              type="text"
-                              value={newChecklistItem[type === "entry" ? "entry" : "takeProfit"]}
-                              onChange={(e) => setNewChecklistItem({
-                                ...newChecklistItem,
-                                [type === "entry" ? "entry" : "takeProfit"]: e.target.value,
-                              })}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  addChecklistItem(selectedStrategy, type, newChecklistItem[type === "entry" ? "entry" : "takeProfit"]);
-                                }
-                              }}
-                              placeholder={`Add ${title.toLowerCase()} item...`}
-                              style={{
-                                flex: 1,
-                                padding: "10px",
-                                backgroundColor: "var(--bg-secondary)",
-                                border: "1px solid var(--border-color)",
-                                borderRadius: "6px",
-                                color: "var(--text-primary)",
-                                fontSize: "14px",
-                              }}
-                            />
+                const ChecklistSection = ({ type, title, items }: { type: "entry" | "take_profit"; title: string; items: ChecklistItem[] }) => {
+                  // Organize items: groups (items with no parent_id that have children) and regular items
+                  const itemIdsSet = new Set(items.map(item => item.id));
+                  const groups = items.filter(item => !item.parent_id && items.some(child => child.parent_id === item.id));
+                  const regularItems = items.filter(item => !item.parent_id && !items.some(child => child.parent_id === item.id));
+                  const groupedItems = items.filter(item => item.parent_id !== null && itemIdsSet.has(item.parent_id));
+                  
+                  // Organize by parent
+                  const itemsByParent = new Map<number, ChecklistItem[]>();
+                  groupedItems.forEach(item => {
+                    if (item.parent_id) {
+                      const parentId = item.parent_id;
+                      if (!itemsByParent.has(parentId)) {
+                        itemsByParent.set(parentId, []);
+                      }
+                      itemsByParent.get(parentId)!.push(item);
+                    }
+                  });
+                  
+                  const itemIds = items.map(item => item.id);
+                  const fieldKey = type === "entry" ? "entry" : "takeProfit";
+                  const currentValue = newChecklistItem[fieldKey];
+                  const selectedItems = Array.from(selectedChecklistItems);
+                  const hasSelection = selectedItems.length > 0;
+                  
+                  const handleToggleSelect = (itemId: number, selected: boolean) => {
+                    setSelectedChecklistItems(prev => {
+                      const newSet = new Set(prev);
+                      if (selected) {
+                        newSet.add(itemId);
+                      } else {
+                        newSet.delete(itemId);
+                      }
+                      return newSet;
+                    });
+                  };
+                  
+                  const handleGroupSelected = () => {
+                    setPendingGroupAction({ strategyId: selectedStrategy, type, itemIds: selectedItems });
+                    setGroupName("");
+                    setShowGroupModal(true);
+                  };
+                  
+                  const handleUngroupSelected = () => {
+                    ungroupChecklistItems(selectedItems);
+                  };
+                  
+                  return (
+                    <div style={{ marginBottom: "32px" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                        <h4 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)" }}>
+                          {title}
+                        </h4>
+                        {isEditing && hasSelection && (
+                          <div style={{ display: "flex", gap: "8px" }}>
                             <button
-                              onClick={() => addChecklistItem(selectedStrategy, type, newChecklistItem[type === "entry" ? "entry" : "takeProfit"])}
+                              onClick={handleGroupSelected}
                               style={{
                                 background: "var(--accent)",
                                 border: "none",
                                 borderRadius: "6px",
-                                padding: "10px 16px",
+                                padding: "6px 12px",
                                 color: "white",
                                 cursor: "pointer",
                                 display: "flex",
                                 alignItems: "center",
                                 gap: "6px",
-                                fontSize: "14px",
+                                fontSize: "12px",
                                 fontWeight: "500",
                               }}
+                              title="Group Selected"
                             >
-                              <Plus size={16} />
-                              Add
+                              <FolderPlus size={14} />
+                              Group ({selectedItems.length})
+                            </button>
+                            <button
+                              onClick={handleUngroupSelected}
+                              style={{
+                                background: "var(--bg-tertiary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "6px",
+                                padding: "6px 12px",
+                                color: "var(--text-primary)",
+                                cursor: "pointer",
+                                fontSize: "12px",
+                                fontWeight: "500",
+                              }}
+                              title="Ungroup Selected"
+                            >
+                              Ungroup
                             </button>
                           </div>
-                        </div>
-                      );
-                    };
-
-                    return (
-                      <div>
-                        <ChecklistSection
-                          type="entry"
-                          title="Entry Checklist"
-                          items={currentChecklist.entry}
-                        />
-                        <ChecklistSection
-                          type="take_profit"
-                          title="Take Profit Checklist"
-                          items={currentChecklist.takeProfit}
-                        />
+                        )}
                       </div>
-                    );
-                  })()}
-                </div>
-              )}
+                      {isEditing ? (
+                        <DndContext
+                          sensors={sensors}
+                          collisionDetection={closestCenter}
+                          onDragEnd={(e) => handleDragEnd(type, e)}
+                        >
+                          <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
+                            {/* Render groups with their children */}
+                            {groups.map((group) => {
+                              const children = itemsByParent.get(group.id) || [];
+                              return (
+                                <div key={group.id} style={{ marginBottom: "12px" }}>
+                                  <SortableChecklistItem
+                                    item={group}
+                                    onDelete={() => deleteChecklistItem(selectedStrategy, group.id, type)}
+                                    isEditing={isEditing}
+                                    isSelected={selectedChecklistItems.has(group.id)}
+                                    onSelect={(selected) => handleToggleSelect(group.id, selected)}
+                                    onEdit={() => startEditingItem(group)}
+                                    isEditingText={editingItemId === group.id}
+                                    editingText={editingItemText}
+                                    onEditingTextChange={setEditingItemText}
+                                    onSaveEdit={() => saveEditedItem(group.id, editingItemText)}
+                                    onCancelEdit={cancelEditingItem}
+                                  />
+                                  {children.map((child) => (
+                                    <SortableChecklistItem
+                                      key={child.id}
+                                      item={child}
+                                      onDelete={() => deleteChecklistItem(selectedStrategy, child.id, type)}
+                                      isEditing={isEditing}
+                                      isSelected={selectedChecklistItems.has(child.id)}
+                                      onSelect={(selected) => handleToggleSelect(child.id, selected)}
+                                      onEdit={() => startEditingItem(child)}
+                                      isEditingText={editingItemId === child.id}
+                                      editingText={editingItemText}
+                                      onEditingTextChange={setEditingItemText}
+                                      onSaveEdit={() => saveEditedItem(child.id, editingItemText)}
+                                      onCancelEdit={cancelEditingItem}
+                                    />
+                                  ))}
+                                </div>
+                              );
+                            })}
+                            {/* Render regular (ungrouped) items */}
+                            {regularItems.map((item) => (
+                              <SortableChecklistItem
+                                key={item.id}
+                                item={item}
+                                onDelete={() => deleteChecklistItem(selectedStrategy, item.id, type)}
+                                isEditing={isEditing}
+                                isSelected={selectedChecklistItems.has(item.id)}
+                                onSelect={(selected) => handleToggleSelect(item.id, selected)}
+                                onEdit={() => startEditingItem(item)}
+                                isEditingText={editingItemId === item.id}
+                                editingText={editingItemText}
+                                onEditingTextChange={setEditingItemText}
+                                onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
+                                onCancelEdit={cancelEditingItem}
+                              />
+                            ))}
+                          </SortableContext>
+                        </DndContext>
+                      ) : (
+                        <div>
+                          {/* Render groups with their children in view mode */}
+                          {groups.map((group) => {
+                            const children = itemsByParent.get(group.id) || [];
+                            return (
+                              <div key={group.id} style={{ marginBottom: "12px" }}>
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "8px",
+                                    padding: "10px",
+                                    backgroundColor: "var(--bg-tertiary)",
+                                    border: "1px solid var(--border-color)",
+                                    borderRadius: "6px",
+                                    marginBottom: "8px",
+                                    fontWeight: "600",
+                                  }}
+                                >
+                                  <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
+                                    {group.item_text}
+                                  </div>
+                                </div>
+                                {children.map((child) => (
+                                  <div
+                                    key={child.id}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      padding: "10px",
+                                      backgroundColor: "var(--bg-tertiary)",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "6px",
+                                      marginBottom: "8px",
+                                      marginLeft: "24px",
+                                    }}
+                                  >
+                                    <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
+                                      {child.item_text}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })}
+                          {/* Render regular items */}
+                          {regularItems.map((item) => (
+                            <div
+                              key={item.id}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "8px",
+                                padding: "10px",
+                                backgroundColor: "var(--bg-tertiary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "6px",
+                                marginBottom: "8px",
+                              }}
+                            >
+                              <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
+                                {item.item_text}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {isEditing && (
+                        <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+                          <input
+                            key={`${selectedStrategy}-${type}-add-input`}
+                            type="text"
+                            value={currentValue}
+                            onChange={(e) => {
+                              const newValue = e.target.value;
+                              setNewChecklistItem(prev => ({
+                                ...prev,
+                                [fieldKey]: newValue,
+                              }));
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                addChecklistItem(selectedStrategy, type, currentValue);
+                              }
+                            }}
+                            placeholder={`Add ${title.toLowerCase()} item...`}
+                            style={{
+                              flex: 1,
+                              padding: "10px",
+                              backgroundColor: "var(--bg-secondary)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "6px",
+                              color: "var(--text-primary)",
+                              fontSize: "14px",
+                            }}
+                          />
+                          <button
+                            onClick={() => addChecklistItem(selectedStrategy, type, currentValue)}
+                            style={{
+                              background: "var(--accent)",
+                              border: "none",
+                              borderRadius: "6px",
+                              padding: "10px 16px",
+                              color: "white",
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "6px",
+                              fontSize: "14px",
+                              fontWeight: "500",
+                            }}
+                          >
+                            <Plus size={16} />
+                            Add
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                };
+
+                return (
+                  <div style={{ padding: "20px", overflowY: "auto" }}>
+                    <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "24px" }}>Checklists</h3>
+                    <div>
+                      <ChecklistSection
+                        type="entry"
+                        title="Entry Checklist"
+                        items={currentChecklist.entry}
+                      />
+                      <ChecklistSection
+                        type="take_profit"
+                        title="Take Profit Checklist"
+                        items={currentChecklist.takeProfit}
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
       )}
@@ -1325,6 +1712,123 @@ export default function Strategies() {
           <div style={{ textAlign: "center" }}>
             <Target size={48} style={{ margin: "0 auto 16px", opacity: 0.3 }} />
             <p style={{ fontSize: "16px" }}>Select a strategy to view details</p>
+          </div>
+        </div>
+      )}
+
+      {/* Group Name Modal */}
+      {showGroupModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={handleGroupModalCancel}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "400px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                fontSize: "18px",
+                fontWeight: "600",
+                marginBottom: "16px",
+                color: "var(--text-primary)",
+              }}
+            >
+              Create Group
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-secondary)",
+                marginBottom: "16px",
+              }}
+            >
+              Enter a name for the group:
+            </p>
+            <input
+              type="text"
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && groupName.trim()) {
+                  handleGroupModalSubmit();
+                } else if (e.key === "Escape") {
+                  handleGroupModalCancel();
+                }
+              }}
+              placeholder="Group name..."
+              autoFocus
+              style={{
+                width: "100%",
+                padding: "12px",
+                backgroundColor: "var(--bg-primary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                color: "var(--text-primary)",
+                fontSize: "14px",
+                marginBottom: "20px",
+                outline: "none",
+              }}
+            />
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                onClick={handleGroupModalCancel}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleGroupModalSubmit}
+                disabled={!groupName.trim()}
+                style={{
+                  background: groupName.trim() ? "var(--accent)" : "var(--bg-tertiary)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: groupName.trim() ? "white" : "var(--text-secondary)",
+                  cursor: groupName.trim() ? "pointer" : "not-allowed",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  opacity: groupName.trim() ? 1 : 0.6,
+                }}
+              >
+                Create
+              </button>
+            </div>
           </div>
         </div>
       )}

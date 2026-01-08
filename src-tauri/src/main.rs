@@ -56,6 +56,8 @@ fn main() {
             commands::get_strategy_checklist,
             commands::save_strategy_checklist_item,
             commands::delete_strategy_checklist_item,
+            commands::group_checklist_items,
+            commands::ungroup_checklist_items,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
