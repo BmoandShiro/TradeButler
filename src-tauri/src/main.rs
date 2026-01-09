@@ -58,6 +58,13 @@ fn main() {
             commands::delete_strategy_checklist_item,
             commands::group_checklist_items,
             commands::ungroup_checklist_items,
+            commands::create_journal_entry,
+            commands::get_journal_entries,
+            commands::get_journal_entry,
+            commands::update_journal_entry,
+            commands::delete_journal_entry,
+            commands::save_journal_checklist_responses,
+            commands::get_journal_checklist_responses,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

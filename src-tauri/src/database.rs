@@ -37,6 +37,23 @@ pub struct Strategy {
     pub color: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct JournalEntry {
+    pub id: Option<i64>,
+    pub date: String,
+    pub title: String,
+    pub trade: Option<String>,
+    pub what_went_well: Option<String>,
+    pub what_could_be_improved: Option<String>,
+    pub emotional_state: Option<String>,
+    pub notes: Option<String>,
+    pub symbol: Option<String>,
+    pub strategy_id: Option<i64>,
+    pub outcome: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
 pub fn init_database(db_path: &Path) -> Result<()> {
     let conn = Connection::open(db_path)?;
 
@@ -167,6 +184,59 @@ pub fn init_database(db_path: &Path) -> Result<()> {
     // Create index for strategy_checklists
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_strategy_checklists_strategy ON strategy_checklists(strategy_id)",
+        [],
+    )?;
+
+    // Create journal_entries table for storing trade journal entries
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS journal_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            title TEXT NOT NULL,
+            trade TEXT,
+            what_went_well TEXT,
+            what_could_be_improved TEXT,
+            emotional_state TEXT,
+            notes TEXT,
+            symbol TEXT,
+            strategy_id INTEGER,
+            outcome TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (strategy_id) REFERENCES strategies(id)
+        )",
+        [],
+    )?;
+
+    // Create index for journal_entries
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_entries_date ON journal_entries(date)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_entries_strategy ON journal_entries(strategy_id)",
+        [],
+    )?;
+
+    // Create journal_checklist_responses table for storing checklist responses for journal entries
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS journal_checklist_responses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            journal_entry_id INTEGER NOT NULL,
+            checklist_item_id INTEGER NOT NULL,
+            is_checked INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (journal_entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE,
+            FOREIGN KEY (checklist_item_id) REFERENCES strategy_checklists(id) ON DELETE CASCADE,
+            UNIQUE(journal_entry_id, checklist_item_id)
+        )",
+        [],
+    )?;
+
+    // Create index for journal_checklist_responses
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_checklist_responses_entry ON journal_checklist_responses(journal_entry_id)",
         [],
     )?;
 

@@ -1,4 +1,4 @@
-use crate::database::{get_connection, Trade, EmotionalState, Strategy};
+use crate::database::{get_connection, Trade, EmotionalState, Strategy, JournalEntry};
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -1827,6 +1827,197 @@ pub fn update_trade_strategy(trade_id: i64, strategy_id: Option<i64>) -> Result<
     ).map_err(|e| e.to_string())?;
     
     Ok(())
+}
+
+// Journal Entry Commands
+#[tauri::command]
+pub fn create_journal_entry(
+    date: String,
+    title: String,
+    trade: Option<String>,
+    what_went_well: Option<String>,
+    what_could_be_improved: Option<String>,
+    emotional_state: Option<String>,
+    notes: Option<String>,
+    symbol: Option<String>,
+    strategy_id: Option<i64>,
+    outcome: Option<String>,
+) -> Result<i64, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let id = conn.execute(
+        "INSERT INTO journal_entries (date, title, trade, what_went_well, what_could_be_improved, emotional_state, notes, symbol, strategy_id, outcome) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![date, title, trade, what_went_well, what_could_be_improved, emotional_state, notes, symbol, strategy_id, outcome],
+    ).map_err(|e| e.to_string())?;
+    
+    Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+pub fn get_journal_entries() -> Result<Vec<JournalEntry>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn
+        .prepare("SELECT id, date, title, trade, what_went_well, what_could_be_improved, emotional_state, notes, symbol, strategy_id, outcome, created_at, updated_at FROM journal_entries ORDER BY date DESC, created_at DESC")
+        .map_err(|e| e.to_string())?;
+    
+    let entry_iter = stmt
+        .query_map([], |row| {
+            Ok(JournalEntry {
+                id: Some(row.get(0)?),
+                date: row.get(1)?,
+                title: row.get(2)?,
+                trade: row.get(3)?,
+                what_went_well: row.get(4)?,
+                what_could_be_improved: row.get(5)?,
+                emotional_state: row.get(6)?,
+                notes: row.get(7)?,
+                symbol: row.get(8)?,
+                strategy_id: row.get(9)?,
+                outcome: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut entries = Vec::new();
+    for entry in entry_iter {
+        entries.push(entry.map_err(|e| e.to_string())?);
+    }
+    
+    Ok(entries)
+}
+
+#[tauri::command]
+pub fn get_journal_entry(id: i64) -> Result<JournalEntry, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn
+        .prepare("SELECT id, date, title, trade, what_went_well, what_could_be_improved, emotional_state, notes, symbol, strategy_id, outcome, created_at, updated_at FROM journal_entries WHERE id = ?1")
+        .map_err(|e| e.to_string())?;
+    
+    let entry = stmt
+        .query_row(params![id], |row| {
+            Ok(JournalEntry {
+                id: Some(row.get(0)?),
+                date: row.get(1)?,
+                title: row.get(2)?,
+                trade: row.get(3)?,
+                what_went_well: row.get(4)?,
+                what_could_be_improved: row.get(5)?,
+                emotional_state: row.get(6)?,
+                notes: row.get(7)?,
+                symbol: row.get(8)?,
+                strategy_id: row.get(9)?,
+                outcome: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    
+    Ok(entry)
+}
+
+#[tauri::command]
+pub fn update_journal_entry(
+    id: i64,
+    date: String,
+    title: String,
+    trade: Option<String>,
+    what_went_well: Option<String>,
+    what_could_be_improved: Option<String>,
+    emotional_state: Option<String>,
+    notes: Option<String>,
+    symbol: Option<String>,
+    strategy_id: Option<i64>,
+    outcome: Option<String>,
+) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    conn.execute(
+        "UPDATE journal_entries SET date = ?1, title = ?2, trade = ?3, what_went_well = ?4, what_could_be_improved = ?5, emotional_state = ?6, notes = ?7, symbol = ?8, strategy_id = ?9, outcome = ?10, updated_at = CURRENT_TIMESTAMP WHERE id = ?11",
+        params![date, title, trade, what_went_well, what_could_be_improved, emotional_state, notes, symbol, strategy_id, outcome, id],
+    ).map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_journal_entry(id: i64) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    conn.execute("DELETE FROM journal_entries WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JournalChecklistResponse {
+    pub id: Option<i64>,
+    pub journal_entry_id: i64,
+    pub checklist_item_id: i64,
+    pub is_checked: bool,
+}
+
+#[tauri::command]
+pub fn save_journal_checklist_responses(
+    journal_entry_id: i64,
+    responses: Vec<(i64, bool)>,
+) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    // Delete existing responses for this journal entry
+    conn.execute(
+        "DELETE FROM journal_checklist_responses WHERE journal_entry_id = ?1",
+        params![journal_entry_id],
+    ).map_err(|e| e.to_string())?;
+    
+    // Insert new responses
+    for (checklist_item_id, is_checked) in responses {
+        conn.execute(
+            "INSERT INTO journal_checklist_responses (journal_entry_id, checklist_item_id, is_checked) VALUES (?1, ?2, ?3)",
+            params![journal_entry_id, checklist_item_id, if is_checked { 1 } else { 0 }],
+        ).map_err(|e| e.to_string())?;
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_journal_checklist_responses(journal_entry_id: i64) -> Result<Vec<JournalChecklistResponse>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn
+        .prepare("SELECT id, journal_entry_id, checklist_item_id, is_checked FROM journal_checklist_responses WHERE journal_entry_id = ?1")
+        .map_err(|e| e.to_string())?;
+    
+    let response_iter = stmt
+        .query_map(params![journal_entry_id], |row| {
+            Ok(JournalChecklistResponse {
+                id: Some(row.get(0)?),
+                journal_entry_id: row.get(1)?,
+                checklist_item_id: row.get(2)?,
+                is_checked: row.get::<_, i64>(3)? != 0,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut responses = Vec::new();
+    for response in response_iter {
+        responses.push(response.map_err(|e| e.to_string())?);
+    }
+    
+    Ok(responses)
 }
 
 // Dashboard Stats Commands
