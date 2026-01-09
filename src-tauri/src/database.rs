@@ -42,14 +42,23 @@ pub struct JournalEntry {
     pub id: Option<i64>,
     pub date: String,
     pub title: String,
+    pub strategy_id: Option<i64>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct JournalTrade {
+    pub id: Option<i64>,
+    pub journal_entry_id: i64,
+    pub symbol: Option<String>,
     pub trade: Option<String>,
     pub what_went_well: Option<String>,
     pub what_could_be_improved: Option<String>,
     pub emotional_state: Option<String>,
     pub notes: Option<String>,
-    pub symbol: Option<String>,
-    pub strategy_id: Option<i64>,
     pub outcome: Option<String>,
+    pub trade_order: i64,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
 }
@@ -193,17 +202,30 @@ pub fn init_database(db_path: &Path) -> Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT NOT NULL,
             title TEXT NOT NULL,
+            strategy_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (strategy_id) REFERENCES strategies(id)
+        )",
+        [],
+    )?;
+
+    // Create journal_trades table for storing individual trades within journal entries
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS journal_trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            journal_entry_id INTEGER NOT NULL,
+            symbol TEXT,
             trade TEXT,
             what_went_well TEXT,
             what_could_be_improved TEXT,
             emotional_state TEXT,
             notes TEXT,
-            symbol TEXT,
-            strategy_id INTEGER,
             outcome TEXT,
+            trade_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (strategy_id) REFERENCES strategies(id)
+            FOREIGN KEY (journal_entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE
         )",
         [],
     )?;
@@ -215,6 +237,10 @@ pub fn init_database(db_path: &Path) -> Result<()> {
     )?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_journal_entries_strategy ON journal_entries(strategy_id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_trades_entry ON journal_trades(journal_entry_id)",
         [],
     )?;
 

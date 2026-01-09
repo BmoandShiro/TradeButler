@@ -1,4 +1,4 @@
-use crate::database::{get_connection, Trade, EmotionalState, Strategy, JournalEntry};
+use crate::database::{get_connection, Trade, EmotionalState, Strategy, JournalEntry, JournalTrade};
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -1834,21 +1834,14 @@ pub fn update_trade_strategy(trade_id: i64, strategy_id: Option<i64>) -> Result<
 pub fn create_journal_entry(
     date: String,
     title: String,
-    trade: Option<String>,
-    what_went_well: Option<String>,
-    what_could_be_improved: Option<String>,
-    emotional_state: Option<String>,
-    notes: Option<String>,
-    symbol: Option<String>,
     strategy_id: Option<i64>,
-    outcome: Option<String>,
 ) -> Result<i64, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
-    let id = conn.execute(
-        "INSERT INTO journal_entries (date, title, trade, what_went_well, what_could_be_improved, emotional_state, notes, symbol, strategy_id, outcome) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![date, title, trade, what_went_well, what_could_be_improved, emotional_state, notes, symbol, strategy_id, outcome],
+    conn.execute(
+        "INSERT INTO journal_entries (date, title, strategy_id) VALUES (?1, ?2, ?3)",
+        params![date, title, strategy_id],
     ).map_err(|e| e.to_string())?;
     
     Ok(conn.last_insert_rowid())
@@ -1860,7 +1853,7 @@ pub fn get_journal_entries() -> Result<Vec<JournalEntry>, String> {
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     let mut stmt = conn
-        .prepare("SELECT id, date, title, trade, what_went_well, what_could_be_improved, emotional_state, notes, symbol, strategy_id, outcome, created_at, updated_at FROM journal_entries ORDER BY date DESC, created_at DESC")
+        .prepare("SELECT id, date, title, strategy_id, created_at, updated_at FROM journal_entries ORDER BY date DESC, created_at DESC")
         .map_err(|e| e.to_string())?;
     
     let entry_iter = stmt
@@ -1869,16 +1862,9 @@ pub fn get_journal_entries() -> Result<Vec<JournalEntry>, String> {
                 id: Some(row.get(0)?),
                 date: row.get(1)?,
                 title: row.get(2)?,
-                trade: row.get(3)?,
-                what_went_well: row.get(4)?,
-                what_could_be_improved: row.get(5)?,
-                emotional_state: row.get(6)?,
-                notes: row.get(7)?,
-                symbol: row.get(8)?,
-                strategy_id: row.get(9)?,
-                outcome: row.get(10)?,
-                created_at: row.get(11)?,
-                updated_at: row.get(12)?,
+                strategy_id: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1897,7 +1883,7 @@ pub fn get_journal_entry(id: i64) -> Result<JournalEntry, String> {
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     let mut stmt = conn
-        .prepare("SELECT id, date, title, trade, what_went_well, what_could_be_improved, emotional_state, notes, symbol, strategy_id, outcome, created_at, updated_at FROM journal_entries WHERE id = ?1")
+        .prepare("SELECT id, date, title, strategy_id, created_at, updated_at FROM journal_entries WHERE id = ?1")
         .map_err(|e| e.to_string())?;
     
     let entry = stmt
@@ -1906,16 +1892,9 @@ pub fn get_journal_entry(id: i64) -> Result<JournalEntry, String> {
                 id: Some(row.get(0)?),
                 date: row.get(1)?,
                 title: row.get(2)?,
-                trade: row.get(3)?,
-                what_went_well: row.get(4)?,
-                what_could_be_improved: row.get(5)?,
-                emotional_state: row.get(6)?,
-                notes: row.get(7)?,
-                symbol: row.get(8)?,
-                strategy_id: row.get(9)?,
-                outcome: row.get(10)?,
-                created_at: row.get(11)?,
-                updated_at: row.get(12)?,
+                strategy_id: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1928,21 +1907,14 @@ pub fn update_journal_entry(
     id: i64,
     date: String,
     title: String,
-    trade: Option<String>,
-    what_went_well: Option<String>,
-    what_could_be_improved: Option<String>,
-    emotional_state: Option<String>,
-    notes: Option<String>,
-    symbol: Option<String>,
     strategy_id: Option<i64>,
-    outcome: Option<String>,
 ) -> Result<(), String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     conn.execute(
-        "UPDATE journal_entries SET date = ?1, title = ?2, trade = ?3, what_went_well = ?4, what_could_be_improved = ?5, emotional_state = ?6, notes = ?7, symbol = ?8, strategy_id = ?9, outcome = ?10, updated_at = CURRENT_TIMESTAMP WHERE id = ?11",
-        params![date, title, trade, what_went_well, what_could_be_improved, emotional_state, notes, symbol, strategy_id, outcome, id],
+        "UPDATE journal_entries SET date = ?1, title = ?2, strategy_id = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
+        params![date, title, strategy_id, id],
     ).map_err(|e| e.to_string())?;
     
     Ok(())
@@ -2018,6 +1990,100 @@ pub fn get_journal_checklist_responses(journal_entry_id: i64) -> Result<Vec<Jour
     }
     
     Ok(responses)
+}
+
+// Journal Trade Commands
+#[tauri::command]
+pub fn create_journal_trade(
+    journal_entry_id: i64,
+    symbol: Option<String>,
+    trade: Option<String>,
+    what_went_well: Option<String>,
+    what_could_be_improved: Option<String>,
+    emotional_state: Option<String>,
+    notes: Option<String>,
+    outcome: Option<String>,
+    trade_order: i64,
+) -> Result<i64, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    conn.execute(
+        "INSERT INTO journal_trades (journal_entry_id, symbol, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![journal_entry_id, symbol, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order],
+    ).map_err(|e| e.to_string())?;
+    
+    Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+pub fn get_journal_trades(journal_entry_id: i64) -> Result<Vec<JournalTrade>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn
+        .prepare("SELECT id, journal_entry_id, symbol, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, created_at, updated_at FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order ASC")
+        .map_err(|e| e.to_string())?;
+    
+    let trade_iter = stmt
+        .query_map(params![journal_entry_id], |row| {
+            Ok(JournalTrade {
+                id: Some(row.get(0)?),
+                journal_entry_id: row.get(1)?,
+                symbol: row.get(2)?,
+                trade: row.get(3)?,
+                what_went_well: row.get(4)?,
+                what_could_be_improved: row.get(5)?,
+                emotional_state: row.get(6)?,
+                notes: row.get(7)?,
+                outcome: row.get(8)?,
+                trade_order: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut trades = Vec::new();
+    for trade in trade_iter {
+        trades.push(trade.map_err(|e| e.to_string())?);
+    }
+    
+    Ok(trades)
+}
+
+#[tauri::command]
+pub fn update_journal_trade(
+    id: i64,
+    symbol: Option<String>,
+    trade: Option<String>,
+    what_went_well: Option<String>,
+    what_could_be_improved: Option<String>,
+    emotional_state: Option<String>,
+    notes: Option<String>,
+    outcome: Option<String>,
+    trade_order: i64,
+) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    conn.execute(
+        "UPDATE journal_trades SET symbol = ?1, trade = ?2, what_went_well = ?3, what_could_be_improved = ?4, emotional_state = ?5, notes = ?6, outcome = ?7, trade_order = ?8, updated_at = CURRENT_TIMESTAMP WHERE id = ?9",
+        params![symbol, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, id],
+    ).map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_journal_trade(id: i64) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    conn.execute("DELETE FROM journal_trades WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    
+    Ok(())
 }
 
 // Dashboard Stats Commands

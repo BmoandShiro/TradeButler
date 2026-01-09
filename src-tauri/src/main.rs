@@ -63,6 +63,10 @@ fn main() {
             commands::get_journal_entry,
             commands::update_journal_entry,
             commands::delete_journal_entry,
+            commands::create_journal_trade,
+            commands::get_journal_trades,
+            commands::update_journal_trade,
+            commands::delete_journal_trade,
             commands::save_journal_checklist_responses,
             commands::get_journal_checklist_responses,
         ])
