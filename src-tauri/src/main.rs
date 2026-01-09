@@ -69,6 +69,7 @@ fn main() {
             commands::delete_journal_trade,
             commands::save_journal_checklist_responses,
             commands::get_journal_checklist_responses,
+            commands::get_all_symbols,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

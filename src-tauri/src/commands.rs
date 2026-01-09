@@ -2086,6 +2086,51 @@ pub fn delete_journal_trade(id: i64) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn get_all_symbols() -> Result<Vec<String>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    // Get unique symbols from trades
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT symbol FROM trades WHERE symbol IS NOT NULL AND symbol != '' ORDER BY symbol")
+        .map_err(|e| e.to_string())?;
+    
+    let trade_symbols_iter = stmt
+        .query_map([], |row| {
+            Ok(row.get::<_, String>(0)?)
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut symbols: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for symbol_result in trade_symbols_iter {
+        if let Ok(symbol) = symbol_result {
+            symbols.insert(symbol);
+        }
+    }
+    
+    // Get unique symbols from journal trades
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT symbol FROM journal_trades WHERE symbol IS NOT NULL AND symbol != '' ORDER BY symbol")
+        .map_err(|e| e.to_string())?;
+    
+    let journal_symbols_iter = stmt
+        .query_map([], |row| {
+            Ok(row.get::<_, String>(0)?)
+        })
+        .map_err(|e| e.to_string())?;
+    
+    for symbol_result in journal_symbols_iter {
+        if let Ok(symbol) = symbol_result {
+            symbols.insert(symbol);
+        }
+    }
+    
+    let mut symbol_vec: Vec<String> = symbols.into_iter().collect();
+    symbol_vec.sort();
+    Ok(symbol_vec)
+}
+
 // Dashboard Stats Commands
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TopSymbol {

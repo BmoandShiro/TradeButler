@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, FileText, X, Save } from "lucide-react";
 import { format } from "date-fns";
@@ -100,10 +100,18 @@ export default function Journal() {
   // Checklist state (per trade, but checklists come from strategy)
   const [strategyChecklists, setStrategyChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [checklistResponses, setChecklistResponses] = useState<Map<number, Map<number, boolean>>>(new Map()); // trade_index -> checklist_item_id -> is_checked
+  
+  // Available symbols for dropdown
+  const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
+  
+  // Modal state
+  const [showTitleRequiredModal, setShowTitleRequiredModal] = useState(false);
+  const titleInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     loadEntries();
     loadStrategies();
+    loadAvailableSymbols();
   }, []);
 
   useEffect(() => {
@@ -141,6 +149,15 @@ export default function Journal() {
       setStrategies(data);
     } catch (error) {
       console.error("Error loading strategies:", error);
+    }
+  };
+
+  const loadAvailableSymbols = async () => {
+    try {
+      const symbols = await invoke<string[]>("get_all_symbols");
+      setAvailableSymbols(symbols);
+    } catch (error) {
+      console.error("Error loading symbols:", error);
     }
   };
 
@@ -349,7 +366,7 @@ export default function Journal() {
 
   const handleSave = async () => {
     if (!entryFormData.title.trim()) {
-      alert("Please enter a title");
+      setShowTitleRequiredModal(true);
       return;
     }
 
@@ -695,6 +712,7 @@ export default function Journal() {
                       Title
                     </label>
                     <input
+                      ref={titleInputRef}
                       type="text"
                       value={entryFormData.title}
                       onChange={(e) => setEntryFormData({ ...entryFormData, title: e.target.value })}
@@ -823,21 +841,29 @@ export default function Journal() {
                         <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
                           Symbol
                         </label>
-                        <input
-                          type="text"
-                          value={currentTrade.symbol}
-                          onChange={(e) => updateTradeFormData(activeTradeIndex, "symbol", e.target.value)}
-                          placeholder="Symbol..."
-                          style={{
-                            width: "100%",
-                            padding: "8px",
-                            backgroundColor: "var(--bg-primary)",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: "4px",
-                            color: "var(--text-primary)",
-                            fontSize: "14px",
-                          }}
-                        />
+                        <div style={{ position: "relative" }}>
+                          <input
+                            type="text"
+                            list={`symbol-list-${activeTradeIndex}`}
+                            value={currentTrade.symbol}
+                            onChange={(e) => updateTradeFormData(activeTradeIndex, "symbol", e.target.value)}
+                            placeholder="Symbol..."
+                            style={{
+                              width: "100%",
+                              padding: "8px",
+                              backgroundColor: "var(--bg-primary)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              color: "var(--text-primary)",
+                              fontSize: "14px",
+                            }}
+                          />
+                          <datalist id={`symbol-list-${activeTradeIndex}`}>
+                            {availableSymbols.map((symbol) => (
+                              <option key={symbol} value={symbol} />
+                            ))}
+                          </datalist>
+                        </div>
                       </div>
                       <div style={{ flex: 1 }}>
                         <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
@@ -1326,6 +1352,87 @@ export default function Journal() {
           </div>
         </div>
       </div>
+
+      {/* Title Required Modal */}
+      {showTitleRequiredModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => setShowTitleRequiredModal(false)}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "400px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                fontSize: "18px",
+                fontWeight: "600",
+                marginBottom: "12px",
+                color: "var(--text-primary)",
+              }}
+            >
+              Journal Entry Title Required
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-primary)",
+                marginBottom: "20px",
+                lineHeight: "1.5",
+              }}
+            >
+              Please enter a title for your journal entry before saving.
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                onClick={() => {
+                  setShowTitleRequiredModal(false);
+                  setTimeout(() => {
+                    titleInputRef.current?.focus();
+                  }, 100);
+                }}
+                style={{
+                  background: "var(--accent)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
