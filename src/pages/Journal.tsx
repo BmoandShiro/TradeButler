@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, FileText, X, Save } from "lucide-react";
+import { Plus, Edit2, Trash2, FileText, X, RotateCcw } from "lucide-react";
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 
@@ -107,6 +107,40 @@ export default function Journal() {
   // Modal state
   const [showTitleRequiredModal, setShowTitleRequiredModal] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  
+  // Edit history for undo functionality
+  const [editHistory, setEditHistory] = useState<Array<{
+    entry: { date: string; title: string; strategy_id: number | null };
+    trades: Array<{
+      id: number | null;
+      symbol: string;
+      trade: string;
+      what_went_well: string;
+      what_could_be_improved: string;
+      emotional_state: string;
+      notes: string;
+      outcome: string;
+      trade_order: number;
+    }>;
+    checklistResponses: Map<number, Map<number, boolean>>;
+  }>>([]);
+  
+  // Store original state when starting to edit
+  const [originalEntryData, setOriginalEntryData] = useState<{
+    entry: { date: string; title: string; strategy_id: number | null };
+    trades: Array<{
+      id: number | null;
+      symbol: string;
+      trade: string;
+      what_went_well: string;
+      what_could_be_improved: string;
+      emotional_state: string;
+      notes: string;
+      outcome: string;
+      trade_order: number;
+    }>;
+    checklistResponses: Map<number, Map<number, boolean>>;
+  } | null>(null);
 
   useEffect(() => {
     loadEntries();
@@ -299,6 +333,19 @@ export default function Journal() {
       setTradesFormData(tradesData);
       setActiveTradeIndex(0);
       setActiveTab("trade");
+      
+      // Store initial state for undo
+      const initialState = {
+        entry: {
+          date: selectedEntry.date,
+          title: selectedEntry.title,
+          strategy_id: selectedEntry.strategy_id,
+        },
+        trades: tradesData.map(t => ({ ...t })),
+        checklistResponses: new Map(checklistResponses),
+      };
+      setOriginalEntryData(initialState);
+      setEditHistory([initialState]);
     }
   };
 
@@ -362,6 +409,16 @@ export default function Journal() {
       reindexedResponses.set(newIndex, newResponses.get(oldIndex) || new Map());
     });
     setChecklistResponses(reindexedResponses);
+    
+    // Track history for undo
+    if (isEditing) {
+      const currentState = {
+        entry: { ...entryFormData },
+        trades: reorderedTrades.map(t => ({ ...t })),
+        checklistResponses: new Map(reindexedResponses),
+      };
+      setEditHistory(prev => [...prev, currentState].slice(-10));
+    }
   };
 
   const handleSave = async () => {
@@ -459,6 +516,8 @@ export default function Journal() {
       await loadTrades(entryId);
       setIsCreating(false);
       setIsEditing(false);
+      setEditHistory([]);
+      setOriginalEntryData(null);
     } catch (error) {
       console.error("Error saving entry:", error);
       alert("Failed to save entry: " + error);
@@ -468,10 +527,39 @@ export default function Journal() {
   const handleCancel = () => {
     setIsCreating(false);
     setIsEditing(false);
+    setEditHistory([]);
+    setOriginalEntryData(null);
     if (selectedEntry) {
       // Reload the entry to reset form
       loadEntry(selectedEntry.id);
     }
+  };
+
+  const handleUndo = () => {
+    if (editHistory.length <= 1) return; // Can't undo if we're at the initial state
+    
+    // Remove the last state and restore the previous one
+    const newHistory = [...editHistory];
+    newHistory.pop(); // Remove current state
+    const previousState = newHistory[newHistory.length - 1]; // Get previous state
+    
+    setEditHistory(newHistory);
+    setEntryFormData({
+      date: previousState.entry.date,
+      title: previousState.entry.title,
+      strategy_id: previousState.entry.strategy_id,
+    });
+    
+    // Deep copy trades
+    const restoredTrades = previousState.trades.map(t => ({ ...t }));
+    setTradesFormData(restoredTrades);
+    
+    // Deep copy checklist responses
+    const restoredResponses = new Map<number, Map<number, boolean>>();
+    for (const [tradeIndex, responses] of previousState.checklistResponses.entries()) {
+      restoredResponses.set(tradeIndex, new Map(responses));
+    }
+    setChecklistResponses(restoredResponses);
   };
 
   const loadEntry = async (id: number) => {
@@ -558,10 +646,44 @@ export default function Journal() {
       >
         {selectedEntry && !isCreating && !isEditing ? (
           <>
-            <div style={{ padding: "24px", borderBottom: "1px solid var(--border-color)" }}>
+            <div style={{ padding: "24px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h2 style={{ fontSize: "24px", fontWeight: "bold", marginBottom: "8px" }}>
                 {format(new Date(selectedEntry.date), "MM/dd/yyyy")} - {selectedEntry.title}
               </h2>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <button
+                  onClick={handleEdit}
+                  style={{
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    padding: "8px",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                  }}
+                  title="Edit"
+                >
+                  <Edit2 size={16} />
+                </button>
+                <button
+                  onClick={handleDelete}
+                  style={{
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    padding: "8px",
+                    color: "var(--danger)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                  }}
+                  title="Delete"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
             </div>
             <div style={{ flex: 1, overflowY: "auto", padding: "24px" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -682,8 +804,59 @@ export default function Journal() {
           </>
         ) : (isCreating || isEditing) ? (
           <>
-            <div style={{ padding: "20px", borderBottom: "1px solid var(--border-color)" }}>
+            <div style={{ padding: "20px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h2 style={{ fontSize: "20px", fontWeight: "bold" }}>Journal Entry</h2>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                {isEditing && editHistory.length > 1 && (
+                  <button
+                    onClick={handleUndo}
+                    style={{
+                      background: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "6px",
+                      padding: "8px",
+                      color: "var(--text-primary)",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                    }}
+                    title="Undo"
+                  >
+                    <RotateCcw size={16} />
+                  </button>
+                )}
+                <button
+                  onClick={handleSave}
+                  style={{
+                    background: "var(--accent)",
+                    border: "none",
+                    borderRadius: "6px",
+                    padding: "8px 12px",
+                    color: "white",
+                    cursor: "pointer",
+                    fontSize: "13px",
+                    fontWeight: "500",
+                  }}
+                  title="Save"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={handleCancel}
+                  style={{
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    padding: "8px 12px",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    fontSize: "13px",
+                  }}
+                  title="Cancel"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
             <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
               <div style={{ padding: "20px", borderBottom: "1px solid var(--border-color)" }}>
@@ -715,7 +888,19 @@ export default function Journal() {
                       ref={titleInputRef}
                       type="text"
                       value={entryFormData.title}
-                      onChange={(e) => setEntryFormData({ ...entryFormData, title: e.target.value })}
+                      onChange={(e) => {
+                        const newData = { ...entryFormData, title: e.target.value };
+                        setEntryFormData(newData);
+                        // Track history for undo
+                        if (isEditing) {
+                          const currentState = {
+                            entry: newData,
+                            trades: tradesFormData.map(t => ({ ...t })),
+                            checklistResponses: new Map(checklistResponses),
+                          };
+                          setEditHistory(prev => [...prev, currentState].slice(-10));
+                        }
+                      }}
                       placeholder="Entry title..."
                       style={{
                         width: "100%",
@@ -1109,25 +1294,6 @@ export default function Journal() {
                     )}
                   </div>
 
-                  {/* Save Button */}
-                  <div style={{ padding: "20px", borderTop: "1px solid var(--border-color)", display: "flex", justifyContent: "center" }}>
-                    <button
-                      onClick={handleSave}
-                      style={{
-                        background: "var(--accent)",
-                        border: "none",
-                        borderRadius: "6px",
-                        padding: "10px 24px",
-                        color: "white",
-                        cursor: "pointer",
-                        fontSize: "14px",
-                        fontWeight: "500",
-                      }}
-                    >
-                      <Save size={16} style={{ marginRight: "8px", verticalAlign: "middle" }} />
-                      Save
-                    </button>
-                  </div>
                 </>
               )}
             </div>
@@ -1280,75 +1446,6 @@ export default function Journal() {
               <Plus size={16} />
               Add Entry
             </button>
-            {selectedEntry && !isCreating && !isEditing && (
-              <>
-                <button
-                  onClick={handleEdit}
-                  style={{
-                    width: "100%",
-                    padding: "10px",
-                    backgroundColor: "var(--bg-tertiary)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "6px",
-                    color: "var(--text-primary)",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "6px",
-                    fontSize: "14px",
-                    fontWeight: "500",
-                  }}
-                >
-                  <Edit2 size={16} />
-                  Edit Entry
-                </button>
-                <button
-                  onClick={handleDelete}
-                  style={{
-                    width: "100%",
-                    padding: "10px",
-                    backgroundColor: "var(--bg-tertiary)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "6px",
-                    color: "var(--danger)",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "6px",
-                    fontSize: "14px",
-                    fontWeight: "500",
-                  }}
-                >
-                  <Trash2 size={16} />
-                  Delete Entry
-                </button>
-              </>
-            )}
-            {isCreating || isEditing ? (
-              <button
-                onClick={handleCancel}
-                style={{
-                  width: "100%",
-                  padding: "10px",
-                  backgroundColor: "var(--bg-tertiary)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "6px",
-                  color: "var(--text-primary)",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "6px",
-                  fontSize: "14px",
-                  fontWeight: "500",
-                }}
-              >
-                <X size={16} />
-                Cancel
-              </button>
-            ) : null}
           </div>
         </div>
       </div>
