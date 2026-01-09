@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2 } from "lucide-react";
-import { format } from "date-fns";
+import { format, parse } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 
 interface JournalEntry {
@@ -649,7 +649,7 @@ export default function Journal() {
           <>
             <div style={{ padding: "24px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h2 style={{ fontSize: "24px", fontWeight: "bold", marginBottom: "8px" }}>
-                {format(new Date(selectedEntry.date), "MM/dd/yyyy")} - {selectedEntry.title}
+                {format(parse(selectedEntry.date, "yyyy-MM-dd", new Date()), "MM/dd/yyyy")} - {selectedEntry.title}
               </h2>
               <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                 <button
@@ -1676,7 +1676,7 @@ export default function Journal() {
                         marginBottom: "4px",
                       }}
                     >
-                      {format(new Date(entry.date), "MM/dd/yyyy")} - {entry.title}
+                      {format(parse(entry.date, "yyyy-MM-dd", new Date()), "MM/dd/yyyy")} - {entry.title}
                     </div>
                   </div>
                 );
