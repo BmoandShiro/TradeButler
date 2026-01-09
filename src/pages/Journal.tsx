@@ -904,26 +904,17 @@ export default function Journal() {
                   {/* Tab Content */}
                   <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", padding: "20px" }}>
                     {activeTab === "trade" && (
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "16px" }}>
-                        <textarea
-                          value={currentTrade.trade}
-                          onChange={(e) => updateTradeFormData(activeTradeIndex, "trade", e.target.value)}
-                          placeholder="Describe the related trades..."
-                          style={{
-                            flex: 1,
-                            padding: "12px",
-                            backgroundColor: "var(--bg-secondary)",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: "6px",
-                            color: "var(--text-primary)",
-                            fontSize: "14px",
-                            fontFamily: "inherit",
-                            resize: "none",
-                            minHeight: "200px",
-                          }}
-                        />
+                      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "16px", overflow: "hidden" }}>
+                        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+                          <RichTextEditor
+                            value={currentTrade.trade}
+                            onChange={(content: string) => updateTradeFormData(activeTradeIndex, "trade", content)}
+                            placeholder="Describe the related trades..."
+                            readOnly={false}
+                          />
+                        </div>
                         {entryFormData.strategy_id && currentChecklists && (
-                          <div style={{ marginTop: "20px" }}>
+                          <div style={{ marginTop: "20px", overflowY: "auto" }}>
                             {allTypes.map((type) => {
                               const items = currentChecklists.get(type) || [];
                               if (items.length === 0) return null;
@@ -1051,64 +1042,37 @@ export default function Journal() {
                       </div>
                     )}
                     {activeTab === "what_went_well" && (
-                      <textarea
-                        value={currentTrade.what_went_well}
-                        onChange={(e) => updateTradeFormData(activeTradeIndex, "what_went_well", e.target.value)}
-                        placeholder="What went well..."
-                        style={{
-                          flex: 1,
-                          padding: "12px",
-                          backgroundColor: "var(--bg-secondary)",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "6px",
-                          color: "var(--text-primary)",
-                          fontSize: "14px",
-                          fontFamily: "inherit",
-                          resize: "none",
-                          minHeight: "200px",
-                        }}
-                      />
+                      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+                        <RichTextEditor
+                          value={currentTrade.what_went_well}
+                          onChange={(content: string) => updateTradeFormData(activeTradeIndex, "what_went_well", content)}
+                          placeholder="What went well..."
+                          readOnly={false}
+                        />
+                      </div>
                     )}
                     {activeTab === "what_could_be_improved" && (
-                      <textarea
-                        value={currentTrade.what_could_be_improved}
-                        onChange={(e) => updateTradeFormData(activeTradeIndex, "what_could_be_improved", e.target.value)}
-                        placeholder="What could be improved..."
-                        style={{
-                          flex: 1,
-                          padding: "12px",
-                          backgroundColor: "var(--bg-secondary)",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "6px",
-                          color: "var(--text-primary)",
-                          fontSize: "14px",
-                          fontFamily: "inherit",
-                          resize: "none",
-                          minHeight: "200px",
-                        }}
-                      />
+                      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+                        <RichTextEditor
+                          value={currentTrade.what_could_be_improved}
+                          onChange={(content: string) => updateTradeFormData(activeTradeIndex, "what_could_be_improved", content)}
+                          placeholder="What could be improved..."
+                          readOnly={false}
+                        />
+                      </div>
                     )}
                     {activeTab === "emotional_state" && (
-                      <textarea
-                        value={currentTrade.emotional_state}
-                        onChange={(e) => updateTradeFormData(activeTradeIndex, "emotional_state", e.target.value)}
-                        placeholder="Emotional state..."
-                        style={{
-                          flex: 1,
-                          padding: "12px",
-                          backgroundColor: "var(--bg-secondary)",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "6px",
-                          color: "var(--text-primary)",
-                          fontSize: "14px",
-                          fontFamily: "inherit",
-                          resize: "none",
-                          minHeight: "200px",
-                        }}
-                      />
+                      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+                        <RichTextEditor
+                          value={currentTrade.emotional_state}
+                          onChange={(content: string) => updateTradeFormData(activeTradeIndex, "emotional_state", content)}
+                          placeholder="Emotional state..."
+                          readOnly={false}
+                        />
+                      </div>
                     )}
                     {activeTab === "notes" && (
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
                         <RichTextEditor
                           value={currentTrade.notes}
                           onChange={(content: string) => updateTradeFormData(activeTradeIndex, "notes", content)}
