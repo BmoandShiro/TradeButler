@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, FileText, X, RotateCcw } from "lucide-react";
+import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2 } from "lucide-react";
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 
@@ -66,6 +66,7 @@ export default function Journal() {
   const [activeTradeIndex, setActiveTradeIndex] = useState(0);
   const [activeTab, setActiveTab] = useState<TabType>("trade");
   const [loading, setLoading] = useState(true);
+  const [isMaximized, setIsMaximized] = useState(false);
   
   // Entry-level form state
   const [entryFormData, setEntryFormData] = useState({
@@ -652,6 +653,22 @@ export default function Journal() {
               </h2>
               <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                 <button
+                  onClick={() => setIsMaximized(!isMaximized)}
+                  style={{
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    padding: "8px",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                  }}
+                  title={isMaximized ? "Restore" : "Maximize"}
+                >
+                  {isMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                </button>
+                <button
                   onClick={handleEdit}
                   style={{
                     background: "var(--bg-tertiary)",
@@ -807,6 +824,22 @@ export default function Journal() {
             <div style={{ padding: "20px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h2 style={{ fontSize: "20px", fontWeight: "bold" }}>Journal Entry</h2>
               <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <button
+                  onClick={() => setIsMaximized(!isMaximized)}
+                  style={{
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    padding: "8px",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                  }}
+                  title={isMaximized ? "Restore" : "Maximize"}
+                >
+                  {isMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                </button>
                 {isEditing && editHistory.length > 1 && (
                   <button
                     onClick={handleUndo}
@@ -1333,9 +1366,9 @@ export default function Journal() {
       {/* Right Panel - Entry List */}
       <div
         style={{
-          width: "300px",
-          borderLeft: "1px solid var(--border-color)",
-          display: "flex",
+          width: isMaximized ? "0" : "300px",
+          borderLeft: isMaximized ? "none" : "1px solid var(--border-color)",
+          display: isMaximized ? "none" : "flex",
           flexDirection: "column",
           backgroundColor: "var(--bg-secondary)",
           overflow: "hidden",
