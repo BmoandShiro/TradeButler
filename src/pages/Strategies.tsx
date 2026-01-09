@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
-import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw } from "lucide-react";
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import {
@@ -677,6 +677,10 @@ export default function Strategies() {
   const [tempChecklists, setTempChecklists] = useState<Map<string, ChecklistItem[]>>(new Map());
   const [pendingTradeIds, setPendingTradeIds] = useState<number[]>([]);
   const [isImportingCSV, setIsImportingCSV] = useState(false);
+  const [editHistory, setEditHistory] = useState<Array<{ name: string; description: string; color: string; notes: string }>>([]);
+  const [editingChecklists, setEditingChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
+  const [originalChecklists, setOriginalChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
+  const [checklistEditHistory, setChecklistEditHistory] = useState<Map<number, Array<Map<string, ChecklistItem[]>>>>(new Map());
   
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -861,6 +865,41 @@ export default function Strategies() {
       return;
     }
     
+    // If editing, use editingChecklists instead of saving directly
+    if (isEditing && editingChecklists.has(strategyId)) {
+      const currentChecklist = editingChecklists.get(strategyId)!;
+      const items = currentChecklist.get(type) || [];
+      const maxOrder = items.length > 0 ? Math.max(...items.map(i => i.item_order)) : -1;
+      
+      const newItem: ChecklistItem = {
+        id: Date.now(), // Temporary ID (will be replaced when saved)
+        strategy_id: strategyId,
+        item_text: text.trim(),
+        is_checked: false,
+        item_order: maxOrder + 1,
+        checklist_type: type,
+        parent_id: null,
+      };
+
+      const updatedChecklist = new Map(currentChecklist);
+      updatedChecklist.set(type, [...items, newItem]);
+      setEditingChecklists(new Map(editingChecklists.set(strategyId, updatedChecklist)));
+      
+      // Update history
+      const history = checklistEditHistory.get(strategyId) || [];
+      const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
+      setChecklistEditHistory(new Map(checklistEditHistory.set(strategyId, newHistory)));
+      
+      // Clear the input field for this type
+      setNewChecklistItem(prev => {
+        const newMap = new Map(prev);
+        newMap.set(type, "");
+        return newMap;
+      });
+      return;
+    }
+    
+    // Otherwise, save directly (for non-editing mode, though this shouldn't happen)
     try {
       const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
       const items = currentChecklist.get(type) || [];
@@ -913,6 +952,22 @@ export default function Strategies() {
       return;
     }
     
+    // If editing, use editingChecklists instead of deleting directly
+    if (isEditing && editingChecklists.has(strategyId)) {
+      const currentChecklist = editingChecklists.get(strategyId)!;
+      const items = currentChecklist.get(type) || [];
+      const updatedItems = items.filter(item => item.id !== itemId);
+      const updatedChecklist = new Map(currentChecklist);
+      updatedChecklist.set(type, updatedItems);
+      setEditingChecklists(new Map(editingChecklists.set(strategyId, updatedChecklist)));
+      
+      // Update history
+      const history = checklistEditHistory.get(strategyId) || [];
+      const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
+      setChecklistEditHistory(new Map(checklistEditHistory.set(strategyId, newHistory)));
+      return;
+    }
+    
     try {
       await invoke("delete_strategy_checklist_item", { id: itemId });
       const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
@@ -935,6 +990,27 @@ export default function Strategies() {
     }
 
     if (!confirm(`Are you sure you want to delete the "${type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')} Checklist"? This will delete all items in this checklist.`)) {
+      return;
+    }
+
+    // If editing, use editingChecklists instead of deleting directly
+    if (isEditing && editingChecklists.has(strategyId)) {
+      const currentChecklist = editingChecklists.get(strategyId)!;
+      const updatedChecklist = new Map(currentChecklist);
+      updatedChecklist.delete(type);
+      setEditingChecklists(new Map(editingChecklists.set(strategyId, updatedChecklist)));
+      
+      // Update history
+      const history = checklistEditHistory.get(strategyId) || [];
+      const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
+      setChecklistEditHistory(new Map(checklistEditHistory.set(strategyId, newHistory)));
+      
+      // Clear the input field for this type
+      setNewChecklistItem(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(type);
+        return newMap;
+      });
       return;
     }
 
@@ -1007,6 +1083,45 @@ export default function Strategies() {
       return;
     }
     
+    // If editing, use editingChecklists instead of saving directly
+    if (isEditing && editingChecklists.has(strategyId)) {
+      const items = editingChecklists.get(strategyId)!.get(type) || [];
+      const selectedItems = items.filter(item => itemIds.includes(item.id));
+      const otherItems = items.filter(item => !itemIds.includes(item.id));
+      
+      // Create group item
+      const groupItem: ChecklistItem = {
+        id: Date.now(),
+        strategy_id: strategyId,
+        item_text: groupName.trim(),
+        is_checked: false,
+        item_order: items.length > 0 ? Math.max(...items.map(i => i.item_order)) + 1 : 0,
+        checklist_type: type,
+        parent_id: null,
+      };
+      
+      // Update selected items to have group as parent
+      const updatedSelectedItems = selectedItems.map(item => ({
+        ...item,
+        parent_id: groupItem.id,
+      }));
+      
+      const updatedChecklist = new Map(editingChecklists.get(strategyId)!);
+      updatedChecklist.set(type, [...otherItems, groupItem, ...updatedSelectedItems]);
+      setEditingChecklists(new Map(editingChecklists.set(strategyId, updatedChecklist)));
+      
+      // Update history
+      const history = checklistEditHistory.get(strategyId) || [];
+      const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
+      setChecklistEditHistory(new Map(checklistEditHistory.set(strategyId, newHistory)));
+      
+      setSelectedChecklistItems(new Set());
+      setShowGroupModal(false);
+      setGroupName("");
+      setPendingGroupAction(null);
+      return;
+    }
+    
     try {
       await invoke<number>("group_checklist_items", {
         itemIds: itemIds,
@@ -1059,6 +1174,26 @@ export default function Strategies() {
       return;
     }
     
+    // If editing, use editingChecklists instead of saving directly
+    if (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)) {
+      const updatedChecklist = new Map(editingChecklists.get(selectedStrategy)!);
+      for (const [type, items] of updatedChecklist.entries()) {
+        const updatedItems = items.map(item => 
+          itemIds.includes(item.id) ? { ...item, parent_id: null } : item
+        );
+        updatedChecklist.set(type, updatedItems);
+      }
+      setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, updatedChecklist)));
+      
+      // Update history
+      const history = checklistEditHistory.get(selectedStrategy) || [];
+      const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
+      setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, newHistory)));
+      
+      setSelectedChecklistItems(new Set());
+      return;
+    }
+    
     try {
       await invoke("ungroup_checklist_items", { itemIds: itemIds });
       setSelectedChecklistItems(new Set());
@@ -1103,6 +1238,32 @@ export default function Strategies() {
       return;
     }
     
+    // If editing, update editingChecklists instead of saving directly
+    if (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)) {
+      const checklistMap = editingChecklists.get(selectedStrategy)!;
+      const allItems: ChecklistItem[] = [];
+      for (const items of checklistMap.values()) {
+        allItems.push(...items);
+      }
+      const item = allItems.find(i => i.id === itemId);
+      if (item) {
+        const type = item.checklist_type;
+        const items = checklistMap.get(type) || [];
+        const updatedItems = items.map(i => i.id === itemId ? { ...i, item_text: newText.trim() } : i);
+        const updatedChecklist = new Map(checklistMap);
+        updatedChecklist.set(type, updatedItems);
+        setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, updatedChecklist)));
+        
+        // Update history
+        const history = checklistEditHistory.get(selectedStrategy) || [];
+        const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
+        setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, newHistory)));
+      }
+      setEditingItemId(null);
+      setEditingItemText("");
+      return;
+    }
+    
     try {
       const checklistMap = checklists.get(selectedStrategy || 0) || new Map<string, ChecklistItem[]>();
       const allItems: ChecklistItem[] = [];
@@ -1137,6 +1298,33 @@ export default function Strategies() {
   };
 
   const reorderChecklistItems = async (strategyId: number, type: string, activeId: number, overId: number) => {
+    // If editing, use editingChecklists instead of saving directly
+    if (isEditing && editingChecklists.has(strategyId)) {
+      const currentChecklist = editingChecklists.get(strategyId)!;
+      const items = currentChecklist.get(type) || [];
+      
+      const oldIndex = items.findIndex(item => item.id === activeId);
+      const newIndex = items.findIndex(item => item.id === overId);
+      
+      if (oldIndex === -1 || newIndex === -1) return;
+      
+      const reorderedItems = arrayMove(items, oldIndex, newIndex);
+      const updatedItems = reorderedItems.map((item, index) => ({
+        ...item,
+        item_order: index,
+      }));
+
+      const updatedChecklist = new Map(currentChecklist);
+      updatedChecklist.set(type, updatedItems);
+      setEditingChecklists(new Map(editingChecklists.set(strategyId, updatedChecklist)));
+      
+      // Update history
+      const history = checklistEditHistory.get(strategyId) || [];
+      const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
+      setChecklistEditHistory(new Map(checklistEditHistory.set(strategyId, newHistory)));
+      return;
+    }
+    
     const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
     const items = currentChecklist.get(type) || [];
     
@@ -1324,19 +1512,101 @@ export default function Strategies() {
   const handleEditClick = () => {
     if (selectedStrategyData) {
       setIsEditing(true);
-      setEditingFormData({
+      const initialData = {
         name: selectedStrategyData.name,
         description: selectedStrategyData.description || "",
         color: selectedStrategyData.color || "#3b82f6",
+        notes: selectedStrategyData.notes || "",
+      };
+      setEditingFormData({
+        name: initialData.name,
+        description: initialData.description,
+        color: initialData.color,
       });
+      // Store initial state for undo
+      setEditHistory([initialData]);
       // Ensure notes are loaded into notesContent for editing
-      if (selectedStrategyData.notes && !notesContent.has(selectedStrategyData.id)) {
-        setNotesContent(new Map(notesContent.set(selectedStrategyData.id, selectedStrategyData.notes)));
-      } else if (!selectedStrategyData.notes) {
-        // Initialize empty notes if none exist
-        setNotesContent(new Map(notesContent.set(selectedStrategyData.id, "")));
+      setNotesContent(new Map(notesContent.set(selectedStrategyData.id, initialData.notes)));
+      
+      // Initialize checklist editing state - save original and create working copy
+      if (selectedStrategyData.id) {
+        const currentChecklist = checklists.get(selectedStrategyData.id) || new Map<string, ChecklistItem[]>();
+        // Deep copy the original checklist
+        const originalCopy = new Map<string, ChecklistItem[]>();
+        for (const [type, items] of currentChecklist.entries()) {
+          originalCopy.set(type, items.map(item => ({ ...item })));
+        }
+        setOriginalChecklists(new Map(originalChecklists.set(selectedStrategyData.id, originalCopy)));
+        
+        // Create working copy for editing
+        const editingCopy = new Map<string, ChecklistItem[]>();
+        for (const [type, items] of currentChecklist.entries()) {
+          editingCopy.set(type, items.map(item => ({ ...item })));
+        }
+        setEditingChecklists(new Map(editingChecklists.set(selectedStrategyData.id, editingCopy)));
+        
+        // Initialize history with original state
+        setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategyData.id, [originalCopy])));
       }
     }
+  };
+
+  const handleSaveChecklists = async (strategyId: number) => {
+    if (!editingChecklists.has(strategyId)) return;
+    
+    const editingChecklist = editingChecklists.get(strategyId)!;
+    const originalChecklist = originalChecklists.get(strategyId) || new Map<string, ChecklistItem[]>();
+    
+    // Get all items from both original and editing to compare
+    const allOriginalItems = new Map<number, ChecklistItem>();
+    for (const items of originalChecklist.values()) {
+      for (const item of items) {
+        allOriginalItems.set(item.id, item);
+      }
+    }
+    
+    const allEditingItems = new Map<number, ChecklistItem>();
+    for (const items of editingChecklist.values()) {
+      for (const item of items) {
+        allEditingItems.set(item.id, item);
+      }
+    }
+    
+    // Delete items that were removed
+    for (const [itemId] of allOriginalItems.entries()) {
+      if (!allEditingItems.has(itemId)) {
+        await invoke("delete_strategy_checklist_item", { id: itemId });
+      }
+    }
+    
+    // Save or update items that exist in editing
+    for (const [type, items] of editingChecklist.entries()) {
+      for (const item of items) {
+        const originalItem = allOriginalItems.get(item.id);
+        const isNew = !originalItem;
+        const hasChanged = isNew || (originalItem && (
+          originalItem.item_text !== item.item_text ||
+          originalItem.item_order !== item.item_order ||
+          originalItem.parent_id !== item.parent_id ||
+          originalItem.checklist_type !== item.checklist_type
+        ));
+        
+        if (isNew || hasChanged) {
+          await invoke<number>("save_strategy_checklist_item", {
+            id: isNew ? null : item.id,
+            strategyId: strategyId,
+            itemText: item.item_text,
+            isChecked: item.is_checked,
+            itemOrder: item.item_order,
+            checklistType: type,
+            parentId: item.parent_id,
+          });
+        }
+      }
+    }
+    
+    // Reload checklists to get updated IDs for new items
+    await loadChecklists(strategyId);
   };
 
   const handleSaveEdit = async () => {
@@ -1350,8 +1620,40 @@ export default function Strategies() {
         notes: currentNotes || null,
         color: editingFormData.color || null,
       });
+      
+      // Save checklist changes if any
+      if (selectedStrategyData.id && editingChecklists.has(selectedStrategyData.id)) {
+        await handleSaveChecklists(selectedStrategyData.id);
+        
+        // Update custom checklist types based on what's in editingChecklists
+        const editingChecklist = editingChecklists.get(selectedStrategyData.id)!;
+        const defaultTypes = ["entry", "take_profit", "review"];
+        const customTypesSet = new Set<string>();
+        for (const type of editingChecklist.keys()) {
+          if (!defaultTypes.includes(type)) {
+            customTypesSet.add(type);
+          }
+        }
+        setCustomChecklistTypes(new Map(customChecklistTypes.set(selectedStrategyData.id, customTypesSet)));
+      }
+      
       setIsEditing(false);
-      loadStrategies();
+      setEditHistory([]); // Clear edit history after saving
+      // Clear checklist editing state
+      if (selectedStrategyData.id) {
+        const updatedEditing = new Map(editingChecklists);
+        updatedEditing.delete(selectedStrategyData.id);
+        setEditingChecklists(updatedEditing);
+        
+        const updatedOriginal = new Map(originalChecklists);
+        updatedOriginal.delete(selectedStrategyData.id);
+        setOriginalChecklists(updatedOriginal);
+        
+        const updatedHistory = new Map(checklistEditHistory);
+        updatedHistory.delete(selectedStrategyData.id);
+        setChecklistEditHistory(updatedHistory);
+      }
+      await loadStrategies();
     } catch (error) {
       console.error("Error saving strategy:", error);
       alert("Failed to save strategy: " + error);
@@ -1361,18 +1663,83 @@ export default function Strategies() {
   const handleCancelEdit = () => {
     setIsEditing(false);
     if (selectedStrategyData) {
+      // Revert to original values from database
       setEditingFormData({
         name: selectedStrategyData.name,
         description: selectedStrategyData.description || "",
         color: selectedStrategyData.color || "#3b82f6",
       });
       // Reset notes to original value from database
-      if (selectedStrategyData.notes) {
-        setNotesContent(new Map(notesContent.set(selectedStrategyData.id, selectedStrategyData.notes)));
-      } else {
-        setNotesContent(new Map(notesContent.set(selectedStrategyData.id, "")));
+      setNotesContent(new Map(notesContent.set(selectedStrategyData.id, selectedStrategyData.notes || "")));
+      // Clear edit history
+      setEditHistory([]);
+      
+      // Revert checklists to original state
+      if (selectedStrategyData.id && originalChecklists.has(selectedStrategyData.id)) {
+        const original = originalChecklists.get(selectedStrategyData.id)!;
+        // Deep copy back to checklists
+        const restored = new Map<string, ChecklistItem[]>();
+        for (const [type, items] of original.entries()) {
+          restored.set(type, items.map(item => ({ ...item })));
+        }
+        setChecklists(new Map(checklists.set(selectedStrategyData.id, restored)));
+        
+        const updatedEditing = new Map(editingChecklists);
+        updatedEditing.delete(selectedStrategyData.id);
+        setEditingChecklists(updatedEditing);
+        
+        const updatedOriginal = new Map(originalChecklists);
+        updatedOriginal.delete(selectedStrategyData.id);
+        setOriginalChecklists(updatedOriginal);
+        
+        const updatedHistory = new Map(checklistEditHistory);
+        updatedHistory.delete(selectedStrategyData.id);
+        setChecklistEditHistory(updatedHistory);
       }
+      
+      // Reload strategies to ensure we have the latest data
+      loadStrategies();
     }
+  };
+
+  const handleUndo = () => {
+    if (editHistory.length <= 1) return; // Can't undo if we're at the initial state
+    
+    // Remove the last state and restore the previous one
+    const newHistory = [...editHistory];
+    newHistory.pop(); // Remove current state
+    const previousState = newHistory[newHistory.length - 1]; // Get previous state
+    
+    setEditHistory(newHistory);
+    setEditingFormData({
+      name: previousState.name,
+      description: previousState.description,
+      color: previousState.color,
+    });
+    
+    if (selectedStrategy) {
+      setNotesContent(new Map(notesContent.set(selectedStrategy, previousState.notes)));
+    }
+  };
+
+  const handleChecklistUndo = () => {
+    if (!selectedStrategy) return;
+    const history = checklistEditHistory.get(selectedStrategy);
+    if (!history || history.length <= 1) return; // Can't undo if we're at the initial state
+    
+    // Remove the last state and restore the previous one
+    const newHistory = [...history];
+    newHistory.pop(); // Remove current state
+    const previousState = newHistory[newHistory.length - 1]; // Get previous state
+    
+    setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, newHistory)));
+    
+    // Deep copy the previous state
+    const restored = new Map<string, ChecklistItem[]>();
+    for (const [type, items] of previousState.entries()) {
+      restored.set(type, items.map(item => ({ ...item })));
+    }
+    setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, restored)));
   };
 
   const handleDeleteClick = (id: number) => {
@@ -1403,31 +1770,34 @@ export default function Strategies() {
   };
 
 
-  const handleNotesChange = async (strategyId: number | null, content: string) => {
+  const handleNotesChange = (strategyId: number | null, content: string) => {
     if (isCreating) {
       setNewStrategyNotes(content);
       return;
     }
     if (!isEditing || !strategyId) return;
+    // Just update the local state, don't save to database
     setNotesContent(new Map(notesContent.set(strategyId, content)));
-    // Auto-save after a delay
-    const timeoutId = setTimeout(async () => {
-      try {
-        const strategy = strategies.find((s) => s.id === strategyId);
-        if (strategy) {
-          await invoke("update_strategy", {
-            id: strategyId,
-            name: strategy.name,
-            description: strategy.description || null,
-            notes: content || null,
-            color: strategy.color || null,
-          });
-        }
-      } catch (error) {
-        console.error("Error saving notes:", error);
+    // Add to edit history for undo (debounced to avoid too many history entries)
+    if (editHistory.length > 0) {
+      const currentState = {
+        name: editingFormData.name,
+        description: editingFormData.description,
+        color: editingFormData.color,
+        notes: content,
+      };
+      // Only add to history if it's different from the last state
+      const lastState = editHistory[editHistory.length - 1];
+      if (lastState.notes !== content || 
+          lastState.name !== editingFormData.name ||
+          lastState.description !== editingFormData.description ||
+          lastState.color !== editingFormData.color) {
+        setEditHistory(prev => {
+          const newHistory = [...prev, currentState];
+          return newHistory.slice(-10); // Keep last 10 states
+        });
       }
-    }, 1000);
-    return () => clearTimeout(timeoutId);
+    }
   };
 
   if (loading) {
@@ -1714,7 +2084,20 @@ export default function Strategies() {
                     ref={nameInputRef}
                     type="text"
                     value={editingFormData.name}
-                    onChange={(e) => setEditingFormData({ ...editingFormData, name: e.target.value })}
+                    onChange={(e) => {
+                      const newName = e.target.value;
+                      setEditingFormData({ ...editingFormData, name: newName });
+                      // Track history
+                      if (selectedStrategy && editHistory.length > 0) {
+                        const currentState = {
+                          name: newName,
+                          description: editingFormData.description,
+                          color: editingFormData.color,
+                          notes: notesContent.get(selectedStrategy) || "",
+                        };
+                        setEditHistory(prev => [...prev, currentState].slice(-10));
+                      }
+                    }}
                     placeholder="Strategy Name"
                     style={{
                       fontSize: "24px",
@@ -1819,6 +2202,39 @@ export default function Strategies() {
                   </>
                 ) : (
                   <div style={{ display: "flex", gap: "8px" }}>
+                    {isEditing && (() => {
+                      const canUndoNotes = editHistory.length > 1;
+                      const canUndoChecklists = selectedStrategy && checklistEditHistory.has(selectedStrategy) && checklistEditHistory.get(selectedStrategy)!.length > 1;
+                      const canUndo = canUndoNotes || canUndoChecklists;
+                      
+                      return canUndo ? (
+                        <button
+                          onClick={() => {
+                            // Undo notes if there's history
+                            if (canUndoNotes) {
+                              handleUndo();
+                            }
+                            // Undo checklists if there's history
+                            if (canUndoChecklists) {
+                              handleChecklistUndo();
+                            }
+                          }}
+                          style={{
+                            background: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "6px",
+                            padding: "8px",
+                            color: "var(--text-primary)",
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                          }}
+                          title="Undo"
+                        >
+                          <RotateCcw size={16} />
+                        </button>
+                      ) : null;
+                    })()}
                     <button
                       onClick={handleSaveEdit}
                       style={{
@@ -1866,7 +2282,20 @@ export default function Strategies() {
                     <input
                       type="text"
                       value={editingFormData.description}
-                      onChange={(e) => setEditingFormData({ ...editingFormData, description: e.target.value })}
+                      onChange={(e) => {
+                        const newDescription = e.target.value;
+                        setEditingFormData({ ...editingFormData, description: newDescription });
+                        // Track history
+                        if (selectedStrategy && editHistory.length > 0) {
+                          const currentState = {
+                            name: editingFormData.name,
+                            description: newDescription,
+                            color: editingFormData.color,
+                            notes: notesContent.get(selectedStrategy) || "",
+                          };
+                          setEditHistory(prev => [...prev, currentState].slice(-10));
+                        }
+                      }}
                       placeholder="Strategy description..."
                       style={{
                         width: "100%",
@@ -1886,7 +2315,20 @@ export default function Strategies() {
                     <input
                       type="color"
                       value={editingFormData.color}
-                      onChange={(e) => setEditingFormData({ ...editingFormData, color: e.target.value })}
+                      onChange={(e) => {
+                        const newColor = e.target.value;
+                        setEditingFormData({ ...editingFormData, color: newColor });
+                        // Track history
+                        if (selectedStrategy && editHistory.length > 0) {
+                          const currentState = {
+                            name: editingFormData.name,
+                            description: editingFormData.description,
+                            color: newColor,
+                            notes: notesContent.get(selectedStrategy) || "",
+                          };
+                          setEditHistory(prev => [...prev, currentState].slice(-10));
+                        }
+                      }}
                       style={{
                         width: "100%",
                         height: "36px",
@@ -2229,9 +2671,12 @@ export default function Strategies() {
               )}
 
               {activeTab === "checklists" && (selectedStrategy || isCreating) && (() => {
+                // Use editingChecklists when editing, tempChecklists when creating, or regular checklists otherwise
                 const currentChecklist = isCreating 
                   ? tempChecklists 
-                  : (checklists.get(selectedStrategy || 0) || new Map<string, ChecklistItem[]>());
+                  : (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy))
+                    ? editingChecklists.get(selectedStrategy)!
+                    : (checklists.get(selectedStrategy || 0) || new Map<string, ChecklistItem[]>());
                 const virtualStrategyId: number = isCreating ? -1 : (selectedStrategy || 0);
                 
                 const handleDragEnd = (type: string, event: DragEndEvent) => {
@@ -2251,6 +2696,25 @@ export default function Strategies() {
                     const updatedChecklist = new Map(currentChecklist);
                     updatedChecklist.set(type, updatedItems);
                     setTempChecklists(updatedChecklist);
+                  } else if (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)) {
+                    // Handle reordering in editingChecklists
+                    const items = currentChecklist.get(type) || [];
+                    const oldIndex = items.findIndex(item => item.id === active.id);
+                    const newIndex = items.findIndex(item => item.id === over.id);
+                    if (oldIndex === -1 || newIndex === -1) return;
+                    const reorderedItems = arrayMove(items, oldIndex, newIndex);
+                    const updatedItems = reorderedItems.map((item, index) => ({
+                      ...item,
+                      item_order: index,
+                    }));
+                    const updatedChecklist = new Map(currentChecklist);
+                    updatedChecklist.set(type, updatedItems);
+                    setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, updatedChecklist)));
+                    
+                    // Update history
+                    const history = checklistEditHistory.get(selectedStrategy) || [];
+                    const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
+                    setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, newHistory)));
                   } else {
                     reorderChecklistItems(virtualStrategyId, type, active.id as number, over.id as number);
                   }
@@ -2536,11 +3000,30 @@ export default function Strategies() {
               onChange={(e) => setNewChecklistName(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && newChecklistName.trim()) {
-                  if (selectedStrategy) {
-                    const currentChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
-                    const typeName = newChecklistName.trim().toLowerCase().replace(/\s+/g, '_');
+                  const typeName = newChecklistName.trim().toLowerCase().replace(/\s+/g, '_');
+                  
+                  if (isCreating) {
+                    // Add to tempChecklists when creating
+                    const updatedChecklist = new Map(tempChecklists);
+                    if (!updatedChecklist.has(typeName)) {
+                      updatedChecklist.set(typeName, []);
+                    }
+                    setTempChecklists(updatedChecklist);
+                  } else if (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)) {
+                    // Add to editingChecklists when editing
+                    const currentChecklist = editingChecklists.get(selectedStrategy)!;
+                    const updatedChecklist = new Map(currentChecklist);
+                    if (!updatedChecklist.has(typeName)) {
+                      updatedChecklist.set(typeName, []);
+                    }
+                    setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, updatedChecklist)));
                     
-                    // Initialize the checklist type in the map
+                    // Update history
+                    const history = checklistEditHistory.get(selectedStrategy) || [];
+                    const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
+                    setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, newHistory)));
+                  } else if (selectedStrategy) {
+                    const currentChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
                     const updatedChecklist = new Map(currentChecklist);
                     if (!updatedChecklist.has(typeName)) {
                       updatedChecklist.set(typeName, []);
@@ -2551,10 +3034,10 @@ export default function Strategies() {
                     const customTypesSet = new Set(customChecklistTypes.get(selectedStrategy) || []);
                     customTypesSet.add(typeName);
                     setCustomChecklistTypes(new Map(customChecklistTypes.set(selectedStrategy, customTypesSet)));
-                    
-                    setNewChecklistName("");
-                    setShowNewChecklistModal(false);
                   }
+                  
+                  setNewChecklistName("");
+                  setShowNewChecklistModal(false);
                 } else if (e.key === "Escape") {
                   setShowNewChecklistModal(false);
                   setNewChecklistName("");
@@ -2611,6 +3094,19 @@ export default function Strategies() {
                         updatedChecklist.set(typeName, []);
                       }
                       setTempChecklists(updatedChecklist);
+                    } else if (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)) {
+                      // Add to editingChecklists when editing
+                      const currentChecklist = editingChecklists.get(selectedStrategy)!;
+                      const updatedChecklist = new Map(currentChecklist);
+                      if (!updatedChecklist.has(typeName)) {
+                        updatedChecklist.set(typeName, []);
+                      }
+                      setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, updatedChecklist)));
+                      
+                      // Update history
+                      const history = checklistEditHistory.get(selectedStrategy) || [];
+                      const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
+                      setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, newHistory)));
                     } else if (selectedStrategy) {
                       const currentChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
                       const updatedChecklist = new Map(currentChecklist);
