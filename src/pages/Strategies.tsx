@@ -677,6 +677,8 @@ export default function Strategies() {
   const [tempChecklists, setTempChecklists] = useState<Map<string, ChecklistItem[]>>(new Map());
   const [pendingTradeIds, setPendingTradeIds] = useState<number[]>([]);
   const [isImportingCSV, setIsImportingCSV] = useState(false);
+  const [showCSVFormatModal, setShowCSVFormatModal] = useState(false);
+  const [pendingCSVFile, setPendingCSVFile] = useState<{ path: string; isForExisting: boolean } | null>(null);
   const [editHistory, setEditHistory] = useState<Array<{ name: string; description: string; color: string; notes: string }>>([]);
   const [editingChecklists, setEditingChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [originalChecklists, setOriginalChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
@@ -1389,21 +1391,112 @@ export default function Strategies() {
       const filePath = Array.isArray(file) ? file[0] : file;
       
       if (filePath && typeof filePath === "string") {
-        const contents = await readTextFile(filePath);
-        const importedTradeIds = await invoke<number[]>("import_trades_csv", { csvData: contents });
+        // Store the file and show format selection modal
+        setPendingCSVFile({ path: filePath, isForExisting: false });
+        setShowCSVFormatModal(true);
+        setIsImportingCSV(false);
+      } else {
+        alert("Please select a valid CSV file.");
+        setIsImportingCSV(false);
+      }
+    } catch (error) {
+      console.error("Error importing CSV:", error);
+      alert("Failed to import CSV: " + (error instanceof Error ? error.message : String(error)));
+      setIsImportingCSV(false);
+    }
+  };
+
+  const handleCSVFormatSelection = async (_format: "webull" | "coinbase") => {
+    if (!pendingCSVFile) return;
+    
+    try {
+      setIsImportingCSV(true);
+      setShowCSVFormatModal(false);
+      
+      const contents = await readTextFile(pendingCSVFile.path);
+      const importedTradeIds = await invoke<number[]>("import_trades_csv", { csvData: contents });
+      
+      if (pendingCSVFile.isForExisting) {
+        // Handle existing strategy import
+        if (!selectedStrategy) {
+          setIsImportingCSV(false);
+          setPendingCSVFile(null);
+          return;
+        }
+        
+        if (importedTradeIds && importedTradeIds.length > 0) {
+          // Immediately assign all imported trades to the selected strategy
+          for (const tradeId of importedTradeIds) {
+            await invoke("update_trade_strategy", { tradeId, strategyId: selectedStrategy });
+          }
+          
+          // Reload trades for this strategy
+          const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+          const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
+            strategyId: selectedStrategy,
+            pairingMethod: pairingMethod,
+            startDate: null,
+            endDate: null,
+          });
+          setStrategyPairs(new Map(strategyPairs.set(selectedStrategy, pairs)));
+          
+          // Update stats
+          const stats = calculateStrategyStats(pairs);
+          setStrategyStats(new Map(strategyStats.set(selectedStrategy, stats)));
+          
+          alert(`Trades imported successfully! ${importedTradeIds.length} trade(s) have been assigned to this strategy.`);
+        } else {
+          alert("No new trades were imported. They may have been duplicates.");
+        }
+      } else {
+        // Handle new strategy import
         if (importedTradeIds && importedTradeIds.length > 0) {
           setPendingTradeIds(prev => [...prev, ...importedTradeIds]);
           alert(`Trades imported successfully! ${importedTradeIds.length} trade(s) will be assigned to this strategy when you save.`);
         } else {
           alert("No new trades were imported. They may have been duplicates.");
         }
-      } else {
-        alert("Please select a valid CSV file.");
       }
+      
+      setPendingCSVFile(null);
     } catch (error) {
       console.error("Error importing CSV:", error);
       alert("Failed to import CSV: " + (error instanceof Error ? error.message : String(error)));
     } finally {
+      setIsImportingCSV(false);
+    }
+  };
+
+  const handleImportCSVForExistingStrategy = async () => {
+    if (!selectedStrategy) return;
+    
+    try {
+      setIsImportingCSV(true);
+      const file = await open({
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+        multiple: false,
+      });
+
+      if (!file) {
+        setIsImportingCSV(false);
+        return;
+      }
+
+      // Handle both string (single file) and array (multiple files) cases
+      const filePath = Array.isArray(file) ? file[0] : file;
+      
+      if (filePath && typeof filePath === "string") {
+        // Store the file and show format selection modal
+        setPendingCSVFile({ path: filePath, isForExisting: true });
+        setShowCSVFormatModal(true);
+        setIsImportingCSV(false);
+      } else {
+        alert("Please select a valid CSV file.");
+        setIsImportingCSV(false);
+      }
+    } catch (error) {
+      console.error("Error importing CSV:", error);
+      alert("Failed to import CSV: " + (error instanceof Error ? error.message : String(error)));
       setIsImportingCSV(false);
     }
   };
@@ -2404,13 +2497,6 @@ export default function Strategies() {
                     }}>
                       Strategy Details
                     </h3>
-                    <p style={{ 
-                      fontSize: "13px", 
-                      color: "var(--text-secondary)",
-                      margin: 0
-                    }}>
-                      Document your trading strategy, rules, and insights with rich text formatting
-                    </p>
                   </div>
                   <div style={{ 
                     flex: 1, 
@@ -2437,9 +2523,9 @@ export default function Strategies() {
                 <div style={{ padding: "20px", overflowY: "auto" }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
                     <h3 style={{ fontSize: "18px", fontWeight: "600" }}>Trades</h3>
-                    {isCreating && (
+                    {(isCreating || selectedStrategy) && (
                       <button
-                        onClick={handleImportCSVForStrategy}
+                        onClick={isCreating ? handleImportCSVForStrategy : handleImportCSVForExistingStrategy}
                         disabled={isImportingCSV}
                         style={{
                           background: "var(--accent)",
@@ -3309,7 +3395,9 @@ export default function Strategies() {
               <button
                 onClick={() => {
                   setShowNameRequiredModal(false);
-                  nameInputRef.current?.focus();
+                  setTimeout(() => {
+                    nameInputRef.current?.focus();
+                  }, 100);
                 }}
                 style={{
                   background: "var(--accent)",
@@ -3323,6 +3411,118 @@ export default function Strategies() {
                 }}
               >
                 OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CSV Format Selection Modal */}
+      {showCSVFormatModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => {
+            setShowCSVFormatModal(false);
+            setPendingCSVFile(null);
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "400px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                fontSize: "18px",
+                fontWeight: "600",
+                marginBottom: "12px",
+                color: "var(--text-primary)",
+              }}
+            >
+              Select CSV Format
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-secondary)",
+                marginBottom: "20px",
+                lineHeight: "1.5",
+              }}
+            >
+              Is this CSV file from Webull or Coinbase?
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                onClick={() => {
+                  setShowCSVFormatModal(false);
+                  setPendingCSVFile(null);
+                }}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleCSVFormatSelection("coinbase")}
+                style={{
+                  background: "var(--accent)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Coinbase
+              </button>
+              <button
+                onClick={() => handleCSVFormatSelection("webull")}
+                style={{
+                  background: "var(--accent)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Webull
               </button>
             </div>
           </div>
