@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
-import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy } from "lucide-react";
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import {
@@ -1861,6 +1861,82 @@ export default function Strategies() {
     setStrategyToDelete(null);
   };
 
+  const handleDuplicate = async (strategyId: number) => {
+    try {
+      const strategy = strategies.find(s => s.id === strategyId);
+      if (!strategy) return;
+
+      // Create new strategy name with " (Copy)" suffix
+      let newName = `${strategy.name} (Copy)`;
+      let counter = 1;
+      // Ensure unique name
+      while (strategies.some(s => s.name === newName)) {
+        newName = `${strategy.name} (Copy ${counter})`;
+        counter++;
+      }
+
+      // Create the new strategy
+      const newStrategyId = await invoke<number>("create_strategy", {
+        name: newName,
+        description: strategy.description || null,
+        notes: strategy.notes || null,
+        color: strategy.color || null,
+      });
+
+      // Load all checklist items from the original strategy
+      const allItems = await invoke<ChecklistItem[]>("get_strategy_checklist", {
+        strategyId: strategyId,
+        checklistType: null,
+      });
+
+      // Copy all checklist items (preserve parent relationships)
+      if (allItems.length > 0) {
+        const idMap = new Map<number, number>(); // Maps original ID to new database ID
+        
+        // First pass: Save all items without parents (groups and regular items)
+        const itemsWithoutParents = allItems.filter(item => !item.parent_id);
+        for (const item of itemsWithoutParents) {
+          const newId = await invoke<number>("save_strategy_checklist_item", {
+            id: null,
+            strategyId: newStrategyId,
+            itemText: item.item_text,
+            isChecked: false, // Reset checked state for duplicate
+            itemOrder: item.item_order,
+            checklistType: item.checklist_type,
+            parentId: null,
+          });
+          idMap.set(item.id, newId);
+        }
+        
+        // Second pass: Save items with parents (children of groups)
+        const itemsWithParents = allItems.filter(item => item.parent_id);
+        for (const item of itemsWithParents) {
+          const newParentId = idMap.get(item.parent_id!);
+          if (newParentId) {
+            await invoke<number>("save_strategy_checklist_item", {
+              id: null,
+              strategyId: newStrategyId,
+              itemText: item.item_text,
+              isChecked: false, // Reset checked state for duplicate
+              itemOrder: item.item_order,
+              checklistType: item.checklist_type,
+              parentId: newParentId,
+            });
+          }
+        }
+      }
+
+      // Reload strategies and select the new one
+      await loadStrategies();
+      setSelectedStrategy(newStrategyId);
+      setActiveTab("notes");
+      setIsEditing(false);
+      setIsCreating(false);
+    } catch (error) {
+      console.error("Error duplicating strategy:", error);
+      alert("Failed to duplicate strategy: " + error);
+    }
+  };
 
   const handleNotesChange = (strategyId: number | null, content: string) => {
     if (isCreating) {
@@ -2274,6 +2350,22 @@ export default function Strategies() {
                       title="Edit"
                     >
                       <Edit2 size={16} />
+                    </button>
+                    <button
+                      onClick={() => selectedStrategyData && handleDuplicate(selectedStrategyData.id)}
+                      style={{
+                        background: "var(--bg-tertiary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "6px",
+                        padding: "8px",
+                        color: "var(--text-primary)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                      }}
+                      title="Duplicate"
+                    >
+                      <Copy size={16} />
                     </button>
                     <button
                       onClick={() => selectedStrategyData && handleDeleteClick(selectedStrategyData.id)}

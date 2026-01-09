@@ -52,6 +52,9 @@ pub struct JournalTrade {
     pub id: Option<i64>,
     pub journal_entry_id: i64,
     pub symbol: Option<String>,
+    pub position: Option<String>,
+    pub entry_type: Option<String>,
+    pub exit_type: Option<String>,
     pub trade: Option<String>,
     pub what_went_well: Option<String>,
     pub what_could_be_improved: Option<String>,
@@ -216,6 +219,9 @@ pub fn init_database(db_path: &Path) -> Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             journal_entry_id INTEGER NOT NULL,
             symbol TEXT,
+            position TEXT,
+            entry_type TEXT,
+            exit_type TEXT,
             trade TEXT,
             what_went_well TEXT,
             what_could_be_improved TEXT,
@@ -229,6 +235,11 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         )",
         [],
     )?;
+    
+    // Add new columns if they don't exist (migration)
+    let _ = conn.execute("ALTER TABLE journal_trades ADD COLUMN position TEXT", []);
+    let _ = conn.execute("ALTER TABLE journal_trades ADD COLUMN entry_type TEXT", []);
+    let _ = conn.execute("ALTER TABLE journal_trades ADD COLUMN exit_type TEXT", []);
 
     // Create index for journal_entries
     conn.execute(

@@ -1997,6 +1997,9 @@ pub fn get_journal_checklist_responses(journal_entry_id: i64) -> Result<Vec<Jour
 pub fn create_journal_trade(
     journal_entry_id: i64,
     symbol: Option<String>,
+    position: Option<String>,
+    entry_type: Option<String>,
+    exit_type: Option<String>,
     trade: Option<String>,
     what_went_well: Option<String>,
     what_could_be_improved: Option<String>,
@@ -2009,8 +2012,8 @@ pub fn create_journal_trade(
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     conn.execute(
-        "INSERT INTO journal_trades (journal_entry_id, symbol, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![journal_entry_id, symbol, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order],
+        "INSERT INTO journal_trades (journal_entry_id, symbol, position, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![journal_entry_id, symbol, position, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order],
     ).map_err(|e| e.to_string())?;
     
     Ok(conn.last_insert_rowid())
@@ -2022,7 +2025,7 @@ pub fn get_journal_trades(journal_entry_id: i64) -> Result<Vec<JournalTrade>, St
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     let mut stmt = conn
-        .prepare("SELECT id, journal_entry_id, symbol, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, created_at, updated_at FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order ASC")
+        .prepare("SELECT id, journal_entry_id, symbol, position, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, created_at, updated_at FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order ASC")
         .map_err(|e| e.to_string())?;
     
     let trade_iter = stmt
@@ -2031,15 +2034,18 @@ pub fn get_journal_trades(journal_entry_id: i64) -> Result<Vec<JournalTrade>, St
                 id: Some(row.get(0)?),
                 journal_entry_id: row.get(1)?,
                 symbol: row.get(2)?,
-                trade: row.get(3)?,
-                what_went_well: row.get(4)?,
-                what_could_be_improved: row.get(5)?,
-                emotional_state: row.get(6)?,
-                notes: row.get(7)?,
-                outcome: row.get(8)?,
-                trade_order: row.get(9)?,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
+                position: row.get(3)?,
+                entry_type: row.get(4)?,
+                exit_type: row.get(5)?,
+                trade: row.get(6)?,
+                what_went_well: row.get(7)?,
+                what_could_be_improved: row.get(8)?,
+                emotional_state: row.get(9)?,
+                notes: row.get(10)?,
+                outcome: row.get(11)?,
+                trade_order: row.get(12)?,
+                created_at: row.get(13)?,
+                updated_at: row.get(14)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -2056,6 +2062,9 @@ pub fn get_journal_trades(journal_entry_id: i64) -> Result<Vec<JournalTrade>, St
 pub fn update_journal_trade(
     id: i64,
     symbol: Option<String>,
+    position: Option<String>,
+    entry_type: Option<String>,
+    exit_type: Option<String>,
     trade: Option<String>,
     what_went_well: Option<String>,
     what_could_be_improved: Option<String>,
@@ -2068,8 +2077,8 @@ pub fn update_journal_trade(
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     conn.execute(
-        "UPDATE journal_trades SET symbol = ?1, trade = ?2, what_went_well = ?3, what_could_be_improved = ?4, emotional_state = ?5, notes = ?6, outcome = ?7, trade_order = ?8, updated_at = CURRENT_TIMESTAMP WHERE id = ?9",
-        params![symbol, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, id],
+        "UPDATE journal_trades SET symbol = ?1, position = ?2, entry_type = ?3, exit_type = ?4, trade = ?5, what_went_well = ?6, what_could_be_improved = ?7, emotional_state = ?8, notes = ?9, outcome = ?10, trade_order = ?11, updated_at = CURRENT_TIMESTAMP WHERE id = ?12",
+        params![symbol, position, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, id],
     ).map_err(|e| e.to_string())?;
     
     Ok(())

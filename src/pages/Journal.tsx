@@ -17,6 +17,9 @@ interface JournalTrade {
   id: number;
   journal_entry_id: number;
   symbol: string | null;
+  position: string | null;
+  entry_type: string | null;
+  exit_type: string | null;
   trade: string | null;
   what_went_well: string | null;
   what_could_be_improved: string | null;
@@ -115,6 +118,9 @@ export default function Journal() {
     trades: Array<{
       id: number | null;
       symbol: string;
+      position: string;
+      entry_type: string;
+      exit_type: string;
       trade: string;
       what_went_well: string;
       what_could_be_improved: string;
@@ -132,6 +138,9 @@ export default function Journal() {
     trades: Array<{
       id: number | null;
       symbol: string;
+      position: string;
+      entry_type: string;
+      exit_type: string;
       trade: string;
       what_went_well: string;
       what_could_be_improved: string;
@@ -276,12 +285,15 @@ export default function Journal() {
     setTradesFormData([{
       id: null,
       symbol: "",
+      position: "",
+      entry_type: "",
+      exit_type: "",
       trade: "",
       what_went_well: "",
       what_could_be_improved: "",
       emotional_state: "",
       notes: "",
-      outcome: "Positive",
+      outcome: "None",
       trade_order: 0,
     }]);
     setActiveTradeIndex(0);
@@ -308,12 +320,15 @@ export default function Journal() {
       const tradesData = selectedTrades.map(trade => ({
         id: trade.id,
         symbol: trade.symbol || "",
+        position: trade.position || "",
+        entry_type: trade.entry_type || "",
+        exit_type: trade.exit_type || "",
         trade: trade.trade || "",
         what_went_well: trade.what_went_well || "",
         what_could_be_improved: trade.what_could_be_improved || "",
         emotional_state: trade.emotional_state || "",
         notes: trade.notes || "",
-        outcome: trade.outcome || "Positive",
+        outcome: trade.outcome || "None",
         trade_order: trade.trade_order,
       }));
       
@@ -321,12 +336,15 @@ export default function Journal() {
         tradesData.push({
           id: null,
           symbol: "",
+          position: "",
+          entry_type: "",
+          exit_type: "",
           trade: "",
           what_went_well: "",
           what_could_be_improved: "",
           emotional_state: "",
           notes: "",
-          outcome: "Positive",
+          outcome: "None",
           trade_order: 0,
         });
       }
@@ -368,12 +386,15 @@ export default function Journal() {
     const newTrade = {
       id: null,
       symbol: "",
+      position: "",
+      entry_type: "",
+      exit_type: "",
       trade: "",
       what_went_well: "",
       what_could_be_improved: "",
       emotional_state: "",
       notes: "",
-      outcome: "Positive",
+      outcome: "None",
       trade_order: tradesFormData.length,
     };
     setTradesFormData([...tradesFormData, newTrade]);
@@ -466,6 +487,9 @@ export default function Journal() {
           await invoke("update_journal_trade", {
             id: tradeData.id,
             symbol: tradeData.symbol || null,
+            position: tradeData.position || null,
+            entryType: tradeData.entry_type || null,
+            exitType: tradeData.exit_type || null,
             trade: tradeData.trade || null,
             whatWentWell: tradeData.what_went_well || null,
             whatCouldBeImproved: tradeData.what_could_be_improved || null,
@@ -478,6 +502,9 @@ export default function Journal() {
           await invoke("create_journal_trade", {
             journalEntryId: entryId,
             symbol: tradeData.symbol || null,
+            position: tradeData.position || null,
+            entryType: tradeData.entry_type || null,
+            exitType: tradeData.exit_type || null,
             trade: tradeData.trade || null,
             whatWentWell: tradeData.what_went_well || null,
             whatCouldBeImproved: tradeData.what_could_be_improved || null,
@@ -749,6 +776,36 @@ export default function Journal() {
                             </label>
                             <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
                               {trade.symbol}
+                            </div>
+                          </div>
+                        )}
+                        {trade.position && (
+                          <div style={{ marginBottom: "8px" }}>
+                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                              Position
+                            </label>
+                            <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
+                              {trade.position}
+                            </div>
+                          </div>
+                        )}
+                        {trade.entry_type && (
+                          <div style={{ marginBottom: "8px" }}>
+                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                              Entry Type
+                            </label>
+                            <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
+                              {trade.entry_type}
+                            </div>
+                          </div>
+                        )}
+                        {trade.exit_type && (
+                          <div style={{ marginBottom: "8px" }}>
+                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                              Exit Type
+                            </label>
+                            <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
+                              {trade.exit_type}
                             </div>
                           </div>
                         )}
@@ -1052,7 +1109,7 @@ export default function Journal() {
               {/* Content Tabs for Current Trade */}
               {currentTrade && (
                 <>
-                  {/* Trade-specific fields - Symbol and Outcome */}
+                  {/* Trade-specific fields - Symbol, Position, Entry Type, Exit Type, and Outcome */}
                   <div style={{ padding: "20px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)" }}>
                     <div style={{ display: "flex", gap: "12px" }}>
                       <div style={{ flex: 1 }}>
@@ -1085,6 +1142,82 @@ export default function Journal() {
                       </div>
                       <div style={{ flex: 1 }}>
                         <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                          Position
+                        </label>
+                        <select
+                          value={currentTrade.position}
+                          onChange={(e) => updateTradeFormData(activeTradeIndex, "position", e.target.value)}
+                          style={{
+                            width: "100%",
+                            padding: "8px",
+                            backgroundColor: "var(--bg-primary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "4px",
+                            color: "var(--text-primary)",
+                            fontSize: "14px",
+                          }}
+                        >
+                          <option value="">Select position...</option>
+                          <option value="Long">Long</option>
+                          <option value="Short">Short</option>
+                          <option value="Call">Call</option>
+                          <option value="Put">Put</option>
+                          <option value="Call Spread">Call Spread</option>
+                          <option value="Put Spread">Put Spread</option>
+                          <option value="Iron Condor">Iron Condor</option>
+                          <option value="Butterfly">Butterfly</option>
+                          <option value="Straddle">Straddle</option>
+                          <option value="Strangle">Strangle</option>
+                          <option value="Covered Call">Covered Call</option>
+                          <option value="Protective Put">Protective Put</option>
+                        </select>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                          Entry Type
+                        </label>
+                        <select
+                          value={currentTrade.entry_type}
+                          onChange={(e) => updateTradeFormData(activeTradeIndex, "entry_type", e.target.value)}
+                          style={{
+                            width: "100%",
+                            padding: "8px",
+                            backgroundColor: "var(--bg-primary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "4px",
+                            color: "var(--text-primary)",
+                            fontSize: "14px",
+                          }}
+                        >
+                          <option value="">Select entry type...</option>
+                          <option value="Market">Market</option>
+                          <option value="Limit">Limit</option>
+                        </select>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                          Exit Type
+                        </label>
+                        <select
+                          value={currentTrade.exit_type}
+                          onChange={(e) => updateTradeFormData(activeTradeIndex, "exit_type", e.target.value)}
+                          style={{
+                            width: "100%",
+                            padding: "8px",
+                            backgroundColor: "var(--bg-primary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "4px",
+                            color: "var(--text-primary)",
+                            fontSize: "14px",
+                          }}
+                        >
+                          <option value="">Select exit type...</option>
+                          <option value="Market">Market</option>
+                          <option value="Limit">Limit</option>
+                        </select>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
                           Outcome
                         </label>
                         <select
@@ -1100,9 +1233,10 @@ export default function Journal() {
                             fontSize: "14px",
                           }}
                         >
+                          <option value="None">None</option>
                           <option value="Positive">Positive</option>
                           <option value="Negative">Negative</option>
-                          <option value="Neutral">Neutral</option>
+                          <option value="Breakeven">Breakeven</option>
                         </select>
                       </div>
                     </div>
