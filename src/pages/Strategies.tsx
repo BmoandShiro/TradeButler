@@ -815,7 +815,8 @@ export default function Strategies() {
         const type = item.checklist_type;
         if (!checklistMap.has(type)) {
           checklistMap.set(type, []);
-          if (!defaultTypes.includes(type)) {
+          // Exclude "survey" from being treated as a custom type - it has its own tab
+          if (!defaultTypes.includes(type) && type !== "survey") {
             customTypesSet.add(type);
           }
         }
@@ -1722,7 +1723,8 @@ export default function Strategies() {
         const defaultTypes = ["entry", "take_profit"];
         const customTypesSet = new Set<string>();
         for (const type of editingChecklist.keys()) {
-          if (!defaultTypes.includes(type)) {
+          // Exclude "survey" from being treated as a custom type - it has its own tab
+          if (!defaultTypes.includes(type) && type !== "survey") {
             customTypesSet.add(type);
           }
         }
@@ -2909,11 +2911,12 @@ export default function Strategies() {
                 };
 
                 // Get all checklist types in order: default types first, then custom
+                // Exclude "survey" type from Checklists tab - it should only appear in Survey tab
                 const defaultTypes = ["entry", "take_profit"];
                 const tempCustomTypes = isCreating 
-                  ? Array.from(new Set(Array.from(tempChecklists.keys()).filter(t => !defaultTypes.includes(t))))
-                  : Array.from(customChecklistTypes.get(selectedStrategy || 0) || []);
-                const allTypes = [...defaultTypes, ...tempCustomTypes.filter(t => !defaultTypes.includes(t))];
+                  ? Array.from(new Set(Array.from(tempChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")))
+                  : Array.from(customChecklistTypes.get(selectedStrategy || 0) || []).filter(t => t !== "survey");
+                const allTypes = [...defaultTypes, ...tempCustomTypes.filter(t => !defaultTypes.includes(t) && t !== "survey")];
 
                 return (
                   <div style={{ padding: "24px", overflowY: "auto" }}>
