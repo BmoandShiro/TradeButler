@@ -54,7 +54,7 @@ interface JournalChecklistResponse {
   is_checked: boolean;
 }
 
-type TabType = "trade" | "what_went_well" | "what_could_be_improved" | "emotional_state" | "notes" | "checklists";
+type TabType = "trade" | "what_went_well" | "what_could_be_improved" | "emotional_state" | "notes" | "checklists" | "survey";
 
 export default function Journal() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
@@ -598,7 +598,7 @@ export default function Journal() {
     const titleMap: Record<string, string> = {
       "entry": "Entry Checklist",
       "take_profit": "Take Profit Checklist",
-      "review": "Review Checklist",
+      "survey": "Survey",
     };
     return titleMap[type] || type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') + " Checklist";
   };
@@ -627,9 +627,9 @@ export default function Journal() {
   const currentTrade = tradesFormData[activeTradeIndex];
   const selectedStrategy = strategies.find(s => s.id === entryFormData.strategy_id);
   const currentChecklists = entryFormData.strategy_id ? strategyChecklists.get(entryFormData.strategy_id) : null;
-  const defaultTypes = ["entry", "take_profit", "review"];
+  const defaultTypes = ["entry", "take_profit"];
   const customTypes = currentChecklists 
-    ? Array.from(currentChecklists.keys()).filter(t => !defaultTypes.includes(t))
+    ? Array.from(currentChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")
     : [];
   const allTypes = [...defaultTypes, ...customTypes.filter(t => !defaultTypes.includes(t))];
 
@@ -1122,6 +1122,7 @@ export default function Journal() {
                       { id: "emotional_state" as TabType, label: "Emotional State" },
                       { id: "notes" as TabType, label: "Notes" },
                       { id: "checklists" as TabType, label: "Checklists" },
+                      { id: "survey" as TabType, label: "Survey" },
                     ].map((tab) => {
                       const isActive = activeTab === tab.id;
                       return (
@@ -1335,6 +1336,250 @@ export default function Journal() {
                             fontSize: "14px"
                           }}>
                             {entryFormData.strategy_id ? "No checklists available for this strategy." : "Select a strategy to view checklists."}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {activeTab === "survey" && (
+                      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+                        {entryFormData.strategy_id && currentChecklists ? (
+                          <div style={{ overflowY: "auto" }}>
+                            {(() => {
+                              const surveyItems = currentChecklists.get("survey") || [];
+                              if (surveyItems.length === 0) {
+                                return (
+                                  <div style={{ 
+                                    display: "flex", 
+                                    alignItems: "center", 
+                                    justifyContent: "center", 
+                                    height: "100%",
+                                    color: "var(--text-secondary)",
+                                    fontSize: "14px"
+                                  }}>
+                                    {entryFormData.strategy_id ? "No survey items available for this strategy." : "Select a strategy to view survey."}
+                                  </div>
+                                );
+                              }
+
+                              // Organize items: groups and regular items
+                              const groups = surveyItems.filter(item => !item.parent_id && surveyItems.some(child => child.parent_id === item.id));
+                              const regularItems = surveyItems.filter(item => !item.parent_id && !surveyItems.some(child => child.parent_id === item.id));
+                              const groupedItems = surveyItems.filter(item => item.parent_id !== null && surveyItems.some(p => p.id === item.parent_id));
+                              const itemsByParent = new Map<number, ChecklistItem[]>();
+                              groupedItems.forEach(item => {
+                                if (item.parent_id) {
+                                  const parentId = item.parent_id;
+                                  if (!itemsByParent.has(parentId)) {
+                                    itemsByParent.set(parentId, []);
+                                  }
+                                  itemsByParent.get(parentId)!.push(item);
+                                }
+                              });
+
+                              const tradeResponses = checklistResponses.get(activeTradeIndex) || new Map();
+
+                              return (
+                                <div style={{ marginBottom: "24px" }}>
+                                  <h4 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>
+                                    Post-Trade Survey
+                                  </h4>
+                                  {/* Render groups */}
+                                  {groups.map((group) => {
+                                    const children = itemsByParent.get(group.id) || [];
+                                    return (
+                                      <div key={group.id} style={{ marginBottom: "16px" }}>
+                                        <div
+                                          style={{
+                                            padding: "12px",
+                                            backgroundColor: "var(--bg-tertiary)",
+                                            border: "1px solid var(--border-color)",
+                                            borderRadius: "6px",
+                                            marginBottom: "8px",
+                                            fontWeight: "600",
+                                            color: "var(--text-primary)",
+                                          }}
+                                        >
+                                          {group.item_text}
+                                        </div>
+                                        {children.map((child) => {
+                                          const response = tradeResponses.get(child.id);
+                                          const isYes = response === true;
+                                          const isNo = response === false;
+                                          return (
+                                            <div
+                                              key={child.id}
+                                              style={{
+                                                display: "flex",
+                                                alignItems: "center",
+                                                justifyContent: "space-between",
+                                                gap: "12px",
+                                                padding: "12px",
+                                                marginLeft: "20px",
+                                                marginBottom: "8px",
+                                                backgroundColor: "var(--bg-tertiary)",
+                                                borderRadius: "6px",
+                                              }}
+                                            >
+                                              <label
+                                                style={{
+                                                  flex: 1,
+                                                  fontSize: "14px",
+                                                  color: "var(--text-primary)",
+                                                }}
+                                              >
+                                                {child.item_text}
+                                              </label>
+                                              <div style={{ display: "flex", gap: "8px" }}>
+                                                <button
+                                                  onClick={() => {
+                                                    setChecklistResponses(prev => {
+                                                      const newMap = new Map(prev);
+                                                      const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
+                                                      tradeResponses.set(child.id, true);
+                                                      newMap.set(activeTradeIndex, tradeResponses);
+                                                      return newMap;
+                                                    });
+                                                  }}
+                                                  style={{
+                                                    padding: "6px 16px",
+                                                    backgroundColor: isYes ? "var(--accent)" : "var(--bg-secondary)",
+                                                    border: `1px solid ${isYes ? "var(--accent)" : "var(--border-color)"}`,
+                                                    borderRadius: "6px",
+                                                    color: isYes ? "white" : "var(--text-primary)",
+                                                    cursor: "pointer",
+                                                    fontSize: "13px",
+                                                    fontWeight: "500",
+                                                    transition: "all 0.2s",
+                                                  }}
+                                                >
+                                                  Yes
+                                                </button>
+                                                <button
+                                                  onClick={() => {
+                                                    setChecklistResponses(prev => {
+                                                      const newMap = new Map(prev);
+                                                      const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
+                                                      tradeResponses.set(child.id, false);
+                                                      newMap.set(activeTradeIndex, tradeResponses);
+                                                      return newMap;
+                                                    });
+                                                  }}
+                                                  style={{
+                                                    padding: "6px 16px",
+                                                    backgroundColor: isNo ? "var(--accent)" : "var(--bg-secondary)",
+                                                    border: `1px solid ${isNo ? "var(--accent)" : "var(--border-color)"}`,
+                                                    borderRadius: "6px",
+                                                    color: isNo ? "white" : "var(--text-primary)",
+                                                    cursor: "pointer",
+                                                    fontSize: "13px",
+                                                    fontWeight: "500",
+                                                    transition: "all 0.2s",
+                                                  }}
+                                                >
+                                                  No
+                                                </button>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    );
+                                  })}
+                                  {/* Render regular items */}
+                                  {regularItems.map((item) => {
+                                    const response = tradeResponses.get(item.id);
+                                    const isYes = response === true;
+                                    const isNo = response === false;
+                                    return (
+                                      <div
+                                        key={item.id}
+                                        style={{
+                                          display: "flex",
+                                          alignItems: "center",
+                                          justifyContent: "space-between",
+                                          gap: "12px",
+                                          padding: "12px",
+                                          marginBottom: "8px",
+                                          backgroundColor: "var(--bg-tertiary)",
+                                          borderRadius: "6px",
+                                        }}
+                                      >
+                                        <label
+                                          style={{
+                                            flex: 1,
+                                            fontSize: "14px",
+                                            color: "var(--text-primary)",
+                                          }}
+                                        >
+                                          {item.item_text}
+                                        </label>
+                                        <div style={{ display: "flex", gap: "8px" }}>
+                                          <button
+                                            onClick={() => {
+                                              setChecklistResponses(prev => {
+                                                const newMap = new Map(prev);
+                                                const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
+                                                tradeResponses.set(item.id, true);
+                                                newMap.set(activeTradeIndex, tradeResponses);
+                                                return newMap;
+                                              });
+                                            }}
+                                            style={{
+                                              padding: "6px 16px",
+                                              backgroundColor: isYes ? "var(--accent)" : "var(--bg-secondary)",
+                                              border: `1px solid ${isYes ? "var(--accent)" : "var(--border-color)"}`,
+                                              borderRadius: "6px",
+                                              color: isYes ? "white" : "var(--text-primary)",
+                                              cursor: "pointer",
+                                              fontSize: "13px",
+                                              fontWeight: "500",
+                                              transition: "all 0.2s",
+                                            }}
+                                          >
+                                            Yes
+                                          </button>
+                                          <button
+                                            onClick={() => {
+                                              setChecklistResponses(prev => {
+                                                const newMap = new Map(prev);
+                                                const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
+                                                tradeResponses.set(item.id, false);
+                                                newMap.set(activeTradeIndex, tradeResponses);
+                                                return newMap;
+                                              });
+                                            }}
+                                            style={{
+                                              padding: "6px 16px",
+                                              backgroundColor: isNo ? "var(--accent)" : "var(--bg-secondary)",
+                                              border: `1px solid ${isNo ? "var(--accent)" : "var(--border-color)"}`,
+                                              borderRadius: "6px",
+                                              color: isNo ? "white" : "var(--text-primary)",
+                                              cursor: "pointer",
+                                              fontSize: "13px",
+                                              fontWeight: "500",
+                                              transition: "all 0.2s",
+                                            }}
+                                          >
+                                            No
+                                          </button>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        ) : (
+                          <div style={{ 
+                            display: "flex", 
+                            alignItems: "center", 
+                            justifyContent: "center", 
+                            height: "100%",
+                            color: "var(--text-secondary)",
+                            fontSize: "14px"
+                          }}>
+                            {entryFormData.strategy_id ? "No survey items available for this strategy." : "Select a strategy to view survey."}
                           </div>
                         )}
                       </div>

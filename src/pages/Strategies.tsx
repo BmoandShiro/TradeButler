@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
-import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList } from "lucide-react";
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import {
@@ -48,7 +48,7 @@ interface PairedTrade {
   strategy_id: number | null;
 }
 
-type TabType = "notes" | "trades" | "checklists";
+type TabType = "notes" | "trades" | "checklists" | "survey";
 
 interface ChecklistItem {
   id: number;
@@ -787,7 +787,7 @@ export default function Strategies() {
       }
     }
     // Load checklists
-    if (activeTab === "checklists" && !checklists.has(strategyId)) {
+    if ((activeTab === "checklists" || activeTab === "survey") && !checklists.has(strategyId)) {
       await loadChecklists(strategyId);
     }
   };
@@ -801,7 +801,7 @@ export default function Strategies() {
       });
       
       // Default checklist types - always include these even if empty
-      const defaultTypes = ["entry", "take_profit", "review"];
+      const defaultTypes = ["entry", "take_profit"];
       const checklistMap = new Map<string, ChecklistItem[]>();
       const customTypesSet = new Set<string>();
       
@@ -830,7 +830,6 @@ export default function Strategies() {
       const checklistMap = new Map<string, ChecklistItem[]>();
       checklistMap.set("entry", []);
       checklistMap.set("take_profit", []);
-      checklistMap.set("review", []);
       setChecklists(new Map(checklists.set(strategyId, checklistMap)));
       setCustomChecklistTypes(new Map(customChecklistTypes.set(strategyId, new Set())));
     }
@@ -985,9 +984,9 @@ export default function Strategies() {
   };
 
   const deleteChecklistType = async (strategyId: number, type: string) => {
-    const defaultTypes = ["entry", "take_profit", "review"];
+    const defaultTypes = ["entry", "take_profit"];
     if (defaultTypes.includes(type)) {
-      alert("Cannot delete default checklist types (Entry, Take Profit, or Review)");
+      alert("Cannot delete default checklist types (Entry or Take Profit)");
       return;
     }
 
@@ -1720,7 +1719,7 @@ export default function Strategies() {
         
         // Update custom checklist types based on what's in editingChecklists
         const editingChecklist = editingChecklists.get(selectedStrategyData.id)!;
-        const defaultTypes = ["entry", "take_profit", "review"];
+        const defaultTypes = ["entry", "take_profit"];
         const customTypesSet = new Set<string>();
         for (const type of editingChecklist.keys()) {
           if (!defaultTypes.includes(type)) {
@@ -2455,6 +2454,7 @@ export default function Strategies() {
                 { id: "notes" as TabType, label: "Details", icon: FileText },
                 { id: "trades" as TabType, label: "Trades", icon: TrendingUp },
                 { id: "checklists" as TabType, label: "Checklists", icon: ListChecks },
+                { id: "survey" as TabType, label: "Survey", icon: ClipboardList },
               ].map((tab) => {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
@@ -2811,13 +2811,13 @@ export default function Strategies() {
                   const titleMap: Record<string, string> = {
                     "entry": "Entry Checklist",
                     "take_profit": "Take Profit Checklist",
-                    "review": "Review Checklist",
+                    "survey": "Survey",
                   };
                   return titleMap[type] || type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') + " Checklist";
                 };
 
                 // Get all checklist types in order: default types first, then custom
-                const defaultTypes = ["entry", "take_profit", "review"];
+                const defaultTypes = ["entry", "take_profit"];
                 const tempCustomTypes = isCreating 
                   ? Array.from(new Set(Array.from(tempChecklists.keys()).filter(t => !defaultTypes.includes(t))))
                   : Array.from(customChecklistTypes.get(selectedStrategy || 0) || []);
@@ -2885,6 +2885,110 @@ export default function Strategies() {
                           />
                         );
                       })}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {activeTab === "survey" && (selectedStrategy || isCreating) && (() => {
+                // Use editingChecklists when editing, tempChecklists when creating, or regular checklists otherwise
+                const currentChecklist = isCreating 
+                  ? tempChecklists 
+                  : (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy))
+                    ? editingChecklists.get(selectedStrategy)!
+                    : (checklists.get(selectedStrategy || 0) || new Map<string, ChecklistItem[]>());
+                const virtualStrategyId: number = isCreating ? -1 : (selectedStrategy || 0);
+                
+                const handleDragEnd = (type: string, event: DragEndEvent) => {
+                  const { active, over } = event;
+                  if (!over || active.id === over.id) return;
+                  if (isCreating) {
+                    // Handle reordering in tempChecklists
+                    const items = currentChecklist.get(type) || [];
+                    const oldIndex = items.findIndex(item => item.id === active.id);
+                    const newIndex = items.findIndex(item => item.id === over.id);
+                    if (oldIndex === -1 || newIndex === -1) return;
+                    const reorderedItems = arrayMove(items, oldIndex, newIndex);
+                    const updatedItems = reorderedItems.map((item, index) => ({
+                      ...item,
+                      item_order: index,
+                    }));
+                    const updatedChecklist = new Map(currentChecklist);
+                    updatedChecklist.set(type, updatedItems);
+                    setTempChecklists(updatedChecklist);
+                  } else if (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)) {
+                    // Handle reordering in editingChecklists
+                    const items = currentChecklist.get(type) || [];
+                    const oldIndex = items.findIndex(item => item.id === active.id);
+                    const newIndex = items.findIndex(item => item.id === over.id);
+                    if (oldIndex === -1 || newIndex === -1) return;
+                    const reorderedItems = arrayMove(items, oldIndex, newIndex);
+                    const updatedItems = reorderedItems.map((item, index) => ({
+                      ...item,
+                      item_order: index,
+                    }));
+                    const updatedChecklist = new Map(currentChecklist);
+                    updatedChecklist.set(type, updatedItems);
+                    setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, updatedChecklist)));
+                    
+                    // Update history
+                    const history = checklistEditHistory.get(selectedStrategy) || [];
+                    const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
+                    setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, newHistory)));
+                  } else {
+                    reorderChecklistItems(virtualStrategyId, type, active.id as number, over.id as number);
+                  }
+                };
+
+                // Get survey items (checklist_type = "survey")
+                const surveyItems = currentChecklist.get("survey") || [];
+                
+                // Initialize survey type if it doesn't exist
+                if (!currentChecklist.has("survey")) {
+                  const updatedChecklist = new Map(currentChecklist);
+                  updatedChecklist.set("survey", []);
+                  if (isCreating) {
+                    setTempChecklists(updatedChecklist);
+                  } else if (isEditing && selectedStrategy) {
+                    setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, updatedChecklist)));
+                  }
+                }
+
+                return (
+                  <div style={{ padding: "24px", overflowY: "auto" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "32px", paddingBottom: "16px", borderBottom: "1px solid var(--border-color)" }}>
+                      <h2 style={{ fontSize: "24px", fontWeight: "700", color: "var(--text-primary)", margin: 0 }}>
+                        Post-Trade Survey
+                      </h2>
+                    </div>
+                    <div>
+                      <ChecklistSection
+                        type="survey"
+                        title="Survey"
+                        items={surveyItems}
+                        selectedStrategy={virtualStrategyId}
+                        isEditing={isEditing || isCreating}
+                        newChecklistItem={newChecklistItem}
+                        setNewChecklistItem={setNewChecklistItem}
+                        selectedChecklistItems={selectedChecklistItems}
+                        setSelectedChecklistItems={setSelectedChecklistItems}
+                        editingItemId={editingItemId}
+                        editingItemText={editingItemText}
+                        setEditingItemText={setEditingItemText}
+                        sensors={sensors}
+                        onDragEnd={handleDragEnd}
+                        deleteChecklistItem={deleteChecklistItem}
+                        startEditingItem={startEditingItem}
+                        saveEditedItem={saveEditedItem}
+                        cancelEditingItem={cancelEditingItem}
+                        addChecklistItem={addChecklistItem}
+                        setPendingGroupAction={setPendingGroupAction}
+                        setGroupName={setGroupName}
+                        setShowGroupModal={setShowGroupModal}
+                        ungroupChecklistItems={ungroupChecklistItems}
+                        isCustom={false}
+                        onDeleteChecklist={undefined}
+                      />
                     </div>
                   </div>
                 );
