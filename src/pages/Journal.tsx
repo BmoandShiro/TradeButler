@@ -833,52 +833,102 @@ export default function Journal() {
                           </div>
                         )}
                         {trade.trade && (
-                          <div style={{ marginBottom: "8px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                          <div style={{ marginBottom: "24px" }}>
+                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "8px", display: "block" }}>
                               Trade
                             </label>
-                            <div style={{ color: "var(--text-primary)", fontSize: "14px", whiteSpace: "pre-wrap" }}>
-                              {trade.trade}
+                            <div style={{ 
+                              backgroundColor: "var(--bg-tertiary)", 
+                              borderRadius: "6px", 
+                              border: "1px solid var(--border-color)",
+                              overflow: "hidden",
+                              minHeight: "100px"
+                            }}>
+                              <RichTextEditor
+                                value={trade.trade || ""}
+                                onChange={() => {}}
+                                readOnly={true}
+                              />
                             </div>
                           </div>
                         )}
                         {trade.what_went_well && (
-                          <div style={{ marginBottom: "8px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                          <div style={{ marginBottom: "24px" }}>
+                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "8px", display: "block" }}>
                               What Went Well
                             </label>
-                            <div style={{ color: "var(--text-primary)", fontSize: "14px", whiteSpace: "pre-wrap" }}>
-                              {trade.what_went_well}
+                            <div style={{ 
+                              backgroundColor: "var(--bg-tertiary)", 
+                              borderRadius: "6px", 
+                              border: "1px solid var(--border-color)",
+                              overflow: "hidden",
+                              minHeight: "100px"
+                            }}>
+                              <RichTextEditor
+                                value={trade.what_went_well || ""}
+                                onChange={() => {}}
+                                readOnly={true}
+                              />
                             </div>
                           </div>
                         )}
                         {trade.what_could_be_improved && (
-                          <div style={{ marginBottom: "8px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                          <div style={{ marginBottom: "24px" }}>
+                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "8px", display: "block" }}>
                               What Could Be Improved
                             </label>
-                            <div style={{ color: "var(--text-primary)", fontSize: "14px", whiteSpace: "pre-wrap" }}>
-                              {trade.what_could_be_improved}
+                            <div style={{ 
+                              backgroundColor: "var(--bg-tertiary)", 
+                              borderRadius: "6px", 
+                              border: "1px solid var(--border-color)",
+                              overflow: "hidden",
+                              minHeight: "100px"
+                            }}>
+                              <RichTextEditor
+                                value={trade.what_could_be_improved || ""}
+                                onChange={() => {}}
+                                readOnly={true}
+                              />
                             </div>
                           </div>
                         )}
                         {trade.emotional_state && (
-                          <div style={{ marginBottom: "8px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                          <div style={{ marginBottom: "24px" }}>
+                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "8px", display: "block" }}>
                               Emotional State
                             </label>
-                            <div style={{ color: "var(--text-primary)", fontSize: "14px", whiteSpace: "pre-wrap" }}>
-                              {trade.emotional_state}
+                            <div style={{ 
+                              backgroundColor: "var(--bg-tertiary)", 
+                              borderRadius: "6px", 
+                              border: "1px solid var(--border-color)",
+                              overflow: "hidden",
+                              minHeight: "100px"
+                            }}>
+                              <RichTextEditor
+                                value={trade.emotional_state || ""}
+                                onChange={() => {}}
+                                readOnly={true}
+                              />
                             </div>
                           </div>
                         )}
                         {trade.notes && (
-                          <div style={{ marginBottom: "8px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                          <div style={{ marginBottom: "24px" }}>
+                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "8px", display: "block" }}>
                               Notes
                             </label>
-                            <div style={{ color: "var(--text-primary)", fontSize: "14px", whiteSpace: "pre-wrap" }}>
-                              {trade.notes}
+                            <div style={{ 
+                              backgroundColor: "var(--bg-tertiary)", 
+                              borderRadius: "6px", 
+                              border: "1px solid var(--border-color)",
+                              overflow: "hidden",
+                              minHeight: "100px"
+                            }}>
+                              <RichTextEditor
+                                value={trade.notes || ""}
+                                onChange={() => {}}
+                                readOnly={true}
+                              />
                             </div>
                           </div>
                         )}

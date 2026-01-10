@@ -69,6 +69,36 @@ export default function RichTextEditor({
         }}
       />
       <style>{`
+        ${readOnly ? `
+        .quill {
+          display: flex;
+          flex-direction: column;
+          height: 100%;
+          min-height: 0;
+          border-radius: 0;
+          overflow: visible;
+          background: transparent;
+          border: none;
+          box-shadow: none;
+        }
+        .ql-container {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          min-height: 0;
+          overflow: visible;
+          background: transparent;
+        }
+        .ql-editor {
+          flex: 1;
+          min-height: auto;
+          padding: 0;
+          color: var(--text-primary);
+          font-size: 15px;
+          line-height: 1.7;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+        }
+        ` : `
         .quill {
           display: flex;
           flex-direction: column;
@@ -97,6 +127,7 @@ export default function RichTextEditor({
           line-height: 1.7;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
         }
+        `}
         .ql-editor.ql-blank::before {
           color: var(--text-secondary);
           font-style: normal;
@@ -105,6 +136,12 @@ export default function RichTextEditor({
         }
         .ql-editor p {
           margin-bottom: 12px;
+        }
+        .ql-editor img {
+          max-width: 100%;
+          height: auto;
+          display: block;
+          margin: 16px 0;
         }
         .ql-editor h1 {
           font-size: 28px;
@@ -245,7 +282,7 @@ export default function RichTextEditor({
         .ql-snow .ql-stroke.ql-thin {
           stroke-width: 1;
         }
-      `}</style>
+        `}</style>
     </div>
   );
 }
