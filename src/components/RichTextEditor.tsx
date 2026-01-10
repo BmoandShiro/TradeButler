@@ -77,9 +77,9 @@ export default function RichTextEditor({
           min-height: 0;
           border-radius: 0;
           overflow: visible;
-          background: transparent;
-          border: none;
-          box-shadow: none;
+          background: transparent !important;
+          border: none !important;
+          box-shadow: none !important;
         }
         .ql-container {
           flex: 1;
@@ -87,7 +87,8 @@ export default function RichTextEditor({
           flex-direction: column;
           min-height: 0;
           overflow: visible;
-          background: transparent;
+          background: transparent !important;
+          border: none !important;
         }
         .ql-editor {
           flex: 1;
@@ -97,6 +98,13 @@ export default function RichTextEditor({
           font-size: 15px;
           line-height: 1.7;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+          border: none !important;
+        }
+        .ql-snow {
+          border: none !important;
+        }
+        .ql-snow .ql-container {
+          border: none !important;
         }
         ` : `
         .quill {

@@ -838,11 +838,7 @@ export default function Journal() {
                               Trade
                             </label>
                             <div style={{ 
-                              backgroundColor: "var(--bg-tertiary)", 
-                              borderRadius: "6px", 
-                              border: "1px solid var(--border-color)",
-                              overflow: "hidden",
-                              minHeight: "100px"
+                              overflow: "hidden"
                             }}>
                               <RichTextEditor
                                 value={trade.trade || ""}
@@ -858,11 +854,7 @@ export default function Journal() {
                               What Went Well
                             </label>
                             <div style={{ 
-                              backgroundColor: "var(--bg-tertiary)", 
-                              borderRadius: "6px", 
-                              border: "1px solid var(--border-color)",
-                              overflow: "hidden",
-                              minHeight: "100px"
+                              overflow: "hidden"
                             }}>
                               <RichTextEditor
                                 value={trade.what_went_well || ""}
@@ -878,11 +870,7 @@ export default function Journal() {
                               What Could Be Improved
                             </label>
                             <div style={{ 
-                              backgroundColor: "var(--bg-tertiary)", 
-                              borderRadius: "6px", 
-                              border: "1px solid var(--border-color)",
-                              overflow: "hidden",
-                              minHeight: "100px"
+                              overflow: "hidden"
                             }}>
                               <RichTextEditor
                                 value={trade.what_could_be_improved || ""}
@@ -898,11 +886,7 @@ export default function Journal() {
                               Emotional State
                             </label>
                             <div style={{ 
-                              backgroundColor: "var(--bg-tertiary)", 
-                              borderRadius: "6px", 
-                              border: "1px solid var(--border-color)",
-                              overflow: "hidden",
-                              minHeight: "100px"
+                              overflow: "hidden"
                             }}>
                               <RichTextEditor
                                 value={trade.emotional_state || ""}
@@ -918,11 +902,7 @@ export default function Journal() {
                               Notes
                             </label>
                             <div style={{ 
-                              backgroundColor: "var(--bg-tertiary)", 
-                              borderRadius: "6px", 
-                              border: "1px solid var(--border-color)",
-                              overflow: "hidden",
-                              minHeight: "100px"
+                              overflow: "hidden"
                             }}>
                               <RichTextEditor
                                 value={trade.notes || ""}
