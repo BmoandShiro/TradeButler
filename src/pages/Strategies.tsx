@@ -268,11 +268,14 @@ function ChecklistSection({
   isCustom: boolean;
   onDeleteChecklist?: () => void;
 }) {
+  // Sort items by item_order first
+  const sortedItems = [...items].sort((a, b) => a.item_order - b.item_order);
+  
   // Organize items: groups (items with no parent_id that have children) and regular items
-  const itemIdsSet = new Set(items.map(item => item.id));
-  const groups = items.filter(item => !item.parent_id && items.some(child => child.parent_id === item.id));
-  const regularItems = items.filter(item => !item.parent_id && !items.some(child => child.parent_id === item.id));
-  const groupedItems = items.filter(item => item.parent_id !== null && itemIdsSet.has(item.parent_id));
+  const itemIdsSet = new Set(sortedItems.map(item => item.id));
+  const groups = sortedItems.filter(item => !item.parent_id && sortedItems.some(child => child.parent_id === item.id));
+  const regularItems = sortedItems.filter(item => !item.parent_id && !sortedItems.some(child => child.parent_id === item.id));
+  const groupedItems = sortedItems.filter(item => item.parent_id !== null && itemIdsSet.has(item.parent_id));
   
   // Organize by parent
   const itemsByParent = new Map<number, ChecklistItem[]>();
@@ -285,6 +288,14 @@ function ChecklistSection({
       itemsByParent.get(parentId)!.push(item);
     }
   });
+  
+  // Sort children within each group by item_order
+  for (const [, children] of itemsByParent.entries()) {
+    children.sort((a, b) => a.item_order - b.item_order);
+  }
+  
+  // Create a combined sorted list: merge groups and regular items, sorted by item_order
+  const allTopLevelItems = [...groups, ...regularItems].sort((a, b) => a.item_order - b.item_order);
   
   const itemIds = items.map(item => item.id);
   const currentValue = newChecklistItem.get(type) || "";
@@ -387,27 +398,121 @@ function ChecklistSection({
           onDragEnd={(e) => onDragEnd(type, e)}
         >
           <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
-            {/* Render groups with their children */}
-            {groups.map((group) => {
-              const children = itemsByParent.get(group.id) || [];
-              return (
-                <div key={group.id} style={{ marginBottom: "20px", position: "relative" }}>
-                  {/* Group Header - Enhanced styling */}
+            {/* Render all top-level items (groups and regular items) sorted by item_order */}
+            {allTopLevelItems.map((item) => {
+              const isGroup = groups.some(g => g.id === item.id);
+              const children = isGroup ? (itemsByParent.get(item.id) || []) : [];
+              
+              if (isGroup) {
+                return (
+                  <div key={item.id} style={{ marginBottom: "20px", position: "relative" }}>
+                    {/* Group Header - Enhanced styling */}
+                    <SortableChecklistItem
+                      item={item}
+                      onDelete={() => deleteChecklistItem(selectedStrategy, item.id, type)}
+                      isEditing={isEditing}
+                      isSelected={selectedChecklistItems.has(item.id)}
+                      onSelect={(selected) => handleToggleSelect(item.id, selected)}
+                      onEdit={() => startEditingItem(item)}
+                      isEditingText={editingItemId === item.id}
+                      editingText={editingItemText}
+                      onEditingTextChange={setEditingItemText}
+                      onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
+                      onCancelEdit={cancelEditingItem}
+                      isGroup={true}
+                    />
+                    {/* Group Children - with visual connection */}
+                    {children.length > 0 && (
+                      <div style={{ 
+                        position: "relative", 
+                        marginLeft: "20px", 
+                        paddingLeft: "24px", 
+                        borderLeft: "2px solid var(--accent)",
+                        opacity: 0.6,
+                      }}>
+                        {children.map((child, index) => (
+                          <div key={child.id} style={{ position: "relative" }}>
+                            {index < children.length - 1 && (
+                              <div style={{
+                                position: "absolute",
+                                left: "-26px",
+                                top: "24px",
+                                width: "2px",
+                                height: "calc(100% + 8px)",
+                                backgroundColor: "var(--accent)",
+                                opacity: 0.4,
+                              }} />
+                            )}
+                            <SortableChecklistItem
+                              item={child}
+                              onDelete={() => deleteChecklistItem(selectedStrategy, child.id, type)}
+                              isEditing={isEditing}
+                              isSelected={selectedChecklistItems.has(child.id)}
+                              onSelect={(selected) => handleToggleSelect(child.id, selected)}
+                              onEdit={() => startEditingItem(child)}
+                              isEditingText={editingItemId === child.id}
+                              editingText={editingItemText}
+                              onEditingTextChange={setEditingItemText}
+                              onSaveEdit={() => saveEditedItem(child.id, editingItemText)}
+                              onCancelEdit={cancelEditingItem}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              } else {
+                // Regular item
+                return (
                   <SortableChecklistItem
-                    item={group}
-                    onDelete={() => deleteChecklistItem(selectedStrategy, group.id, type)}
+                    key={item.id}
+                    item={item}
+                    onDelete={() => deleteChecklistItem(selectedStrategy, item.id, type)}
                     isEditing={isEditing}
-                    isSelected={selectedChecklistItems.has(group.id)}
-                    onSelect={(selected) => handleToggleSelect(group.id, selected)}
-                    onEdit={() => startEditingItem(group)}
-                    isEditingText={editingItemId === group.id}
+                    isSelected={selectedChecklistItems.has(item.id)}
+                    onSelect={(selected) => handleToggleSelect(item.id, selected)}
+                    onEdit={() => startEditingItem(item)}
+                    isEditingText={editingItemId === item.id}
                     editingText={editingItemText}
                     onEditingTextChange={setEditingItemText}
-                    onSaveEdit={() => saveEditedItem(group.id, editingItemText)}
+                    onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
                     onCancelEdit={cancelEditingItem}
-                    isGroup={true}
                   />
-                  {/* Group Children - with visual connection */}
+                );
+              }
+            })}
+          </SortableContext>
+        </DndContext>
+      ) : (
+        <div>
+          {/* Render all top-level items (groups and regular items) sorted by item_order in view mode */}
+          {allTopLevelItems.map((item) => {
+            const isGroup = groups.some(g => g.id === item.id);
+            const children = isGroup ? (itemsByParent.get(item.id) || []) : [];
+            
+            if (isGroup) {
+              return (
+                <div key={item.id} style={{ marginBottom: "20px", position: "relative" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      padding: "14px 16px",
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "2px solid var(--accent)",
+                      borderRadius: "8px",
+                      marginBottom: "12px",
+                      fontWeight: "600",
+                      boxShadow: "0 1px 4px rgba(0, 0, 0, 0.1)",
+                    }}
+                  >
+                    <Folder size={18} style={{ color: "var(--accent)", flexShrink: 0 }} />
+                    <div style={{ flex: 1, fontSize: "15px", fontWeight: "600", color: "var(--text-primary)" }}>
+                      {item.item_text}
+                    </div>
+                  </div>
                   {children.length > 0 && (
                     <div style={{ 
                       position: "relative", 
@@ -429,140 +534,52 @@ function ChecklistSection({
                               opacity: 0.4,
                             }} />
                           )}
-                          <SortableChecklistItem
-                            item={child}
-                            onDelete={() => deleteChecklistItem(selectedStrategy, child.id, type)}
-                            isEditing={isEditing}
-                            isSelected={selectedChecklistItems.has(child.id)}
-                            onSelect={(selected) => handleToggleSelect(child.id, selected)}
-                            onEdit={() => startEditingItem(child)}
-                            isEditingText={editingItemId === child.id}
-                            editingText={editingItemText}
-                            onEditingTextChange={setEditingItemText}
-                            onSaveEdit={() => saveEditedItem(child.id, editingItemText)}
-                            onCancelEdit={cancelEditingItem}
-                          />
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              padding: "12px 14px",
+                              backgroundColor: "var(--bg-tertiary)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "6px",
+                              marginBottom: "8px",
+                            }}
+                          >
+                            <ChevronRight size={14} style={{ color: "var(--text-secondary)", opacity: 0.5 }} />
+                            <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
+                              {child.item_text}
+                            </div>
+                          </div>
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
               );
-            })}
-            {/* Render regular (ungrouped) items */}
-            {regularItems.length > 0 && (
-              <div style={{ marginTop: regularItems.length > 0 && groups.length > 0 ? "24px" : "0" }}>
-                {regularItems.map((item) => (
-                  <SortableChecklistItem
-                    key={item.id}
-                    item={item}
-                    onDelete={() => deleteChecklistItem(selectedStrategy, item.id, type)}
-                    isEditing={isEditing}
-                    isSelected={selectedChecklistItems.has(item.id)}
-                    onSelect={(selected) => handleToggleSelect(item.id, selected)}
-                    onEdit={() => startEditingItem(item)}
-                    isEditingText={editingItemId === item.id}
-                    editingText={editingItemText}
-                    onEditingTextChange={setEditingItemText}
-                    onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
-                    onCancelEdit={cancelEditingItem}
-                  />
-                ))}
-              </div>
-            )}
-          </SortableContext>
-        </DndContext>
-      ) : (
-        <div>
-          {/* Render groups with their children in view mode */}
-          {groups.map((group) => {
-            const children = itemsByParent.get(group.id) || [];
-            return (
-              <div key={group.id} style={{ marginBottom: "20px", position: "relative" }}>
+            } else {
+              // Regular item
+              return (
                 <div
+                  key={item.id}
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: "10px",
-                    padding: "14px 16px",
-                    backgroundColor: "var(--bg-secondary)",
-                    border: "2px solid var(--accent)",
-                    borderRadius: "8px",
-                    marginBottom: "12px",
-                    fontWeight: "600",
-                    boxShadow: "0 1px 4px rgba(0, 0, 0, 0.1)",
+                    gap: "8px",
+                    padding: "12px 14px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    marginBottom: "8px",
                   }}
                 >
-                  <Folder size={18} style={{ color: "var(--accent)", flexShrink: 0 }} />
-                  <div style={{ flex: 1, fontSize: "15px", fontWeight: "600", color: "var(--text-primary)" }}>
-                    {group.item_text}
+                  <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
+                    {item.item_text}
                   </div>
                 </div>
-                {children.length > 0 && (
-                  <div style={{ 
-                    position: "relative", 
-                    marginLeft: "20px", 
-                    paddingLeft: "24px", 
-                    borderLeft: "2px solid var(--accent)",
-                    opacity: 0.6,
-                  }}>
-                    {children.map((child, index) => (
-                      <div key={child.id} style={{ position: "relative" }}>
-                        {index < children.length - 1 && (
-                          <div style={{
-                            position: "absolute",
-                            left: "-26px",
-                            top: "24px",
-                            width: "2px",
-                            height: "calc(100% + 8px)",
-                            backgroundColor: "var(--accent)",
-                            opacity: 0.4,
-                          }} />
-                        )}
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "8px",
-                            padding: "12px 14px",
-                            backgroundColor: "var(--bg-tertiary)",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: "6px",
-                            marginBottom: "8px",
-                          }}
-                        >
-                          <ChevronRight size={14} style={{ color: "var(--text-secondary)", opacity: 0.5 }} />
-                          <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
-                            {child.item_text}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
+              );
+            }
           })}
-          {/* Render regular items */}
-          {regularItems.map((item) => (
-            <div
-              key={item.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "12px 14px",
-                backgroundColor: "var(--bg-tertiary)",
-                border: "1px solid var(--border-color)",
-                borderRadius: "6px",
-                marginBottom: "8px",
-              }}
-            >
-              <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
-                {item.item_text}
-              </div>
-            </div>
-          ))}
         </div>
       )}
       {isEditing && (
@@ -1672,9 +1689,16 @@ export default function Strategies() {
       }
     }
     
-    // Save or update items that exist in editing
+    // Create ID mapping for new items (temporary IDs to new database IDs)
+    const idMap = new Map<number, number>();
+    
+    // First pass: Save all parent items (groups) first
     for (const [type, items] of editingChecklist.entries()) {
-      for (const item of items) {
+      // Filter to only parent items (groups)
+      const parentItems = items.filter(item => !item.parent_id);
+      
+      // Save parent items first
+      for (const item of parentItems) {
         const originalItem = allOriginalItems.get(item.id);
         const isNew = !originalItem;
         const hasChanged = isNew || (originalItem && (
@@ -1685,15 +1709,60 @@ export default function Strategies() {
         ));
         
         if (isNew || hasChanged) {
-          await invoke<number>("save_strategy_checklist_item", {
+          const newId = await invoke<number>("save_strategy_checklist_item", {
             id: isNew ? null : item.id,
             strategyId: strategyId,
             itemText: item.item_text,
             isChecked: item.is_checked,
             itemOrder: item.item_order,
             checklistType: type,
-            parentId: item.parent_id,
+            parentId: null,
           });
+          
+          // If it's a new item, map the old temporary ID to the new database ID
+          if (isNew) {
+            idMap.set(item.id, newId);
+          }
+        }
+      }
+    }
+    
+    // Second pass: Save all child items with updated parent IDs
+    for (const [type, items] of editingChecklist.entries()) {
+      const childItems = items.filter(item => item.parent_id !== null);
+      
+      for (const item of childItems) {
+        const originalItem = allOriginalItems.get(item.id);
+        const isNew = !originalItem;
+        
+        // Get the correct parent ID (either from idMap if parent was new, or use existing)
+        let correctParentId = item.parent_id;
+        if (idMap.has(item.parent_id!)) {
+          correctParentId = idMap.get(item.parent_id!)!;
+        }
+        
+        const hasChanged = isNew || (originalItem && (
+          originalItem.item_text !== item.item_text ||
+          originalItem.item_order !== item.item_order ||
+          originalItem.parent_id !== correctParentId ||
+          originalItem.checklist_type !== item.checklist_type
+        ));
+        
+        if (isNew || hasChanged) {
+          const newId = await invoke<number>("save_strategy_checklist_item", {
+            id: isNew ? null : item.id,
+            strategyId: strategyId,
+            itemText: item.item_text,
+            isChecked: item.is_checked,
+            itemOrder: item.item_order,
+            checklistType: type,
+            parentId: correctParentId,
+          });
+          
+          // If it's a new item, map the old temporary ID to the new database ID
+          if (isNew) {
+            idMap.set(item.id, newId);
+          }
         }
       }
     }
