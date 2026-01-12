@@ -606,6 +606,9 @@ export default function Trades() {
                     <SortableHeader column="price" label="Entry Price" viewMode={viewMode} />
                     <SortableHeader column="trades" label="Trades" viewMode={viewMode} />
                     <SortableHeader column="pnl" label="P&L" viewMode={viewMode} />
+                    <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                      %
+                    </th>
                     <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                         <span>Strategy</span>
@@ -680,6 +683,24 @@ export default function Trades() {
                               {group.total_pnl >= 0 ? "+" : ""}${group.total_pnl.toFixed(2)}
                             </span>
                           </td>
+                          <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
+                            {group.final_quantity === 0 && group.position_trades.length >= 2 && (() => {
+                              const entryPrice = group.entry_trade.price;
+                              const lastTrade = group.position_trades[group.position_trades.length - 1];
+                              const exitPrice = lastTrade.price;
+                              const percentage = entryPrice > 0 ? ((exitPrice - entryPrice) / entryPrice) * 100 : 0;
+                              return (
+                                <span
+                                  style={{
+                                    fontWeight: "600",
+                                    color: percentage >= 0 ? "var(--profit)" : "var(--loss)",
+                                  }}
+                                >
+                                  {percentage >= 0 ? "+" : ""}{percentage.toFixed(2)}%
+                                </span>
+                              );
+                            })()}
+                          </td>
                           <td style={{ padding: "12px 16px", fontSize: "14px" }}>
                             <select
                               value={group.entry_trade.strategy_id ? String(group.entry_trade.strategy_id) : ""}
@@ -721,7 +742,7 @@ export default function Trades() {
                         </tr>
                         {isExpanded && (
                           <tr key={`${group.entry_trade.id}-details`}>
-                            <td colSpan={9} style={{ padding: "0", backgroundColor: "var(--bg-tertiary)" }}>
+                            <td colSpan={10} style={{ padding: "0", backgroundColor: "var(--bg-tertiary)" }}>
                               <div style={{ padding: "20px" }}>
                                 <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px" }}>
                                   Position Trades ({group.position_trades.length})
@@ -1217,21 +1238,38 @@ export default function Trades() {
                                     </div>
                                     <div style={{ gridColumn: "1 / -1", paddingTop: "12px", borderTop: "1px solid var(--border-color)" }}>
                                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
-                                        <div>
-                                          <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Net P&L: </span>
-                                          <span
-                                            style={{
-                                              fontSize: "16px",
-                                              fontWeight: "600",
-                                              color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
-                                              display: "flex",
-                                              alignItems: "center",
-                                              gap: "4px",
-                                            }}
-                                          >
-                                            {pair.net_profit_loss >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
-                                            {pair.net_profit_loss >= 0 ? "+" : ""}${pair.net_profit_loss.toFixed(2)}
-                                          </span>
+                                        <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
+                                          <div>
+                                            <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Net P&L: </span>
+                                            <span
+                                              style={{
+                                                fontSize: "16px",
+                                                fontWeight: "600",
+                                                color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
+                                                display: "flex",
+                                                alignItems: "center",
+                                                gap: "4px",
+                                              }}
+                                            >
+                                              {pair.net_profit_loss >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                                              {pair.net_profit_loss >= 0 ? "+" : ""}${pair.net_profit_loss.toFixed(2)}
+                                            </span>
+                                          </div>
+                                          <div>
+                                            <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Return: </span>
+                                            <span
+                                              style={{
+                                                fontSize: "16px",
+                                                fontWeight: "600",
+                                                color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
+                                              }}
+                                            >
+                                              {(() => {
+                                                const percentage = pair.entry_price > 0 ? ((pair.exit_price - pair.entry_price) / pair.entry_price) * 100 : 0;
+                                                return `${percentage >= 0 ? "+" : ""}${percentage.toFixed(2)}%`;
+                                              })()}
+                                            </span>
+                                          </div>
                                         </div>
                                         <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
                                           <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
