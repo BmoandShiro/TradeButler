@@ -152,6 +152,10 @@ const metricIcons: Record<string, any> = {
   average_loss: TrendingDown,
   largest_win: TrendingUp,
   largest_loss: TrendingDown,
+  average_gain_pct: TrendingUp,
+  average_loss_pct: TrendingDown,
+  largest_win_pct: TrendingUp,
+  largest_loss_pct: TrendingDown,
   consecutive_wins: TrendingUp,
   consecutive_losses: TrendingDown,
   current_win_streak: TrendingUp,
@@ -211,6 +215,11 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
       return `$${(value || 0).toFixed(2)}`;
     case "average_holding_time_seconds":
       return formatHoldingTime(value || 0);
+    case "average_gain_pct":
+    case "average_loss_pct":
+    case "largest_win_pct":
+    case "largest_loss_pct":
+      return `${(value || 0) >= 0 ? "+" : ""}${(value || 0).toFixed(2)}%`;
     default:
       return value.toFixed(2);
   }
@@ -1841,6 +1850,10 @@ export default function Dashboard() {
     best_day: metrics?.best_day || 0,
     worst_day: metrics?.worst_day || 0,
     average_holding_time_seconds: metrics?.average_holding_time_seconds || 0,
+    average_gain_pct: metrics?.average_gain_pct || 0,
+    average_loss_pct: metrics?.average_loss_pct || 0,
+    largest_win_pct: metrics?.largest_win_pct || 0,
+    largest_loss_pct: metrics?.largest_loss_pct || 0,
   };
 
   return (

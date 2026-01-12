@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Calendar } from "lucide-react";
 
-export type Timeframe = "all" | "7d" | "30d" | "90d" | "180d" | "1y" | "custom";
+export type Timeframe = "all" | "7d" | "30d" | "90d" | "180d" | "1y" | "ytd" | "custom";
 
 export interface TimeframeSelectorProps {
   value: Timeframe;
@@ -250,6 +250,7 @@ export function TimeframeSelector({
     { value: "90d", label: "Last 3 Months" },
     { value: "180d", label: "Last 6 Months" },
     { value: "1y", label: "Last Year" },
+    { value: "ytd", label: "YTD" },
     { value: "custom", label: "Custom" },
   ];
 
@@ -283,6 +284,10 @@ export function TimeframeSelector({
         break;
       case "1y":
         start.setFullYear(end.getFullYear() - 1);
+        break;
+      case "ytd":
+        start.setMonth(0);
+        start.setDate(1);
         break;
       default:
         return null;
@@ -396,6 +401,12 @@ export function getTimeframeDates(timeframe: Timeframe, customStart?: string, cu
       start.setFullYear(end.getFullYear() - 1);
       start.setMonth(end.getMonth());
       start.setDate(end.getDate());
+      break;
+    case "ytd":
+      start.setFullYear(end.getFullYear());
+      start.setMonth(0);
+      start.setDate(1);
+      start.setHours(0, 0, 0, 0);
       break;
     default:
       return { start: null, end: null };

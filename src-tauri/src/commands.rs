@@ -138,6 +138,10 @@ pub struct Metrics {
     pub largest_win_group_id: Option<i64>,
     pub largest_loss_group_id: Option<i64>,
     pub average_holding_time_seconds: f64,
+    pub average_gain_pct: f64,
+    pub average_loss_pct: f64,
+    pub largest_win_pct: f64,
+    pub largest_loss_pct: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1654,6 +1658,44 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
         0.0
     };
     
+    // Calculate percentage-based metrics (based on entry/exit prices, not P&L)
+    let mut winning_pct_gains = Vec::new();
+    let mut losing_pct_losses = Vec::new();
+    let mut largest_win_pct = 0.0;
+    let mut largest_loss_pct = 0.0;
+    
+    for paired in &filtered_paired_trades {
+        if paired.entry_price > 0.0 {
+            let pct = ((paired.exit_price - paired.entry_price) / paired.entry_price) * 100.0;
+            
+            if paired.net_profit_loss > 0.0 {
+                // Winning trade
+                winning_pct_gains.push(pct);
+                if pct > largest_win_pct {
+                    largest_win_pct = pct;
+                }
+            } else if paired.net_profit_loss < 0.0 {
+                // Losing trade
+                losing_pct_losses.push(pct);
+                if pct < largest_loss_pct {
+                    largest_loss_pct = pct;
+                }
+            }
+        }
+    }
+    
+    let average_gain_pct = if !winning_pct_gains.is_empty() {
+        winning_pct_gains.iter().sum::<f64>() / winning_pct_gains.len() as f64
+    } else {
+        0.0
+    };
+    
+    let average_loss_pct = if !losing_pct_losses.is_empty() {
+        losing_pct_losses.iter().sum::<f64>() / losing_pct_losses.len() as f64
+    } else {
+        0.0
+    };
+    
     Ok(Metrics {
         total_trades,
         winning_trades,
@@ -1692,6 +1734,10 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
         largest_win_group_id,
         largest_loss_group_id,
         average_holding_time_seconds,
+        average_gain_pct,
+        average_loss_pct,
+        largest_win_pct,
+        largest_loss_pct,
     })
 }
 
