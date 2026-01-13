@@ -70,6 +70,7 @@ export default function Journal() {
   const [activeTab, setActiveTab] = useState<TabType>("trade");
   const [loading, setLoading] = useState(true);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [isTabContentMaximized, setIsTabContentMaximized] = useState(false);
   
   // Entry-level form state
   const [entryFormData, setEntryFormData] = useState({
@@ -652,36 +653,15 @@ export default function Journal() {
     if (entryItems.length === 0) return 0;
 
     const tradeResponses = checklistResponses.get(tradeIndex) || new Map();
-    
-    // Count checkable items the same way they're rendered:
-    // - Regular items (no parent_id, not a group header)
-    // - Child items (has parent_id)
-    // Exclude group headers (items that have children)
-    const groups = entryItems.filter(item => !item.parent_id && entryItems.some(child => child.parent_id === item.id));
-    const regularItems = entryItems.filter(item => !item.parent_id && !entryItems.some(child => child.parent_id === item.id));
-    const groupedItems = entryItems.filter(item => item.parent_id !== null && entryItems.some(p => p.id === item.parent_id));
-    
-    // Total checkable items = regular items + grouped items (children)
-    const totalCheckable = regularItems.length + groupedItems.length;
-    
-    if (totalCheckable === 0) return 0;
-
     let checked = 0;
-    // Count checked regular items
-    for (const item of regularItems) {
-      if (tradeResponses.get(item.id)) {
-        checked++;
-      }
-    }
-    // Count checked grouped items (children)
-    for (const item of groupedItems) {
+
+    for (const item of entryItems) {
       if (tradeResponses.get(item.id)) {
         checked++;
       }
     }
 
-    const percentage = (checked / totalCheckable) * 100;
-    return Math.round(percentage);
+    return Math.round((checked / entryItems.length) * 100);
   };
 
   const calculateTakeProfitImplementation = (tradeIndex: number): number => {
@@ -694,35 +674,101 @@ export default function Journal() {
 
     const tradeResponses = checklistResponses.get(tradeIndex) || new Map();
     
-    // Count checkable items the same way they're rendered:
-    // - Regular items (no parent_id, not a group header)
-    // - Child items (has parent_id)
-    // Exclude group headers (items that have children)
+    // Organize items into groups and regular items
     const groups = takeProfitItems.filter(item => !item.parent_id && takeProfitItems.some(child => child.parent_id === item.id));
     const regularItems = takeProfitItems.filter(item => !item.parent_id && !takeProfitItems.some(child => child.parent_id === item.id));
     const groupedItems = takeProfitItems.filter(item => item.parent_id !== null && takeProfitItems.some(p => p.id === item.parent_id));
-    
-    // Total checkable items = regular items + grouped items (children)
-    const totalCheckable = regularItems.length + groupedItems.length;
-    
-    if (totalCheckable === 0) return 0;
+    const itemsByParent = new Map<number, ChecklistItem[]>();
+    groupedItems.forEach(item => {
+      if (item.parent_id) {
+        const parentId = item.parent_id;
+        if (!itemsByParent.has(parentId)) {
+          itemsByParent.set(parentId, []);
+        }
+        itemsByParent.get(parentId)!.push(item);
+      }
+    });
 
-    let checked = 0;
-    // Count checked regular items
-    for (const item of regularItems) {
-      if (tradeResponses.get(item.id)) {
-        checked++;
+    // Find "Before Trade" and "During Trade" groups
+    let beforeTradeGroup: ChecklistItem | null = null;
+    let duringTradeGroup: ChecklistItem | null = null;
+    
+    for (const group of groups) {
+      const text = group.item_text.toLowerCase();
+      if (text.includes("before trade") || text.includes("before")) {
+        beforeTradeGroup = group;
+      } else if (text.includes("during trade") || text.includes("during")) {
+        duringTradeGroup = group;
       }
     }
-    // Count checked grouped items (children)
-    for (const item of groupedItems) {
-      if (tradeResponses.get(item.id)) {
-        checked++;
+
+    // Calculate scores: 50% weight for preparation (Before Trade), 50% for execution (During Trade)
+    let beforeScore = 0;
+    let duringScore = 0;
+    let otherScore = 0;
+
+    // Calculate Before Trade score
+    if (beforeTradeGroup) {
+      const beforeItems = itemsByParent.get(beforeTradeGroup.id) || [];
+      if (beforeItems.length > 0) {
+        const beforeChecked = beforeItems.filter(item => tradeResponses.get(item.id)).length;
+        beforeScore = (beforeChecked / beforeItems.length) * 0.5;
+      }
+    } else {
+      // Fallback: look for items that indicate preparation (TP marking, etc.)
+      const prepItems = takeProfitItems.filter(item => {
+        const text = item.item_text.toLowerCase();
+        return text.includes("tp1 marked") || 
+               text.includes("tp2 marked") || 
+               text.includes("tp3 marked") || 
+               text.includes("tp4 marked") ||
+               (text.includes("marked") && !text.includes("during"));
+      });
+      if (prepItems.length > 0) {
+        const prepChecked = prepItems.filter(item => tradeResponses.get(item.id)).length;
+        beforeScore = (prepChecked / prepItems.length) * 0.5;
       }
     }
 
-    const percentage = (checked / totalCheckable) * 100;
-    return Math.round(percentage);
+    // Calculate During Trade score
+    if (duringTradeGroup) {
+      const duringItems = itemsByParent.get(duringTradeGroup.id) || [];
+      if (duringItems.length > 0) {
+        const duringChecked = duringItems.filter(item => tradeResponses.get(item.id)).length;
+        duringScore = (duringChecked / duringItems.length) * 0.5;
+      }
+    } else {
+      // Fallback: look for items that indicate execution (At TP1, close, move stop, etc.)
+      const execItems = takeProfitItems.filter(item => {
+        const text = item.item_text.toLowerCase();
+        return text.includes("at tp1") || 
+               text.includes("at tp2") || 
+               text.includes("at tp3") || 
+               text.includes("at tp4") ||
+               text.includes("close") ||
+               text.includes("move stop") ||
+               text.includes("trail") ||
+               text.includes("max loss") ||
+               text.includes("stop loss");
+      });
+      if (execItems.length > 0) {
+        const execChecked = execItems.filter(item => tradeResponses.get(item.id)).length;
+        duringScore = (execChecked / execItems.length) * 0.5;
+      }
+    }
+
+    // Handle regular items (not in groups) - give them a small weight
+    if (regularItems.length > 0 && (beforeTradeGroup || duringTradeGroup)) {
+      const regularChecked = regularItems.filter(item => tradeResponses.get(item.id)).length;
+      otherScore = (regularChecked / regularItems.length) * 0.1;
+    } else if (regularItems.length > 0) {
+      // If no groups, treat all items equally
+      const regularChecked = regularItems.filter(item => tradeResponses.get(item.id)).length;
+      otherScore = regularChecked / regularItems.length;
+    }
+
+    const totalScore = beforeScore + duringScore + otherScore;
+    return Math.round(totalScore * 100);
   };
 
   const currentTrade = tradesFormData[activeTradeIndex];
@@ -1053,97 +1099,100 @@ export default function Journal() {
               </div>
             </div>
             <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-              <div style={{ padding: "20px", borderBottom: "1px solid var(--border-color)" }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                  <div>
-                    <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
-                      Date
-                    </label>
-                    <input
-                      type="date"
-                      value={entryFormData.date}
-                      onChange={(e) => setEntryFormData({ ...entryFormData, date: e.target.value })}
-                      style={{
-                        width: "100%",
-                        padding: "8px",
-                        backgroundColor: "var(--bg-secondary)",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: "4px",
-                        color: "var(--text-primary)",
-                        fontSize: "14px",
-                      }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
-                      Title
-                    </label>
-                    <input
-                      ref={titleInputRef}
-                      type="text"
-                      value={entryFormData.title}
-                      onChange={(e) => {
-                        const newData = { ...entryFormData, title: e.target.value };
-                        setEntryFormData(newData);
-                        // Track history for undo
-                        if (isEditing) {
-                          const currentState = {
-                            entry: newData,
-                            trades: tradesFormData.map(t => ({ ...t })),
-                            checklistResponses: new Map(checklistResponses),
-                          };
-                          setEditHistory(prev => [...prev, currentState].slice(-10));
-                        }
-                      }}
-                      placeholder="Entry title..."
-                      style={{
-                        width: "100%",
-                        padding: "8px",
-                        backgroundColor: "var(--bg-secondary)",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: "4px",
-                        color: "var(--text-primary)",
-                        fontSize: "14px",
-                      }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
-                      Strategy
-                    </label>
-                    <select
-                      value={entryFormData.strategy_id || ""}
-                      onChange={(e) => setEntryFormData({ ...entryFormData, strategy_id: e.target.value ? parseInt(e.target.value) : null })}
-                      style={{
-                        width: "100%",
-                        padding: "8px",
-                        backgroundColor: "var(--bg-secondary)",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: "4px",
-                        color: "var(--text-primary)",
-                        fontSize: "14px",
-                      }}
-                    >
-                      <option value="">Select a strategy...</option>
-                      {strategies.map((strategy) => (
-                        <option key={strategy.id} value={strategy.id}>
-                          {strategy.name}
-                        </option>
-                      ))}
-                    </select>
+              {!isTabContentMaximized && (
+                <div style={{ padding: "20px", borderBottom: "1px solid var(--border-color)" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                    <div>
+                      <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                        Date
+                      </label>
+                      <input
+                        type="date"
+                        value={entryFormData.date}
+                        onChange={(e) => setEntryFormData({ ...entryFormData, date: e.target.value })}
+                        style={{
+                          width: "100%",
+                          padding: "8px",
+                          backgroundColor: "var(--bg-secondary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "4px",
+                          color: "var(--text-primary)",
+                          fontSize: "14px",
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                        Title
+                      </label>
+                      <input
+                        ref={titleInputRef}
+                        type="text"
+                        value={entryFormData.title}
+                        onChange={(e) => {
+                          const newData = { ...entryFormData, title: e.target.value };
+                          setEntryFormData(newData);
+                          // Track history for undo
+                          if (isEditing) {
+                            const currentState = {
+                              entry: newData,
+                              trades: tradesFormData.map(t => ({ ...t })),
+                              checklistResponses: new Map(checklistResponses),
+                            };
+                            setEditHistory(prev => [...prev, currentState].slice(-10));
+                          }
+                        }}
+                        placeholder="Entry title..."
+                        style={{
+                          width: "100%",
+                          padding: "8px",
+                          backgroundColor: "var(--bg-secondary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "4px",
+                          color: "var(--text-primary)",
+                          fontSize: "14px",
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                        Strategy
+                      </label>
+                      <select
+                        value={entryFormData.strategy_id || ""}
+                        onChange={(e) => setEntryFormData({ ...entryFormData, strategy_id: e.target.value ? parseInt(e.target.value) : null })}
+                        style={{
+                          width: "100%",
+                          padding: "8px",
+                          backgroundColor: "var(--bg-secondary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "4px",
+                          color: "var(--text-primary)",
+                          fontSize: "14px",
+                        }}
+                      >
+                        <option value="">Select a strategy...</option>
+                        {strategies.map((strategy) => (
+                          <option key={strategy.id} value={strategy.id}>
+                            {strategy.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
               {/* Trade Tabs */}
-              <div
-                style={{
-                  display: "flex",
-                  borderBottom: "1px solid var(--border-color)",
-                  backgroundColor: "var(--bg-secondary)",
-                  overflowX: "auto",
-                }}
-              >
+              {!isTabContentMaximized && (
+                <div
+                  style={{
+                    display: "flex",
+                    borderBottom: "1px solid var(--border-color)",
+                    backgroundColor: "var(--bg-secondary)",
+                    overflowX: "auto",
+                  }}
+                >
                 {tradesFormData.map((trade, index) => {
                   const isActive = activeTradeIndex === index;
                   const tabLabel = trade.symbol || `Trade ${index + 1}`;
@@ -1209,12 +1258,14 @@ export default function Journal() {
                   Add Trade
                 </button>
               </div>
+              )}
 
               {/* Content Tabs for Current Trade */}
               {currentTrade && (
                 <>
                   {/* Trade-specific fields - Symbol, Position, Entry Type, Exit Type, and Outcome */}
-                  <div style={{ padding: "20px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)" }}>
+                  {!isTabContentMaximized && (
+                    <div style={{ padding: "20px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)" }}>
                     <div style={{ display: "flex", gap: "12px" }}>
                       <div style={{ flex: 1 }}>
                         <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
@@ -1345,14 +1396,16 @@ export default function Journal() {
                       </div>
                     </div>
                   </div>
+                  )}
 
-                  <div
-                    style={{
-                      display: "flex",
-                      borderBottom: "1px solid var(--border-color)",
-                      backgroundColor: "var(--bg-secondary)",
-                    }}
-                  >
+                  {!isTabContentMaximized && (
+                    <div
+                      style={{
+                        display: "flex",
+                        borderBottom: "1px solid var(--border-color)",
+                        backgroundColor: "var(--bg-secondary)",
+                      }}
+                    >
                     {[
                       { id: "trade" as TabType, label: "Trade" },
                       { id: "what_went_well" as TabType, label: "What Went Well" },
@@ -1384,9 +1437,82 @@ export default function Journal() {
                       );
                     })}
                   </div>
+                  )}
 
                   {/* Tab Content */}
-                  <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", padding: "20px" }}>
+                  <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", padding: isTabContentMaximized ? "40px" : "20px", position: "relative" }}>
+                    {/* Maximize button for tab content */}
+                    <button
+                      onClick={() => setIsTabContentMaximized(!isTabContentMaximized)}
+                      style={{
+                        position: "absolute",
+                        top: isTabContentMaximized ? "40px" : "20px",
+                        right: isTabContentMaximized ? "40px" : "20px",
+                        zIndex: 10,
+                        background: "var(--bg-tertiary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "6px",
+                        padding: "8px",
+                        color: "var(--text-primary)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        boxShadow: "0 2px 8px rgba(0, 0, 0, 0.2)",
+                      }}
+                      title={isTabContentMaximized ? "Restore" : "Maximize"}
+                    >
+                      {isTabContentMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                    </button>
+                    {/* Show active tab label and switcher when maximized */}
+                    {isTabContentMaximized && (
+                      <div style={{ marginBottom: "20px", paddingBottom: "16px", borderBottom: "1px solid var(--border-color)" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
+                          <h3 style={{ fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>
+                            {[
+                              { id: "trade" as TabType, label: "Trade" },
+                              { id: "what_went_well" as TabType, label: "What Went Well" },
+                              { id: "what_could_be_improved" as TabType, label: "What Could Be Improved" },
+                              { id: "emotional_state" as TabType, label: "Emotional State" },
+                              { id: "notes" as TabType, label: "Notes" },
+                              { id: "checklists" as TabType, label: "Checklists" },
+                              { id: "survey" as TabType, label: "Survey" },
+                            ].find(tab => tab.id === activeTab)?.label || "Tab"}
+                          </h3>
+                        </div>
+                        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                          {[
+                            { id: "trade" as TabType, label: "Trade" },
+                            { id: "what_went_well" as TabType, label: "What Went Well" },
+                            { id: "what_could_be_improved" as TabType, label: "What Could Be Improved" },
+                            { id: "emotional_state" as TabType, label: "Emotional State" },
+                            { id: "notes" as TabType, label: "Notes" },
+                            { id: "checklists" as TabType, label: "Checklists" },
+                            { id: "survey" as TabType, label: "Survey" },
+                          ].map((tab) => {
+                            const isActive = activeTab === tab.id;
+                            return (
+                              <button
+                                key={tab.id}
+                                onClick={() => setActiveTab(tab.id)}
+                                style={{
+                                  padding: "8px 16px",
+                                  background: isActive ? "var(--accent)" : "var(--bg-tertiary)",
+                                  border: `1px solid ${isActive ? "var(--accent)" : "var(--border-color)"}`,
+                                  borderRadius: "6px",
+                                  color: isActive ? "white" : "var(--text-primary)",
+                                  cursor: "pointer",
+                                  fontSize: "13px",
+                                  fontWeight: isActive ? "600" : "400",
+                                  transition: "all 0.2s",
+                                }}
+                              >
+                                {tab.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                     {activeTab === "trade" && (
                       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
                         <RichTextEditor
