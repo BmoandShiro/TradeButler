@@ -653,15 +653,36 @@ export default function Journal() {
     if (entryItems.length === 0) return 0;
 
     const tradeResponses = checklistResponses.get(tradeIndex) || new Map();
-    let checked = 0;
+    
+    // Count checkable items the same way they're rendered:
+    // - Regular items (no parent_id, not a group header)
+    // - Child items (has parent_id)
+    // Exclude group headers (items that have children)
+    const groups = entryItems.filter(item => !item.parent_id && entryItems.some(child => child.parent_id === item.id));
+    const regularItems = entryItems.filter(item => !item.parent_id && !entryItems.some(child => child.parent_id === item.id));
+    const groupedItems = entryItems.filter(item => item.parent_id !== null && entryItems.some(p => p.id === item.parent_id));
+    
+    // Total checkable items = regular items + grouped items (children)
+    const totalCheckable = regularItems.length + groupedItems.length;
+    
+    if (totalCheckable === 0) return 0;
 
-    for (const item of entryItems) {
+    let checked = 0;
+    // Count checked regular items
+    for (const item of regularItems) {
+      if (tradeResponses.get(item.id)) {
+        checked++;
+      }
+    }
+    // Count checked grouped items (children)
+    for (const item of groupedItems) {
       if (tradeResponses.get(item.id)) {
         checked++;
       }
     }
 
-    return Math.round((checked / entryItems.length) * 100);
+    const percentage = (checked / totalCheckable) * 100;
+    return Math.round(percentage);
   };
 
   const calculateTakeProfitImplementation = (tradeIndex: number): number => {
@@ -674,101 +695,35 @@ export default function Journal() {
 
     const tradeResponses = checklistResponses.get(tradeIndex) || new Map();
     
-    // Organize items into groups and regular items
+    // Count checkable items the same way they're rendered:
+    // - Regular items (no parent_id, not a group header)
+    // - Child items (has parent_id)
+    // Exclude group headers (items that have children)
     const groups = takeProfitItems.filter(item => !item.parent_id && takeProfitItems.some(child => child.parent_id === item.id));
     const regularItems = takeProfitItems.filter(item => !item.parent_id && !takeProfitItems.some(child => child.parent_id === item.id));
     const groupedItems = takeProfitItems.filter(item => item.parent_id !== null && takeProfitItems.some(p => p.id === item.parent_id));
-    const itemsByParent = new Map<number, ChecklistItem[]>();
-    groupedItems.forEach(item => {
-      if (item.parent_id) {
-        const parentId = item.parent_id;
-        if (!itemsByParent.has(parentId)) {
-          itemsByParent.set(parentId, []);
-        }
-        itemsByParent.get(parentId)!.push(item);
-      }
-    });
-
-    // Find "Before Trade" and "During Trade" groups
-    let beforeTradeGroup: ChecklistItem | null = null;
-    let duringTradeGroup: ChecklistItem | null = null;
     
-    for (const group of groups) {
-      const text = group.item_text.toLowerCase();
-      if (text.includes("before trade") || text.includes("before")) {
-        beforeTradeGroup = group;
-      } else if (text.includes("during trade") || text.includes("during")) {
-        duringTradeGroup = group;
+    // Total checkable items = regular items + grouped items (children)
+    const totalCheckable = regularItems.length + groupedItems.length;
+    
+    if (totalCheckable === 0) return 0;
+
+    let checked = 0;
+    // Count checked regular items
+    for (const item of regularItems) {
+      if (tradeResponses.get(item.id)) {
+        checked++;
+      }
+    }
+    // Count checked grouped items (children)
+    for (const item of groupedItems) {
+      if (tradeResponses.get(item.id)) {
+        checked++;
       }
     }
 
-    // Calculate scores: 50% weight for preparation (Before Trade), 50% for execution (During Trade)
-    let beforeScore = 0;
-    let duringScore = 0;
-    let otherScore = 0;
-
-    // Calculate Before Trade score
-    if (beforeTradeGroup) {
-      const beforeItems = itemsByParent.get(beforeTradeGroup.id) || [];
-      if (beforeItems.length > 0) {
-        const beforeChecked = beforeItems.filter(item => tradeResponses.get(item.id)).length;
-        beforeScore = (beforeChecked / beforeItems.length) * 0.5;
-      }
-    } else {
-      // Fallback: look for items that indicate preparation (TP marking, etc.)
-      const prepItems = takeProfitItems.filter(item => {
-        const text = item.item_text.toLowerCase();
-        return text.includes("tp1 marked") || 
-               text.includes("tp2 marked") || 
-               text.includes("tp3 marked") || 
-               text.includes("tp4 marked") ||
-               (text.includes("marked") && !text.includes("during"));
-      });
-      if (prepItems.length > 0) {
-        const prepChecked = prepItems.filter(item => tradeResponses.get(item.id)).length;
-        beforeScore = (prepChecked / prepItems.length) * 0.5;
-      }
-    }
-
-    // Calculate During Trade score
-    if (duringTradeGroup) {
-      const duringItems = itemsByParent.get(duringTradeGroup.id) || [];
-      if (duringItems.length > 0) {
-        const duringChecked = duringItems.filter(item => tradeResponses.get(item.id)).length;
-        duringScore = (duringChecked / duringItems.length) * 0.5;
-      }
-    } else {
-      // Fallback: look for items that indicate execution (At TP1, close, move stop, etc.)
-      const execItems = takeProfitItems.filter(item => {
-        const text = item.item_text.toLowerCase();
-        return text.includes("at tp1") || 
-               text.includes("at tp2") || 
-               text.includes("at tp3") || 
-               text.includes("at tp4") ||
-               text.includes("close") ||
-               text.includes("move stop") ||
-               text.includes("trail") ||
-               text.includes("max loss") ||
-               text.includes("stop loss");
-      });
-      if (execItems.length > 0) {
-        const execChecked = execItems.filter(item => tradeResponses.get(item.id)).length;
-        duringScore = (execChecked / execItems.length) * 0.5;
-      }
-    }
-
-    // Handle regular items (not in groups) - give them a small weight
-    if (regularItems.length > 0 && (beforeTradeGroup || duringTradeGroup)) {
-      const regularChecked = regularItems.filter(item => tradeResponses.get(item.id)).length;
-      otherScore = (regularChecked / regularItems.length) * 0.1;
-    } else if (regularItems.length > 0) {
-      // If no groups, treat all items equally
-      const regularChecked = regularItems.filter(item => tradeResponses.get(item.id)).length;
-      otherScore = regularChecked / regularItems.length;
-    }
-
-    const totalScore = beforeScore + duringScore + otherScore;
-    return Math.round(totalScore * 100);
+    const percentage = (checked / totalCheckable) * 100;
+    return Math.round(percentage);
   };
 
   const currentTrade = tradesFormData[activeTradeIndex];
