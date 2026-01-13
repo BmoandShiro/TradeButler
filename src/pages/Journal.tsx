@@ -643,25 +643,86 @@ export default function Journal() {
     return titleMap[type] || type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') + " Checklist";
   };
 
-  const calculateProgress = (tradeIndex: number): number => {
+  const calculateEntryProbability = (tradeIndex: number): number => {
     if (!entryFormData.strategy_id) return 0;
     const checklists = strategyChecklists.get(entryFormData.strategy_id);
     if (!checklists) return 0;
 
-    let total = 0;
-    let checked = 0;
-    const tradeResponses = checklistResponses.get(tradeIndex) || new Map();
+    const entryItems = checklists.get("entry") || [];
+    if (entryItems.length === 0) return 0;
 
-    for (const items of checklists.values()) {
-      for (const item of items) {
-        total++;
-        if (tradeResponses.get(item.id)) {
-          checked++;
-        }
+    const tradeResponses = checklistResponses.get(tradeIndex) || new Map();
+    
+    // Count checkable items the same way they're rendered:
+    // - Regular items (no parent_id, not a group header)
+    // - Child items (has parent_id)
+    // Exclude group headers (items that have children)
+    const groups = entryItems.filter(item => !item.parent_id && entryItems.some(child => child.parent_id === item.id));
+    const regularItems = entryItems.filter(item => !item.parent_id && !entryItems.some(child => child.parent_id === item.id));
+    const groupedItems = entryItems.filter(item => item.parent_id !== null && entryItems.some(p => p.id === item.parent_id));
+    
+    // Total checkable items = regular items + grouped items (children)
+    const totalCheckable = regularItems.length + groupedItems.length;
+    
+    if (totalCheckable === 0) return 0;
+
+    let checked = 0;
+    // Count checked regular items
+    for (const item of regularItems) {
+      if (tradeResponses.get(item.id)) {
+        checked++;
+      }
+    }
+    // Count checked grouped items (children)
+    for (const item of groupedItems) {
+      if (tradeResponses.get(item.id)) {
+        checked++;
       }
     }
 
-    return total > 0 ? Math.round((checked / total) * 100) : 0;
+    const percentage = (checked / totalCheckable) * 100;
+    return Math.round(percentage);
+  };
+
+  const calculateTakeProfitImplementation = (tradeIndex: number): number => {
+    if (!entryFormData.strategy_id) return 0;
+    const checklists = strategyChecklists.get(entryFormData.strategy_id);
+    if (!checklists) return 0;
+
+    const takeProfitItems = checklists.get("take_profit") || [];
+    if (takeProfitItems.length === 0) return 0;
+
+    const tradeResponses = checklistResponses.get(tradeIndex) || new Map();
+    
+    // Count checkable items the same way they're rendered:
+    // - Regular items (no parent_id, not a group header)
+    // - Child items (has parent_id)
+    // Exclude group headers (items that have children)
+    const groups = takeProfitItems.filter(item => !item.parent_id && takeProfitItems.some(child => child.parent_id === item.id));
+    const regularItems = takeProfitItems.filter(item => !item.parent_id && !takeProfitItems.some(child => child.parent_id === item.id));
+    const groupedItems = takeProfitItems.filter(item => item.parent_id !== null && takeProfitItems.some(p => p.id === item.parent_id));
+    
+    // Total checkable items = regular items + grouped items (children)
+    const totalCheckable = regularItems.length + groupedItems.length;
+    
+    if (totalCheckable === 0) return 0;
+
+    let checked = 0;
+    // Count checked regular items
+    for (const item of regularItems) {
+      if (tradeResponses.get(item.id)) {
+        checked++;
+      }
+    }
+    // Count checked grouped items (children)
+    for (const item of groupedItems) {
+      if (tradeResponses.get(item.id)) {
+        checked++;
+      }
+    }
+
+    const percentage = (checked / totalCheckable) * 100;
+    return Math.round(percentage);
   };
 
   const currentTrade = tradesFormData[activeTradeIndex];
@@ -1864,31 +1925,90 @@ export default function Journal() {
 
         {/* Bottom Controls */}
         <div style={{ padding: "16px", borderTop: "1px solid var(--border-color)" }}>
-          {/* Progress Bar */}
+          {/* Progress Bars */}
           {(isCreating || isEditing) && entryFormData.strategy_id && currentTrade && (
-            <div style={{ marginBottom: "12px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Checklist Progress</span>
-                <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>{calculateProgress(activeTradeIndex)}%</span>
-              </div>
-              <div
-                style={{
-                  width: "100%",
-                  height: "8px",
-                  backgroundColor: "var(--bg-tertiary)",
-                  borderRadius: "4px",
-                  overflow: "hidden",
-                }}
-              >
-                <div
-                  style={{
-                    width: `${calculateProgress(activeTradeIndex)}%`,
-                    height: "100%",
-                    backgroundColor: "var(--accent)",
-                    transition: "width 0.3s",
-                  }}
-                />
-              </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "12px" }}>
+              {/* Entry Probability */}
+              {(() => {
+                const entryItems = currentChecklists?.get("entry") || [];
+                if (entryItems.length > 0) {
+                  const entryProb = calculateEntryProbability(activeTradeIndex);
+                  const getEntryColor = () => {
+                    if (entryProb >= 80) return "var(--profit)";
+                    if (entryProb >= 60) return "var(--accent)";
+                    if (entryProb >= 40) return "var(--warning)";
+                    return "var(--danger)";
+                  };
+                  return (
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                        <span style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>Entry Probability</span>
+                        <span style={{ fontSize: "12px", color: getEntryColor(), fontWeight: "600" }}>{entryProb}%</span>
+                      </div>
+                      <div
+                        style={{
+                          width: "100%",
+                          height: "8px",
+                          backgroundColor: "var(--bg-tertiary)",
+                          borderRadius: "4px",
+                          overflow: "hidden",
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: `${entryProb}%`,
+                            height: "100%",
+                            backgroundColor: getEntryColor(),
+                            transition: "width 0.3s",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+              
+              {/* Take Profit Implementation */}
+              {(() => {
+                const takeProfitItems = currentChecklists?.get("take_profit") || [];
+                if (takeProfitItems.length > 0) {
+                  const tpImpl = calculateTakeProfitImplementation(activeTradeIndex);
+                  const getTPColor = () => {
+                    if (tpImpl >= 80) return "var(--profit)";
+                    if (tpImpl >= 60) return "var(--accent)";
+                    if (tpImpl >= 40) return "var(--warning)";
+                    return "var(--danger)";
+                  };
+                  return (
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                        <span style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>Take Profit Implementation</span>
+                        <span style={{ fontSize: "12px", color: getTPColor(), fontWeight: "600" }}>{tpImpl}%</span>
+                      </div>
+                      <div
+                        style={{
+                          width: "100%",
+                          height: "8px",
+                          backgroundColor: "var(--bg-tertiary)",
+                          borderRadius: "4px",
+                          overflow: "hidden",
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: `${tpImpl}%`,
+                            height: "100%",
+                            backgroundColor: getTPColor(),
+                            transition: "width 0.3s",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
             </div>
           )}
 

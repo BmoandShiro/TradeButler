@@ -241,6 +241,7 @@ function ChecklistSection({
   ungroupChecklistItems,
   isCustom,
   onDeleteChecklist,
+  moveItemsToGroup,
 }: { 
   type: string; 
   title: string; 
@@ -260,13 +261,14 @@ function ChecklistSection({
   startEditingItem: (item: ChecklistItem) => void;
   saveEditedItem: (itemId: number, newText: string) => Promise<void>;
   cancelEditingItem: () => void;
-  addChecklistItem: (strategyId: number, type: string, text: string) => Promise<void>;
+  addChecklistItem: (strategyId: number, type: string, text: string, parentId?: number | null) => Promise<void>;
   setPendingGroupAction: Dispatch<SetStateAction<{ strategyId: number; type: string; itemIds: number[] } | null>>;
   setGroupName: Dispatch<SetStateAction<string>>;
   setShowGroupModal: Dispatch<SetStateAction<boolean>>;
   ungroupChecklistItems: (itemIds: number[]) => Promise<void>;
   isCustom: boolean;
   onDeleteChecklist?: () => void;
+  moveItemsToGroup: (itemIds: number[], groupId: number, checklistType: string) => Promise<void>;
 }) {
   // Sort items by item_order first
   const sortedItems = [...items].sort((a, b) => a.item_order - b.item_order);
@@ -324,6 +326,12 @@ function ChecklistSection({
     ungroupChecklistItems(selectedItems);
   };
   
+  const handleMoveToGroup = (groupId: number) => {
+    moveItemsToGroup(selectedItems, groupId, type);
+  };
+  
+  const availableGroups = groups;
+  
   return (
     <div style={{ marginBottom: "40px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px", paddingBottom: "12px", borderBottom: "2px solid var(--border-color)" }}>
@@ -332,46 +340,6 @@ function ChecklistSection({
           {title}
         </h4>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          {isEditing && hasSelection && (
-            <>
-              <button
-                onClick={handleGroupSelected}
-                style={{
-                  background: "var(--accent)",
-                  border: "none",
-                  borderRadius: "6px",
-                  padding: "6px 12px",
-                  color: "white",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  fontSize: "12px",
-                  fontWeight: "500",
-                }}
-                title="Group Selected"
-              >
-                <FolderPlus size={14} />
-                Group ({selectedItems.length})
-              </button>
-              <button
-                onClick={handleUngroupSelected}
-                style={{
-                  background: "var(--bg-tertiary)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "6px",
-                  padding: "6px 12px",
-                  color: "var(--text-primary)",
-                  cursor: "pointer",
-                  fontSize: "12px",
-                  fontWeight: "500",
-                }}
-                title="Ungroup Selected"
-              >
-                Ungroup
-              </button>
-            </>
-          )}
           {isEditing && isCustom && onDeleteChecklist && (
             <button
               onClick={onDeleteChecklist}
@@ -583,75 +551,160 @@ function ChecklistSection({
         </div>
       )}
       {isEditing && (
-        <div style={{ 
-          display: "flex", 
-          gap: "10px", 
-          marginTop: "16px",
-          padding: "16px",
-          backgroundColor: "var(--bg-secondary)",
-          borderRadius: "8px",
-          border: "1px dashed var(--border-color)",
-        }}>
-          <input
-            type="text"
-            value={currentValue}
-            onChange={(e) => {
-              const newValue = e.target.value;
-              setNewChecklistItem(prev => {
-                const newMap = new Map(prev);
-                newMap.set(type, newValue);
-                return newMap;
-              });
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                addChecklistItem(selectedStrategy, type, currentValue);
-              }
-            }}
-            placeholder={`Add ${title.toLowerCase()} item...`}
-            style={{
-              flex: 1,
-              padding: "12px 14px",
-              backgroundColor: "var(--bg-primary)",
+        <>
+          {/* Group/Ungroup/Move buttons - separate section above add input */}
+          {hasSelection && (
+            <div style={{ 
+              marginTop: "16px",
+              marginBottom: "12px",
+              padding: "12px", 
+              backgroundColor: "var(--bg-secondary)",
+              borderRadius: "6px",
               border: "1px solid var(--border-color)",
-              borderRadius: "6px",
-              color: "var(--text-primary)",
-              fontSize: "14px",
-              outline: "none",
-              transition: "border-color 0.2s",
-            }}
-            onFocus={(e) => e.target.style.borderColor = "var(--accent)"}
-            onBlur={(e) => e.target.style.borderColor = "var(--border-color)"}
-          />
-          <button
-            onClick={() => addChecklistItem(selectedStrategy, type, currentValue)}
-            style={{
-              background: "var(--accent)",
-              border: "none",
-              borderRadius: "6px",
-              padding: "12px 20px",
-              color: "white",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              fontSize: "14px",
-              fontWeight: "600",
-              transition: "opacity 0.2s, transform 0.2s",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.opacity = "0.9";
-              e.currentTarget.style.transform = "translateY(-1px)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.opacity = "1";
-              e.currentTarget.style.transform = "translateY(0)";
-            }}
-          >
-            <Plus size={16} />
-            Add
-          </button>
-        </div>
+            }}>
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                <button
+                  onClick={handleGroupSelected}
+                  style={{
+                    background: "var(--accent)",
+                    border: "none",
+                    borderRadius: "6px",
+                    padding: "8px 12px",
+                    color: "white",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    fontSize: "12px",
+                    fontWeight: "500",
+                  }}
+                  title="Create New Group with Selected Items"
+                >
+                  <FolderPlus size={14} />
+                  New Group ({selectedItems.length})
+                </button>
+                {availableGroups.length > 0 && (
+                  <select
+                    onChange={(e) => {
+                      const groupId = e.target.value ? parseInt(e.target.value) : null;
+                      if (groupId) {
+                        handleMoveToGroup(groupId);
+                      }
+                      // Reset dropdown
+                      e.target.value = "";
+                    }}
+                    defaultValue=""
+                    style={{
+                      padding: "8px 12px",
+                      backgroundColor: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "6px",
+                      color: "var(--text-primary)",
+                      fontSize: "12px",
+                      cursor: "pointer",
+                      outline: "none",
+                    }}
+                    title="Move Selected to Existing Group"
+                  >
+                    <option value="" disabled>Move to Group...</option>
+                    {availableGroups.map((group) => (
+                      <option key={group.id} value={group.id}>
+                        Move to: {group.item_text}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  onClick={handleUngroupSelected}
+                  style={{
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    padding: "8px 12px",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    fontWeight: "500",
+                  }}
+                  title="Ungroup Selected"
+                >
+                  Ungroup
+                </button>
+              </div>
+            </div>
+          )}
+          
+          {/* Add item input */}
+          <div style={{ 
+            marginTop: hasSelection ? "0" : "16px",
+            padding: "16px",
+            backgroundColor: "var(--bg-secondary)",
+            borderRadius: "8px",
+            border: "1px dashed var(--border-color)",
+          }}>
+            <div style={{ display: "flex", gap: "10px", alignItems: "flex-start" }}>
+            <input
+              type="text"
+              value={currentValue}
+              onChange={(e) => {
+                const newValue = e.target.value;
+                setNewChecklistItem(prev => {
+                  const newMap = new Map(prev);
+                  newMap.set(type, newValue);
+                  return newMap;
+                });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  addChecklistItem(selectedStrategy, type, currentValue, null);
+                }
+              }}
+              placeholder={`Add ${title.toLowerCase()} item...`}
+              style={{
+                flex: 1,
+                padding: "12px 14px",
+                backgroundColor: "var(--bg-primary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                color: "var(--text-primary)",
+                fontSize: "14px",
+                outline: "none",
+                transition: "border-color 0.2s",
+              }}
+              onFocus={(e) => e.target.style.borderColor = "var(--accent)"}
+              onBlur={(e) => e.target.style.borderColor = "var(--border-color)"}
+            />
+            <button
+              onClick={() => addChecklistItem(selectedStrategy, type, currentValue, null)}
+              style={{
+                background: "var(--accent)",
+                border: "none",
+                borderRadius: "6px",
+                padding: "12px 20px",
+                color: "white",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                fontSize: "14px",
+                fontWeight: "600",
+                transition: "opacity 0.2s, transform 0.2s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.opacity = "0.9";
+                e.currentTarget.style.transform = "translateY(-1px)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.opacity = "1";
+                e.currentTarget.style.transform = "translateY(0)";
+              }}
+            >
+              <Plus size={16} />
+              Add
+            </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
@@ -853,7 +906,7 @@ export default function Strategies() {
     }
   };
 
-  const addChecklistItem = async (strategyId: number, type: string, text: string) => {
+  const addChecklistItem = async (strategyId: number, type: string, text: string, parentId: number | null = null) => {
     if (!text.trim()) return;
     
     // If creating (virtual strategy ID), use tempChecklists
@@ -862,14 +915,25 @@ export default function Strategies() {
       const items = currentChecklist.get(type) || [];
       const maxOrder = items.length > 0 ? Math.max(...items.map(i => i.item_order)) : -1;
       
+      // Calculate order: if adding to a group, order within that group; otherwise top-level order
+      let itemOrder = maxOrder + 1;
+      if (parentId) {
+        const groupChildren = items.filter(i => i.parent_id === parentId);
+        if (groupChildren.length > 0) {
+          itemOrder = Math.max(...groupChildren.map(i => i.item_order)) + 1;
+        } else {
+          itemOrder = maxOrder + 1;
+        }
+      }
+      
       const newItem: ChecklistItem = {
         id: Date.now(), // Temporary ID
         strategy_id: -1,
         item_text: text.trim(),
         is_checked: false,
-        item_order: maxOrder + 1,
+        item_order: itemOrder,
         checklist_type: type,
-        parent_id: null,
+        parent_id: parentId,
       };
 
       const updatedChecklist = new Map(currentChecklist);
@@ -890,14 +954,25 @@ export default function Strategies() {
       const items = currentChecklist.get(type) || [];
       const maxOrder = items.length > 0 ? Math.max(...items.map(i => i.item_order)) : -1;
       
+      // Calculate order: if adding to a group, order within that group; otherwise top-level order
+      let itemOrder = maxOrder + 1;
+      if (parentId) {
+        const groupChildren = items.filter(i => i.parent_id === parentId);
+        if (groupChildren.length > 0) {
+          itemOrder = Math.max(...groupChildren.map(i => i.item_order)) + 1;
+        } else {
+          itemOrder = maxOrder + 1;
+        }
+      }
+      
       const newItem: ChecklistItem = {
         id: Date.now(), // Temporary ID (will be replaced when saved)
         strategy_id: strategyId,
         item_text: text.trim(),
         is_checked: false,
-        item_order: maxOrder + 1,
+        item_order: itemOrder,
         checklist_type: type,
-        parent_id: null,
+        parent_id: parentId,
       };
 
       const updatedChecklist = new Map(currentChecklist);
@@ -924,14 +999,25 @@ export default function Strategies() {
       const items = currentChecklist.get(type) || [];
       const maxOrder = items.length > 0 ? Math.max(...items.map(i => i.item_order)) : -1;
       
+      // Calculate order: if adding to a group, order within that group; otherwise top-level order
+      let itemOrder = maxOrder + 1;
+      if (parentId) {
+        const groupChildren = items.filter(i => i.parent_id === parentId);
+        if (groupChildren.length > 0) {
+          itemOrder = Math.max(...groupChildren.map(i => i.item_order)) + 1;
+        } else {
+          itemOrder = maxOrder + 1;
+        }
+      }
+      
       const newId = await invoke<number>("save_strategy_checklist_item", {
         id: null,
         strategyId: strategyId,
         itemText: text.trim(),
         isChecked: false,
-        itemOrder: maxOrder + 1,
+        itemOrder: itemOrder,
         checklistType: type,
-        parentId: null,
+        parentId: parentId,
       });
 
       const newItem: ChecklistItem = {
@@ -939,9 +1025,9 @@ export default function Strategies() {
         strategy_id: strategyId,
         item_text: text.trim(),
         is_checked: false,
-        item_order: maxOrder + 1,
+        item_order: itemOrder,
         checklist_type: type,
-        parent_id: null,
+        parent_id: parentId,
       };
 
       const updatedChecklist = new Map(currentChecklist);
@@ -1174,6 +1260,106 @@ export default function Strategies() {
     setShowGroupModal(false);
     setGroupName("");
     setPendingGroupAction(null);
+  };
+
+  const moveItemsToGroup = async (itemIds: number[], groupId: number, checklistType: string) => {
+    if (itemIds.length === 0 || !groupId) return;
+    
+    // If creating, update tempChecklists
+    if (isCreating) {
+      const updatedChecklist = new Map(tempChecklists);
+      const items = updatedChecklist.get(checklistType) || [];
+      
+      // Calculate max order within the target group (excluding items being moved)
+      const groupChildren = items.filter(i => i.parent_id === groupId && !itemIds.includes(i.id));
+      const maxGroupOrder = groupChildren.length > 0 ? Math.max(...groupChildren.map(i => i.item_order)) : -1;
+      
+      let orderOffset = 0;
+      const updatedItems = items.map(item => {
+        if (itemIds.includes(item.id)) {
+          // Set parent_id and update order to be after the last item in the group
+          const newOrder = maxGroupOrder + 1 + orderOffset;
+          orderOffset++;
+          return { ...item, parent_id: groupId, item_order: newOrder };
+        }
+        return item;
+      });
+      updatedChecklist.set(checklistType, updatedItems);
+      setTempChecklists(updatedChecklist);
+      setSelectedChecklistItems(new Set());
+      return;
+    }
+    
+    // If editing, use editingChecklists instead of saving directly
+    if (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)) {
+      const updatedChecklist = new Map(editingChecklists.get(selectedStrategy)!);
+      const items = updatedChecklist.get(checklistType) || [];
+      
+      // Calculate max order within the target group (excluding items being moved)
+      const groupChildren = items.filter(i => i.parent_id === groupId && !itemIds.includes(i.id));
+      const maxGroupOrder = groupChildren.length > 0 ? Math.max(...groupChildren.map(i => i.item_order)) : -1;
+      
+      let orderOffset = 0;
+      const updatedItems = items.map(item => {
+        if (itemIds.includes(item.id)) {
+          // Set parent_id and update order to be after the last item in the group
+          const newOrder = maxGroupOrder + 1 + orderOffset;
+          orderOffset++;
+          return { ...item, parent_id: groupId, item_order: newOrder };
+        }
+        return item;
+      });
+      updatedChecklist.set(checklistType, updatedItems);
+      setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, updatedChecklist)));
+      
+      // Update history
+      const history = checklistEditHistory.get(selectedStrategy) || [];
+      const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
+      setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, newHistory)));
+      
+      setSelectedChecklistItems(new Set());
+      return;
+    }
+    
+    // Otherwise, save directly (shouldn't happen in non-editing mode, but handle it)
+    try {
+      // Load current items to calculate order
+      const allItems = await invoke<ChecklistItem[]>("get_strategy_checklist", {
+        strategyId: selectedStrategy!,
+        checklistType: checklistType,
+      });
+      
+      // Calculate max order within the target group (excluding items being moved)
+      const groupChildren = allItems.filter(i => i.parent_id === groupId && !itemIds.includes(i.id));
+      const maxGroupOrder = groupChildren.length > 0 ? Math.max(...groupChildren.map(i => i.item_order)) : -1;
+      
+      // Update each item
+      let orderOffset = 0;
+      for (const itemId of itemIds) {
+        const item = allItems.find(i => i.id === itemId);
+        if (item) {
+          const newOrder = maxGroupOrder + 1 + orderOffset;
+          await invoke("save_strategy_checklist_item", {
+            id: itemId,
+            strategyId: selectedStrategy!,
+            itemText: item.item_text,
+            isChecked: item.is_checked,
+            itemOrder: newOrder,
+            checklistType: checklistType,
+            parentId: groupId,
+          });
+          orderOffset++;
+        }
+      }
+      
+      setSelectedChecklistItems(new Set());
+      if (selectedStrategy) {
+        await loadChecklists(selectedStrategy);
+      }
+    } catch (error) {
+      console.error("Error moving items to group:", error);
+      alert("Failed to move items to group: " + error);
+    }
   };
 
   const ungroupChecklistItems = async (itemIds: number[]) => {
@@ -3046,6 +3232,7 @@ export default function Strategies() {
                             ungroupChecklistItems={ungroupChecklistItems}
                             isCustom={isCustom}
                             onDeleteChecklist={isCustom && !isCreating ? () => deleteChecklistType(virtualStrategyId, type) : undefined}
+                            moveItemsToGroup={moveItemsToGroup}
                           />
                         );
                       })}
@@ -3152,6 +3339,7 @@ export default function Strategies() {
                         ungroupChecklistItems={ungroupChecklistItems}
                         isCustom={false}
                         onDeleteChecklist={undefined}
+                        moveItemsToGroup={moveItemsToGroup}
                       />
                     </div>
                   </div>
