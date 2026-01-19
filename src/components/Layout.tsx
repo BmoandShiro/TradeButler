@@ -10,7 +10,8 @@ import {
   Trash2,
   TrendingDown,
   Calculator,
-  DollarSign
+  DollarSign,
+  FileText
 } from "lucide-react";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
@@ -72,6 +73,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: "/trades", icon: TrendingUp, label: "Trades" },
     { path: "/calendar", icon: Calendar, label: "Calendar" },
     { path: "/strategies", icon: Target, label: "Strategies" },
+    { path: "/journal", icon: FileText, label: "Journal" },
     { path: "/emotions", icon: Heart, label: "Emotions" },
     { path: "/analytics", icon: BarChart3, label: "Analytics" },
     { path: "/evaluation", icon: TrendingDown, label: "Evaluation" },
@@ -195,8 +197,10 @@ export default function Layout({ children }: LayoutProps) {
       <main
         style={{
           flex: 1,
-          overflow: "auto",
+          overflow: "hidden",
           backgroundColor: "var(--bg-primary)",
+          display: "flex",
+          flexDirection: "column",
         }}
       >
         {children}

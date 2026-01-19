@@ -37,6 +37,35 @@ pub struct Strategy {
     pub color: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct JournalEntry {
+    pub id: Option<i64>,
+    pub date: String,
+    pub title: String,
+    pub strategy_id: Option<i64>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct JournalTrade {
+    pub id: Option<i64>,
+    pub journal_entry_id: i64,
+    pub symbol: Option<String>,
+    pub position: Option<String>,
+    pub entry_type: Option<String>,
+    pub exit_type: Option<String>,
+    pub trade: Option<String>,
+    pub what_went_well: Option<String>,
+    pub what_could_be_improved: Option<String>,
+    pub emotional_state: Option<String>,
+    pub notes: Option<String>,
+    pub outcome: Option<String>,
+    pub trade_order: i64,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
 pub fn init_database(db_path: &Path) -> Result<()> {
     let conn = Connection::open(db_path)?;
 
@@ -140,16 +169,111 @@ pub fn init_database(db_path: &Path) -> Result<()> {
             item_text TEXT NOT NULL,
             is_checked INTEGER NOT NULL DEFAULT 0,
             item_order INTEGER NOT NULL DEFAULT 0,
+            checklist_type TEXT NOT NULL DEFAULT 'entry',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (strategy_id) REFERENCES strategies(id) ON DELETE CASCADE
         )",
         [],
     )?;
+    
+    // Add checklist_type column if it doesn't exist (migration for existing databases)
+    let _ = conn.execute(
+        "ALTER TABLE strategy_checklists ADD COLUMN checklist_type TEXT NOT NULL DEFAULT 'entry'",
+        [],
+    );
+    
+    // Add parent_id column for grouping (migration for existing databases)
+    let _ = conn.execute(
+        "ALTER TABLE strategy_checklists ADD COLUMN parent_id INTEGER",
+        [],
+    );
+    
+    // Add foreign key for parent_id if it doesn't exist
+    // Note: SQLite doesn't support adding foreign keys via ALTER TABLE easily,
+    // so we'll handle this in the application logic
 
     // Create index for strategy_checklists
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_strategy_checklists_strategy ON strategy_checklists(strategy_id)",
+        [],
+    )?;
+
+    // Create journal_entries table for storing trade journal entries
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS journal_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            title TEXT NOT NULL,
+            strategy_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (strategy_id) REFERENCES strategies(id)
+        )",
+        [],
+    )?;
+
+    // Create journal_trades table for storing individual trades within journal entries
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS journal_trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            journal_entry_id INTEGER NOT NULL,
+            symbol TEXT,
+            position TEXT,
+            entry_type TEXT,
+            exit_type TEXT,
+            trade TEXT,
+            what_went_well TEXT,
+            what_could_be_improved TEXT,
+            emotional_state TEXT,
+            notes TEXT,
+            outcome TEXT,
+            trade_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (journal_entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+    
+    // Add new columns if they don't exist (migration)
+    let _ = conn.execute("ALTER TABLE journal_trades ADD COLUMN position TEXT", []);
+    let _ = conn.execute("ALTER TABLE journal_trades ADD COLUMN entry_type TEXT", []);
+    let _ = conn.execute("ALTER TABLE journal_trades ADD COLUMN exit_type TEXT", []);
+
+    // Create index for journal_entries
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_entries_date ON journal_entries(date)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_entries_strategy ON journal_entries(strategy_id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_trades_entry ON journal_trades(journal_entry_id)",
+        [],
+    )?;
+
+    // Create journal_checklist_responses table for storing checklist responses for journal entries
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS journal_checklist_responses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            journal_entry_id INTEGER NOT NULL,
+            checklist_item_id INTEGER NOT NULL,
+            is_checked INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (journal_entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE,
+            FOREIGN KEY (checklist_item_id) REFERENCES strategy_checklists(id) ON DELETE CASCADE,
+            UNIQUE(journal_entry_id, checklist_item_id)
+        )",
+        [],
+    )?;
+
+    // Create index for journal_checklist_responses
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_checklist_responses_entry ON journal_checklist_responses(journal_entry_id)",
         [],
     )?;
 

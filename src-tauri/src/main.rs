@@ -56,6 +56,20 @@ fn main() {
             commands::get_strategy_checklist,
             commands::save_strategy_checklist_item,
             commands::delete_strategy_checklist_item,
+            commands::group_checklist_items,
+            commands::ungroup_checklist_items,
+            commands::create_journal_entry,
+            commands::get_journal_entries,
+            commands::get_journal_entry,
+            commands::update_journal_entry,
+            commands::delete_journal_entry,
+            commands::create_journal_trade,
+            commands::get_journal_trades,
+            commands::update_journal_trade,
+            commands::delete_journal_trade,
+            commands::save_journal_checklist_responses,
+            commands::get_journal_checklist_responses,
+            commands::get_all_symbols,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
