@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Calculator, X, BarChart3, TrendingUp, ChevronUp, ChevronDown, Loader } from "lucide-react";
-import { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { invoke } from "@tauri-apps/api/tauri";
 
 interface DividendYearResult {

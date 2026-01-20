@@ -2,6 +2,7 @@
   "name": "tradebutler",
   "version": "1.0.0",
   "description": "Local trading analytics and metrics application",
+  "license": "UNLICENSED",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -5,17 +5,17 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { Settings } from "lucide-react";
 
 interface Trade {
-  id?: number;
+  id: number;
   symbol: string;
   side: string;
   quantity: number;
   price: number;
   timestamp: string;
-  order_type?: string;
-  status?: string;
-  fees?: number;
-  notes?: string;
-  strategy_id?: number;
+  order_type: string;
+  status: string;
+  fees: number | null;
+  notes: string | null;
+  strategy_id: number | null;
 }
 
 interface TradeChartProps {

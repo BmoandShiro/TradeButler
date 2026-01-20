@@ -83,6 +83,9 @@ export default function Journal() {
   const [tradesFormData, setTradesFormData] = useState<Array<{
     id: number | null;
     symbol: string;
+    position: string;
+    entry_type: string;
+    exit_type: string;
     trade: string;
     what_went_well: string;
     what_could_be_improved: string;
@@ -93,6 +96,9 @@ export default function Journal() {
   }>>([{
     id: null,
     symbol: "",
+    position: "",
+    entry_type: "",
+    exit_type: "",
     trade: "",
     what_went_well: "",
     what_could_be_improved: "",
@@ -135,7 +141,7 @@ export default function Journal() {
   }>>([]);
   
   // Store original state when starting to edit
-  const [originalEntryData, setOriginalEntryData] = useState<{
+  const [, setOriginalEntryData] = useState<{
     entry: { date: string; title: string; strategy_id: number | null };
     trades: Array<{
       id: number | null;
@@ -226,15 +232,15 @@ export default function Journal() {
       // Group by checklist_type
       const grouped = new Map<string, ChecklistItem[]>();
       for (const item of allItems) {
-        const type = item.checklist_type || "entry";
-        if (!grouped.has(type)) {
-          grouped.set(type, []);
+        const checklistType = item.checklist_type || "entry";
+        if (!grouped.has(checklistType)) {
+          grouped.set(checklistType, []);
         }
-        grouped.get(type)!.push(item);
+        grouped.get(checklistType)!.push(item);
       }
 
       // Sort each group by item_order
-      for (const [type, items] of grouped.entries()) {
+      for (const [, items] of grouped.entries()) {
         items.sort((a, b) => a.item_order - b.item_order);
       }
 
@@ -319,7 +325,20 @@ export default function Journal() {
       }
       
       // Convert trades to form data
-      const tradesData = selectedTrades.map(trade => ({
+      const tradesData: Array<{
+        id: number | null;
+        symbol: string;
+        position: string;
+        entry_type: string;
+        exit_type: string;
+        trade: string;
+        what_went_well: string;
+        what_could_be_improved: string;
+        emotional_state: string;
+        notes: string;
+        outcome: string;
+        trade_order: number;
+      }> = selectedTrades.map(trade => ({
         id: trade.id,
         symbol: trade.symbol || "",
         position: trade.position || "",
@@ -331,7 +350,7 @@ export default function Journal() {
         emotional_state: trade.emotional_state || "",
         notes: trade.notes || "",
         outcome: trade.outcome || "None",
-        trade_order: trade.trade_order,
+        trade_order: trade.trade_order ?? 0,
       }));
       
       if (tradesData.length === 0) {
@@ -537,7 +556,7 @@ export default function Journal() {
           const responses: [number, boolean][] = [];
           // Use responses from the first trade (or combine all trades' responses)
           const firstTradeResponses = checklistResponses.get(0) || new Map();
-          for (const [type, items] of checklists.entries()) {
+          for (const [, items] of checklists.entries()) {
             for (const item of items) {
               const isChecked = firstTradeResponses.get(item.id) || false;
               responses.push([item.id, isChecked]);
@@ -658,7 +677,6 @@ export default function Journal() {
     // - Regular items (no parent_id, not a group header)
     // - Child items (has parent_id)
     // Exclude group headers (items that have children)
-    const groups = entryItems.filter(item => !item.parent_id && entryItems.some(child => child.parent_id === item.id));
     const regularItems = entryItems.filter(item => !item.parent_id && !entryItems.some(child => child.parent_id === item.id));
     const groupedItems = entryItems.filter(item => item.parent_id !== null && entryItems.some(p => p.id === item.parent_id));
     
@@ -699,7 +717,6 @@ export default function Journal() {
     // - Regular items (no parent_id, not a group header)
     // - Child items (has parent_id)
     // Exclude group headers (items that have children)
-    const groups = takeProfitItems.filter(item => !item.parent_id && takeProfitItems.some(child => child.parent_id === item.id));
     const regularItems = takeProfitItems.filter(item => !item.parent_id && !takeProfitItems.some(child => child.parent_id === item.id));
     const groupedItems = takeProfitItems.filter(item => item.parent_id !== null && takeProfitItems.some(p => p.id === item.parent_id));
     
@@ -727,7 +744,6 @@ export default function Journal() {
   };
 
   const currentTrade = tradesFormData[activeTradeIndex];
-  const selectedStrategy = strategies.find(s => s.id === entryFormData.strategy_id);
   const currentChecklists = entryFormData.strategy_id ? strategyChecklists.get(entryFormData.strategy_id) : null;
   const defaultTypes = ["entry", "take_profit"];
   const customTypes = currentChecklists 

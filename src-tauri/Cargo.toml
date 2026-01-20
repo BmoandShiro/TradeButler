@@ -3,7 +3,7 @@ name = "tradebutler"
 version = "1.0.0"
 description = "Local trading analytics and metrics application"
 authors = ["TradeButler"]
-license = ""
+license = "Proprietary"
 repository = ""
 edition = "2021"
 

@@ -790,7 +790,6 @@ export default function Trades() {
                                         }
                                         
                                         const isLong = positionSize > 0.0001;
-                                        const isShort = positionSize < -0.0001;
                                         const isClosed = Math.abs(positionSize) < 0.0001;
                                         
                                         return (
@@ -1315,12 +1314,6 @@ export default function Trades() {
                                           onChange={(e) => {
                                             e.stopPropagation();
                                             const newNotes = e.target.value;
-                                            // Update the pair in the state
-                                            const updatedPairs = relevantPairs.map((p) =>
-                                              p.entry_trade_id === pair.entry_trade_id && p.exit_trade_id === pair.exit_trade_id
-                                                ? { ...p, notes: newNotes }
-                                                : p
-                                            );
                                             
                                             // Update the trade's pairs
                                             setTradesWithPairing((prev) =>

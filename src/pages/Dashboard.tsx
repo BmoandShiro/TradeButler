@@ -76,6 +76,10 @@ interface Metrics {
   largest_win_group_id?: number | null;
   largest_loss_group_id?: number | null;
   average_holding_time_seconds: number;
+  average_gain_pct: number;
+  average_loss_pct: number;
+  largest_win_pct: number;
+  largest_loss_pct: number;
 }
 
 interface TopSymbol {
@@ -1327,7 +1331,7 @@ export default function Dashboard() {
     return localStorage.getItem("tradebutler_dashboard_custom_end") || "";
   });
   const [showPositionGroupModal, setShowPositionGroupModal] = useState(false);
-  const [selectedPositionGroupId, setSelectedPositionGroupId] = useState<number | null>(null);
+  const [_selectedPositionGroupId, setSelectedPositionGroupId] = useState<number | null>(null);
   const [selectedPositionGroup, setSelectedPositionGroup] = useState<any>(null);
   
   // Close settings menus when clicking outside

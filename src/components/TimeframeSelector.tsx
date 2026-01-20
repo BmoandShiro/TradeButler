@@ -241,8 +241,6 @@ export function TimeframeSelector({
   customEndDate,
   onCustomDatesChange,
 }: TimeframeSelectorProps) {
-  const [showCustomPicker, setShowCustomPicker] = useState(false);
-
   const timeframes: { value: Timeframe; label: string }[] = [
     { value: "all", label: "All Time" },
     { value: "7d", label: "Last 7 Days" },
@@ -256,44 +254,6 @@ export function TimeframeSelector({
 
   const handleTimeframeChange = (newValue: Timeframe) => {
     onChange(newValue);
-    if (newValue === "custom") {
-      setShowCustomPicker(true);
-    } else {
-      setShowCustomPicker(false);
-    }
-  };
-
-  const getDateRange = (timeframe: Timeframe): { start: Date; end: Date } | null => {
-    if (timeframe === "all") return null;
-    
-    const end = new Date();
-    const start = new Date();
-    
-    switch (timeframe) {
-      case "7d":
-        start.setDate(end.getDate() - 7);
-        break;
-      case "30d":
-        start.setDate(end.getDate() - 30);
-        break;
-      case "90d":
-        start.setDate(end.getDate() - 90);
-        break;
-      case "180d":
-        start.setDate(end.getDate() - 180);
-        break;
-      case "1y":
-        start.setFullYear(end.getFullYear() - 1);
-        break;
-      case "ytd":
-        start.setMonth(0);
-        start.setDate(1);
-        break;
-      default:
-        return null;
-    }
-    
-    return { start, end };
   };
 
   return (
