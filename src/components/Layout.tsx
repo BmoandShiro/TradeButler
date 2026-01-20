@@ -17,6 +17,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
+import { createPortal } from "react-dom";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -25,6 +26,8 @@ interface LayoutProps {
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation();
   const [isImporting, setIsImporting] = useState(false);
+  const [showClearDataModal, setShowClearDataModal] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
 
   const handleImportCSV = async () => {
     try {
@@ -47,25 +50,31 @@ export default function Layout({ children }: LayoutProps) {
     }
   };
 
-  const handleClearAllData = async () => {
-    const confirmed = window.confirm(
-      "⚠️ WARNING: This will delete ALL trade data!\n\n" +
-      "This action cannot be undone. Are you sure you want to continue?\n\n" +
-      "Click OK to delete all trades, or Cancel to abort."
-    );
+  const handleClearAllData = () => {
+    setShowClearDataModal(true);
+    setDeleteConfirmText("");
+  };
 
-    if (!confirmed) {
+  const handleConfirmClearData = async () => {
+    if (deleteConfirmText !== "DELETE") {
       return;
     }
 
     try {
       await invoke("clear_all_trades");
+      setShowClearDataModal(false);
+      setDeleteConfirmText("");
       alert("All trade data has been cleared successfully!");
       window.location.reload();
     } catch (error) {
       console.error("Error clearing data:", error);
       alert("Failed to clear data: " + error);
     }
+  };
+
+  const handleCancelClearData = () => {
+    setShowClearDataModal(false);
+    setDeleteConfirmText("");
   };
 
   const navItems = [
@@ -191,6 +200,28 @@ export default function Layout({ children }: LayoutProps) {
             );
           })}
         </nav>
+
+        {/* Footer in Sidebar */}
+        <div
+          style={{
+            padding: "20px",
+            borderTop: "1px solid var(--border-color)",
+            marginTop: "auto",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "11px",
+              color: "var(--text-secondary)",
+              textAlign: "center",
+              lineHeight: "1.4",
+            }}
+          >
+            v1.0.0.0-alpha Created By:
+            <br />
+            @BMOandShiro @PlaneStation
+          </div>
+        </div>
       </aside>
 
       {/* Main Content */}
@@ -205,6 +236,135 @@ export default function Layout({ children }: LayoutProps) {
       >
         {children}
       </main>
+
+      {/* Clear Data Confirmation Modal */}
+      {showClearDataModal && createPortal(
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 10000,
+          }}
+          onClick={handleCancelClearData}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "500px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                fontSize: "20px",
+                fontWeight: "600",
+                marginBottom: "12px",
+                color: "var(--danger)",
+              }}
+            >
+              ⚠️ Delete All Trade Data
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-primary)",
+                marginBottom: "16px",
+                lineHeight: "1.5",
+              }}
+            >
+              This action will <strong>permanently delete ALL trade data</strong> from your database.
+            </p>
+            <p
+              style={{
+                fontSize: "13px",
+                color: "var(--text-secondary)",
+                marginBottom: "20px",
+                lineHeight: "1.5",
+              }}
+            >
+              This cannot be undone. Type <strong style={{ color: "var(--danger)" }}>DELETE</strong> in the box below to confirm.
+            </p>
+            <input
+              type="text"
+              value={deleteConfirmText}
+              onChange={(e) => setDeleteConfirmText(e.target.value)}
+              placeholder="Type DELETE to confirm"
+              style={{
+                width: "100%",
+                padding: "10px",
+                backgroundColor: "var(--bg-primary)",
+                border: `1px solid ${deleteConfirmText === "DELETE" ? "var(--danger)" : "var(--border-color)"}`,
+                borderRadius: "6px",
+                color: "var(--text-primary)",
+                fontSize: "14px",
+                marginBottom: "20px",
+                outline: "none",
+              }}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && deleteConfirmText === "DELETE") {
+                  handleConfirmClearData();
+                } else if (e.key === "Escape") {
+                  handleCancelClearData();
+                }
+              }}
+            />
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                onClick={handleCancelClearData}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmClearData}
+                disabled={deleteConfirmText !== "DELETE"}
+                style={{
+                  background: deleteConfirmText === "DELETE" ? "var(--danger)" : "var(--bg-tertiary)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "white",
+                  cursor: deleteConfirmText === "DELETE" ? "pointer" : "not-allowed",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  opacity: deleteConfirmText === "DELETE" ? 1 : 0.5,
+                }}
+              >
+                Delete All Data
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
