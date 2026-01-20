@@ -5,6 +5,7 @@ import { readTextFile } from "@tauri-apps/api/fs";
 import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy } from "lucide-react";
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
+import { ColorPicker } from "../components/ColorPicker";
 import {
   DndContext,
   closestCenter,
@@ -2753,11 +2754,9 @@ export default function Strategies() {
                     <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
                       Color
                     </label>
-                    <input
-                      type="color"
-                      value={editingFormData.color}
-                      onChange={(e) => {
-                        const newColor = e.target.value;
+                    <ColorPicker
+                      value={editingFormData.color || "#3b82f6"}
+                      onChange={(newColor) => {
                         setEditingFormData({ ...editingFormData, color: newColor });
                         // Track history
                         if (selectedStrategy && editHistory.length > 0) {
@@ -2769,13 +2768,6 @@ export default function Strategies() {
                           };
                           setEditHistory(prev => [...prev, currentState].slice(-10));
                         }
-                      }}
-                      style={{
-                        width: "100%",
-                        height: "36px",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: "4px",
-                        cursor: "pointer",
                       }}
                     />
                   </div>

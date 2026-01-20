@@ -290,6 +290,24 @@ export default function RichTextEditor({
         .ql-snow .ql-stroke.ql-thin {
           stroke-width: 1;
         }
+        .ql-snow {
+          border-color: var(--border-color) !important;
+        }
+        .ql-snow .ql-toolbar {
+          border-color: var(--border-color) !important;
+        }
+        .ql-snow .ql-container {
+          border-color: var(--border-color) !important;
+        }
+        .ql-snow .ql-editor {
+          border-color: transparent !important;
+        }
+        .ql-snow.ql-toolbar {
+          border-color: var(--border-color) !important;
+        }
+        .ql-snow.ql-container {
+          border-color: var(--border-color) !important;
+        }
         `}</style>
     </div>
   );
