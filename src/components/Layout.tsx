@@ -18,6 +18,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
 import { createPortal } from "react-dom";
+import appIcon from "../assets/app-icon.png";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -104,16 +105,35 @@ export default function Layout({ children }: LayoutProps) {
         }}
       >
         <div style={{ padding: "0 20px 20px" }}>
-          <h1
+          <div
             style={{
-              fontSize: "24px",
-              fontWeight: "bold",
+              display: "flex",
+              alignItems: "center",
+              gap: "12px",
               marginBottom: "10px",
-              color: "var(--accent)",
             }}
           >
-            TradeButler
-          </h1>
+            <img
+              src={appIcon}
+              alt="TradeButler"
+              style={{
+                width: "56px",
+                height: "56px",
+                objectFit: "contain",
+                flexShrink: 0,
+              }}
+            />
+            <h1
+              style={{
+                fontSize: "24px",
+                fontWeight: "bold",
+                color: "var(--accent)",
+                margin: 0,
+              }}
+            >
+              TradeButler
+            </h1>
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             <button
               onClick={handleImportCSV}

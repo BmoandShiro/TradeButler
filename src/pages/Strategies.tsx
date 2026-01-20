@@ -922,7 +922,7 @@ export default function Strategies() {
         const groupChildren = items.filter(i => i.parent_id === parentId);
         if (groupChildren.length > 0) {
           itemOrder = Math.max(...groupChildren.map(i => i.item_order)) + 1;
-        } else {
+      } else {
           itemOrder = maxOrder + 1;
         }
       }
@@ -2256,40 +2256,40 @@ export default function Strategies() {
           style={{
             padding: "20px",
             borderBottom: "1px solid var(--border-color)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
           <h1 style={{ fontSize: "24px", fontWeight: "bold" }}>Strategies</h1>
-          <button
+        <button
             onClick={handleCreateNew}
-            style={{
-              background: "var(--accent)",
-              border: "none",
+          style={{
+            background: "var(--accent)",
+            border: "none",
               borderRadius: "6px",
               padding: "8px 12px",
-              color: "white",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
+            color: "white",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
               gap: "6px",
               fontSize: "13px",
-              fontWeight: "500",
-            }}
-          >
-            <Plus size={16} />
+            fontWeight: "500",
+          }}
+        >
+          <Plus size={16} />
             New
-          </button>
-        </div>
+        </button>
+      </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: "12px" }}>
 
           {strategies.length === 0 ? (
-            <div
-              style={{
+        <div
+          style={{
                 backgroundColor: "var(--bg-tertiary)",
-                border: "1px solid var(--border-color)",
+            border: "1px solid var(--border-color)",
                 borderRadius: "6px",
                 padding: "30px",
                 textAlign: "center",
@@ -2378,7 +2378,7 @@ export default function Strategies() {
                       };
                       
                       return (
-                        <div>
+            <div>
                           <div 
                             style={{ 
                               display: "flex", 
@@ -2506,9 +2506,9 @@ export default function Strategies() {
                   }}
                 />
                 {(isEditing || isCreating) ? (
-                  <input
+              <input
                     ref={nameInputRef}
-                    type="text"
+                type="text"
                     value={editingFormData.name}
                     onChange={(e) => {
                       const newName = e.target.value;
@@ -2525,7 +2525,7 @@ export default function Strategies() {
                       }
                     }}
                     placeholder="Strategy Name"
-                    style={{
+                style={{
                       fontSize: "24px",
                       fontWeight: "bold",
                       background: "transparent",
@@ -2545,10 +2545,10 @@ export default function Strategies() {
                   onClick={() => setIsMaximized(!isMaximized)}
                   style={{
                     background: "var(--bg-tertiary)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
                     padding: "8px",
-                    color: "var(--text-primary)",
+                  color: "var(--text-primary)",
                     cursor: "pointer",
                     display: "flex",
                     alignItems: "center",
@@ -2590,7 +2590,7 @@ export default function Strategies() {
                     >
                       Cancel
                     </button>
-                  </div>
+            </div>
                 ) : !isEditing ? (
                   <>
                     <button
@@ -2717,12 +2717,12 @@ export default function Strategies() {
             <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border-color)" }}>
               {(isEditing || isCreating) ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                  <div>
+            <div>
                     <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
-                      Description
-                    </label>
-                    <input
-                      type="text"
+                Description
+              </label>
+              <input
+                type="text"
                       value={editingFormData.description}
                       onChange={(e) => {
                         const newDescription = e.target.value;
@@ -2739,21 +2739,21 @@ export default function Strategies() {
                         }
                       }}
                       placeholder="Strategy description..."
-                      style={{
-                        width: "100%",
+                style={{
+                  width: "100%",
                         padding: "8px",
                         backgroundColor: "var(--bg-secondary)",
-                        border: "1px solid var(--border-color)",
+                  border: "1px solid var(--border-color)",
                         borderRadius: "4px",
-                        color: "var(--text-primary)",
-                        fontSize: "14px",
-                      }}
-                    />
-                  </div>
-                  <div>
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                }}
+              />
+            </div>
+            <div>
                     <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
                       Color
-                    </label>
+              </label>
                     <ColorPicker
                       value={editingFormData.color || "#3b82f6"}
                       onChange={(newColor) => {
@@ -2785,7 +2785,7 @@ export default function Strategies() {
 
             {/* Tabs */}
             <div
-              style={{
+                style={{
                 display: "flex",
                 borderBottom: "1px solid var(--border-color)",
                 backgroundColor: "var(--bg-secondary)",
@@ -2917,8 +2917,8 @@ export default function Strategies() {
                         gap: "32px",
                         marginBottom: "24px",
                         padding: "16px",
-                        backgroundColor: "var(--bg-tertiary)",
-                        borderRadius: "6px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  borderRadius: "6px",
                         border: "1px solid var(--border-color)"
                       }}>
                         <div>
@@ -3080,7 +3080,7 @@ export default function Strategies() {
                               <td
                                 style={{
                                   padding: "12px",
-                                  fontSize: "14px",
+                  fontSize: "14px",
                                   textAlign: "right",
                                   fontWeight: "600",
                                   color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
@@ -3303,8 +3303,8 @@ export default function Strategies() {
                       <h2 style={{ fontSize: "24px", fontWeight: "700", color: "var(--text-primary)", margin: 0 }}>
                         Post-Trade Survey
                       </h2>
-                    </div>
-                    <div>
+            </div>
+            <div>
                       <ChecklistSection
                         type="survey"
                         title="Survey"
@@ -3408,7 +3408,7 @@ export default function Strategies() {
             >
               Enter a name for the group:
             </p>
-            <input
+              <input
               type="text"
               value={groupName}
               onChange={(e) => setGroupName(e.target.value)}
@@ -3421,12 +3421,12 @@ export default function Strategies() {
               }}
               placeholder="Group name..."
               autoFocus
-              style={{
+                style={{
                 width: "100%",
                 padding: "12px",
                 backgroundColor: "var(--bg-primary)",
-                border: "1px solid var(--border-color)",
-                borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
                 color: "var(--text-primary)",
                 fontSize: "14px",
                 marginBottom: "20px",
@@ -3699,10 +3699,10 @@ export default function Strategies() {
             }}
             onClick={handleDeleteCancel}
           >
-            <div
-              style={{
-                backgroundColor: "var(--bg-secondary)",
-                border: "1px solid var(--border-color)",
+        <div
+          style={{
+            backgroundColor: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
                 borderRadius: "12px",
                 padding: "24px",
                 width: "90%",
@@ -3778,7 +3778,7 @@ export default function Strategies() {
                 >
                   Delete
                 </button>
-              </div>
+        </div>
             </div>
           </div>
         );
@@ -3802,9 +3802,9 @@ export default function Strategies() {
           onClick={() => setShowNameRequiredModal(false)}
         >
           <div
-            style={{
-              backgroundColor: "var(--bg-secondary)",
-              border: "1px solid var(--border-color)",
+              style={{
+                backgroundColor: "var(--bg-secondary)",
+                border: "1px solid var(--border-color)",
               borderRadius: "12px",
               padding: "24px",
               width: "90%",
@@ -3833,8 +3833,8 @@ export default function Strategies() {
             >
               Please enter a name for your strategy before saving.
             </p>
-            <div
-              style={{
+                  <div
+                    style={{
                 display: "flex",
                 gap: "12px",
                 justifyContent: "flex-end",
@@ -3860,7 +3860,7 @@ export default function Strategies() {
               >
                 OK
               </button>
-            </div>
+                </div>
           </div>
         </div>
       )}
@@ -3924,33 +3924,33 @@ export default function Strategies() {
                 justifyContent: "flex-end",
               }}
             >
-              <button
+                <button
                 onClick={() => {
                   setShowCSVFormatModal(false);
                   setPendingCSVFile(null);
                 }}
-                style={{
-                  background: "var(--bg-tertiary)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "6px",
+                  style={{
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
                   padding: "10px 20px",
-                  color: "var(--text-primary)",
-                  cursor: "pointer",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
                   fontSize: "14px",
                   fontWeight: "500",
-                }}
-              >
+                  }}
+                >
                 Cancel
-              </button>
-              <button
+                </button>
+                <button
                 onClick={() => handleCSVFormatSelection("coinbase")}
-                style={{
+                  style={{
                   background: "var(--accent)",
                   border: "none",
-                  borderRadius: "6px",
+                    borderRadius: "6px",
                   padding: "10px 20px",
                   color: "white",
-                  cursor: "pointer",
+                    cursor: "pointer",
                   fontSize: "14px",
                   fontWeight: "500",
                 }}
@@ -3971,9 +3971,9 @@ export default function Strategies() {
                 }}
               >
                 Webull
-              </button>
+                </button>
+              </div>
             </div>
-          </div>
         </div>
       )}
     </div>
