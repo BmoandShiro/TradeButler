@@ -36,7 +36,7 @@ This script will:
 - ✅ Check if Rust/Cargo is installed
 - ✅ Add Cargo to your PATH permanently (if needed)
 - ✅ Check if Node.js is installed
-- ✅ Install npm dependencies
+- ✅ Install npm dependencies (including react-quill, recharts, and all other packages from package.json)
 
 ## Manual Setup
 
@@ -77,6 +77,12 @@ rustc --version
 cargo --version
 ```
 
+## NPM Dependencies
+
+All npm dependencies (including `react-quill`, `recharts`, `lightweight-charts`, etc.) are automatically installed when you run the setup script or `npm install`. These are listed in `package.json` and will be installed in the `node_modules` directory.
+
+**Important:** If you switch branches or pull changes that update `package.json`, you may need to run `npm install` again to ensure all dependencies are up to date.
+
 ## Optional Requirements
 
 ### Internet Connectivity (Optional)
@@ -105,3 +111,7 @@ cargo --version
 - Check if Yahoo Finance is accessible from your network
 - Some symbols may not have intraday data available (daily data will be used as fallback)
 
+### "Cannot find module 'react-quill'" or similar dependency errors
+- Run `npm install` to install all dependencies from `package.json`
+- If switching branches, dependencies may have changed - run `npm install` again
+- Delete `node_modules` and `package-lock.json`, then run `npm install` to do a clean install
