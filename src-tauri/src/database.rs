@@ -27,6 +27,36 @@ pub struct EmotionalState {
     pub trade_id: Option<i64>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EmotionSurvey {
+    pub id: Option<i64>,
+    pub emotional_state_id: i64,
+    pub timestamp: String,
+    // Before the Trade (1-8)
+    pub before_calm_clear: i32, // 1-5
+    pub before_urgency_pressure: i32, // 1-5
+    pub before_confidence_vs_validation: i32, // 1-5
+    pub before_fomo: i32, // 1-5
+    pub before_recovering_loss: i32, // 1-5
+    pub before_patient_detached: i32, // 1-5
+    pub before_trust_process: i32, // 1-5
+    pub before_emotional_state: i32, // 1-5 (bored, excited, anxious, neutral)
+    // During the Trade (9-15)
+    pub during_stable: i32, // 1-5
+    pub during_tension_stress: i32, // 1-5
+    pub during_tempted_interfere: i32, // 1-5
+    pub during_need_control: i32, // 1-5
+    pub during_fear_loss: i32, // 1-5
+    pub during_excitement_greed: i32, // 1-5
+    pub during_mentally_present: i32, // 1-5
+    // After the Trade (16-20)
+    pub after_accept_outcome: i32, // 1-5
+    pub after_emotional_reaction: i32, // 1-5
+    pub after_confidence_affected: i32, // 1-5
+    pub after_tempted_another_trade: i32, // 1-5
+    pub after_proud_discipline: i32, // 1-5
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Strategy {
     pub id: Option<i64>,
@@ -274,6 +304,47 @@ pub fn init_database(db_path: &Path) -> Result<()> {
     // Create index for journal_checklist_responses
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_journal_checklist_responses_entry ON journal_checklist_responses(journal_entry_id)",
+        [],
+    )?;
+
+    // Create emotion_surveys table for storing detailed emotion surveys linked to emotional states
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS emotion_surveys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            emotional_state_id INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            before_calm_clear INTEGER NOT NULL,
+            before_urgency_pressure INTEGER NOT NULL,
+            before_confidence_vs_validation INTEGER NOT NULL,
+            before_fomo INTEGER NOT NULL,
+            before_recovering_loss INTEGER NOT NULL,
+            before_patient_detached INTEGER NOT NULL,
+            before_trust_process INTEGER NOT NULL,
+            before_emotional_state INTEGER NOT NULL,
+            during_stable INTEGER NOT NULL,
+            during_tension_stress INTEGER NOT NULL,
+            during_tempted_interfere INTEGER NOT NULL,
+            during_need_control INTEGER NOT NULL,
+            during_fear_loss INTEGER NOT NULL,
+            during_excitement_greed INTEGER NOT NULL,
+            during_mentally_present INTEGER NOT NULL,
+            after_accept_outcome INTEGER NOT NULL,
+            after_emotional_reaction INTEGER NOT NULL,
+            after_confidence_affected INTEGER NOT NULL,
+            after_tempted_another_trade INTEGER NOT NULL,
+            after_proud_discipline INTEGER NOT NULL,
+            FOREIGN KEY (emotional_state_id) REFERENCES emotional_states(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+
+    // Create index for emotion_surveys
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_emotion_surveys_state ON emotion_surveys(emotional_state_id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_emotion_surveys_timestamp ON emotion_surveys(timestamp)",
         [],
     )?;
 

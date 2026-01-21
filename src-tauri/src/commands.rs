@@ -1,4 +1,4 @@
-use crate::database::{get_connection, Trade, EmotionalState, Strategy, JournalEntry, JournalTrade};
+use crate::database::{get_connection, Trade, EmotionalState, EmotionSurvey, Strategy, JournalEntry, JournalTrade};
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -1790,6 +1790,173 @@ pub fn get_emotional_states() -> Result<Vec<EmotionalState>, String> {
     }
     
     Ok(states)
+}
+
+#[tauri::command]
+pub fn add_emotion_survey(
+    emotional_state_id: i64,
+    timestamp: String,
+    before_calm_clear: i32,
+    before_urgency_pressure: i32,
+    before_confidence_vs_validation: i32,
+    before_fomo: i32,
+    before_recovering_loss: i32,
+    before_patient_detached: i32,
+    before_trust_process: i32,
+    before_emotional_state: i32,
+    during_stable: i32,
+    during_tension_stress: i32,
+    during_tempted_interfere: i32,
+    during_need_control: i32,
+    during_fear_loss: i32,
+    during_excitement_greed: i32,
+    during_mentally_present: i32,
+    after_accept_outcome: i32,
+    after_emotional_reaction: i32,
+    after_confidence_affected: i32,
+    after_tempted_another_trade: i32,
+    after_proud_discipline: i32,
+) -> Result<i64, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    conn.execute(
+        "INSERT INTO emotion_surveys (
+            emotional_state_id, timestamp,
+            before_calm_clear, before_urgency_pressure, before_confidence_vs_validation,
+            before_fomo, before_recovering_loss, before_patient_detached,
+            before_trust_process, before_emotional_state,
+            during_stable, during_tension_stress, during_tempted_interfere,
+            during_need_control, during_fear_loss, during_excitement_greed,
+            during_mentally_present,
+            after_accept_outcome, after_emotional_reaction, after_confidence_affected,
+            after_tempted_another_trade, after_proud_discipline
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+        params![
+            emotional_state_id, timestamp,
+            before_calm_clear, before_urgency_pressure, before_confidence_vs_validation,
+            before_fomo, before_recovering_loss, before_patient_detached,
+            before_trust_process, before_emotional_state,
+            during_stable, during_tension_stress, during_tempted_interfere,
+            during_need_control, during_fear_loss, during_excitement_greed,
+            during_mentally_present,
+            after_accept_outcome, after_emotional_reaction, after_confidence_affected,
+            after_tempted_another_trade, after_proud_discipline
+        ],
+    ).map_err(|e| e.to_string())?;
+    
+    Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+pub fn get_emotion_survey(emotional_state_id: i64) -> Result<Option<EmotionSurvey>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, emotional_state_id, timestamp,
+            before_calm_clear, before_urgency_pressure, before_confidence_vs_validation,
+            before_fomo, before_recovering_loss, before_patient_detached,
+            before_trust_process, before_emotional_state,
+            during_stable, during_tension_stress, during_tempted_interfere,
+            during_need_control, during_fear_loss, during_excitement_greed,
+            during_mentally_present,
+            after_accept_outcome, after_emotional_reaction, after_confidence_affected,
+            after_tempted_another_trade, after_proud_discipline
+            FROM emotion_surveys WHERE emotional_state_id = ?1"
+        )
+        .map_err(|e| e.to_string())?;
+    
+    match stmt.query_row(params![emotional_state_id], |row| {
+        Ok(EmotionSurvey {
+            id: Some(row.get(0)?),
+            emotional_state_id: row.get(1)?,
+            timestamp: row.get(2)?,
+            before_calm_clear: row.get(3)?,
+            before_urgency_pressure: row.get(4)?,
+            before_confidence_vs_validation: row.get(5)?,
+            before_fomo: row.get(6)?,
+            before_recovering_loss: row.get(7)?,
+            before_patient_detached: row.get(8)?,
+            before_trust_process: row.get(9)?,
+            before_emotional_state: row.get(10)?,
+            during_stable: row.get(11)?,
+            during_tension_stress: row.get(12)?,
+            during_tempted_interfere: row.get(13)?,
+            during_need_control: row.get(14)?,
+            during_fear_loss: row.get(15)?,
+            during_excitement_greed: row.get(16)?,
+            during_mentally_present: row.get(17)?,
+            after_accept_outcome: row.get(18)?,
+            after_emotional_reaction: row.get(19)?,
+            after_confidence_affected: row.get(20)?,
+            after_tempted_another_trade: row.get(21)?,
+            after_proud_discipline: row.get(22)?,
+        })
+    }) {
+        Ok(survey) => Ok(Some(survey)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+pub fn get_all_emotion_surveys() -> Result<Vec<EmotionSurvey>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, emotional_state_id, timestamp,
+            before_calm_clear, before_urgency_pressure, before_confidence_vs_validation,
+            before_fomo, before_recovering_loss, before_patient_detached,
+            before_trust_process, before_emotional_state,
+            during_stable, during_tension_stress, during_tempted_interfere,
+            during_need_control, during_fear_loss, during_excitement_greed,
+            during_mentally_present,
+            after_accept_outcome, after_emotional_reaction, after_confidence_affected,
+            after_tempted_another_trade, after_proud_discipline
+            FROM emotion_surveys ORDER BY timestamp DESC"
+        )
+        .map_err(|e| e.to_string())?;
+    
+    let survey_iter = stmt
+        .query_map([], |row| {
+            Ok(EmotionSurvey {
+                id: Some(row.get(0)?),
+                emotional_state_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                before_calm_clear: row.get(3)?,
+                before_urgency_pressure: row.get(4)?,
+                before_confidence_vs_validation: row.get(5)?,
+                before_fomo: row.get(6)?,
+                before_recovering_loss: row.get(7)?,
+                before_patient_detached: row.get(8)?,
+                before_trust_process: row.get(9)?,
+                before_emotional_state: row.get(10)?,
+                during_stable: row.get(11)?,
+                during_tension_stress: row.get(12)?,
+                during_tempted_interfere: row.get(13)?,
+                during_need_control: row.get(14)?,
+                during_fear_loss: row.get(15)?,
+                during_excitement_greed: row.get(16)?,
+                during_mentally_present: row.get(17)?,
+                after_accept_outcome: row.get(18)?,
+                after_emotional_reaction: row.get(19)?,
+                after_confidence_affected: row.get(20)?,
+                after_tempted_another_trade: row.get(21)?,
+                after_proud_discipline: row.get(22)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut surveys = Vec::new();
+    for survey in survey_iter {
+        surveys.push(survey.map_err(|e| e.to_string())?);
+    }
+    
+    Ok(surveys)
 }
 
 // Strategy Management Commands
