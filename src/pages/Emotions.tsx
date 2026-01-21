@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
-import { Plus, X, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Heart, ClipboardList } from "lucide-react";
+import { Plus, X, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Heart, ClipboardList, Maximize2, Minimize2, Edit2, Trash2 } from "lucide-react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import RichTextEditor from "../components/RichTextEditor";
 
 interface EmotionalState {
   id: number;
@@ -500,6 +501,8 @@ export default function Emotions() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingState, setEditingState] = useState<EmotionalState | null>(null);
+  const [isEditingSelectedState, setIsEditingSelectedState] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
   const [formTab, setFormTab] = useState<"basic" | SurveyTabType>("basic");
   const [formData, setFormData] = useState({
     emotion: "Neutral",
@@ -549,6 +552,7 @@ export default function Emotions() {
     e.preventDefault();
     try {
       if (editingState) {
+        if (!isEditingSelectedState) return;
         // Update existing state
         await invoke("update_emotional_state", {
           id: editingState.id,
@@ -556,6 +560,18 @@ export default function Emotions() {
           intensity: formData.intensity,
           notes: formData.notes || null,
         });
+        
+        await loadStates();
+        await loadSurveys();
+        
+        // Close form after successful save
+        setShowForm(false);
+        setEditingState(null);
+        setIsEditingSelectedState(false);
+        setIsMaximized(false);
+        setFormTab("basic");
+        setFormData({ emotion: "Neutral", intensity: 5, notes: "" });
+        return;
       } else {
         // Create new state
         const stateId = await invoke<number>("add_emotional_state", {
@@ -610,6 +626,8 @@ export default function Emotions() {
       // Reset form
       setShowForm(false);
       setEditingState(null);
+      setIsEditingSelectedState(false);
+      setIsMaximized(false);
       setFormTab("basic");
       setFormData({ emotion: "Neutral", intensity: 5, notes: "" });
       const initial: Record<string, number> = {};
@@ -632,6 +650,13 @@ export default function Emotions() {
       await invoke("delete_emotional_state", { id: state.id });
       await loadStates();
       await loadSurveys();
+      // Close form if deleting the currently selected state
+      if (editingState?.id === state.id) {
+        setShowForm(false);
+        setEditingState(null);
+        setIsEditingSelectedState(false);
+        setIsMaximized(false);
+      }
     } catch (error) {
       console.error("Error deleting emotional state:", error);
       alert("Failed to delete emotional state");
@@ -669,6 +694,7 @@ export default function Emotions() {
         <button
           onClick={() => {
             setEditingState(null);
+            setIsEditingSelectedState(true);
             setFormData({ emotion: "Neutral", intensity: 5, notes: "" });
             const initial: Record<string, number> = {};
             Object.values(SURVEY_QUESTIONS).flat().forEach((q) => {
@@ -731,7 +757,18 @@ export default function Emotions() {
                   <div
                     key={state.id}
                     onClick={() => {
+                      if (editingState?.id === state.id && showForm) {
+                        // Clicking the same state again - unselect it
+                        setShowForm(false);
+                        setEditingState(null);
+                        setIsEditingSelectedState(false);
+                        setIsMaximized(false);
+                        return;
+                      }
+                      // Open in read-only mode first
                       setEditingState(state);
+                      setIsEditingSelectedState(false);
+                      setIsMaximized(false);
                       setFormData({ emotion: state.emotion, intensity: state.intensity, notes: state.notes || "" });
                       setShowForm(true);
                       setFormTab("basic");
@@ -810,7 +847,7 @@ export default function Emotions() {
         </div>
       )}
 
-      <MetricsDisplay surveys={surveys} states={states} />
+      {!showForm && <MetricsDisplay surveys={surveys} states={states} />}
 
       {showForm && (
         <div
@@ -821,13 +858,117 @@ export default function Emotions() {
             padding: "0",
             marginBottom: "30px",
             overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            height: editingState && isMaximized ? "calc(100vh - 100px)" : editingState ? "calc(100vh - 250px)" : "auto",
+            minHeight: editingState ? "600px" : "auto",
+            position: isMaximized ? "fixed" : "relative",
+            top: isMaximized ? "50px" : "auto",
+            left: isMaximized ? "50px" : "auto",
+            right: isMaximized ? "50px" : "auto",
+            bottom: isMaximized ? "50px" : "auto",
+            zIndex: isMaximized ? 1000 : "auto",
           }}
         >
           {/* Form Header */}
-          <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
+          <div style={{ 
+            padding: "20px 24px", 
+            borderBottom: "1px solid var(--border-color)", 
+            backgroundColor: "var(--bg-tertiary)",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}>
             <h2 style={{ fontSize: "18px", fontWeight: "600", margin: 0 }}>
-              {editingState ? `Edit Emotional State: ${editingState.emotion}` : "Add New Emotional State"}
+              {editingState ? `${editingState.emotion} - ${format(new Date(editingState.timestamp), "MMM dd, yyyy HH:mm")}` : "Add New Emotional State"}
             </h2>
+            {editingState && (
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <button
+                  onClick={() => setIsMaximized(!isMaximized)}
+                  style={{
+                    background: "var(--bg-secondary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    padding: "8px",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                  title={isMaximized ? "Restore" : "Maximize"}
+                >
+                  {isMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                </button>
+                {!isEditingSelectedState ? (
+                  <>
+                    <button
+                      onClick={() => setIsEditingSelectedState(true)}
+                      style={{
+                        background: "var(--bg-secondary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "6px",
+                        padding: "8px",
+                        color: "var(--text-primary)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                      title="Edit"
+                    >
+                      <Edit2 size={16} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(editingState)}
+                      style={{
+                        background: "var(--bg-secondary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "6px",
+                        padding: "8px",
+                        color: "var(--danger)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                      title="Delete"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="submit"
+                    form="emotion-form"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      const form = document.getElementById("emotion-form") as HTMLFormElement;
+                      if (form) {
+                        form.requestSubmit();
+                      }
+                    }}
+                    style={{
+                      background: "var(--accent)",
+                      border: "none",
+                      borderRadius: "6px",
+                      padding: "8px 16px",
+                      color: "white",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontWeight: "500",
+                      fontSize: "14px",
+                    }}
+                    title="Save Changes"
+                  >
+                    Save
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Form Tabs */}
@@ -869,17 +1010,25 @@ export default function Emotions() {
             })}
           </div>
 
-          <form onSubmit={handleSubmit}>
-            <div style={{ padding: "24px" }}>
+          <form id="emotion-form" onSubmit={handleSubmit}>
+            <div style={{ 
+              padding: "24px", 
+              display: "flex", 
+              flexDirection: "column", 
+              minHeight: 0,
+              flex: 1,
+              overflow: "hidden",
+            }}>
               {formTab === "basic" && (
                 <>
-                  <div style={{ marginBottom: "16px" }}>
+                  <div style={{ marginBottom: "20px" }}>
                     <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", color: "var(--text-secondary)" }}>
                       Emotion
                     </label>
                     <select
                       value={formData.emotion}
                       onChange={(e) => setFormData({ ...formData, emotion: e.target.value })}
+                      disabled={!!editingState && !isEditingSelectedState}
                       style={{
                         width: "100%",
                         padding: "10px",
@@ -888,6 +1037,7 @@ export default function Emotions() {
                         borderRadius: "6px",
                         color: "var(--text-primary)",
                         fontSize: "14px",
+                        opacity: !!editingState && !isEditingSelectedState ? 0.7 : 1,
                       }}
                     >
                       {EMOTIONS.map((emotion) => (
@@ -898,7 +1048,7 @@ export default function Emotions() {
                     </select>
                   </div>
 
-                  <div style={{ marginBottom: "16px" }}>
+                  <div style={{ marginBottom: "20px" }}>
                     <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", color: "var(--text-secondary)" }}>
                       Intensity: {formData.intensity}/10
                     </label>
@@ -908,34 +1058,46 @@ export default function Emotions() {
                       max="10"
                       value={formData.intensity}
                       onChange={(e) => setFormData({ ...formData, intensity: parseInt(e.target.value) })}
-                      style={{ width: "100%" }}
+                      disabled={!!editingState && !isEditingSelectedState}
+                      style={{ width: "100%", opacity: !!editingState && !isEditingSelectedState ? 0.7 : 1 }}
                     />
                   </div>
 
-                  <div style={{ marginBottom: "16px" }}>
-                    <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", color: "var(--text-secondary)" }}>
-                      Notes (optional)
+                  <div style={{ 
+                    flex: 1, 
+                    display: "flex", 
+                    flexDirection: "column", 
+                    overflow: "hidden", 
+                    minHeight: editingState ? "500px" : "400px",
+                    marginBottom: "16px",
+                  }}>
+                    <label style={{ display: "block", marginBottom: "12px", fontSize: "14px", fontWeight: "600", color: "var(--text-primary)" }}>
+                      Notes
                     </label>
-                    <textarea
-                      value={formData.notes}
-                      onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                      style={{
-                        width: "100%",
-                        padding: "10px",
-                        backgroundColor: "var(--bg-tertiary)",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: "6px",
-                        color: "var(--text-primary)",
-                        fontSize: "14px",
-                        minHeight: "80px",
-                        resize: "vertical",
-                      }}
-                    />
+                    <div style={{ 
+                      flex: 1, 
+                      display: "flex", 
+                      flexDirection: "column", 
+                      overflow: "hidden", 
+                      backgroundColor: "var(--bg-secondary)",
+                      borderRadius: "8px",
+                      padding: "1px"
+                    }}>
+                      <RichTextEditor
+                        key={`notes-${editingState?.id || 'new'}-${isEditingSelectedState ? 'edit' : 'view'}`}
+                        value={formData.notes}
+                        onChange={(content: string) => setFormData({ ...formData, notes: content })}
+                        placeholder="Add detailed notes about your emotional state... Use the toolbar above to format your text, add headings, lists, and more."
+                        readOnly={editingState !== null && !isEditingSelectedState}
+                      />
+                    </div>
                   </div>
 
-                  <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "6px" }}>
-                    Survey tabs are optional — if you don’t change any answers, nothing will be saved for the survey.
-                  </p>
+                  {!editingState && (
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "8px" }}>
+                      Survey tabs are optional — if you don't change any answers, nothing will be saved for the survey.
+                    </p>
+                  )}
                 </>
               )}
 
@@ -987,69 +1149,159 @@ export default function Emotions() {
                 gap: "10px",
               }}
             >
-              <button
-                type="button"
-                onClick={() => {
-                  setShowForm(false);
-                  setEditingState(null);
-                  setFormTab("basic");
-                  setFormData({ emotion: "Neutral", intensity: 5, notes: "" });
-                  const initial: Record<string, number> = {};
-                  Object.values(SURVEY_QUESTIONS).flat().forEach((q) => {
-                    initial[q.key] = 3;
-                  });
-                  setSurveyResponses(initial);
-                }}
-                style={{
-                  padding: "10px 20px",
-                  backgroundColor: "var(--bg-secondary)",
-                  color: "var(--text-primary)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  fontSize: "14px",
-                }}
-              >
-                Cancel
-              </button>
-              {editingState && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    handleDelete(editingState);
-                    setShowForm(false);
-                    setEditingState(null);
-                  }}
-                  style={{
-                    padding: "10px 20px",
-                    backgroundColor: "var(--danger)",
-                    color: "white",
-                    border: "none",
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                    fontSize: "14px",
-                    fontWeight: "500",
-                  }}
-                >
-                  Delete
-                </button>
+              {editingState ? (
+                <>
+                  {!isEditingSelectedState ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowForm(false);
+                          setEditingState(null);
+                          setIsEditingSelectedState(false);
+                          setIsMaximized(false);
+                          setFormTab("basic");
+                          setFormData({ emotion: "Neutral", intensity: 5, notes: "" });
+                        }}
+                        style={{
+                          padding: "10px 20px",
+                          backgroundColor: "var(--bg-secondary)",
+                          color: "var(--text-primary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "6px",
+                          cursor: "pointer",
+                          fontSize: "14px",
+                        }}
+                      >
+                        Close
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingSelectedState(true)}
+                        style={{
+                          padding: "10px 20px",
+                          backgroundColor: "var(--accent)",
+                          color: "white",
+                          border: "none",
+                          borderRadius: "6px",
+                          cursor: "pointer",
+                          fontSize: "14px",
+                          fontWeight: "500",
+                        }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleDelete(editingState);
+                          setShowForm(false);
+                          setEditingState(null);
+                          setIsEditingSelectedState(false);
+                          setIsMaximized(false);
+                        }}
+                        style={{
+                          padding: "10px 20px",
+                          backgroundColor: "var(--danger)",
+                          color: "white",
+                          border: "none",
+                          borderRadius: "6px",
+                          cursor: "pointer",
+                          fontSize: "14px",
+                          fontWeight: "500",
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFormData({
+                            emotion: editingState.emotion,
+                            intensity: editingState.intensity,
+                            notes: editingState.notes || "",
+                          });
+                          setIsEditingSelectedState(false);
+                        }}
+                        style={{
+                          padding: "10px 20px",
+                          backgroundColor: "var(--bg-secondary)",
+                          color: "var(--text-primary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "6px",
+                          cursor: "pointer",
+                          fontSize: "14px",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        style={{
+                          padding: "10px 20px",
+                          backgroundColor: "var(--accent)",
+                          color: "white",
+                          border: "none",
+                          borderRadius: "6px",
+                          cursor: "pointer",
+                          fontSize: "14px",
+                          fontWeight: "500",
+                        }}
+                      >
+                        Save
+                      </button>
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowForm(false);
+                      setEditingState(null);
+                      setIsEditingSelectedState(false);
+                      setFormTab("basic");
+                      setFormData({ emotion: "Neutral", intensity: 5, notes: "" });
+                      const initial: Record<string, number> = {};
+                      Object.values(SURVEY_QUESTIONS).flat().forEach((q) => {
+                        initial[q.key] = 3;
+                      });
+                      setSurveyResponses(initial);
+                    }}
+                    style={{
+                      padding: "10px 20px",
+                      backgroundColor: "var(--bg-secondary)",
+                      color: "var(--text-primary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontSize: "14px",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    style={{
+                      padding: "10px 20px",
+                      backgroundColor: "var(--accent)",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontSize: "14px",
+                      fontWeight: "500",
+                    }}
+                  >
+                    Save State
+                  </button>
+                </>
               )}
-              <button
-                type="submit"
-                style={{
-                  padding: "10px 20px",
-                  backgroundColor: "var(--accent)",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  fontSize: "14px",
-                  fontWeight: "500",
-                }}
-              >
-                {editingState ? "Update State" : "Save State"}
-              </button>
             </div>
           </form>
         </div>
