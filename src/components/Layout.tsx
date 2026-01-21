@@ -18,7 +18,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
 import { createPortal } from "react-dom";
-import appIcon from "../assets/app-icon.png";
+import appIcon from "../../ICON.png";
 
 interface LayoutProps {
   children: React.ReactNode;
