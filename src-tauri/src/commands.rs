@@ -1793,6 +1793,40 @@ pub fn get_emotional_states() -> Result<Vec<EmotionalState>, String> {
 }
 
 #[tauri::command]
+pub fn update_emotional_state(
+    id: i64,
+    emotion: String,
+    intensity: i32,
+    notes: Option<String>,
+) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    conn.execute(
+        "UPDATE emotional_states SET emotion = ?1, intensity = ?2, notes = ?3 WHERE id = ?4",
+        params![emotion, intensity, notes, id],
+    ).map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_emotional_state(id: i64) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    // Delete associated survey if exists
+    conn.execute("DELETE FROM emotion_surveys WHERE emotional_state_id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    
+    // Delete the emotional state
+    conn.execute("DELETE FROM emotional_states WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+#[tauri::command]
 pub fn add_emotion_survey(
     emotional_state_id: i64,
     timestamp: String,
