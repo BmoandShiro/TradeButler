@@ -301,8 +301,6 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
           const tradeTime = findClosestBarTime(tradeTimestamp);
           const isBuy = trade.side.toUpperCase() === "BUY";
           
-          // For options: just point to the bar (no text) - tag based on time filled
-          // For stocks: show full details with price
           const buyColor = cleanColor(chartSettings.buyMarkerColor, defaultSettings.buyMarkerColor);
           const sellColor = cleanColor(chartSettings.sellMarkerColor, defaultSettings.sellMarkerColor);
           
@@ -312,12 +310,8 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
             color: isBuy ? buyColor : sellColor,
             shape: isBuy ? 'arrowUp' : 'arrowDown',
             size: 2, // Larger size for better visibility
+            text: `${trade.side} ${trade.quantity.toFixed(2)} @ $${trade.price.toFixed(2)}`, // Show details for both stocks and options
           };
-          
-          // Only add text for stocks (with price details)
-          if (!isOptions) {
-            marker.text = `${trade.side} ${trade.quantity.toFixed(2)} @ $${trade.price.toFixed(2)}`;
-          }
           
           markers.push(marker);
         });
@@ -364,13 +358,10 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
           color: sellColor,
           shape: 'arrowDown',
           size: 2, // Larger size for better visibility
+          text: `Exit @ $${exitPrice.toFixed(2)}`, // Show details for both stocks and options
         };
         
-        // Only add text for stocks
-        if (!isOptions) {
-          entryMarker.text = `Entry @ $${entryPrice.toFixed(2)}`;
-          exitMarker.text = `Exit @ $${exitPrice.toFixed(2)}`;
-        }
+        entryMarker.text = `Entry @ $${entryPrice.toFixed(2)}`; // Show details for both stocks and options
         
         markers.push(entryMarker);
         markers.push(exitMarker);
@@ -453,29 +444,27 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
         });
       }
 
-      // Only add entry and exit price lines for stocks (not options, since price doesn't match chart scale)
-      if (!isOptions) {
-        const buyColor = cleanColor(chartSettings.buyMarkerColor, defaultSettings.buyMarkerColor);
-        const sellColor = cleanColor(chartSettings.sellMarkerColor, defaultSettings.sellMarkerColor);
-        
-        seriesRef.current.createPriceLine({
-          price: entryPrice,
-          color: buyColor,
-          lineWidth: 2,
-          lineStyle: 0, // Solid
-          axisLabelVisible: true,
-          title: "Entry",
-        });
+      // Add entry and exit price lines for both stocks and options
+      const buyColor = cleanColor(chartSettings.buyMarkerColor, defaultSettings.buyMarkerColor);
+      const sellColor = cleanColor(chartSettings.sellMarkerColor, defaultSettings.sellMarkerColor);
+      
+      seriesRef.current.createPriceLine({
+        price: entryPrice,
+        color: buyColor,
+        lineWidth: 2,
+        lineStyle: 0, // Solid
+        axisLabelVisible: true,
+        title: "Entry",
+      });
 
-        seriesRef.current.createPriceLine({
-          price: exitPrice,
-          color: sellColor,
-          lineWidth: 2,
-          lineStyle: 0, // Solid
-          axisLabelVisible: true,
-          title: "Exit",
-        });
-      }
+      seriesRef.current.createPriceLine({
+        price: exitPrice,
+        color: sellColor,
+        lineWidth: 2,
+        lineStyle: 0, // Solid
+        axisLabelVisible: true,
+        title: "Exit",
+      });
 
       // Set visible range to show entry and exit with some padding
       const entryTime = Math.floor(new Date(entryTimestamp).getTime() / 1000) as UTCTimestamp;
