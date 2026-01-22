@@ -931,16 +931,18 @@ export default function Strategies() {
     }
   };
 
-  // Save state to localStorage
-  const saveState = () => {
+  // Save selected strategy and active tab to localStorage
+  useEffect(() => {
     if (selectedStrategy !== null) {
       localStorage.setItem('strategies_selected_strategy', selectedStrategy.toString());
     } else {
       localStorage.removeItem('strategies_selected_strategy');
     }
+  }, [selectedStrategy]);
+
+  useEffect(() => {
     localStorage.setItem('strategies_active_tab', activeTab);
-    saveScrollPositions();
-  };
+  }, [activeTab]);
 
   // Restore state from localStorage
   const restoreState = () => {

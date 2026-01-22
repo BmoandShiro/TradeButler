@@ -100,25 +100,42 @@ export default function Layout({ children }: LayoutProps) {
   };
 
   const handleExport = async () => {
+    console.log("handleExport called");
     try {
       setIsExporting(true);
+      console.log("isExporting set to true");
+      
+      // First, get the export data
+      console.log("Calling export_data command...");
+      const jsonData = await invoke<string>("export_data");
+      console.log("Export data retrieved, length:", jsonData.length);
+      
+      // Then, ask user where to save it
+      console.log("Opening save dialog...");
       const filePath = await save({
         filters: [
           { name: "JSON", extensions: ["json"] },
         ],
         defaultPath: `TradeButler-Export-${new Date().toISOString().split('T')[0]}.json`,
       });
+      console.log("Save dialog returned:", filePath);
 
       if (filePath && typeof filePath === "string") {
-        const jsonData = await invoke<string>("export_data");
+        console.log("Saving to:", filePath);
         await writeTextFile(filePath, jsonData);
-        alert("Data exported successfully!");
+        console.log("File saved successfully");
+        alert(`Data exported successfully to:\n${filePath}`);
+      } else {
+        console.log("Export cancelled by user or filePath is null");
+        // User cancelled, don't show error
       }
     } catch (error) {
       console.error("Error exporting:", error);
-      alert("Failed to export: " + error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      alert(`Failed to export: ${errorMessage}\n\nCheck the console (F12) for more details.`);
     } finally {
       setIsExporting(false);
+      console.log("isExporting set to false");
     }
   };
 

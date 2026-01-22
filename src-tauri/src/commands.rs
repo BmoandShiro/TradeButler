@@ -4932,6 +4932,7 @@ pub struct VersionInfo {
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
     tag_name: String,
+    #[allow(dead_code)]
     name: String,
     body: Option<String>,
     assets: Vec<GitHubAsset>,
@@ -4941,6 +4942,7 @@ struct GitHubRelease {
 struct GitHubAsset {
     name: String,
     browser_download_url: String,
+    #[allow(dead_code)]
     content_type: String,
 }
 
