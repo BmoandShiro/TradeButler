@@ -1,9 +1,23 @@
 import { useState, useEffect } from "react";
-import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw } from "lucide-react";
+import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { createPortal } from "react-dom";
 import { ColorPicker } from "../components/ColorPicker";
-import { loadTheme, saveTheme, applyTheme, resetTheme, defaultTheme, ThemeColors } from "../utils/themeManager";
+import { 
+  loadTheme, 
+  saveTheme, 
+  applyTheme, 
+  resetTheme, 
+  defaultTheme, 
+  ThemeColors,
+  getAllPresets,
+  getPresetById,
+  createPresetFromCurrentTheme,
+  deleteCustomPreset,
+  saveCustomPreset,
+  ThemePreset,
+  presetThemes
+} from "../utils/themeManager";
 
 interface VersionInfo {
   current: string;
@@ -23,6 +37,12 @@ export default function Settings() {
   
   // Theme state
   const [theme, setTheme] = useState<ThemeColors>(() => loadTheme());
+  const [presets, setPresets] = useState<ThemePreset[]>(() => getAllPresets());
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+  const [showSavePresetModal, setShowSavePresetModal] = useState(false);
+  const [presetName, setPresetName] = useState("");
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+  const [editingPresetName, setEditingPresetName] = useState("");
 
   const checkVersion = async () => {
     try {
@@ -102,6 +122,8 @@ export default function Settings() {
     setTheme(updatedTheme);
     saveTheme(updatedTheme);
     applyTheme(updatedTheme);
+    // Clear selected preset when manually editing colors
+    setSelectedPresetId(null);
   };
 
   const handleResetTheme = () => {
@@ -116,7 +138,77 @@ export default function Settings() {
     const loadedTheme = loadTheme();
     setTheme(loadedTheme);
     applyTheme(loadedTheme);
+    setPresets(getAllPresets());
   }, []);
+
+  // Apply preset
+  const handleApplyPreset = (presetId: string) => {
+    const preset = getPresetById(presetId);
+    if (preset) {
+      setTheme(preset.colors);
+      saveTheme(preset.colors);
+      applyTheme(preset.colors);
+      setSelectedPresetId(presetId);
+    }
+  };
+
+  // Save current theme as preset
+  const handleSavePreset = () => {
+    if (!presetName.trim()) {
+      alert("Please enter a name for your preset");
+      return;
+    }
+    const newPreset = createPresetFromCurrentTheme(presetName.trim());
+    setPresets(getAllPresets());
+    setShowSavePresetModal(false);
+    setPresetName("");
+    setSelectedPresetId(newPreset.id);
+  };
+
+  // Delete custom preset
+  const handleDeletePreset = (presetId: string) => {
+    const preset = getPresetById(presetId);
+    if (preset && preset.isCustom) {
+      if (confirm(`Delete preset "${preset.name}"?`)) {
+        deleteCustomPreset(presetId);
+        setPresets(getAllPresets());
+        if (selectedPresetId === presetId) {
+          setSelectedPresetId(null);
+        }
+      }
+    }
+  };
+
+  // Start editing preset name
+  const handleStartEditPreset = (presetId: string) => {
+    const preset = getPresetById(presetId);
+    if (preset && preset.isCustom) {
+      setEditingPresetId(presetId);
+      setEditingPresetName(preset.name);
+    }
+  };
+
+  // Save edited preset name
+  const handleSaveEditPreset = () => {
+    if (!editingPresetId || !editingPresetName.trim()) return;
+    const preset = getPresetById(editingPresetId);
+    if (preset && preset.isCustom) {
+      const updated: ThemePreset = {
+        ...preset,
+        name: editingPresetName.trim(),
+      };
+      saveCustomPreset(updated);
+      setPresets(getAllPresets());
+      setEditingPresetId(null);
+      setEditingPresetName("");
+    }
+  };
+
+  // Cancel editing
+  const handleCancelEditPreset = () => {
+    setEditingPresetId(null);
+    setEditingPresetName("");
+  };
 
   return (
     <div
@@ -207,6 +299,99 @@ export default function Settings() {
           >
             Customize the appearance of TradeButler by adjusting the color scheme. Changes are applied immediately.
           </p>
+
+          {/* Preset Selector */}
+          <div style={{ marginBottom: "24px" }}>
+            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+              Theme Presets
+            </label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "12px" }}>
+              {presets.map((preset) => (
+                <div
+                  key={preset.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "8px 12px",
+                    backgroundColor: selectedPresetId === preset.id ? "var(--accent)" : "var(--bg-tertiary)",
+                    border: `1px solid ${selectedPresetId === preset.id ? "var(--accent)" : "var(--border-color)"}`,
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    transition: "all 0.2s",
+                  }}
+                  onClick={() => handleApplyPreset(preset.id)}
+                >
+                  <span style={{ fontSize: "13px", color: selectedPresetId === preset.id ? "white" : "var(--text-primary)" }}>
+                    {editingPresetId === preset.id ? (
+                      <input
+                        type="text"
+                        value={editingPresetName}
+                        onChange={(e) => setEditingPresetName(e.target.value)}
+                        onBlur={handleSaveEditPreset}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleSaveEditPreset();
+                          if (e.key === "Escape") handleCancelEditPreset();
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                          backgroundColor: "var(--bg-primary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "4px",
+                          padding: "2px 6px",
+                          color: "var(--text-primary)",
+                          fontSize: "13px",
+                          width: "120px",
+                        }}
+                        autoFocus
+                      />
+                    ) : (
+                      preset.name
+                    )}
+                  </span>
+                  {preset.isCustom && editingPresetId !== preset.id && (
+                    <>
+                      <Edit2
+                        size={12}
+                        style={{ color: selectedPresetId === preset.id ? "white" : "var(--text-secondary)", cursor: "pointer" }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStartEditPreset(preset.id);
+                        }}
+                      />
+                      <Trash2
+                        size={12}
+                        style={{ color: selectedPresetId === preset.id ? "white" : "var(--text-secondary)", cursor: "pointer" }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeletePreset(preset.id);
+                        }}
+                      />
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={() => setShowSavePresetModal(true)}
+              style={{
+                padding: "8px 16px",
+                backgroundColor: "var(--bg-tertiary)",
+                color: "var(--text-primary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                cursor: "pointer",
+                fontSize: "13px",
+                fontWeight: "500",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+              }}
+            >
+              <Save size={14} />
+              Save Current Theme as Preset
+            </button>
+          </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "20px" }}>
             {/* Background Colors */}
@@ -676,6 +861,128 @@ export default function Settings() {
                     Download Update
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Save Preset Modal */}
+      {showSavePresetModal && createPortal(
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 10000,
+          }}
+          onClick={() => {
+            setShowSavePresetModal(false);
+            setPresetName("");
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "400px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                fontSize: "20px",
+                fontWeight: "600",
+                marginBottom: "16px",
+                color: "var(--text-primary)",
+              }}
+            >
+              Save Theme Preset
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-secondary)",
+                marginBottom: "16px",
+              }}
+            >
+              Enter a name for your custom theme preset:
+            </p>
+            <input
+              type="text"
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              placeholder="My Custom Theme"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSavePreset();
+                if (e.key === "Escape") {
+                  setShowSavePresetModal(false);
+                  setPresetName("");
+                }
+              }}
+              style={{
+                width: "100%",
+                padding: "10px",
+                backgroundColor: "var(--bg-primary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                color: "var(--text-primary)",
+                fontSize: "14px",
+                marginBottom: "20px",
+                outline: "none",
+              }}
+            />
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                onClick={() => {
+                  setShowSavePresetModal(false);
+                  setPresetName("");
+                }}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSavePreset}
+                style={{
+                  background: "var(--accent)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Save
               </button>
             </div>
           </div>

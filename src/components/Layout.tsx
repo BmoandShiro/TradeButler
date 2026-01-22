@@ -87,8 +87,17 @@ export default function Layout({ children }: LayoutProps) {
             }
           }
           
-          // Remove theme_colors from import data before passing to Rust (it doesn't expect it)
-          const { theme_colors, ...dataForRust } = importData;
+          // Extract custom presets if present
+          if (importData.custom_theme_presets) {
+            try {
+              localStorage.setItem("tradebutler_custom_theme_presets", JSON.stringify(importData.custom_theme_presets));
+            } catch (e) {
+              console.warn("Failed to import custom presets:", e);
+            }
+          }
+          
+          // Remove theme_colors and custom_theme_presets from import data before passing to Rust (it doesn't expect them)
+          const { theme_colors, custom_theme_presets, ...dataForRust } = importData;
           const jsonDataForRust = JSON.stringify(dataForRust);
           
           const result = await invoke<{
@@ -106,6 +115,7 @@ export default function Layout({ children }: LayoutProps) {
             `Strategies: ${result.strategies_imported} imported, ${result.strategies_skipped} skipped`,
             `Journal Entries: ${result.journal_entries_imported} imported, ${result.journal_entries_skipped} skipped`,
             importData.theme_colors ? `Theme: Imported successfully` : "",
+            importData.custom_theme_presets ? `Custom Presets: ${importData.custom_theme_presets.length} imported` : "",
           ].filter(Boolean).join("\n");
           
           alert(`Data imported successfully!\n\n${summary}`);
@@ -135,7 +145,7 @@ export default function Layout({ children }: LayoutProps) {
       const jsonData = await invoke<string>("export_data");
       console.log("Export data retrieved, length:", jsonData.length);
       
-      // Parse the JSON to add theme colors
+      // Parse the JSON to add theme colors and custom presets
       const exportData = JSON.parse(jsonData);
       
       // Get theme colors from localStorage
@@ -145,6 +155,16 @@ export default function Layout({ children }: LayoutProps) {
           exportData.theme_colors = JSON.parse(themeColors);
         } catch (e) {
           console.warn("Failed to parse theme colors:", e);
+        }
+      }
+      
+      // Get custom presets from localStorage
+      const customPresets = localStorage.getItem("tradebutler_custom_theme_presets");
+      if (customPresets) {
+        try {
+          exportData.custom_theme_presets = JSON.parse(customPresets);
+        } catch (e) {
+          console.warn("Failed to parse custom presets:", e);
         }
       }
       
