@@ -564,7 +564,7 @@ export default function Layout({ children }: LayoutProps) {
               lineHeight: "1.4",
             }}
           >
-            v1.0.0.0-alpha Created By:
+            v1.1.0 Created By:
             <br />
             @BMOandShiro @PlaneStation
           </div>
