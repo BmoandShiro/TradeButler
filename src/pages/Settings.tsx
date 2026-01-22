@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { createPortal } from "react-dom";
+import ReactMarkdown from "react-markdown";
 import { ColorPicker } from "../components/ColorPicker";
 import { 
   loadTheme, 
@@ -780,7 +781,6 @@ export default function Settings() {
                   <div
                     style={{
                       marginTop: "4px",
-                      whiteSpace: "pre-wrap",
                       maxHeight: "200px",
                       overflowY: "auto",
                       overflowX: "hidden",
@@ -792,7 +792,23 @@ export default function Settings() {
                       lineHeight: "1.5",
                     }}
                   >
-                    {versionInfo.release_notes}
+                    <ReactMarkdown
+                      components={{
+                        h1: ({node, ...props}) => <h1 style={{ fontSize: "16px", fontWeight: "bold", margin: "8px 0 4px 0", color: "var(--text-primary)" }} {...props} />,
+                        h2: ({node, ...props}) => <h2 style={{ fontSize: "14px", fontWeight: "bold", margin: "8px 0 4px 0", color: "var(--text-primary)" }} {...props} />,
+                        h3: ({node, ...props}) => <h3 style={{ fontSize: "13px", fontWeight: "bold", margin: "6px 0 4px 0", color: "var(--text-primary)" }} {...props} />,
+                        p: ({node, ...props}) => <p style={{ margin: "4px 0", color: "var(--text-secondary)" }} {...props} />,
+                        strong: ({node, ...props}) => <strong style={{ fontWeight: "bold", color: "var(--text-primary)" }} {...props} />,
+                        em: ({node, ...props}) => <em style={{ fontStyle: "italic" }} {...props} />,
+                        ul: ({node, ...props}) => <ul style={{ margin: "4px 0", paddingLeft: "20px", color: "var(--text-secondary)" }} {...props} />,
+                        ol: ({node, ...props}) => <ol style={{ margin: "4px 0", paddingLeft: "20px", color: "var(--text-secondary)" }} {...props} />,
+                        li: ({node, ...props}) => <li style={{ margin: "2px 0" }} {...props} />,
+                        code: ({node, ...props}) => <code style={{ backgroundColor: "var(--bg-tertiary)", padding: "2px 4px", borderRadius: "3px", fontSize: "11px", fontFamily: "monospace", color: "var(--accent)" }} {...props} />,
+                        a: ({node, ...props}) => <a style={{ color: "var(--accent)", textDecoration: "underline" }} {...props} />,
+                      }}
+                    >
+                      {versionInfo.release_notes}
+                    </ReactMarkdown>
                   </div>
                 </div>
               )}
