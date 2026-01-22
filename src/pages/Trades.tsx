@@ -90,9 +90,25 @@ export default function Trades() {
     return saved === "true";
   });
   const [positionGroupNotes, setPositionGroupNotes] = useState<Map<string, string>>(new Map());
-  const [searchQuery, setSearchQuery] = useState<string>("");
-  const [sortBy, setSortBy] = useState<"date" | "symbol" | "pnl" | "price" | "quantity" | "trades">("date");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [searchQuery, setSearchQuery] = useState<string>(() => {
+    const saved = localStorage.getItem('trades_search_query');
+    return saved || "";
+  });
+  const [sortBy, setSortBy] = useState<"date" | "symbol" | "pnl" | "price" | "quantity" | "trades">(() => {
+    const saved = localStorage.getItem('trades_sort_by');
+    return (saved as "date" | "symbol" | "pnl" | "price" | "quantity" | "trades") || "date";
+  });
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">(() => {
+    const saved = localStorage.getItem('trades_sort_direction');
+    return (saved as "asc" | "desc") || "desc";
+  });
+
+  // Save state to localStorage
+  useEffect(() => {
+    localStorage.setItem('trades_search_query', searchQuery);
+    localStorage.setItem('trades_sort_by', sortBy);
+    localStorage.setItem('trades_sort_direction', sortDirection);
+  }, [searchQuery, sortBy, sortDirection]);
 
   useEffect(() => {
     loadData();

@@ -160,10 +160,130 @@ export default function Journal() {
     checklistResponses: Map<number, Map<number, boolean>>;
   } | null>(null);
 
+  // Store scroll positions for each tab
+  const tabScrollPositions = useRef<Map<TabType, number>>(new Map());
+  const tabContentRefs = useRef<Map<TabType, HTMLDivElement | null>>(new Map());
+
+  // Save work-in-progress to localStorage
+  const saveWorkInProgress = () => {
+    if (isCreating || isEditing) {
+      const workInProgress = {
+        entryFormData,
+        tradesFormData,
+        checklistResponses: Array.from(checklistResponses.entries()).map(([tradeIndex, responses]) => [
+          tradeIndex,
+          Array.from(responses.entries())
+        ]),
+        activeTradeIndex,
+        activeTab,
+        isCreating,
+        isEditing,
+        selectedEntryId: selectedEntry?.id || null,
+        scrollPositions: Array.from(tabScrollPositions.current.entries()),
+      };
+      localStorage.setItem('journal_work_in_progress', JSON.stringify(workInProgress));
+    }
+  };
+
+  // Restore work-in-progress from localStorage
+  const restoreWorkInProgress = () => {
+    try {
+      const saved = localStorage.getItem('journal_work_in_progress');
+      if (saved) {
+        const workInProgress = JSON.parse(saved);
+        setEntryFormData(workInProgress.entryFormData);
+        setTradesFormData(workInProgress.tradesFormData);
+        
+        // Restore checklist responses
+        const restoredResponses = new Map<number, Map<number, boolean>>();
+        workInProgress.checklistResponses.forEach(([tradeIndex, responses]: [number, [number, boolean][]]) => {
+          restoredResponses.set(tradeIndex, new Map(responses));
+        });
+        setChecklistResponses(restoredResponses);
+        
+        setActiveTradeIndex(workInProgress.activeTradeIndex);
+        setActiveTab(workInProgress.activeTab);
+        setIsCreating(workInProgress.isCreating);
+        setIsEditing(workInProgress.isEditing);
+        
+        // Restore scroll positions
+        workInProgress.scrollPositions.forEach(([tab, pos]: [TabType, number]) => {
+          tabScrollPositions.current.set(tab, pos);
+        });
+        
+        // If editing an existing entry, load it
+        if (workInProgress.selectedEntryId && !workInProgress.isCreating) {
+          loadEntry(workInProgress.selectedEntryId);
+        }
+        
+        // Load strategy checklists if needed
+        if (workInProgress.entryFormData.strategy_id) {
+          loadStrategyChecklists(workInProgress.entryFormData.strategy_id);
+        }
+      }
+    } catch (error) {
+      console.error("Error restoring work in progress:", error);
+    }
+  };
+
+  // Clear work-in-progress from localStorage
+  const clearWorkInProgress = () => {
+    localStorage.removeItem('journal_work_in_progress');
+  };
+
+  // Save scroll position when switching tabs
+  const handleTabChange = (newTab: TabType) => {
+    // Save current tab's scroll position
+    const currentTabContent = tabContentRefs.current.get(activeTab);
+    if (currentTabContent) {
+      tabScrollPositions.current.set(activeTab, currentTabContent.scrollTop);
+    }
+    
+    // Restore new tab's scroll position
+    setActiveTab(newTab);
+    
+    // Restore scroll after a brief delay to ensure DOM is updated
+    setTimeout(() => {
+      const newTabContent = tabContentRefs.current.get(newTab);
+      if (newTabContent) {
+        const savedPosition = tabScrollPositions.current.get(newTab) || 0;
+        newTabContent.scrollTop = savedPosition;
+      }
+    }, 50);
+  };
+
+  // Save state before component unmounts
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      saveWorkInProgress();
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    // Also save periodically
+    const interval = setInterval(() => {
+      saveWorkInProgress();
+    }, 5000); // Save every 5 seconds
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      clearInterval(interval);
+      saveWorkInProgress(); // Save one last time
+    };
+  }, [entryFormData, tradesFormData, checklistResponses, activeTradeIndex, activeTab, isCreating, isEditing, selectedEntry]);
+
   useEffect(() => {
     loadEntries();
     loadStrategies();
     loadAvailableSymbols();
+    
+    // Restore work in progress after loading (only if we have saved state)
+    const hasWorkInProgress = localStorage.getItem('journal_work_in_progress');
+    if (hasWorkInProgress) {
+      setTimeout(() => {
+        restoreWorkInProgress();
+      }, 200);
+    }
   }, []);
 
   useEffect(() => {
@@ -281,6 +401,7 @@ export default function Journal() {
   };
 
   const handleCreateNew = () => {
+    clearWorkInProgress(); // Clear any old work in progress
     setIsCreating(true);
     setIsEditing(false);
     setSelectedEntry(null);
@@ -307,6 +428,7 @@ export default function Journal() {
     setActiveTradeIndex(0);
     setActiveTab("trade");
     setChecklistResponses(new Map());
+    tabScrollPositions.current.clear();
   };
 
   const handleEdit = async () => {
@@ -476,6 +598,127 @@ export default function Journal() {
     }
   };
 
+  // Auto-save function (silent, doesn't require title)
+  const autoSave = async () => {
+    // Only auto-save if we have a title and are creating or editing
+    if (!entryFormData.title.trim() || (!isCreating && !isEditing)) {
+      return;
+    }
+
+    try {
+      let entryId: number;
+
+      if (isCreating) {
+        entryId = await invoke<number>("create_journal_entry", {
+          date: entryFormData.date,
+          title: entryFormData.title,
+          strategyId: entryFormData.strategy_id,
+        });
+        // After first auto-save, switch from creating to editing
+        setIsCreating(false);
+        setIsEditing(true);
+        const savedEntry = await invoke<JournalEntry>("get_journal_entry", { id: entryId });
+        setSelectedEntry(savedEntry);
+      } else if (selectedEntry) {
+        entryId = selectedEntry.id;
+        await invoke("update_journal_entry", {
+          id: selectedEntry.id,
+          date: entryFormData.date,
+          title: entryFormData.title,
+          strategyId: entryFormData.strategy_id,
+        });
+      } else {
+        return;
+      }
+
+      // Save all trades
+      for (let i = 0; i < tradesFormData.length; i++) {
+        const tradeData = tradesFormData[i];
+        if (tradeData.id) {
+          await invoke("update_journal_trade", {
+            id: tradeData.id,
+            symbol: tradeData.symbol || null,
+            position: tradeData.position || null,
+            entryType: tradeData.entry_type || null,
+            exitType: tradeData.exit_type || null,
+            trade: tradeData.trade || null,
+            whatWentWell: tradeData.what_went_well || null,
+            whatCouldBeImproved: tradeData.what_could_be_improved || null,
+            emotionalState: tradeData.emotional_state || null,
+            notes: tradeData.notes || null,
+            outcome: tradeData.outcome || null,
+            tradeOrder: i,
+          });
+        } else {
+          await invoke("create_journal_trade", {
+            journalEntryId: entryId,
+            symbol: tradeData.symbol || null,
+            position: tradeData.position || null,
+            entryType: tradeData.entry_type || null,
+            exitType: tradeData.exit_type || null,
+            trade: tradeData.trade || null,
+            whatWentWell: tradeData.what_went_well || null,
+            whatCouldBeImproved: tradeData.what_could_be_improved || null,
+            emotionalState: tradeData.emotional_state || null,
+            notes: tradeData.notes || null,
+            outcome: tradeData.outcome || null,
+            tradeOrder: i,
+          });
+        }
+      }
+
+      // Save checklist responses
+      if (entryFormData.strategy_id) {
+        const checklists = strategyChecklists.get(entryFormData.strategy_id);
+        if (checklists) {
+          const responses: [number, boolean][] = [];
+          const firstTradeResponses = checklistResponses.get(0) || new Map();
+          for (const [, items] of checklists.entries()) {
+            for (const item of items) {
+              const isChecked = firstTradeResponses.get(item.id) || false;
+              responses.push([item.id, isChecked]);
+            }
+          }
+          await invoke("save_journal_checklist_responses", {
+            journalEntryId: entryId,
+            responses: responses,
+          });
+        }
+      }
+
+      // Reload trades to get updated IDs
+      await loadTrades(entryId);
+    } catch (error) {
+      // Silently fail for auto-save
+      console.error("Auto-save error:", error);
+    }
+  };
+
+  // Restore scroll position when tab becomes active
+  useEffect(() => {
+    const tabContent = tabContentRefs.current.get(activeTab);
+    if (tabContent) {
+      const savedPosition = tabScrollPositions.current.get(activeTab) || 0;
+      // Use requestAnimationFrame to ensure DOM is ready
+      requestAnimationFrame(() => {
+        tabContent.scrollTop = savedPosition;
+      });
+    }
+  }, [activeTab]);
+
+  // Debounced auto-save when form data changes
+  useEffect(() => {
+    if (!isCreating && !isEditing) return;
+    if (!entryFormData.title.trim()) return;
+
+    const timeoutId = setTimeout(() => {
+      autoSave();
+    }, 2000); // 2 second debounce
+
+    return () => clearTimeout(timeoutId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entryFormData.title, entryFormData.date, entryFormData.strategy_id, tradesFormData.length]);
+
   const handleSave = async () => {
     if (!entryFormData.title.trim()) {
       setShowTitleRequiredModal(true);
@@ -579,6 +822,9 @@ export default function Journal() {
       setIsEditing(false);
       setEditHistory([]);
       setOriginalEntryData(null);
+      
+      // Clear work in progress after successful save
+      clearWorkInProgress();
     } catch (error) {
       console.error("Error saving entry:", error);
       alert("Failed to save entry: " + error);
@@ -590,9 +836,32 @@ export default function Journal() {
     setIsEditing(false);
     setEditHistory([]);
     setOriginalEntryData(null);
+    clearWorkInProgress();
     if (selectedEntry) {
       // Reload the entry to reset form
       loadEntry(selectedEntry.id);
+    } else {
+      // Reset form if creating
+      setEntryFormData({
+        date: format(new Date(), "yyyy-MM-dd"),
+        title: "",
+        strategy_id: null,
+      });
+      setTradesFormData([{
+        id: null,
+        symbol: "",
+        position: "",
+        entry_type: "",
+        exit_type: "",
+        trade: "",
+        what_went_well: "",
+        what_could_be_improved: "",
+        emotional_state: "",
+        notes: "",
+        outcome: "Positive",
+        trade_order: 0,
+      }]);
+      setChecklistResponses(new Map());
     }
   };
 
@@ -1390,7 +1659,7 @@ export default function Journal() {
                       return (
                         <button
                           key={tab.id}
-                          onClick={() => setActiveTab(tab.id)}
+                          onClick={() => handleTabChange(tab.id)}
                           style={{
                             padding: "12px 20px",
                             background: isActive ? "var(--bg-primary)" : "transparent",
@@ -1464,7 +1733,7 @@ export default function Journal() {
                             return (
                               <button
                                 key={tab.id}
-                                onClick={() => setActiveTab(tab.id)}
+                                onClick={() => handleTabChange(tab.id)}
                                 style={{
                                   padding: "8px 16px",
                                   background: isActive ? "var(--accent)" : "var(--bg-tertiary)",
@@ -1485,7 +1754,11 @@ export default function Journal() {
                       </div>
                     )}
                     {activeTab === "trade" && (
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+                      <div 
+                        ref={(el) => { tabContentRefs.current.set("trade", el); }}
+                        style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
+                        onScroll={(e) => { tabScrollPositions.current.set("trade", e.currentTarget.scrollTop); }}
+                      >
                         <RichTextEditor
                           value={currentTrade.trade}
                           onChange={(content: string) => updateTradeFormData(activeTradeIndex, "trade", content)}
@@ -1495,7 +1768,11 @@ export default function Journal() {
                       </div>
                     )}
                     {activeTab === "what_went_well" && (
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+                      <div 
+                        ref={(el) => { tabContentRefs.current.set("what_went_well", el); }}
+                        style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
+                        onScroll={(e) => { tabScrollPositions.current.set("what_went_well", e.currentTarget.scrollTop); }}
+                      >
                         <RichTextEditor
                           value={currentTrade.what_went_well}
                           onChange={(content: string) => updateTradeFormData(activeTradeIndex, "what_went_well", content)}
@@ -1505,7 +1782,11 @@ export default function Journal() {
                       </div>
                     )}
                     {activeTab === "what_could_be_improved" && (
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+                      <div 
+                        ref={(el) => { tabContentRefs.current.set("what_could_be_improved", el); }}
+                        style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
+                        onScroll={(e) => { tabScrollPositions.current.set("what_could_be_improved", e.currentTarget.scrollTop); }}
+                      >
                         <RichTextEditor
                           value={currentTrade.what_could_be_improved}
                           onChange={(content: string) => updateTradeFormData(activeTradeIndex, "what_could_be_improved", content)}
@@ -1515,7 +1796,11 @@ export default function Journal() {
                       </div>
                     )}
                     {activeTab === "emotional_state" && (
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+                      <div 
+                        ref={(el) => { tabContentRefs.current.set("emotional_state", el); }}
+                        style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
+                        onScroll={(e) => { tabScrollPositions.current.set("emotional_state", e.currentTarget.scrollTop); }}
+                      >
                         <RichTextEditor
                           value={currentTrade.emotional_state}
                           onChange={(content: string) => updateTradeFormData(activeTradeIndex, "emotional_state", content)}
@@ -1525,7 +1810,11 @@ export default function Journal() {
                       </div>
                     )}
                     {activeTab === "notes" && (
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+                      <div 
+                        ref={(el) => { tabContentRefs.current.set("notes", el); }}
+                        style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
+                        onScroll={(e) => { tabScrollPositions.current.set("notes", e.currentTarget.scrollTop); }}
+                      >
                         <RichTextEditor
                           value={currentTrade.notes}
                           onChange={(content: string) => updateTradeFormData(activeTradeIndex, "notes", content)}
@@ -1535,7 +1824,11 @@ export default function Journal() {
                       </div>
                     )}
                     {activeTab === "checklists" && (
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+                      <div 
+                        ref={(el) => { tabContentRefs.current.set("checklists", el); }}
+                        style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
+                        onScroll={(e) => { tabScrollPositions.current.set("checklists", e.currentTarget.scrollTop); }}
+                      >
                         {entryFormData.strategy_id && currentChecklists ? (
                           <div style={{ overflowY: "auto" }}>
                             {allTypes.map((type) => {
@@ -1676,7 +1969,11 @@ export default function Journal() {
                       </div>
                     )}
                     {activeTab === "survey" && (
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+                      <div 
+                        ref={(el) => { tabContentRefs.current.set("survey", el); }}
+                        style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
+                        onScroll={(e) => { tabScrollPositions.current.set("survey", e.currentTarget.scrollTop); }}
+                      >
                         {entryFormData.strategy_id && currentChecklists ? (
                           <div style={{ overflowY: "auto" }}>
                             {(() => {
@@ -1990,6 +2287,7 @@ export default function Journal() {
                   <div
                     key={entry.id}
                     onClick={() => {
+                      clearWorkInProgress(); // Clear work in progress when selecting an existing entry
                       loadEntry(entry.id);
                       setIsCreating(false);
                       setIsEditing(false);

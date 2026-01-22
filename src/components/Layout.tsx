@@ -7,16 +7,18 @@ import {
   Calendar,
   Target,
   Upload,
+  Download,
   Trash2,
   TrendingDown,
   Calculator,
   DollarSign,
-  FileText
+  FileText,
+  Settings
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { open } from "@tauri-apps/api/dialog";
-import { readTextFile } from "@tauri-apps/api/fs";
+import { open, save } from "@tauri-apps/api/dialog";
+import { readTextFile, writeTextFile } from "@tauri-apps/api/fs";
 import { createPortal } from "react-dom";
 import appIcon from "../assets/app-icon.png";
 
@@ -27,27 +29,96 @@ interface LayoutProps {
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation();
   const [isImporting, setIsImporting] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const mainContentRef = useRef<HTMLElement>(null);
+  const scrollPositions = useRef<Map<string, number>>(new Map());
+  const previousPathRef = useRef<string>(location.pathname);
+  
+  // Initialize: Load saved scroll positions from localStorage
+  useEffect(() => {
+    // Load all saved scroll positions on mount
+    const paths = ["/", "/trades", "/calendar", "/strategies", "/journal", "/emotions", "/analytics", "/evaluation", "/average-down-calculator", "/dividend-calculator", "/settings"];
+    paths.forEach(path => {
+      const saved = localStorage.getItem(`scroll_${path}`);
+      if (saved) {
+        const position = parseInt(saved, 10);
+        if (!isNaN(position) && position > 0) {
+          scrollPositions.current.set(path, position);
+        }
+      }
+    });
+  }, []);
 
-  const handleImportCSV = async () => {
+  const handleImport = async () => {
     try {
       setIsImporting(true);
       const file = await open({
-        filters: [{ name: "CSV", extensions: ["csv"] }],
+        filters: [
+          { name: "All Supported", extensions: ["csv", "json"] },
+          { name: "CSV", extensions: ["csv"] },
+          { name: "JSON", extensions: ["json"] },
+        ],
       });
 
       if (file && typeof file === "string") {
         const contents = await readTextFile(file);
-        await invoke("import_trades_csv", { csvData: contents });
-        alert("Trades imported successfully!");
+        
+        // Check if it's JSON (export file) or CSV
+        if (file.toLowerCase().endsWith(".json")) {
+          const result = await invoke<{
+            trades_imported: number;
+            trades_skipped: number;
+            strategies_imported: number;
+            strategies_skipped: number;
+            journal_entries_imported: number;
+            journal_entries_skipped: number;
+            // ... other fields
+          }>("import_data", { jsonData: contents });
+          
+          const summary = [
+            `Trades: ${result.trades_imported} imported, ${result.trades_skipped} skipped`,
+            `Strategies: ${result.strategies_imported} imported, ${result.strategies_skipped} skipped`,
+            `Journal Entries: ${result.journal_entries_imported} imported, ${result.journal_entries_skipped} skipped`,
+          ].join("\n");
+          
+          alert(`Data imported successfully!\n\n${summary}`);
+        } else {
+          // CSV import
+          await invoke("import_trades_csv", { csvData: contents });
+          alert("Trades imported successfully!");
+        }
         window.location.reload();
       }
     } catch (error) {
-      console.error("Error importing CSV:", error);
-      alert("Failed to import CSV: " + error);
+      console.error("Error importing:", error);
+      alert("Failed to import: " + error);
     } finally {
       setIsImporting(false);
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      setIsExporting(true);
+      const filePath = await save({
+        filters: [
+          { name: "JSON", extensions: ["json"] },
+        ],
+        defaultPath: `TradeButler-Export-${new Date().toISOString().split('T')[0]}.json`,
+      });
+
+      if (filePath && typeof filePath === "string") {
+        const jsonData = await invoke<string>("export_data");
+        await writeTextFile(filePath, jsonData);
+        alert("Data exported successfully!");
+      }
+    } catch (error) {
+      console.error("Error exporting:", error);
+      alert("Failed to export: " + error);
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -78,6 +149,115 @@ export default function Layout({ children }: LayoutProps) {
     setDeleteConfirmText("");
   };
 
+  // Save scroll position for current route
+  const saveScrollPosition = () => {
+    if (mainContentRef.current) {
+      const path = location.pathname;
+      const scrollTop = mainContentRef.current.scrollTop;
+      // Always save, even if 0, so we can restore to top if needed
+      scrollPositions.current.set(path, scrollTop);
+      localStorage.setItem(`scroll_${path}`, scrollTop.toString());
+    }
+  };
+
+
+  // Save scroll position when route changes
+  useEffect(() => {
+    // Save the previous route's scroll position (from cleanup of previous effect)
+    const currentPath = location.pathname;
+
+    return () => {
+      // Save current route's scroll position before switching away
+      const pathToSave = previousPathRef.current;
+      if (mainContentRef.current && pathToSave) {
+        const scrollTop = mainContentRef.current.scrollTop;
+        scrollPositions.current.set(pathToSave, scrollTop);
+        localStorage.setItem(`scroll_${pathToSave}`, scrollTop.toString());
+      }
+      // Update ref for next time
+      previousPathRef.current = currentPath;
+    };
+  }, [location.pathname]);
+
+  // Restore scroll position after route change and DOM update
+  // Using useLayoutEffect ensures this runs synchronously before paint
+  useLayoutEffect(() => {
+    if (!mainContentRef.current) return;
+    
+    const path = location.pathname;
+    const saved = localStorage.getItem(`scroll_${path}`);
+    if (!saved) return;
+    
+    const position = parseInt(saved, 10);
+    if (isNaN(position) || position < 0) return;
+    
+    const container = mainContentRef.current;
+    
+    // Function to actually restore the scroll
+    const doRestore = () => {
+      if (!container) return false;
+      
+      const scrollHeight = container.scrollHeight;
+      const clientHeight = container.clientHeight;
+      
+      // If we have scrollable content, restore the position
+      if (scrollHeight > clientHeight || position === 0) {
+        const maxScroll = Math.max(0, scrollHeight - clientHeight);
+        const targetScroll = Math.min(position, maxScroll);
+        
+        // Only restore if we're not already at the target position
+        if (Math.abs(container.scrollTop - targetScroll) > 1) {
+          container.scrollTop = targetScroll;
+        }
+        return true; // Successfully restored
+      }
+      return false; // Content not ready yet
+    };
+    
+    // Try immediately
+    if (doRestore()) return;
+    
+    // Use MutationObserver to detect when content is actually loaded
+    const observer = new MutationObserver(() => {
+      if (doRestore()) {
+        observer.disconnect();
+      }
+    });
+    
+    // Start observing
+    observer.observe(container, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
+    
+    // Disconnect after 3 seconds if content never loads
+    const timeout = setTimeout(() => {
+      observer.disconnect();
+    }, 3000);
+    
+    return () => {
+      observer.disconnect();
+      clearTimeout(timeout);
+    };
+  }, [location.pathname]);
+
+  // Save scroll position on scroll
+  useEffect(() => {
+    const container = mainContentRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      saveScrollPosition();
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+    };
+  }, [location.pathname]);
+
   const navItems = [
     { path: "/", icon: LayoutDashboard, label: "Dashboard" },
     { path: "/trades", icon: TrendingUp, label: "Trades" },
@@ -89,6 +269,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: "/evaluation", icon: TrendingDown, label: "Evaluation" },
     { path: "/average-down-calculator", icon: Calculator, label: "Average Down Calculator" },
     { path: "/dividend-calculator", icon: DollarSign, label: "Dividend Calculator" },
+    { path: "/settings", icon: Settings, label: "Settings" },
   ];
 
   return (
@@ -136,7 +317,7 @@ export default function Layout({ children }: LayoutProps) {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             <button
-              onClick={handleImportCSV}
+              onClick={handleImport}
               disabled={isImporting}
               style={{
                 width: "100%",
@@ -156,7 +337,30 @@ export default function Layout({ children }: LayoutProps) {
               }}
             >
               <Upload size={16} />
-              {isImporting ? "Importing..." : "Import CSV"}
+              {isImporting ? "Importing..." : "Import"}
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={isExporting}
+              style={{
+                width: "100%",
+                padding: "10px",
+                backgroundColor: "var(--bg-tertiary)",
+                color: "var(--accent)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+                fontSize: "14px",
+                fontWeight: "500",
+                opacity: isExporting ? 0.6 : 1,
+              }}
+            >
+              <Download size={16} />
+              {isExporting ? "Exporting..." : "Export"}
             </button>
             <button
               onClick={handleClearAllData}
@@ -246,9 +450,10 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Main Content */}
       <main
+        ref={mainContentRef}
         style={{
           flex: 1,
-          overflow: "hidden",
+          overflow: "auto",
           backgroundColor: "var(--bg-primary)",
           display: "flex",
           flexDirection: "column",

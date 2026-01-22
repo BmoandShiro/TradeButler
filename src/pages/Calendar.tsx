@@ -1,6 +1,7 @@
 import Calendar from "../components/Calendar";
 
 export default function CalendarPage() {
+
   return (
     <div style={{ padding: "30px" }}>
       <h1 style={{ fontSize: "32px", fontWeight: "bold", marginBottom: "30px" }}>
