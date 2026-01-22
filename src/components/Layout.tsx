@@ -21,6 +21,7 @@ import { open, save } from "@tauri-apps/api/dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/api/fs";
 import { createPortal } from "react-dom";
 import appIcon from "../assets/app-icon.png";
+import { applyTheme } from "../utils/themeManager";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -67,6 +68,29 @@ export default function Layout({ children }: LayoutProps) {
         
         // Check if it's JSON (export file) or CSV
         if (file.toLowerCase().endsWith(".json")) {
+          // Parse JSON to check for theme colors
+          let importData;
+          try {
+            importData = JSON.parse(contents);
+          } catch (e) {
+            throw new Error("Invalid JSON file");
+          }
+          
+          // Extract theme colors if present
+          if (importData.theme_colors) {
+            try {
+              localStorage.setItem("tradebutler_theme_colors", JSON.stringify(importData.theme_colors));
+              // Apply the imported theme
+              applyTheme(importData.theme_colors);
+            } catch (e) {
+              console.warn("Failed to import theme colors:", e);
+            }
+          }
+          
+          // Remove theme_colors from import data before passing to Rust (it doesn't expect it)
+          const { theme_colors, ...dataForRust } = importData;
+          const jsonDataForRust = JSON.stringify(dataForRust);
+          
           const result = await invoke<{
             trades_imported: number;
             trades_skipped: number;
@@ -75,13 +99,14 @@ export default function Layout({ children }: LayoutProps) {
             journal_entries_imported: number;
             journal_entries_skipped: number;
             // ... other fields
-          }>("import_data", { jsonData: contents });
+          }>("import_data", { jsonData: jsonDataForRust });
           
           const summary = [
             `Trades: ${result.trades_imported} imported, ${result.trades_skipped} skipped`,
             `Strategies: ${result.strategies_imported} imported, ${result.strategies_skipped} skipped`,
             `Journal Entries: ${result.journal_entries_imported} imported, ${result.journal_entries_skipped} skipped`,
-          ].join("\n");
+            importData.theme_colors ? `Theme: Imported successfully` : "",
+          ].filter(Boolean).join("\n");
           
           alert(`Data imported successfully!\n\n${summary}`);
         } else {
@@ -110,6 +135,22 @@ export default function Layout({ children }: LayoutProps) {
       const jsonData = await invoke<string>("export_data");
       console.log("Export data retrieved, length:", jsonData.length);
       
+      // Parse the JSON to add theme colors
+      const exportData = JSON.parse(jsonData);
+      
+      // Get theme colors from localStorage
+      const themeColors = localStorage.getItem("tradebutler_theme_colors");
+      if (themeColors) {
+        try {
+          exportData.theme_colors = JSON.parse(themeColors);
+        } catch (e) {
+          console.warn("Failed to parse theme colors:", e);
+        }
+      }
+      
+      // Convert back to JSON string
+      const finalJsonData = JSON.stringify(exportData, null, 2);
+      
       // Then, ask user where to save it
       console.log("Opening save dialog...");
       const filePath = await save({
@@ -122,7 +163,7 @@ export default function Layout({ children }: LayoutProps) {
 
       if (filePath && typeof filePath === "string") {
         console.log("Saving to:", filePath);
-        await writeTextFile(filePath, jsonData);
+        await writeTextFile(filePath, finalJsonData);
         console.log("File saved successfully");
         alert(`Data exported successfully to:\n${filePath}`);
       } else {

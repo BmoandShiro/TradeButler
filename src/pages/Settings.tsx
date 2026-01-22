@@ -1,7 +1,9 @@
-import { useState } from "react";
-import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { createPortal } from "react-dom";
+import { ColorPicker } from "../components/ColorPicker";
+import { loadTheme, saveTheme, applyTheme, resetTheme, defaultTheme, ThemeColors } from "../utils/themeManager";
 
 interface VersionInfo {
   current: string;
@@ -18,6 +20,9 @@ export default function Settings() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  
+  // Theme state
+  const [theme, setTheme] = useState<ThemeColors>(() => loadTheme());
 
   const checkVersion = async () => {
     try {
@@ -91,6 +96,28 @@ export default function Settings() {
     setShowUpdateModal(false);
   };
 
+  // Theme handlers
+  const updateThemeColor = (key: keyof ThemeColors, color: string) => {
+    const updatedTheme = { ...theme, [key]: color };
+    setTheme(updatedTheme);
+    saveTheme(updatedTheme);
+    applyTheme(updatedTheme);
+  };
+
+  const handleResetTheme = () => {
+    if (confirm("Reset all theme colors to defaults? This cannot be undone.")) {
+      resetTheme();
+      setTheme(defaultTheme);
+    }
+  };
+
+  // Load theme on mount
+  useEffect(() => {
+    const loadedTheme = loadTheme();
+    setTheme(loadedTheme);
+    applyTheme(loadedTheme);
+  }, []);
+
   return (
     <div
       style={{
@@ -123,6 +150,227 @@ export default function Settings() {
           >
             Settings
           </h1>
+        </div>
+
+        {/* Theme Customization Section */}
+        <div
+          style={{
+            backgroundColor: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "12px",
+            padding: "24px",
+            marginBottom: "24px",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+            <h2
+              style={{
+                fontSize: "20px",
+                fontWeight: "600",
+                color: "var(--text-primary)",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              <Palette size={20} />
+              Theme Customization
+            </h2>
+            <button
+              onClick={handleResetTheme}
+              style={{
+                padding: "8px 16px",
+                backgroundColor: "var(--bg-tertiary)",
+                color: "var(--text-primary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                cursor: "pointer",
+                fontSize: "13px",
+                fontWeight: "500",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+              }}
+            >
+              <RotateCcw size={14} />
+              Reset to Defaults
+            </button>
+          </div>
+
+          <p
+            style={{
+              fontSize: "14px",
+              color: "var(--text-secondary)",
+              marginBottom: "24px",
+              lineHeight: "1.6",
+            }}
+          >
+            Customize the appearance of TradeButler by adjusting the color scheme. Changes are applied immediately.
+          </p>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "20px" }}>
+            {/* Background Colors */}
+            <div>
+              <h3 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "12px" }}>
+                Background Colors
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Primary Background
+                  </label>
+                  <ColorPicker
+                    value={theme.bgPrimary}
+                    onChange={(color) => updateThemeColor("bgPrimary", color)}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Secondary Background
+                  </label>
+                  <ColorPicker
+                    value={theme.bgSecondary}
+                    onChange={(color) => updateThemeColor("bgSecondary", color)}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Tertiary Background
+                  </label>
+                  <ColorPicker
+                    value={theme.bgTertiary}
+                    onChange={(color) => updateThemeColor("bgTertiary", color)}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Hover Background
+                  </label>
+                  <ColorPicker
+                    value={theme.bgHover}
+                    onChange={(color) => updateThemeColor("bgHover", color)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Text & Border Colors */}
+            <div>
+              <h3 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "12px" }}>
+                Text & Border
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Primary Text
+                  </label>
+                  <ColorPicker
+                    value={theme.textPrimary}
+                    onChange={(color) => updateThemeColor("textPrimary", color)}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Secondary Text
+                  </label>
+                  <ColorPicker
+                    value={theme.textSecondary}
+                    onChange={(color) => updateThemeColor("textSecondary", color)}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Border Color
+                  </label>
+                  <ColorPicker
+                    value={theme.borderColor}
+                    onChange={(color) => updateThemeColor("borderColor", color)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Accent Colors */}
+            <div>
+              <h3 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "12px" }}>
+                Accent Colors
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Accent
+                  </label>
+                  <ColorPicker
+                    value={theme.accent}
+                    onChange={(color) => updateThemeColor("accent", color)}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Accent Hover
+                  </label>
+                  <ColorPicker
+                    value={theme.accentHover}
+                    onChange={(color) => updateThemeColor("accentHover", color)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Status Colors */}
+            <div>
+              <h3 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "12px" }}>
+                Status Colors
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Success
+                  </label>
+                  <ColorPicker
+                    value={theme.success}
+                    onChange={(color) => updateThemeColor("success", color)}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Danger
+                  </label>
+                  <ColorPicker
+                    value={theme.danger}
+                    onChange={(color) => updateThemeColor("danger", color)}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Warning
+                  </label>
+                  <ColorPicker
+                    value={theme.warning}
+                    onChange={(color) => updateThemeColor("warning", color)}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Profit
+                  </label>
+                  <ColorPicker
+                    value={theme.profit}
+                    onChange={(color) => updateThemeColor("profit", color)}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Loss
+                  </label>
+                  <ColorPicker
+                    value={theme.loss}
+                    onChange={(color) => updateThemeColor("loss", color)}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Version Checker Section */}
