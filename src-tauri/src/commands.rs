@@ -4948,9 +4948,8 @@ struct GitHubAsset {
 
 // Get current version from package info
 fn get_current_version() -> String {
-    // Return the display version (1.0.0.0-alpha)
-    // Cargo.toml uses 1.0.0-alpha (valid semver), but we display 1.0.0.0-alpha
-    "1.0.0.0-alpha".to_string()
+    // Get version from Cargo.toml at compile time
+    env!("CARGO_PKG_VERSION").to_string()
 }
 
 // Detect if running as installer or portable
