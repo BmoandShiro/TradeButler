@@ -177,23 +177,46 @@ export default function Layout({ children }: LayoutProps) {
     }
   };
 
+  // Get current scroll position (from memory or DOM)
+  const getCurrentScrollPosition = (): number => {
+    if (mainContentRef.current) {
+      return mainContentRef.current.scrollTop;
+    }
+    return 0;
+  };
+
 
   // Save scroll position when route changes
   useEffect(() => {
-    // Save the previous route's scroll position (from cleanup of previous effect)
     const currentPath = location.pathname;
+    const previousPath = previousPathRef.current;
 
-    return () => {
-      // Save current route's scroll position before switching away
-      const pathToSave = previousPathRef.current;
-      if (mainContentRef.current && pathToSave) {
-        const scrollTop = mainContentRef.current.scrollTop;
-        scrollPositions.current.set(pathToSave, scrollTop);
-        localStorage.setItem(`scroll_${pathToSave}`, scrollTop.toString());
+    // Save the previous route's scroll position
+    // Try to get it from the in-memory map first (most up-to-date)
+    // If not available, try to read from DOM (but it might already be the new page)
+    if (previousPath && previousPath !== currentPath) {
+      let scrollTop: number;
+      
+      // First, try to get from in-memory map (saved by scroll event handler)
+      if (scrollPositions.current.has(previousPath)) {
+        scrollTop = scrollPositions.current.get(previousPath)!;
+      } else if (mainContentRef.current) {
+        // Fallback: try to read from DOM
+        scrollTop = mainContentRef.current.scrollTop;
+      } else {
+        // Last resort: try localStorage
+        const saved = localStorage.getItem(`scroll_${previousPath}`);
+        scrollTop = saved ? parseInt(saved, 10) : 0;
       }
-      // Update ref for next time
-      previousPathRef.current = currentPath;
-    };
+      
+      // Only save if we got a valid value and it's not 0 (unless it was intentionally saved as 0)
+      // Actually, save it anyway - 0 is a valid scroll position
+      scrollPositions.current.set(previousPath, scrollTop);
+      localStorage.setItem(`scroll_${previousPath}`, scrollTop.toString());
+    }
+
+    // Update ref for next time
+    previousPathRef.current = currentPath;
   }, [location.pathname]);
 
   // Restore scroll position after route change and DOM update
@@ -202,11 +225,17 @@ export default function Layout({ children }: LayoutProps) {
     if (!mainContentRef.current) return;
     
     const path = location.pathname;
-    const saved = localStorage.getItem(`scroll_${path}`);
-    if (!saved) return;
     
-    const position = parseInt(saved, 10);
-    if (isNaN(position) || position < 0) return;
+    // Try to get from in-memory map first (most up-to-date), then localStorage
+    let position: number;
+    if (scrollPositions.current.has(path)) {
+      position = scrollPositions.current.get(path)!;
+    } else {
+      const saved = localStorage.getItem(`scroll_${path}`);
+      if (!saved) return;
+      position = parseInt(saved, 10);
+      if (isNaN(position) || position < 0) return;
+    }
     
     const container = mainContentRef.current;
     
@@ -225,8 +254,11 @@ export default function Layout({ children }: LayoutProps) {
         // Only restore if we're not already at the target position
         if (Math.abs(container.scrollTop - targetScroll) > 1) {
           container.scrollTop = targetScroll;
+          // Update in-memory map after restoring
+          scrollPositions.current.set(path, targetScroll);
+          return true; // Successfully restored
         }
-        return true; // Successfully restored
+        return true; // Already at target position
       }
       return false; // Content not ready yet
     };
@@ -235,9 +267,10 @@ export default function Layout({ children }: LayoutProps) {
     if (doRestore()) return;
     
     // Use MutationObserver to detect when content is actually loaded
-    const observer = new MutationObserver(() => {
-      if (doRestore()) {
+    let observer: MutationObserver | null = new MutationObserver(() => {
+      if (doRestore() && observer) {
         observer.disconnect();
+        observer = null;
       }
     });
     
@@ -248,14 +281,26 @@ export default function Layout({ children }: LayoutProps) {
       attributes: true,
     });
     
+    // Also try after a short delay (for cases where MutationObserver doesn't catch it)
+    const timeout1 = setTimeout(() => {
+      if (doRestore() && observer) {
+        observer.disconnect();
+        observer = null;
+      }
+    }, 100);
+    
     // Disconnect after 3 seconds if content never loads
-    const timeout = setTimeout(() => {
-      observer.disconnect();
+    const timeout2 = setTimeout(() => {
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+      }
     }, 3000);
     
     return () => {
-      observer.disconnect();
-      clearTimeout(timeout);
+      if (observer) observer.disconnect();
+      clearTimeout(timeout1);
+      clearTimeout(timeout2);
     };
   }, [location.pathname]);
 

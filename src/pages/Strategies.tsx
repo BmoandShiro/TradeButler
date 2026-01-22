@@ -6,6 +6,7 @@ import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import { ColorPicker } from "../components/ColorPicker";
+import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
 import {
   DndContext,
   closestCenter,
@@ -875,59 +876,41 @@ export default function Strategies() {
     localStorage.removeItem('strategies_work_in_progress');
   };
 
-  // Save scroll positions
+  // Save scroll positions using utility
   const saveScrollPositions = () => {
-    if (leftPanelScrollRef.current) {
-      localStorage.setItem('strategies_left_panel_scroll', leftPanelScrollRef.current.scrollTop.toString());
-    }
-    if (rightPanelScrollRef.current) {
-      localStorage.setItem('strategies_right_panel_scroll', rightPanelScrollRef.current.scrollTop.toString());
-    }
-    // Save tab scroll positions
-    const tabPositions: Record<string, number> = {};
-    tabScrollPositions.current.forEach((pos, tab) => {
-      tabPositions[tab] = pos;
-    });
-    localStorage.setItem('strategies_tab_scroll_positions', JSON.stringify(tabPositions));
+    saveAllScrollPositions(
+      tabScrollPositions.current,
+      leftPanelScrollRef.current?.scrollTop ?? null,
+      rightPanelScrollRef.current?.scrollTop ?? null,
+      "strategies"
+    );
   };
 
-  // Restore scroll positions
+  // Restore scroll positions using utility
   const restoreScrollPositions = () => {
+    const scrollState = restoreAllScrollPositions("strategies");
+    
+    // Restore tab scroll positions to the ref
+    scrollState.tabPositions.forEach((pos, tab) => {
+      tabScrollPositions.current.set(tab, pos);
+    });
+    
     // Restore left panel scroll
-    if (leftPanelScrollRef.current) {
-      const saved = localStorage.getItem('strategies_left_panel_scroll');
-      if (saved) {
-        requestAnimationFrame(() => {
-          if (leftPanelScrollRef.current) {
-            leftPanelScrollRef.current.scrollTop = parseInt(saved, 10);
-          }
-        });
-      }
+    if (leftPanelScrollRef.current && scrollState.leftPanelScroll !== null) {
+      requestAnimationFrame(() => {
+        if (leftPanelScrollRef.current) {
+          leftPanelScrollRef.current.scrollTop = scrollState.leftPanelScroll!;
+        }
+      });
     }
     
     // Restore right panel scroll
-    if (rightPanelScrollRef.current) {
-      const saved = localStorage.getItem('strategies_right_panel_scroll');
-      if (saved) {
-        requestAnimationFrame(() => {
-          if (rightPanelScrollRef.current) {
-            rightPanelScrollRef.current.scrollTop = parseInt(saved, 10);
-          }
-        });
-      }
-    }
-    
-    // Restore tab scroll positions
-    const savedTabPositions = localStorage.getItem('strategies_tab_scroll_positions');
-    if (savedTabPositions) {
-      try {
-        const positions = JSON.parse(savedTabPositions);
-        Object.entries(positions).forEach(([tab, pos]) => {
-          tabScrollPositions.current.set(tab as TabType, pos as number);
-        });
-      } catch (e) {
-        console.error("Error restoring tab scroll positions:", e);
-      }
+    if (rightPanelScrollRef.current && scrollState.rightPanelScroll !== null) {
+      requestAnimationFrame(() => {
+        if (rightPanelScrollRef.current) {
+          rightPanelScrollRef.current.scrollTop = scrollState.rightPanelScroll!;
+        }
+      });
     }
   };
 
@@ -3093,10 +3076,23 @@ export default function Strategies() {
                   <button
                     key={tab.id}
                     onClick={() => {
-                      // Save current tab's scroll position
-                      if (rightPanelScrollRef.current) {
+                      // Save current active tab's scroll position
+                      const currentTabContent = tabContentRefs.current.get(activeTab);
+                      if (currentTabContent) {
+                        // Tab has its own scroll container
+                        tabScrollPositions.current.set(activeTab, currentTabContent.scrollTop);
+                      } else if (rightPanelScrollRef.current && activeTab === "notes") {
+                        // Notes tab uses the right panel scroll
                         tabScrollPositions.current.set(activeTab, rightPanelScrollRef.current.scrollTop);
                       }
+                      
+                      // Save all scroll positions (tabs + panels) to localStorage before switching
+                      saveAllScrollPositions(
+                        tabScrollPositions.current,
+                        leftPanelScrollRef.current?.scrollTop ?? null,
+                        rightPanelScrollRef.current?.scrollTop ?? null,
+                        "strategies"
+                      );
                       
                       // Switch to new tab
                       setActiveTab(tab.id);

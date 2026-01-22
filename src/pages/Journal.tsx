@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2 } from "lucide-react";
 import { format, parse } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
+import { saveAllScrollPositions } from "../utils/scrollManager";
 
 interface JournalEntry {
   id: number;
@@ -238,6 +239,14 @@ export default function Journal() {
     if (currentTabContent) {
       tabScrollPositions.current.set(activeTab, currentTabContent.scrollTop);
     }
+    
+    // Save all scroll positions to localStorage before switching
+    saveAllScrollPositions(
+      tabScrollPositions.current,
+      null, // Journal doesn't have a left panel
+      null, // Journal doesn't have a right panel
+      "journal"
+    );
     
     // Restore new tab's scroll position
     setActiveTab(newTab);
