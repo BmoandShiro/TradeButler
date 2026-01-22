@@ -70,6 +70,11 @@ fn main() {
             commands::save_journal_checklist_responses,
             commands::get_journal_checklist_responses,
             commands::get_all_symbols,
+            commands::export_data,
+            commands::import_data,
+            commands::check_version,
+            commands::download_portable_update,
+            commands::download_and_install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

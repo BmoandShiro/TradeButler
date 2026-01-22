@@ -10,6 +10,7 @@ import Journal from "./pages/Journal";
 import Evaluation from "./pages/Evaluation";
 import AverageDownCalculator from "./pages/AverageDownCalculator";
 import DividendCalculator from "./pages/DividendCalculator";
+import Settings from "./pages/Settings";
 
 function App() {
   return (
@@ -26,6 +27,7 @@ function App() {
           <Route path="/evaluation" element={<Evaluation />} />
           <Route path="/average-down-calculator" element={<AverageDownCalculator />} />
           <Route path="/dividend-calculator" element={<DividendCalculator />} />
+          <Route path="/settings" element={<Settings />} />
         </Routes>
       </Layout>
     </Router>

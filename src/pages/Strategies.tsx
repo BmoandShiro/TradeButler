@@ -6,6 +6,7 @@ import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import { ColorPicker } from "../components/ColorPicker";
+import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
 import {
   DndContext,
   closestCenter,
@@ -722,9 +723,21 @@ export default function Strategies() {
     color: "#3b82f6",
   });
   const [newStrategyNotes, setNewStrategyNotes] = useState("");
-  const [selectedStrategy, setSelectedStrategy] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<TabType>("notes");
+  const [selectedStrategy, setSelectedStrategy] = useState<number | null>(() => {
+    const saved = localStorage.getItem('strategies_selected_strategy');
+    return saved ? parseInt(saved, 10) : null;
+  });
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    const saved = localStorage.getItem('strategies_active_tab');
+    return (saved as TabType) || "notes";
+  });
   const [isMaximized, setIsMaximized] = useState(false);
+  
+  // Refs for scroll containers
+  const leftPanelScrollRef = useRef<HTMLDivElement>(null);
+  const rightPanelScrollRef = useRef<HTMLDivElement>(null);
+  const tabScrollPositions = useRef<Map<TabType, number>>(new Map());
+  const tabContentRefs = useRef<Map<TabType, HTMLDivElement | null>>(new Map());
   const [strategyPairs, setStrategyPairs] = useState<Map<number, PairedTrade[]>>(new Map());
   const [loadingPairs, setLoadingPairs] = useState<Set<number>>(new Set());
   const [strategyStats, setStrategyStats] = useState<Map<number, { totalTrades: number; totalPnL: number; winRate: number }>>(new Map());
@@ -762,9 +775,259 @@ export default function Strategies() {
     })
   );
 
+  // Save work-in-progress to localStorage
+  const saveWorkInProgress = () => {
+    if (isCreating || isEditing) {
+      const workInProgress = {
+        editingFormData,
+        newStrategyNotes,
+        notesContent: Array.from(notesContent.entries()),
+        tempChecklists: isCreating ? Array.from(tempChecklists.entries()).map(([type, items]) => [
+          type,
+          items.map(item => ({ ...item }))
+        ]) : [],
+        editingChecklists: isEditing && selectedStrategy ? Array.from(editingChecklists.entries()).map(([strategyId, checklists]) => [
+          strategyId,
+          Array.from(checklists.entries()).map(([type, items]) => [
+            type,
+            items.map(item => ({ ...item }))
+          ])
+        ]) : [],
+        selectedStrategy,
+        activeTab,
+        isCreating,
+        isEditing,
+        scrollPositions: Array.from(tabScrollPositions.current.entries()),
+        leftPanelScroll: leftPanelScrollRef.current?.scrollTop || 0,
+      };
+      localStorage.setItem('strategies_work_in_progress', JSON.stringify(workInProgress));
+    }
+  };
+
+  // Restore work-in-progress from localStorage
+  const restoreWorkInProgress = () => {
+    try {
+      const saved = localStorage.getItem('strategies_work_in_progress');
+      if (saved) {
+        const workInProgress = JSON.parse(saved);
+        setEditingFormData(workInProgress.editingFormData);
+        setNewStrategyNotes(workInProgress.newStrategyNotes || "");
+        
+        // Restore notes content
+        const restoredNotes = new Map<number, string>();
+        workInProgress.notesContent.forEach(([strategyId, notes]: [number, string]) => {
+          restoredNotes.set(strategyId, notes);
+        });
+        setNotesContent(restoredNotes);
+        
+        // Restore temp checklists if creating
+        if (workInProgress.isCreating && workInProgress.tempChecklists) {
+          const restored = new Map<string, ChecklistItem[]>();
+          workInProgress.tempChecklists.forEach(([type, items]: [string, any[]]) => {
+            restored.set(type, items);
+          });
+          setTempChecklists(restored);
+        }
+        
+        // Restore editing checklists if editing
+        if (workInProgress.isEditing && workInProgress.editingChecklists) {
+          const restored = new Map<number, Map<string, ChecklistItem[]>>();
+          workInProgress.editingChecklists.forEach(([strategyId, checklists]: [number, any[]]) => {
+            const checklistMap = new Map<string, ChecklistItem[]>();
+            checklists.forEach(([type, items]: [string, any[]]) => {
+              checklistMap.set(type, items);
+            });
+            restored.set(strategyId, checklistMap);
+          });
+          setEditingChecklists(restored);
+        }
+        
+        setSelectedStrategy(workInProgress.selectedStrategy);
+        setActiveTab(workInProgress.activeTab);
+        setIsCreating(workInProgress.isCreating);
+        setIsEditing(workInProgress.isEditing);
+        
+        // Restore scroll positions
+        workInProgress.scrollPositions.forEach(([tab, pos]: [TabType, number]) => {
+          tabScrollPositions.current.set(tab, pos);
+        });
+        
+        // Restore left panel scroll
+        if (workInProgress.leftPanelScroll && leftPanelScrollRef.current) {
+          requestAnimationFrame(() => {
+            if (leftPanelScrollRef.current) {
+              leftPanelScrollRef.current.scrollTop = workInProgress.leftPanelScroll;
+            }
+          });
+        }
+        
+        // Load strategy data if editing an existing strategy
+        if (workInProgress.selectedStrategy && !workInProgress.isCreating) {
+          loadStrategyData(workInProgress.selectedStrategy);
+        }
+      }
+    } catch (error) {
+      console.error("Error restoring work in progress:", error);
+    }
+  };
+
+  // Clear work-in-progress from localStorage
+  const clearWorkInProgress = () => {
+    localStorage.removeItem('strategies_work_in_progress');
+  };
+
+  // Save scroll positions using utility
+  const saveScrollPositions = () => {
+    saveAllScrollPositions(
+      tabScrollPositions.current,
+      leftPanelScrollRef.current?.scrollTop ?? null,
+      rightPanelScrollRef.current?.scrollTop ?? null,
+      "strategies"
+    );
+  };
+
+  // Restore scroll positions using utility
+  const restoreScrollPositions = () => {
+    const scrollState = restoreAllScrollPositions("strategies");
+    
+    // Restore tab scroll positions to the ref
+    scrollState.tabPositions.forEach((pos, tab) => {
+      tabScrollPositions.current.set(tab, pos);
+    });
+    
+    // Restore left panel scroll
+    if (leftPanelScrollRef.current && scrollState.leftPanelScroll !== null) {
+      requestAnimationFrame(() => {
+        if (leftPanelScrollRef.current) {
+          leftPanelScrollRef.current.scrollTop = scrollState.leftPanelScroll!;
+        }
+      });
+    }
+    
+    // Restore right panel scroll
+    if (rightPanelScrollRef.current && scrollState.rightPanelScroll !== null) {
+      requestAnimationFrame(() => {
+        if (rightPanelScrollRef.current) {
+          rightPanelScrollRef.current.scrollTop = scrollState.rightPanelScroll!;
+        }
+      });
+    }
+  };
+
+  // Save selected strategy and active tab to localStorage
+  useEffect(() => {
+    if (selectedStrategy !== null) {
+      localStorage.setItem('strategies_selected_strategy', selectedStrategy.toString());
+    } else {
+      localStorage.removeItem('strategies_selected_strategy');
+    }
+  }, [selectedStrategy]);
+
+  useEffect(() => {
+    localStorage.setItem('strategies_active_tab', activeTab);
+  }, [activeTab]);
+
+  // Restore state from localStorage
+  const restoreState = () => {
+    const savedStrategy = localStorage.getItem('strategies_selected_strategy');
+    if (savedStrategy) {
+      const strategyId = parseInt(savedStrategy, 10);
+      // Verify strategy still exists before restoring
+      const strategyExists = strategies.some(s => s.id === strategyId);
+      if (strategyExists) {
+        setSelectedStrategy(strategyId);
+      }
+    }
+    
+    const savedTab = localStorage.getItem('strategies_active_tab');
+    if (savedTab) {
+      setActiveTab(savedTab as TabType);
+    }
+    
+    // Restore scroll positions after a delay to ensure DOM is ready
+    setTimeout(() => {
+      restoreScrollPositions();
+    }, 100);
+  };
+
+  // Save work-in-progress before component unmounts
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      saveWorkInProgress();
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    // Also save periodically
+    const interval = setInterval(() => {
+      saveWorkInProgress();
+    }, 5000); // Save every 5 seconds
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      clearInterval(interval);
+      saveWorkInProgress(); // Save one last time
+    };
+  }, [editingFormData, newStrategyNotes, notesContent, tempChecklists, editingChecklists, selectedStrategy, activeTab, isCreating, isEditing]);
+
+  // Save scroll positions on scroll
+  useEffect(() => {
+    const leftPanel = leftPanelScrollRef.current;
+    
+    if (leftPanel) {
+      const handleLeftScroll = () => {
+        if (leftPanelScrollRef.current) {
+          localStorage.setItem('strategies_left_panel_scroll', leftPanelScrollRef.current.scrollTop.toString());
+        }
+      };
+      leftPanel.addEventListener('scroll', handleLeftScroll, { passive: true });
+      
+      return () => {
+        leftPanel.removeEventListener('scroll', handleLeftScroll);
+      };
+    }
+  }, []);
+
   useEffect(() => {
     loadStrategies();
   }, []);
+
+  // Restore state after strategies are loaded
+  useEffect(() => {
+    if (strategies.length > 0) {
+      restoreState();
+      
+      // Restore work in progress after loading
+      const hasWorkInProgress = localStorage.getItem('strategies_work_in_progress');
+      if (hasWorkInProgress) {
+        setTimeout(() => {
+          restoreWorkInProgress();
+        }, 200);
+      }
+    }
+  }, [strategies]);
+
+  // Restore scroll position when tab changes
+  useEffect(() => {
+    // For tabs with their own scroll containers (trades, checklists, survey)
+    const tabContent = tabContentRefs.current.get(activeTab);
+    if (tabContent) {
+      const savedPosition = tabScrollPositions.current.get(activeTab) || 0;
+      requestAnimationFrame(() => {
+        if (tabContent) {
+          tabContent.scrollTop = savedPosition;
+        }
+      });
+    } else if (rightPanelScrollRef.current) {
+      // For tabs without their own scroll container (notes), use the right panel scroll
+      const savedPosition = tabScrollPositions.current.get(activeTab) || 0;
+      requestAnimationFrame(() => {
+        if (rightPanelScrollRef.current) {
+          rightPanelScrollRef.current.scrollTop = savedPosition;
+        }
+      });
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     if (selectedStrategy) {
@@ -1570,12 +1833,14 @@ export default function Strategies() {
   };
 
   const handleCreateNew = () => {
+    clearWorkInProgress(); // Clear any old work in progress
     setIsCreating(true);
     setIsEditing(false);
     setSelectedStrategy(null);
     setEditingFormData({ name: "", description: "", color: "#3b82f6" });
     setNewStrategyNotes("");
     setActiveTab("notes");
+    tabScrollPositions.current.clear();
   };
 
   const handleImportCSVForStrategy = async () => {
@@ -1715,6 +1980,7 @@ export default function Strategies() {
       return;
     }
     try {
+      clearWorkInProgress(); // Clear work in progress when saving
       // Create the strategy - returns just the ID
       const newStrategyId = await invoke<number>("create_strategy", {
         name: editingFormData.name,
@@ -1798,6 +2064,7 @@ export default function Strategies() {
   };
 
   const handleCancelNew = () => {
+    clearWorkInProgress(); // Clear work in progress when canceling
     setIsCreating(false);
     setEditingFormData({ name: "", description: "", color: "#3b82f6" });
     setNewStrategyNotes("");
@@ -1959,6 +2226,7 @@ export default function Strategies() {
   };
 
   const handleSaveEdit = async () => {
+    clearWorkInProgress(); // Clear work in progress when saving
     if (!selectedStrategyData) return;
     try {
       const currentNotes = notesContent.get(selectedStrategyData.id) || selectedStrategyData.notes || "";
@@ -2011,6 +2279,7 @@ export default function Strategies() {
   };
 
   const handleCancelEdit = () => {
+    clearWorkInProgress(); // Clear work in progress when canceling
     setIsEditing(false);
     if (selectedStrategyData) {
       // Revert to original values from database
@@ -2283,7 +2552,10 @@ export default function Strategies() {
         </button>
       </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: "12px" }}>
+        <div 
+          ref={leftPanelScrollRef}
+          style={{ flex: 1, overflowY: "auto", padding: "12px" }}
+        >
 
           {strategies.length === 0 ? (
         <div
@@ -2308,6 +2580,7 @@ export default function Strategies() {
                   <div
                     key={strategy.id}
                     onClick={() => {
+                      clearWorkInProgress(); // Clear work in progress when selecting an existing strategy
                       setSelectedStrategy(strategy.id);
                       setActiveTab("notes");
                       // Only reset editing/creating when switching to a different strategy
@@ -2802,7 +3075,28 @@ export default function Strategies() {
                 return (
                   <button
                     key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
+                    onClick={() => {
+                      // Save current active tab's scroll position
+                      const currentTabContent = tabContentRefs.current.get(activeTab);
+                      if (currentTabContent) {
+                        // Tab has its own scroll container
+                        tabScrollPositions.current.set(activeTab, currentTabContent.scrollTop);
+                      } else if (rightPanelScrollRef.current && activeTab === "notes") {
+                        // Notes tab uses the right panel scroll
+                        tabScrollPositions.current.set(activeTab, rightPanelScrollRef.current.scrollTop);
+                      }
+                      
+                      // Save all scroll positions (tabs + panels) to localStorage before switching
+                      saveAllScrollPositions(
+                        tabScrollPositions.current,
+                        leftPanelScrollRef.current?.scrollTop ?? null,
+                        rightPanelScrollRef.current?.scrollTop ?? null,
+                        "strategies"
+                      );
+                      
+                      // Switch to new tab
+                      setActiveTab(tab.id);
+                    }}
                     style={{
                       padding: "12px 20px",
                       background: isActive ? "var(--bg-primary)" : "transparent",
@@ -2826,8 +3120,18 @@ export default function Strategies() {
             </div>
 
             {/* Tab Content */}
-            <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+            <div 
+              ref={rightPanelScrollRef}
+              style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}
+              onScroll={(e) => {
+                // Save scroll position for notes tab (which uses the right panel scroll)
+                if (activeTab === "notes") {
+                  tabScrollPositions.current.set("notes", e.currentTarget.scrollTop);
+                }
+              }}
+            >
               {activeTab === "notes" && (selectedStrategy !== null || isCreating) && (
+                <div>
                 <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "24px" }}>
                   <div style={{ marginBottom: "20px" }}>
                     <h3 style={{ 
@@ -2858,10 +3162,19 @@ export default function Strategies() {
                     />
                   </div>
                 </div>
+                </div>
               )}
 
               {activeTab === "trades" && (
-                <div style={{ padding: "20px", overflowY: "auto" }}>
+                <div 
+                  ref={(el) => { tabContentRefs.current.set("trades", el); }}
+                  style={{ padding: "20px", overflowY: "auto" }}
+                  onScroll={(e) => { 
+                    if (activeTab === "trades") {
+                      tabScrollPositions.current.set("trades", e.currentTarget.scrollTop);
+                    }
+                  }}
+                >
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
                     <h3 style={{ fontSize: "18px", fontWeight: "600" }}>Trades</h3>
                     {(isCreating || selectedStrategy) && (
@@ -3166,7 +3479,15 @@ export default function Strategies() {
                 const allTypes = [...defaultTypes, ...tempCustomTypes.filter(t => !defaultTypes.includes(t) && t !== "survey")];
 
                 return (
-                  <div style={{ padding: "24px", overflowY: "auto" }}>
+                  <div 
+                    ref={(el) => { tabContentRefs.current.set("checklists", el); }}
+                    style={{ padding: "24px", overflowY: "auto" }}
+                    onScroll={(e) => {
+                      if (activeTab === "checklists") {
+                        tabScrollPositions.current.set("checklists", e.currentTarget.scrollTop);
+                      }
+                    }}
+                  >
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "32px", paddingBottom: "16px", borderBottom: "1px solid var(--border-color)" }}>
                       <h2 style={{ fontSize: "24px", fontWeight: "700", color: "var(--text-primary)", margin: 0 }}>
                         Checklists
@@ -3298,7 +3619,15 @@ export default function Strategies() {
                 }
 
                 return (
-                  <div style={{ padding: "24px", overflowY: "auto" }}>
+                  <div 
+                    ref={(el) => { tabContentRefs.current.set("survey", el); }}
+                    style={{ padding: "24px", overflowY: "auto" }}
+                    onScroll={(e) => {
+                      if (activeTab === "survey") {
+                        tabScrollPositions.current.set("survey", e.currentTarget.scrollTop);
+                      }
+                    }}
+                  >
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "32px", paddingBottom: "16px", borderBottom: "1px solid var(--border-color)" }}>
                       <h2 style={{ fontSize: "24px", fontWeight: "700", color: "var(--text-primary)", margin: 0 }}>
                         Post-Trade Survey

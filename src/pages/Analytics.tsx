@@ -89,6 +89,7 @@ export default function Analytics() {
   const equitySettingsRef = useRef<HTMLDivElement>(null);
   const equitySettingsButtonRef = useRef<HTMLButtonElement>(null);
 
+
   useEffect(() => {
     loadData();
   }, [timeframe, customStartDate, customEndDate]);

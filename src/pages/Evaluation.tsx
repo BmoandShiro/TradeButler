@@ -188,6 +188,7 @@ export default function Evaluation() {
     }
   };
 
+
   useEffect(() => {
     loadEvaluationData();
   }, [timeframe, customStartDate, customEndDate, concentrationPercent]);
@@ -374,7 +375,7 @@ export default function Evaluation() {
   const timeOfDayMin = Math.min(...timeOfDayPnlValues, -1);
 
   return (
-    <div style={{ padding: "30px", overflowY: "auto", height: "100%" }}>
+    <div style={{ padding: "30px" }}>
       <h1 style={{ fontSize: "32px", fontWeight: "bold", marginBottom: "20px" }}>Evaluation</h1>
       
       <div style={{ marginBottom: "30px" }}>

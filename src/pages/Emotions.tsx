@@ -28,12 +28,27 @@ const EMOTIONS = [
 export default function Emotions() {
   const [states, setStates] = useState<EmotionalState[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [formData, setFormData] = useState({
-    emotion: "Neutral",
-    intensity: 5,
-    notes: "",
+  const [showForm, setShowForm] = useState(() => {
+    const saved = localStorage.getItem('emotions_show_form');
+    return saved === "true";
   });
+  const [formData, setFormData] = useState(() => {
+    const saved = localStorage.getItem('emotions_form_data');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return { emotion: "Neutral", intensity: 5, notes: "" };
+      }
+    }
+    return { emotion: "Neutral", intensity: 5, notes: "" };
+  });
+
+  // Save form state
+  useEffect(() => {
+    localStorage.setItem('emotions_show_form', showForm.toString());
+    localStorage.setItem('emotions_form_data', JSON.stringify(formData));
+  }, [showForm, formData]);
 
   useEffect(() => {
     loadStates();
@@ -62,6 +77,8 @@ export default function Emotions() {
       });
       setShowForm(false);
       setFormData({ emotion: "Neutral", intensity: 5, notes: "" });
+      localStorage.removeItem('emotions_form_data');
+      localStorage.setItem('emotions_show_form', "false");
       loadStates();
     } catch (error) {
       console.error("Error adding emotional state:", error);

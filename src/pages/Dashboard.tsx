@@ -1333,7 +1333,7 @@ export default function Dashboard() {
   const [showPositionGroupModal, setShowPositionGroupModal] = useState(false);
   const [_selectedPositionGroupId, setSelectedPositionGroupId] = useState<number | null>(null);
   const [selectedPositionGroup, setSelectedPositionGroup] = useState<any>(null);
-  
+
   // Close settings menus when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -1861,7 +1861,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div style={{ padding: "30px", overflowY: "auto", height: "100%" }}>
+    <div style={{ padding: "30px" }}>
           <div
             style={{
               display: "flex",

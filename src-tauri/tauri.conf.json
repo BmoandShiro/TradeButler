@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "TradeButler",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "tauri": {
     "allowlist": {
@@ -19,7 +19,8 @@
       },
       "dialog": {
         "all": false,
-        "open": true
+        "open": true,
+        "save": true
       },
       "fs": {
         "all": true,

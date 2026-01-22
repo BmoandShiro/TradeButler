@@ -7,18 +7,21 @@ import {
   Calendar,
   Target,
   Upload,
+  Download,
   Trash2,
   TrendingDown,
   Calculator,
   DollarSign,
-  FileText
+  FileText,
+  Settings
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { open } from "@tauri-apps/api/dialog";
-import { readTextFile } from "@tauri-apps/api/fs";
+import { open, save } from "@tauri-apps/api/dialog";
+import { readTextFile, writeTextFile } from "@tauri-apps/api/fs";
 import { createPortal } from "react-dom";
 import appIcon from "../assets/app-icon.png";
+import { applyTheme } from "../utils/themeManager";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -27,27 +30,173 @@ interface LayoutProps {
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation();
   const [isImporting, setIsImporting] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const mainContentRef = useRef<HTMLElement>(null);
+  const scrollPositions = useRef<Map<string, number>>(new Map());
+  const previousPathRef = useRef<string>(location.pathname);
+  
+  // Initialize: Load saved scroll positions from localStorage
+  useEffect(() => {
+    // Load all saved scroll positions on mount
+    const paths = ["/", "/trades", "/calendar", "/strategies", "/journal", "/emotions", "/analytics", "/evaluation", "/average-down-calculator", "/dividend-calculator", "/settings"];
+    paths.forEach(path => {
+      const saved = localStorage.getItem(`scroll_${path}`);
+      if (saved) {
+        const position = parseInt(saved, 10);
+        if (!isNaN(position) && position > 0) {
+          scrollPositions.current.set(path, position);
+        }
+      }
+    });
+  }, []);
 
-  const handleImportCSV = async () => {
+  const handleImport = async () => {
     try {
       setIsImporting(true);
       const file = await open({
-        filters: [{ name: "CSV", extensions: ["csv"] }],
+        filters: [
+          { name: "All Supported", extensions: ["csv", "json"] },
+          { name: "CSV", extensions: ["csv"] },
+          { name: "JSON", extensions: ["json"] },
+        ],
       });
 
       if (file && typeof file === "string") {
         const contents = await readTextFile(file);
-        await invoke("import_trades_csv", { csvData: contents });
-        alert("Trades imported successfully!");
+        
+        // Check if it's JSON (export file) or CSV
+        if (file.toLowerCase().endsWith(".json")) {
+          // Parse JSON to check for theme colors
+          let importData;
+          try {
+            importData = JSON.parse(contents);
+          } catch (e) {
+            throw new Error("Invalid JSON file");
+          }
+          
+          // Extract theme colors if present
+          if (importData.theme_colors) {
+            try {
+              localStorage.setItem("tradebutler_theme_colors", JSON.stringify(importData.theme_colors));
+              // Apply the imported theme
+              applyTheme(importData.theme_colors);
+            } catch (e) {
+              console.warn("Failed to import theme colors:", e);
+            }
+          }
+          
+          // Extract custom presets if present
+          if (importData.custom_theme_presets) {
+            try {
+              localStorage.setItem("tradebutler_custom_theme_presets", JSON.stringify(importData.custom_theme_presets));
+            } catch (e) {
+              console.warn("Failed to import custom presets:", e);
+            }
+          }
+          
+          // Remove theme_colors and custom_theme_presets from import data before passing to Rust (it doesn't expect them)
+          const { theme_colors, custom_theme_presets, ...dataForRust } = importData;
+          const jsonDataForRust = JSON.stringify(dataForRust);
+          
+          const result = await invoke<{
+            trades_imported: number;
+            trades_skipped: number;
+            strategies_imported: number;
+            strategies_skipped: number;
+            journal_entries_imported: number;
+            journal_entries_skipped: number;
+            // ... other fields
+          }>("import_data", { jsonData: jsonDataForRust });
+          
+          const summary = [
+            `Trades: ${result.trades_imported} imported, ${result.trades_skipped} skipped`,
+            `Strategies: ${result.strategies_imported} imported, ${result.strategies_skipped} skipped`,
+            `Journal Entries: ${result.journal_entries_imported} imported, ${result.journal_entries_skipped} skipped`,
+            importData.theme_colors ? `Theme: Imported successfully` : "",
+            importData.custom_theme_presets ? `Custom Presets: ${importData.custom_theme_presets.length} imported` : "",
+          ].filter(Boolean).join("\n");
+          
+          alert(`Data imported successfully!\n\n${summary}`);
+        } else {
+          // CSV import
+          await invoke("import_trades_csv", { csvData: contents });
+          alert("Trades imported successfully!");
+        }
         window.location.reload();
       }
     } catch (error) {
-      console.error("Error importing CSV:", error);
-      alert("Failed to import CSV: " + error);
+      console.error("Error importing:", error);
+      alert("Failed to import: " + error);
     } finally {
       setIsImporting(false);
+    }
+  };
+
+  const handleExport = async () => {
+    console.log("handleExport called");
+    try {
+      setIsExporting(true);
+      console.log("isExporting set to true");
+      
+      // First, get the export data
+      console.log("Calling export_data command...");
+      const jsonData = await invoke<string>("export_data");
+      console.log("Export data retrieved, length:", jsonData.length);
+      
+      // Parse the JSON to add theme colors and custom presets
+      const exportData = JSON.parse(jsonData);
+      
+      // Get theme colors from localStorage
+      const themeColors = localStorage.getItem("tradebutler_theme_colors");
+      if (themeColors) {
+        try {
+          exportData.theme_colors = JSON.parse(themeColors);
+        } catch (e) {
+          console.warn("Failed to parse theme colors:", e);
+        }
+      }
+      
+      // Get custom presets from localStorage
+      const customPresets = localStorage.getItem("tradebutler_custom_theme_presets");
+      if (customPresets) {
+        try {
+          exportData.custom_theme_presets = JSON.parse(customPresets);
+        } catch (e) {
+          console.warn("Failed to parse custom presets:", e);
+        }
+      }
+      
+      // Convert back to JSON string
+      const finalJsonData = JSON.stringify(exportData, null, 2);
+      
+      // Then, ask user where to save it
+      console.log("Opening save dialog...");
+      const filePath = await save({
+        filters: [
+          { name: "JSON", extensions: ["json"] },
+        ],
+        defaultPath: `TradeButler-Export-${new Date().toISOString().split('T')[0]}.json`,
+      });
+      console.log("Save dialog returned:", filePath);
+
+      if (filePath && typeof filePath === "string") {
+        console.log("Saving to:", filePath);
+        await writeTextFile(filePath, finalJsonData);
+        console.log("File saved successfully");
+        alert(`Data exported successfully to:\n${filePath}`);
+      } else {
+        console.log("Export cancelled by user or filePath is null");
+        // User cancelled, don't show error
+      }
+    } catch (error) {
+      console.error("Error exporting:", error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      alert(`Failed to export: ${errorMessage}\n\nCheck the console (F12) for more details.`);
+    } finally {
+      setIsExporting(false);
+      console.log("isExporting set to false");
     }
   };
 
@@ -78,6 +227,160 @@ export default function Layout({ children }: LayoutProps) {
     setDeleteConfirmText("");
   };
 
+  // Save scroll position for current route
+  const saveScrollPosition = () => {
+    if (mainContentRef.current) {
+      const path = location.pathname;
+      const scrollTop = mainContentRef.current.scrollTop;
+      // Always save, even if 0, so we can restore to top if needed
+      scrollPositions.current.set(path, scrollTop);
+      localStorage.setItem(`scroll_${path}`, scrollTop.toString());
+    }
+  };
+
+  // Get current scroll position (from memory or DOM)
+  const getCurrentScrollPosition = (): number => {
+    if (mainContentRef.current) {
+      return mainContentRef.current.scrollTop;
+    }
+    return 0;
+  };
+
+
+  // Save scroll position when route changes
+  useEffect(() => {
+    const currentPath = location.pathname;
+    const previousPath = previousPathRef.current;
+
+    // Save the previous route's scroll position
+    // Try to get it from the in-memory map first (most up-to-date)
+    // If not available, try to read from DOM (but it might already be the new page)
+    if (previousPath && previousPath !== currentPath) {
+      let scrollTop: number;
+      
+      // First, try to get from in-memory map (saved by scroll event handler)
+      if (scrollPositions.current.has(previousPath)) {
+        scrollTop = scrollPositions.current.get(previousPath)!;
+      } else if (mainContentRef.current) {
+        // Fallback: try to read from DOM
+        scrollTop = mainContentRef.current.scrollTop;
+      } else {
+        // Last resort: try localStorage
+        const saved = localStorage.getItem(`scroll_${previousPath}`);
+        scrollTop = saved ? parseInt(saved, 10) : 0;
+      }
+      
+      // Only save if we got a valid value and it's not 0 (unless it was intentionally saved as 0)
+      // Actually, save it anyway - 0 is a valid scroll position
+      scrollPositions.current.set(previousPath, scrollTop);
+      localStorage.setItem(`scroll_${previousPath}`, scrollTop.toString());
+    }
+
+    // Update ref for next time
+    previousPathRef.current = currentPath;
+  }, [location.pathname]);
+
+  // Restore scroll position after route change and DOM update
+  // Using useLayoutEffect ensures this runs synchronously before paint
+  useLayoutEffect(() => {
+    if (!mainContentRef.current) return;
+    
+    const path = location.pathname;
+    
+    // Try to get from in-memory map first (most up-to-date), then localStorage
+    let position: number;
+    if (scrollPositions.current.has(path)) {
+      position = scrollPositions.current.get(path)!;
+    } else {
+      const saved = localStorage.getItem(`scroll_${path}`);
+      if (!saved) return;
+      position = parseInt(saved, 10);
+      if (isNaN(position) || position < 0) return;
+    }
+    
+    const container = mainContentRef.current;
+    
+    // Function to actually restore the scroll
+    const doRestore = () => {
+      if (!container) return false;
+      
+      const scrollHeight = container.scrollHeight;
+      const clientHeight = container.clientHeight;
+      
+      // If we have scrollable content, restore the position
+      if (scrollHeight > clientHeight || position === 0) {
+        const maxScroll = Math.max(0, scrollHeight - clientHeight);
+        const targetScroll = Math.min(position, maxScroll);
+        
+        // Only restore if we're not already at the target position
+        if (Math.abs(container.scrollTop - targetScroll) > 1) {
+          container.scrollTop = targetScroll;
+          // Update in-memory map after restoring
+          scrollPositions.current.set(path, targetScroll);
+          return true; // Successfully restored
+        }
+        return true; // Already at target position
+      }
+      return false; // Content not ready yet
+    };
+    
+    // Try immediately
+    if (doRestore()) return;
+    
+    // Use MutationObserver to detect when content is actually loaded
+    let observer: MutationObserver | null = new MutationObserver(() => {
+      if (doRestore() && observer) {
+        observer.disconnect();
+        observer = null;
+      }
+    });
+    
+    // Start observing
+    observer.observe(container, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
+    
+    // Also try after a short delay (for cases where MutationObserver doesn't catch it)
+    const timeout1 = setTimeout(() => {
+      if (doRestore() && observer) {
+        observer.disconnect();
+        observer = null;
+      }
+    }, 100);
+    
+    // Disconnect after 3 seconds if content never loads
+    const timeout2 = setTimeout(() => {
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+      }
+    }, 3000);
+    
+    return () => {
+      if (observer) observer.disconnect();
+      clearTimeout(timeout1);
+      clearTimeout(timeout2);
+    };
+  }, [location.pathname]);
+
+  // Save scroll position on scroll
+  useEffect(() => {
+    const container = mainContentRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      saveScrollPosition();
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+    };
+  }, [location.pathname]);
+
   const navItems = [
     { path: "/", icon: LayoutDashboard, label: "Dashboard" },
     { path: "/trades", icon: TrendingUp, label: "Trades" },
@@ -89,6 +392,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: "/evaluation", icon: TrendingDown, label: "Evaluation" },
     { path: "/average-down-calculator", icon: Calculator, label: "Average Down Calculator" },
     { path: "/dividend-calculator", icon: DollarSign, label: "Dividend Calculator" },
+    { path: "/settings", icon: Settings, label: "Settings" },
   ];
 
   return (
@@ -136,7 +440,7 @@ export default function Layout({ children }: LayoutProps) {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             <button
-              onClick={handleImportCSV}
+              onClick={handleImport}
               disabled={isImporting}
               style={{
                 width: "100%",
@@ -156,7 +460,30 @@ export default function Layout({ children }: LayoutProps) {
               }}
             >
               <Upload size={16} />
-              {isImporting ? "Importing..." : "Import CSV"}
+              {isImporting ? "Importing..." : "Import"}
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={isExporting}
+              style={{
+                width: "100%",
+                padding: "10px",
+                backgroundColor: "var(--bg-tertiary)",
+                color: "var(--accent)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+                fontSize: "14px",
+                fontWeight: "500",
+                opacity: isExporting ? 0.6 : 1,
+              }}
+            >
+              <Download size={16} />
+              {isExporting ? "Exporting..." : "Export"}
             </button>
             <button
               onClick={handleClearAllData}
@@ -237,7 +564,7 @@ export default function Layout({ children }: LayoutProps) {
               lineHeight: "1.4",
             }}
           >
-            v1.0.0.0-alpha Created By:
+            v1.1.0 Created By:
             <br />
             @BMOandShiro @PlaneStation
           </div>
@@ -246,9 +573,10 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Main Content */}
       <main
+        ref={mainContentRef}
         style={{
           flex: 1,
-          overflow: "hidden",
+          overflow: "auto",
           backgroundColor: "var(--bg-primary)",
           display: "flex",
           flexDirection: "column",

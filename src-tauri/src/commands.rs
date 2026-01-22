@@ -3,6 +3,8 @@ use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use chrono::{Timelike, Datelike};
+use std::fs;
+use std::process::Command;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CsvTrade {
@@ -4332,3 +4334,983 @@ pub fn get_tilt_metric(
     })
 }
 
+// Export/Import Data Structures
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExportData {
+    pub version: String,
+    pub export_date: String,
+    pub trades: Vec<Trade>,
+    pub strategies: Vec<Strategy>,
+    pub emotional_states: Vec<EmotionalState>,
+    pub journal_entries: Vec<JournalEntry>,
+    pub journal_trades: Vec<JournalTrade>,
+    pub strategy_checklists: Vec<StrategyChecklistItem>,
+    pub journal_checklist_responses: Vec<JournalChecklistResponse>,
+    pub pair_notes: Vec<PairNote>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PairNote {
+    pub entry_trade_id: i64,
+    pub exit_trade_id: i64,
+    pub notes: Option<String>,
+}
+
+#[tauri::command]
+pub fn export_data() -> Result<String, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    // Export trades
+    let mut stmt = conn
+        .prepare("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades ORDER BY timestamp")
+        .map_err(|e| e.to_string())?;
+    let trade_iter = stmt
+        .query_map([], |row| {
+            Ok(Trade {
+                id: Some(row.get(0)?),
+                symbol: row.get(1)?,
+                side: row.get(2)?,
+                quantity: row.get(3)?,
+                price: row.get(4)?,
+                timestamp: row.get(5)?,
+                order_type: row.get(6)?,
+                status: row.get(7)?,
+                fees: row.get(8)?,
+                notes: row.get(9)?,
+                strategy_id: row.get(10)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut trades = Vec::new();
+    for trade in trade_iter {
+        trades.push(trade.map_err(|e| e.to_string())?);
+    }
+    
+    // Export strategies
+    let mut stmt = conn
+        .prepare("SELECT id, name, description, notes, created_at, color FROM strategies ORDER BY name")
+        .map_err(|e| e.to_string())?;
+    let strategy_iter = stmt
+        .query_map([], |row| {
+            Ok(Strategy {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                description: row.get(2)?,
+                notes: row.get(3)?,
+                created_at: row.get(4)?,
+                color: row.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut strategies = Vec::new();
+    for strategy in strategy_iter {
+        strategies.push(strategy.map_err(|e| e.to_string())?);
+    }
+    
+    // Export emotional states
+    let mut stmt = conn
+        .prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id FROM emotional_states ORDER BY timestamp")
+        .map_err(|e| e.to_string())?;
+    let emotion_iter = stmt
+        .query_map([], |row| {
+            Ok(EmotionalState {
+                id: Some(row.get(0)?),
+                timestamp: row.get(1)?,
+                emotion: row.get(2)?,
+                intensity: row.get(3)?,
+                notes: row.get(4)?,
+                trade_id: row.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut emotional_states = Vec::new();
+    for emotion in emotion_iter {
+        emotional_states.push(emotion.map_err(|e| e.to_string())?);
+    }
+    
+    // Export journal entries
+    let mut stmt = conn
+        .prepare("SELECT id, date, title, strategy_id, created_at, updated_at FROM journal_entries ORDER BY date DESC")
+        .map_err(|e| e.to_string())?;
+    let entry_iter = stmt
+        .query_map([], |row| {
+            Ok(JournalEntry {
+                id: Some(row.get(0)?),
+                date: row.get(1)?,
+                title: row.get(2)?,
+                strategy_id: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut journal_entries = Vec::new();
+    for entry in entry_iter {
+        journal_entries.push(entry.map_err(|e| e.to_string())?);
+    }
+    
+    // Export journal trades
+    let mut stmt = conn
+        .prepare("SELECT id, journal_entry_id, symbol, position, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, created_at, updated_at FROM journal_trades ORDER BY journal_entry_id, trade_order")
+        .map_err(|e| e.to_string())?;
+    let journal_trade_iter = stmt
+        .query_map([], |row| {
+            Ok(JournalTrade {
+                id: Some(row.get(0)?),
+                journal_entry_id: row.get(1)?,
+                symbol: row.get(2)?,
+                position: row.get(3)?,
+                entry_type: row.get(4)?,
+                exit_type: row.get(5)?,
+                trade: row.get(6)?,
+                what_went_well: row.get(7)?,
+                what_could_be_improved: row.get(8)?,
+                emotional_state: row.get(9)?,
+                notes: row.get(10)?,
+                outcome: row.get(11)?,
+                trade_order: row.get(12)?,
+                created_at: row.get(13)?,
+                updated_at: row.get(14)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut journal_trades = Vec::new();
+    for trade in journal_trade_iter {
+        journal_trades.push(trade.map_err(|e| e.to_string())?);
+    }
+    
+    // Export strategy checklists
+    let mut stmt = conn
+        .prepare("SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id FROM strategy_checklists ORDER BY strategy_id, checklist_type, item_order")
+        .map_err(|e| e.to_string())?;
+    let checklist_iter = stmt
+        .query_map([], |row| {
+            Ok(StrategyChecklistItem {
+                id: Some(row.get(0)?),
+                strategy_id: row.get(1)?,
+                item_text: row.get(2)?,
+                is_checked: row.get::<_, i64>(3)? != 0,
+                item_order: row.get(4)?,
+                checklist_type: row.get(5).unwrap_or_else(|_| "entry".to_string()),
+                parent_id: row.get(6).ok(),
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut strategy_checklists = Vec::new();
+    for item in checklist_iter {
+        strategy_checklists.push(item.map_err(|e| e.to_string())?);
+    }
+    
+    // Export journal checklist responses
+    let mut stmt = conn
+        .prepare("SELECT journal_entry_id, checklist_item_id, is_checked FROM journal_checklist_responses")
+        .map_err(|e| e.to_string())?;
+    let response_iter = stmt
+        .query_map([], |row| {
+            Ok(JournalChecklistResponse {
+                id: None,
+                journal_entry_id: row.get(0)?,
+                checklist_item_id: row.get(1)?,
+                is_checked: row.get::<_, i64>(2)? != 0,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut journal_checklist_responses = Vec::new();
+    for response in response_iter {
+        journal_checklist_responses.push(response.map_err(|e| e.to_string())?);
+    }
+    
+    // Export pair notes
+    let mut stmt = conn
+        .prepare("SELECT entry_trade_id, exit_trade_id, notes FROM pair_notes")
+        .map_err(|e| e.to_string())?;
+    let note_iter = stmt
+        .query_map([], |row| {
+            Ok(PairNote {
+                entry_trade_id: row.get(0)?,
+                exit_trade_id: row.get(1)?,
+                notes: row.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut pair_notes = Vec::new();
+    for note in note_iter {
+        pair_notes.push(note.map_err(|e| e.to_string())?);
+    }
+    
+    let export_data = ExportData {
+        version: "1.0".to_string(),
+        export_date: chrono::Utc::now().to_rfc3339(),
+        trades,
+        strategies,
+        emotional_states,
+        journal_entries,
+        journal_trades,
+        strategy_checklists,
+        journal_checklist_responses,
+        pair_notes,
+    };
+    
+    serde_json::to_string_pretty(&export_data).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn import_data(json_data: String) -> Result<ImportResult, String> {
+    let export_data: ExportData = serde_json::from_str(&json_data)
+        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+    
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let mut result = ImportResult {
+        trades_imported: 0,
+        trades_skipped: 0,
+        strategies_imported: 0,
+        strategies_skipped: 0,
+        emotional_states_imported: 0,
+        emotional_states_skipped: 0,
+        journal_entries_imported: 0,
+        journal_entries_skipped: 0,
+        journal_trades_imported: 0,
+        journal_trades_skipped: 0,
+        checklists_imported: 0,
+        checklists_skipped: 0,
+        checklist_responses_imported: 0,
+        checklist_responses_skipped: 0,
+        pair_notes_imported: 0,
+        pair_notes_skipped: 0,
+    };
+    
+    // Create a map to track old strategy IDs to new strategy IDs
+    let mut strategy_id_map: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    
+    // Import strategies first (they're referenced by other data)
+    for strategy in export_data.strategies {
+        // Check for duplicate by name
+        let existing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM strategies WHERE name = ?1",
+                params![strategy.name],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        
+        if existing > 0 {
+            // Strategy exists, get its ID
+            let existing_id: i64 = conn
+                .query_row(
+                    "SELECT id FROM strategies WHERE name = ?1",
+                    params![strategy.name],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            
+            if let Some(old_id) = strategy.id {
+                strategy_id_map.insert(old_id, existing_id);
+            }
+            result.strategies_skipped += 1;
+        } else {
+            // Insert new strategy
+            conn.execute(
+                "INSERT INTO strategies (name, description, notes, color) VALUES (?1, ?2, ?3, ?4)",
+                params![strategy.name, strategy.description, strategy.notes, strategy.color],
+            ).map_err(|e| e.to_string())?;
+            
+            let new_id = conn.last_insert_rowid();
+            if let Some(old_id) = strategy.id {
+                strategy_id_map.insert(old_id, new_id);
+            }
+            result.strategies_imported += 1;
+        }
+    }
+    
+    // Import trades with duplication check
+    for trade in export_data.trades {
+        // Check for duplicate trade (same symbol, side, quantity, price, and timestamp)
+        let existing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM trades WHERE symbol = ?1 AND side = ?2 AND quantity = ?3 AND price = ?4 AND timestamp = ?5",
+                params![trade.symbol, trade.side, trade.quantity, trade.price, trade.timestamp],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        
+        if existing > 0 {
+            result.trades_skipped += 1;
+            continue;
+        }
+        
+        // Map strategy_id if it exists
+        let mapped_strategy_id = trade.strategy_id.and_then(|id| strategy_id_map.get(&id).copied());
+        
+        conn.execute(
+            "INSERT INTO trades (symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                trade.symbol,
+                trade.side,
+                trade.quantity,
+                trade.price,
+                trade.timestamp,
+                trade.order_type,
+                trade.status,
+                trade.fees,
+                trade.notes,
+                mapped_strategy_id
+            ],
+        ).map_err(|e| e.to_string())?;
+        
+        result.trades_imported += 1;
+    }
+    
+    // Import emotional states
+    for emotion in export_data.emotional_states {
+        // Check for duplicate (same timestamp, emotion, intensity, trade_id)
+        let existing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM emotional_states WHERE timestamp = ?1 AND emotion = ?2 AND intensity = ?3 AND (trade_id = ?4 OR (trade_id IS NULL AND ?4 IS NULL))",
+                params![emotion.timestamp, emotion.emotion, emotion.intensity, emotion.trade_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        
+        if existing > 0 {
+            result.emotional_states_skipped += 1;
+            continue;
+        }
+        
+        conn.execute(
+            "INSERT INTO emotional_states (timestamp, emotion, intensity, notes, trade_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![emotion.timestamp, emotion.emotion, emotion.intensity, emotion.notes, emotion.trade_id],
+        ).map_err(|e| e.to_string())?;
+        
+        result.emotional_states_imported += 1;
+    }
+    
+    // Create a map to track old journal entry IDs to new journal entry IDs
+    let mut journal_entry_id_map: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    
+    // Import journal entries
+    for entry in export_data.journal_entries {
+        // Check for duplicate by date and title
+        let existing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM journal_entries WHERE date = ?1 AND title = ?2",
+                params![entry.date, entry.title],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        
+        if existing > 0 {
+            // Get existing ID
+            let existing_id: i64 = conn
+                .query_row(
+                    "SELECT id FROM journal_entries WHERE date = ?1 AND title = ?2",
+                    params![entry.date, entry.title],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            
+            if let Some(old_id) = entry.id {
+                journal_entry_id_map.insert(old_id, existing_id);
+            }
+            result.journal_entries_skipped += 1;
+            continue;
+        }
+        
+        // Map strategy_id if it exists
+        let mapped_strategy_id = entry.strategy_id.and_then(|id| strategy_id_map.get(&id).copied());
+        
+        conn.execute(
+            "INSERT INTO journal_entries (date, title, strategy_id) VALUES (?1, ?2, ?3)",
+            params![entry.date, entry.title, mapped_strategy_id],
+        ).map_err(|e| e.to_string())?;
+        
+        let new_id = conn.last_insert_rowid();
+        if let Some(old_id) = entry.id {
+            journal_entry_id_map.insert(old_id, new_id);
+        }
+        result.journal_entries_imported += 1;
+    }
+    
+    // Import journal trades
+    for trade in export_data.journal_trades {
+        // Map journal_entry_id
+        let mapped_entry_id = journal_entry_id_map.get(&trade.journal_entry_id).copied();
+        
+        if mapped_entry_id.is_none() {
+            result.journal_trades_skipped += 1;
+            continue;
+        }
+        
+        // Check for duplicate (same journal_entry_id, symbol, trade_order)
+        let existing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM journal_trades WHERE journal_entry_id = ?1 AND symbol = ?2 AND trade_order = ?3",
+                params![mapped_entry_id, trade.symbol, trade.trade_order],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        
+        if existing > 0 {
+            result.journal_trades_skipped += 1;
+            continue;
+        }
+        
+        conn.execute(
+            "INSERT INTO journal_trades (journal_entry_id, symbol, position, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                mapped_entry_id,
+                trade.symbol,
+                trade.position,
+                trade.entry_type,
+                trade.exit_type,
+                trade.trade,
+                trade.what_went_well,
+                trade.what_could_be_improved,
+                trade.emotional_state,
+                trade.notes,
+                trade.outcome,
+                trade.trade_order
+            ],
+        ).map_err(|e| e.to_string())?;
+        
+        result.journal_trades_imported += 1;
+    }
+    
+    // Create a map to track old checklist item IDs to new checklist item IDs
+    let mut checklist_id_map: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    
+    // Import strategy checklists
+    for checklist in export_data.strategy_checklists {
+        // Map strategy_id
+        let mapped_strategy_id = strategy_id_map.get(&checklist.strategy_id).copied();
+        
+        if mapped_strategy_id.is_none() {
+            result.checklists_skipped += 1;
+            continue;
+        }
+        
+        // Check for duplicate (same strategy_id, item_text, checklist_type, item_order)
+        let existing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM strategy_checklists WHERE strategy_id = ?1 AND item_text = ?2 AND checklist_type = ?3 AND item_order = ?4",
+                params![mapped_strategy_id, checklist.item_text, checklist.checklist_type, checklist.item_order],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        
+        if existing > 0 {
+            // Get existing ID
+            let existing_id: i64 = conn
+                .query_row(
+                    "SELECT id FROM strategy_checklists WHERE strategy_id = ?1 AND item_text = ?2 AND checklist_type = ?3 AND item_order = ?4",
+                    params![mapped_strategy_id, checklist.item_text, checklist.checklist_type, checklist.item_order],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            
+            if let Some(old_id) = checklist.id {
+                checklist_id_map.insert(old_id, existing_id);
+            }
+            result.checklists_skipped += 1;
+            continue;
+        }
+        
+        // Map parent_id if it exists
+        let mapped_parent_id = checklist.parent_id.and_then(|id| checklist_id_map.get(&id).copied());
+        
+        let checked_int = if checklist.is_checked { 1 } else { 0 };
+        conn.execute(
+            "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, checklist_type, parent_id) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![mapped_strategy_id, checklist.item_text, checked_int, checklist.item_order, checklist.checklist_type, mapped_parent_id],
+        ).map_err(|e| e.to_string())?;
+        
+        let new_id = conn.last_insert_rowid();
+        if let Some(old_id) = checklist.id {
+            checklist_id_map.insert(old_id, new_id);
+        }
+        result.checklists_imported += 1;
+    }
+    
+    // Import journal checklist responses
+    for response in export_data.journal_checklist_responses {
+        // Map journal_entry_id and checklist_item_id
+        let mapped_entry_id = journal_entry_id_map.get(&response.journal_entry_id).copied();
+        let mapped_checklist_id = checklist_id_map.get(&response.checklist_item_id).copied();
+        
+        if mapped_entry_id.is_none() || mapped_checklist_id.is_none() {
+            result.checklist_responses_skipped += 1;
+            continue;
+        }
+        
+        // Check for duplicate
+        let existing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM journal_checklist_responses WHERE journal_entry_id = ?1 AND checklist_item_id = ?2",
+                params![mapped_entry_id, mapped_checklist_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        
+        if existing > 0 {
+            result.checklist_responses_skipped += 1;
+            continue;
+        }
+        
+        let checked_int = if response.is_checked { 1 } else { 0 };
+        conn.execute(
+            "INSERT INTO journal_checklist_responses (journal_entry_id, checklist_item_id, is_checked) VALUES (?1, ?2, ?3)",
+            params![mapped_entry_id, mapped_checklist_id, checked_int],
+        ).map_err(|e| e.to_string())?;
+        
+        result.checklist_responses_imported += 1;
+    }
+    
+    // Import pair notes
+    for note in export_data.pair_notes {
+        // Check for duplicate
+        let existing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pair_notes WHERE entry_trade_id = ?1 AND exit_trade_id = ?2",
+                params![note.entry_trade_id, note.exit_trade_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        
+        if existing > 0 {
+            result.pair_notes_skipped += 1;
+            continue;
+        }
+        
+        conn.execute(
+            "INSERT INTO pair_notes (entry_trade_id, exit_trade_id, notes) VALUES (?1, ?2, ?3)",
+            params![note.entry_trade_id, note.exit_trade_id, note.notes],
+        ).map_err(|e| e.to_string())?;
+        
+        result.pair_notes_imported += 1;
+    }
+    
+    Ok(result)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ImportResult {
+    pub trades_imported: i32,
+    pub trades_skipped: i32,
+    pub strategies_imported: i32,
+    pub strategies_skipped: i32,
+    pub emotional_states_imported: i32,
+    pub emotional_states_skipped: i32,
+    pub journal_entries_imported: i32,
+    pub journal_entries_skipped: i32,
+    pub journal_trades_imported: i32,
+    pub journal_trades_skipped: i32,
+    pub checklists_imported: i32,
+    pub checklists_skipped: i32,
+    pub checklist_responses_imported: i32,
+    pub checklist_responses_skipped: i32,
+    pub pair_notes_imported: i32,
+    pub pair_notes_skipped: i32,
+}
+
+// Version checking and update functionality
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VersionInfo {
+    pub current: String,
+    pub latest: String,
+    pub is_up_to_date: bool,
+    pub download_url: Option<String>,
+    pub release_notes: Option<String>,
+    pub is_installer: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    #[allow(dead_code)]
+    name: String,
+    body: Option<String>,
+    assets: Vec<GitHubAsset>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct GitHubAsset {
+    name: String,
+    browser_download_url: String,
+    #[allow(dead_code)]
+    content_type: String,
+}
+
+// Get current version from package info
+fn get_current_version() -> String {
+    // Return the display version (1.0.0.0-alpha)
+    // Cargo.toml uses 1.0.0-alpha (valid semver), but we display 1.0.0.0-alpha
+    "1.0.0.0-alpha".to_string()
+}
+
+// Detect if running as installer or portable
+fn is_installer_version() -> bool {
+    // On Windows, check if running from Program Files (installer) vs current directory (portable)
+    #[cfg(windows)]
+    {
+        if let Ok(exe_path) = std::env::current_exe() {
+            let exe_str = exe_path.to_string_lossy().to_lowercase();
+            // If in Program Files, it's likely an installer version
+            return exe_str.contains("program files") || exe_str.contains("programfiles");
+        }
+    }
+    
+    #[cfg(not(windows))]
+    {
+        // On macOS/Linux, check if in /Applications or /usr/local (installer) vs current dir (portable)
+        if let Ok(exe_path) = std::env::current_exe() {
+            let exe_str = exe_path.to_string_lossy();
+            return exe_str.contains("/Applications/") || exe_str.contains("/usr/local/");
+        }
+    }
+    
+    false
+}
+
+// Compare version strings (simple semantic version comparison)
+fn compare_versions(current: &str, latest: &str) -> std::cmp::Ordering {
+    let current_parts: Vec<u32> = current
+        .trim_start_matches('v')
+        .split('.')
+        .map(|s| s.parse().unwrap_or(0))
+        .collect();
+    
+    let latest_parts: Vec<u32> = latest
+        .trim_start_matches('v')
+        .split('.')
+        .map(|s| s.parse().unwrap_or(0))
+        .collect();
+    
+    for (c, l) in current_parts.iter().zip(latest_parts.iter()) {
+        match c.cmp(l) {
+            std::cmp::Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+    
+    current_parts.len().cmp(&latest_parts.len())
+}
+
+#[tauri::command]
+pub async fn check_version() -> Result<VersionInfo, String> {
+    let current_version = get_current_version();
+    let is_installer = is_installer_version();
+    
+    // GitHub repository - update this to your actual repo
+    // For now, using a placeholder - you'll need to replace with your actual GitHub repo
+    let repo_owner = "BMOandShiro"; // Update this
+    let repo_name = "TradeButler"; // Update this
+    let api_url = format!("https://api.github.com/repos/{}/{}/releases/latest", repo_owner, repo_name);
+    
+    eprintln!("[Version Check] Starting version check...");
+    eprintln!("[Version Check] Current version: {}", current_version);
+    eprintln!("[Version Check] Is installer: {}", is_installer);
+    eprintln!("[Version Check] API URL: {}", api_url);
+    
+    let client = reqwest::Client::builder()
+        .user_agent("TradeButler-Updater/1.0")
+        .build()
+        .map_err(|e| {
+            let err_msg = format!("Failed to create HTTP client: {}", e);
+            eprintln!("[Version Check] Error: {}", err_msg);
+            err_msg
+        })?;
+    
+    eprintln!("[Version Check] HTTP client created, sending request...");
+    
+    let response = client
+        .get(&api_url)
+        .header("Accept", "application/vnd.github.v3+json")
+        .send()
+        .await
+        .map_err(|e| {
+            let err_msg = format!("Failed to fetch release info: {}", e);
+            eprintln!("[Version Check] Network error: {}", err_msg);
+            err_msg
+        })?;
+    
+    eprintln!("[Version Check] Response status: {}", response.status());
+    
+    // Handle 404 by trying the releases list endpoint
+    let release: GitHubRelease = if response.status().is_success() {
+        // Successfully got latest release
+        eprintln!("[Version Check] Got latest release, parsing JSON...");
+        response.json().await.map_err(|e| {
+            let err_msg = format!("Failed to parse release info: {}", e);
+            eprintln!("[Version Check] Parse error: {}", err_msg);
+            err_msg
+        })?
+    } else if response.status() == 404 {
+        // Latest release endpoint returned 404, try getting the releases list instead
+        eprintln!("[Version Check] Latest release endpoint returned 404, trying releases list...");
+        let releases_url = format!("https://api.github.com/repos/{}/{}/releases", repo_owner, repo_name);
+        
+        let releases_response = client
+            .get(&releases_url)
+            .header("Accept", "application/vnd.github.v3+json")
+            .send()
+            .await
+            .map_err(|e| {
+                let err_msg = format!("Failed to fetch releases list: {}", e);
+                eprintln!("[Version Check] Network error: {}", err_msg);
+                err_msg
+            })?;
+        
+        eprintln!("[Version Check] Releases list response status: {}", releases_response.status());
+        
+        if !releases_response.status().is_success() {
+            let status = releases_response.status();
+            let error_text = releases_response.text().await.unwrap_or_else(|_| "Unable to read error response".to_string());
+            let err_msg = format!("Repository not found or has no releases. GitHub API returned status {}: {}\n\nPlease verify:\n1. The repository {}/{} exists on GitHub\n2. The repository has at least one release published\n3. The repository is public (or you have access if it's private)", status, error_text, repo_owner, repo_name);
+            eprintln!("[Version Check] API error: {}", err_msg);
+            return Err(err_msg);
+        }
+        
+        #[derive(Debug, Deserialize)]
+        struct GitHubReleaseListItem {
+            tag_name: String,
+            name: String,
+            body: Option<String>,
+            assets: Vec<GitHubAsset>,
+            draft: bool,
+            prerelease: bool,
+        }
+        
+        let releases_list: Vec<GitHubReleaseListItem> = releases_response.json().await.map_err(|e| {
+            let err_msg = format!("Failed to parse releases list: {}", e);
+            eprintln!("[Version Check] Parse error: {}", err_msg);
+            err_msg
+        })?;
+        
+        eprintln!("[Version Check] Found {} releases", releases_list.len());
+        
+        if releases_list.is_empty() {
+            return Err(format!("Repository {}/{} exists but has no releases published yet.", repo_owner, repo_name));
+        }
+        
+        // Find the first non-draft, non-prerelease release, or just the first one
+        let latest_release = releases_list.iter()
+            .find(|r| !r.draft && !r.prerelease)
+            .or_else(|| releases_list.first())
+            .ok_or_else(|| "No valid releases found".to_string())?;
+        
+        eprintln!("[Version Check] Using release: {}", latest_release.tag_name);
+        
+        // Convert to GitHubRelease format
+        GitHubRelease {
+            tag_name: latest_release.tag_name.clone(),
+            name: latest_release.name.clone(),
+            body: latest_release.body.clone(),
+            assets: latest_release.assets.clone(),
+        }
+    } else {
+        // Other error status
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_else(|_| "Unable to read error response".to_string());
+        let err_msg = format!("GitHub API returned status {}: {}", status, error_text);
+        eprintln!("[Version Check] API error: {}", err_msg);
+        return Err(err_msg);
+    };
+    
+    eprintln!("[Version Check] Release tag: {}", release.tag_name);
+    
+    let latest_version = release.tag_name.trim_start_matches('v').to_string();
+    let is_up_to_date = compare_versions(&current_version, &latest_version) != std::cmp::Ordering::Less;
+    
+    eprintln!("[Version Check] Latest version: {}", latest_version);
+    eprintln!("[Version Check] Is up to date: {}", is_up_to_date);
+    
+    // Find appropriate download asset
+    let mut download_url: Option<String> = None;
+    
+    #[cfg(windows)]
+    {
+        if is_installer {
+            // Look for .msi or .exe installer
+            for asset in &release.assets {
+                if asset.name.ends_with(".msi") || (asset.name.ends_with(".exe") && asset.name.contains("installer")) {
+                    download_url = Some(asset.browser_download_url.clone());
+                    break;
+                }
+            }
+        } else {
+            // Look for portable .exe (not installer)
+            for asset in &release.assets {
+                if asset.name.ends_with(".exe") && !asset.name.contains("installer") && !asset.name.ends_with(".msi") {
+                    download_url = Some(asset.browser_download_url.clone());
+                    break;
+                }
+            }
+        }
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        if is_installer {
+            // Look for .dmg
+            for asset in &release.assets {
+                if asset.name.ends_with(".dmg") {
+                    download_url = Some(asset.browser_download_url.clone());
+                    break;
+                }
+            }
+        } else {
+            // Look for .app bundle
+            for asset in &release.assets {
+                if asset.name.ends_with(".app") || asset.name.ends_with(".app.tar.gz") {
+                    download_url = Some(asset.browser_download_url.clone());
+                    break;
+                }
+            }
+        }
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        if is_installer {
+            // Look for .deb
+            for asset in &release.assets {
+                if asset.name.ends_with(".deb") {
+                    download_url = Some(asset.browser_download_url.clone());
+                    break;
+                }
+            }
+        } else {
+            // Look for AppImage
+            for asset in &release.assets {
+                if asset.name.ends_with(".AppImage") {
+                    download_url = Some(asset.browser_download_url.clone());
+                    break;
+                }
+            }
+        }
+    }
+    
+    Ok(VersionInfo {
+        current: current_version,
+        latest: latest_version,
+        is_up_to_date,
+        download_url,
+        release_notes: release.body,
+        is_installer,
+    })
+}
+
+#[tauri::command]
+pub async fn download_portable_update(download_url: String) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("TradeButler-Updater/1.0")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&download_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download update: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("Download failed with status: {}", response.status()));
+    }
+    
+    // Get filename from URL
+    let filename = download_url
+        .split('/')
+        .last()
+        .unwrap_or("TradeButler-update.exe");
+    
+    // Get Downloads directory
+    let downloads_dir = dirs::download_dir()
+        .ok_or("Failed to get Downloads directory")?;
+    
+    let file_path = downloads_dir.join(filename);
+    
+    // Download file
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read download: {}", e))?;
+    
+    fs::write(&file_path, bytes)
+        .map_err(|e| format!("Failed to save file: {}", e))?;
+    
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn download_and_install_update(download_url: String) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .user_agent("TradeButler-Updater/1.0")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&download_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download update: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("Download failed with status: {}", response.status()));
+    }
+    
+    // Get filename from URL
+    let filename = download_url
+        .split('/')
+        .last()
+        .unwrap_or("TradeButler-update.msi");
+    
+    // Get temp directory
+    let temp_dir = std::env::temp_dir();
+    let file_path = temp_dir.join(filename);
+    
+    // Download file
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read download: {}", e))?;
+    
+    fs::write(&file_path, bytes)
+        .map_err(|e| format!("Failed to save file: {}", e))?;
+    
+    // Launch installer
+    #[cfg(windows)]
+    {
+        Command::new("msiexec")
+            .args(&["/i", file_path.to_string_lossy().as_ref()])
+            .spawn()
+            .map_err(|e| format!("Failed to launch installer: {}", e))?;
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        // For macOS, open the DMG
+        Command::new("open")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open DMG: {}", e))?;
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        // For Linux, use appropriate package manager
+        if filename.ends_with(".deb") {
+            Command::new("sudo")
+                .args(&["dpkg", "-i", file_path.to_string_lossy().as_ref()])
+                .spawn()
+                .map_err(|e| format!("Failed to install package: {}", e))?;
+        }
+    }
+    
+    Ok(())
+}
