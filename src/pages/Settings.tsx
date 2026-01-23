@@ -26,6 +26,11 @@ import {
   deletePassword,
   verifyPassword
 } from "../utils/passwordManager";
+import { 
+  getLockScreenStyle, 
+  setLockScreenStyle as saveLockScreenStyle, 
+  LockScreenStyle 
+} from "../utils/lockScreenManager";
 
 interface VersionInfo {
   current: string;
@@ -68,6 +73,7 @@ export default function Settings() {
   const [showRemovePin, setShowRemovePin] = useState(false);
   const [removeVerification, setRemoveVerification] = useState("");
   const [removePinDigits, setRemovePinDigits] = useState<string[]>(["", "", "", "", "", ""]);
+  const [lockScreenStyle, setLockScreenStyle] = useState<LockScreenStyle>(() => getLockScreenStyle());
   const newPasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const confirmPasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const removePasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -718,6 +724,74 @@ export default function Settings() {
                     value={theme.loss}
                     onChange={(color) => updateThemeColor("loss", color)}
                   />
+                </div>
+              </div>
+            </div>
+
+            {/* Lock Screen Style */}
+            <div>
+              <h3 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "12px" }}>
+                Lock Screen Style
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Lock Screen Theme
+                  </label>
+                  <div
+                    style={{
+                      display: "flex",
+                      backgroundColor: "var(--bg-tertiary)",
+                      borderRadius: "6px",
+                      padding: "2px",
+                      border: "1px solid var(--border-color)",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newStyle: LockScreenStyle = "default";
+                        setLockScreenStyle(newStyle);
+                        saveLockScreenStyle(newStyle);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                        border: "none",
+                        backgroundColor: lockScreenStyle === "default" ? "var(--accent)" : "transparent",
+                        color: lockScreenStyle === "default" ? "white" : "var(--text-primary)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      Default
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newStyle: LockScreenStyle = "galaxy";
+                        setLockScreenStyle(newStyle);
+                        saveLockScreenStyle(newStyle);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                        border: "none",
+                        backgroundColor: lockScreenStyle === "galaxy" ? "var(--accent)" : "transparent",
+                        color: lockScreenStyle === "galaxy" ? "white" : "var(--text-primary)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      Galaxy
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

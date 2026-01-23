@@ -25,7 +25,9 @@ import { createPortal } from "react-dom";
 import appIcon from "../assets/app-icon.png";
 import { applyTheme } from "../utils/themeManager";
 import LockScreen from "./LockScreen";
+import GalaxyLockScreen from "./GalaxyLockScreen";
 import { isLocked, setLocked, hasPassword, lockApp } from "../utils/passwordManager";
+import { getLockScreenStyle } from "../utils/lockScreenManager";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -637,7 +639,13 @@ export default function Layout({ children }: LayoutProps) {
       </main>
       
       {/* Lock Screen Overlay */}
-      {isAppLocked && <LockScreen onUnlock={handleUnlock} />}
+      {isAppLocked && (
+        getLockScreenStyle() === "galaxy" ? (
+          <GalaxyLockScreen onUnlock={handleUnlock} />
+        ) : (
+          <LockScreen onUnlock={handleUnlock} />
+        )
+      )}
 
       {/* Clear Data Confirmation Modal */}
       {showClearDataModal && createPortal(
