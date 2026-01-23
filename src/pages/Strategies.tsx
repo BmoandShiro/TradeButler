@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
-import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, AlertTriangle, CheckCircle } from "lucide-react";
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import { ColorPicker } from "../components/ColorPicker";
@@ -766,6 +766,13 @@ export default function Strategies() {
   const [isImportingCSV, setIsImportingCSV] = useState(false);
   const [showCSVFormatModal, setShowCSVFormatModal] = useState(false);
   const [pendingCSVFile, setPendingCSVFile] = useState<{ path: string; isForExisting: boolean } | null>(null);
+  const [pendingCSVFiles, setPendingCSVFiles] = useState<{ path: string; isForExisting: boolean }[]>([]);
+  const [importResults, setImportResults] = useState<{
+    totalAttempted: number;
+    newTrades: number;
+    duplicates: number;
+    errors: number;
+  } | null>(null);
   const [editHistory, setEditHistory] = useState<Array<{ name: string; description: string; color: string; notes: string }>>([]);
   const [editingChecklists, setEditingChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [originalChecklists, setOriginalChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
@@ -1015,12 +1022,30 @@ export default function Strategies() {
     if (strategies.length > 0) {
       restoreState();
       
-      // Restore work in progress after loading
+      // Restore work in progress after loading, but only if we're not in the middle of a save operation
+      // Check if work-in-progress indicates we're creating/editing, otherwise skip restoration
       const hasWorkInProgress = localStorage.getItem('strategies_work_in_progress');
       if (hasWorkInProgress) {
-        setTimeout(() => {
-          restoreWorkInProgress();
-        }, 200);
+        try {
+          const workInProgress = JSON.parse(hasWorkInProgress);
+          // Only restore if we're actually in a creating or editing state
+          // This prevents restoring after a save when isCreating/isEditing are false
+          if (workInProgress.isCreating || workInProgress.isEditing) {
+            setTimeout(() => {
+              // Double-check the state hasn't changed (e.g., by a save operation)
+              const stillHasWorkInProgress = localStorage.getItem('strategies_work_in_progress');
+              if (stillHasWorkInProgress) {
+                const currentState = JSON.parse(stillHasWorkInProgress);
+                // Only restore if still in creating/editing state
+                if (currentState.isCreating || currentState.isEditing) {
+                  restoreWorkInProgress();
+                }
+              }
+            }, 200);
+          }
+        } catch (error) {
+          console.error("Error checking work in progress:", error);
+        }
       }
     }
   }, [strategies]);
@@ -1970,26 +1995,27 @@ export default function Strategies() {
   const handleImportCSVForStrategy = async () => {
     try {
       setIsImportingCSV(true);
-      const file = await open({
+      const files = await open({
         filters: [{ name: "CSV", extensions: ["csv"] }],
-        multiple: false,
+        multiple: true,
       });
 
-      if (!file) {
+      if (!files) {
         setIsImportingCSV(false);
         return;
       }
 
       // Handle both string (single file) and array (multiple files) cases
-      const filePath = Array.isArray(file) ? file[0] : file;
+      const fileArray = Array.isArray(files) ? files : [files];
+      const validFiles = fileArray.filter((f): f is string => typeof f === "string");
       
-      if (filePath && typeof filePath === "string") {
-        // Store the file and show format selection modal
-        setPendingCSVFile({ path: filePath, isForExisting: false });
+      if (validFiles.length > 0) {
+        // Store the files and show format selection modal
+        setPendingCSVFiles(validFiles.map(path => ({ path, isForExisting: false })));
         setShowCSVFormatModal(true);
         setIsImportingCSV(false);
       } else {
-        alert("Please select a valid CSV file.");
+        alert("Please select valid CSV files.");
         setIsImportingCSV(false);
       }
     } catch (error) {
@@ -1999,27 +2025,82 @@ export default function Strategies() {
     }
   };
 
+  // Helper function to count trades in CSV content
+  const countTradesInCSV = (csvContent: string): number => {
+    try {
+      const lines = csvContent.split('\n').filter(line => line.trim().length > 0);
+      // Subtract 1 for header row, but ensure at least 0
+      return Math.max(0, lines.length - 1);
+    } catch {
+      return 0;
+    }
+  };
+
   const handleCSVFormatSelection = async (_format: "webull" | "coinbase") => {
-    if (!pendingCSVFile) return;
+    if (pendingCSVFiles.length === 0 && !pendingCSVFile) return;
+    
+    // Support both old single file and new multiple files
+    const filesToProcess = pendingCSVFiles.length > 0 
+      ? pendingCSVFiles 
+      : (pendingCSVFile ? [pendingCSVFile] : []);
+    
+    if (filesToProcess.length === 0) return;
     
     try {
       setIsImportingCSV(true);
       setShowCSVFormatModal(false);
       
-      const contents = await readTextFile(pendingCSVFile.path);
-      const importedTradeIds = await invoke<number[]>("import_trades_csv", { csvData: contents });
+      let totalAttempted = 0;
+      let totalNewTrades = 0;
+      let totalDuplicates = 0;
+      let totalErrors = 0;
+      const allImportedTradeIds: number[] = [];
       
-      if (pendingCSVFile.isForExisting) {
+      // Process each file
+      for (const fileInfo of filesToProcess) {
+        try {
+          const contents = await readTextFile(fileInfo.path);
+          const tradesInFile = countTradesInCSV(contents);
+          totalAttempted += tradesInFile;
+          
+          const importedTradeIds = await invoke<number[]>("import_trades_csv", { csvData: contents });
+          
+          if (importedTradeIds && importedTradeIds.length > 0) {
+            allImportedTradeIds.push(...importedTradeIds);
+            totalNewTrades += importedTradeIds.length;
+            // Calculate duplicates for this file
+            const duplicatesInFile = tradesInFile - importedTradeIds.length;
+            totalDuplicates += duplicatesInFile;
+          } else {
+            // All trades in this file were duplicates
+            totalDuplicates += tradesInFile;
+          }
+        } catch (error) {
+          totalErrors++;
+          console.error(`Error importing file ${fileInfo.path}:`, error);
+        }
+      }
+      
+      // Set import results for UI display
+      setImportResults({
+        totalAttempted,
+        newTrades: totalNewTrades,
+        duplicates: totalDuplicates,
+        errors: totalErrors,
+      });
+      
+      if (filesToProcess[0].isForExisting) {
         // Handle existing strategy import
         if (!selectedStrategy) {
           setIsImportingCSV(false);
+          setPendingCSVFiles([]);
           setPendingCSVFile(null);
           return;
         }
         
-        if (importedTradeIds && importedTradeIds.length > 0) {
+        if (allImportedTradeIds.length > 0) {
           // Immediately assign all imported trades to the selected strategy
-          for (const tradeId of importedTradeIds) {
+          for (const tradeId of allImportedTradeIds) {
             await invoke("update_trade_strategy", { tradeId, strategyId: selectedStrategy });
           }
           
@@ -2036,25 +2117,20 @@ export default function Strategies() {
           // Update stats
           const stats = calculateStrategyStats(pairs);
           setStrategyStats(new Map(strategyStats.set(selectedStrategy, stats)));
-          
-          alert(`Trades imported successfully! ${importedTradeIds.length} trade(s) have been assigned to this strategy.`);
-        } else {
-          alert("No new trades were imported. They may have been duplicates.");
         }
       } else {
         // Handle new strategy import
-        if (importedTradeIds && importedTradeIds.length > 0) {
-          setPendingTradeIds(prev => [...prev, ...importedTradeIds]);
-          alert(`Trades imported successfully! ${importedTradeIds.length} trade(s) will be assigned to this strategy when you save.`);
-        } else {
-          alert("No new trades were imported. They may have been duplicates.");
+        if (allImportedTradeIds.length > 0) {
+          setPendingTradeIds(prev => [...prev, ...allImportedTradeIds]);
         }
       }
       
+      setPendingCSVFiles([]);
       setPendingCSVFile(null);
     } catch (error) {
       console.error("Error importing CSV:", error);
       alert("Failed to import CSV: " + (error instanceof Error ? error.message : String(error)));
+      setImportResults(null);
     } finally {
       setIsImportingCSV(false);
     }
@@ -2065,26 +2141,27 @@ export default function Strategies() {
     
     try {
       setIsImportingCSV(true);
-      const file = await open({
+      const files = await open({
         filters: [{ name: "CSV", extensions: ["csv"] }],
-        multiple: false,
+        multiple: true,
       });
 
-      if (!file) {
+      if (!files) {
         setIsImportingCSV(false);
         return;
       }
 
       // Handle both string (single file) and array (multiple files) cases
-      const filePath = Array.isArray(file) ? file[0] : file;
+      const fileArray = Array.isArray(files) ? files : [files];
+      const validFiles = fileArray.filter((f): f is string => typeof f === "string");
       
-      if (filePath && typeof filePath === "string") {
-        // Store the file and show format selection modal
-        setPendingCSVFile({ path: filePath, isForExisting: true });
+      if (validFiles.length > 0) {
+        // Store the files and show format selection modal
+        setPendingCSVFiles(validFiles.map(path => ({ path, isForExisting: true })));
         setShowCSVFormatModal(true);
         setIsImportingCSV(false);
       } else {
-        alert("Please select a valid CSV file.");
+        alert("Please select valid CSV files.");
         setIsImportingCSV(false);
       }
     } catch (error) {
@@ -2180,31 +2257,63 @@ export default function Strategies() {
 
       // Reset and reload
       setIsCreating(false);
+      setIsEditing(false); // Ensure we're in view mode, not edit mode
       setNewStrategyNotes("");
       setEditingFormData({ name: "", description: "", color: "#3b82f6" });
       setPendingTradeIds([]);
       setTempChecklists(new Map());
+      setImportResults(null); // Clear any import results
+      
+      // Clear work-in-progress AFTER setting isCreating to false to prevent restoration
+      clearWorkInProgress();
+      
       await loadStrategies();
+      // Select the newly created strategy
       setSelectedStrategy(newStrategyId);
       
       // Always load checklists for the new strategy to ensure custom checklists are loaded
       await loadChecklists(newStrategyId);
       
-      // If there were pending trades, switch to trades tab and reload trades
+      // Always load strategy data to display it properly
+      await loadStrategyData(newStrategyId);
+      
+      // If there were pending trades, reload trades
       if (hadPendingTrades) {
-        setActiveTab("trades");
         // Clear the cached pairs so they reload
         const updatedPairs = new Map(strategyPairs);
         updatedPairs.delete(newStrategyId);
         setStrategyPairs(updatedPairs);
-        // Load the trades for the new strategy
-        await loadStrategyData(newStrategyId);
-      } else {
-        // If we had checklists (including custom), switch to Checklists tab so they're visible
-        const hadChecklists = tempChecklists.size > 0;
-        if (hadChecklists) setActiveTab("checklists");
-        await loadStrategyData(newStrategyId);
+        // Reload trades for the new strategy
+        const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+        const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
+          strategyId: newStrategyId,
+          pairingMethod: pairingMethod,
+          startDate: null,
+          endDate: null,
+        });
+        setStrategyPairs(new Map(strategyPairs.set(newStrategyId, pairs)));
+        // Update stats
+        const stats = calculateStrategyStats(pairs);
+        setStrategyStats(new Map(strategyStats.set(newStrategyId, stats)));
       }
+      
+      // Always switch to Details tab after saving
+      setActiveTab("notes");
+      
+      // Clear work-in-progress one more time after all state updates to prevent restoration
+      clearWorkInProgress();
+      
+      // Scroll to the selected strategy in the list
+      setTimeout(() => {
+        if (leftPanelScrollRef.current) {
+          const strategyElement = leftPanelScrollRef.current.querySelector(`[data-strategy-id="${newStrategyId}"]`);
+          if (strategyElement) {
+            strategyElement.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          }
+        }
+        // Final clear to ensure work-in-progress is not restored
+        clearWorkInProgress();
+      }, 300);
     } catch (error) {
       console.error("Error creating strategy:", error);
       alert("Failed to create strategy: " + error);
@@ -2420,6 +2529,31 @@ export default function Strategies() {
         setChecklistEditHistory(updatedHistory);
       }
       await loadStrategies();
+      
+      // Clear work-in-progress AFTER loading strategies to prevent restoration
+      clearWorkInProgress();
+      
+      // Ensure strategy is selected and reload data to show updated information
+      if (selectedStrategyData?.id) {
+        setSelectedStrategy(selectedStrategyData.id);
+        await loadStrategyData(selectedStrategyData.id);
+        await loadChecklists(selectedStrategyData.id);
+        
+        // Switch to Details tab after saving
+        setActiveTab("notes");
+        
+        // Scroll to the selected strategy in the list
+        setTimeout(() => {
+          if (leftPanelScrollRef.current) {
+            const strategyElement = leftPanelScrollRef.current.querySelector(`[data-strategy-id="${selectedStrategyData.id}"]`);
+            if (strategyElement) {
+              strategyElement.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }
+          }
+          // Final clear to ensure work-in-progress is not restored
+          clearWorkInProgress();
+        }, 300);
+      }
     } catch (error) {
       console.error("Error saving strategy:", error);
       alert("Failed to save strategy: " + error);
@@ -2727,6 +2861,7 @@ export default function Strategies() {
                 return (
                   <div
                     key={strategy.id}
+                    data-strategy-id={strategy.id}
                     onClick={() => {
                       // Save scroll position before switching
                       saveAllScrollPositions(
@@ -3356,6 +3491,107 @@ export default function Strategies() {
                       </button>
                     )}
                   </div>
+                  {/* Import Results Banner - for both creating and existing strategies */}
+                  {importResults && (
+                    <div style={{
+                      padding: "16px",
+                      marginBottom: "16px",
+                      backgroundColor: importResults && importResults.duplicates > 0 ? "var(--warning)" : "var(--accent)",
+                      borderRadius: "8px",
+                      border: `2px solid ${importResults && importResults.duplicates > 0 ? "var(--warning)" : "var(--accent)"}`,
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "12px",
+                      boxShadow: "0 2px 8px rgba(0, 0, 0, 0.15)"
+                    }}>
+                      <div style={{
+                        width: "40px",
+                        height: "40px",
+                        borderRadius: "50%",
+                        backgroundColor: "rgba(255, 255, 255, 0.2)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0
+                      }}>
+                        {importResults && importResults.duplicates > 0 ? (
+                          <AlertTriangle size={20} color="white" />
+                        ) : (
+                          <CheckCircle size={20} color="white" />
+                        )}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ 
+                          color: "white", 
+                          fontSize: "16px", 
+                          fontWeight: "600",
+                          marginBottom: "8px"
+                        }}>
+                          {importResults 
+                            ? (importResults.duplicates > 0 
+                                ? "Import Complete with Warnings" 
+                                : "Trades Imported Successfully!")
+                            : "Trades Imported Successfully!"
+                          }
+                        </div>
+                        {importResults ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                            <div style={{ 
+                              color: "rgba(255, 255, 255, 0.95)", 
+                              fontSize: "14px"
+                            }}>
+                              <strong>{importResults.newTrades}</strong> new trade{importResults.newTrades !== 1 ? "s" : ""} imported
+                              {importResults.duplicates > 0 && (
+                                <span style={{ display: "block", marginTop: "4px", color: "rgba(255, 255, 255, 0.9)", fontSize: "13px" }}>
+                                  ⚠️ <strong>{importResults.duplicates}</strong> duplicate trade{importResults.duplicates !== 1 ? "s" : ""} skipped (already exist in database)
+                                </span>
+                              )}
+                              {importResults.errors > 0 && (
+                                <span style={{ display: "block", marginTop: "4px", color: "rgba(255, 200, 200, 0.95)", fontSize: "13px" }}>
+                                  ❌ <strong>{importResults.errors}</strong> file{importResults.errors !== 1 ? "s" : ""} failed to import
+                                </span>
+                              )}
+                            </div>
+                            {isCreating && importResults.newTrades > 0 && (
+                              <div style={{ 
+                                color: "rgba(255, 255, 255, 0.85)", 
+                                fontSize: "13px",
+                                marginTop: "4px",
+                                fontStyle: "italic"
+                              }}>
+                                {importResults.newTrades} trade{importResults.newTrades !== 1 ? "s" : ""} {importResults.newTrades === 1 ? "will be" : "will be"} assigned to this strategy when you save.
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div style={{ 
+                            color: "rgba(255, 255, 255, 0.9)", 
+                            fontSize: "14px"
+                          }}>
+                            {pendingTradeIds.length} trade{pendingTradeIds.length !== 1 ? "s" : ""} {pendingTradeIds.length === 1 ? "has" : "have"} been imported and {pendingTradeIds.length === 1 ? "will be" : "will be"} assigned to this strategy when you save.
+                          </div>
+                        )}
+                      </div>
+                      {importResults && (
+                        <button
+                          onClick={() => setImportResults(null)}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: "white",
+                            cursor: "pointer",
+                            padding: "4px",
+                            display: "flex",
+                            alignItems: "center",
+                            opacity: 0.8
+                          }}
+                          title="Dismiss"
+                        >
+                          <X size={18} />
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {isCreating ? (
                     <div style={{ 
                       padding: "40px", 
@@ -3371,24 +3607,98 @@ export default function Strategies() {
                       <p style={{ color: "var(--text-secondary)", fontSize: "14px", marginBottom: "20px" }}>
                         Click "Import CSV" above to upload trades. They will be automatically assigned to this strategy when you save.
                       </p>
-                      {pendingTradeIds.length > 0 && (
-                        <p style={{ color: "var(--accent)", fontSize: "14px", fontWeight: "500" }}>
-                          {pendingTradeIds.length} trade{pendingTradeIds.length !== 1 ? "s" : ""} ready to be assigned
-                        </p>
-                      )}
                     </div>
                   ) : selectedStrategy && strategyStats.has(selectedStrategy) && (() => {
                     const stats = strategyStats.get(selectedStrategy)!;
                     return (
-                      <div style={{
-                        display: "flex",
-                        gap: "32px",
-                        marginBottom: "24px",
-                        padding: "16px",
+                      <>
+                        {/* Import Results Banner for existing strategies */}
+                        {importResults && (
+                          <div style={{
+                            padding: "16px",
+                            marginBottom: "16px",
+                            backgroundColor: importResults.duplicates > 0 ? "var(--warning)" : "var(--accent)",
+                            borderRadius: "8px",
+                            border: `2px solid ${importResults.duplicates > 0 ? "var(--warning)" : "var(--accent)"}`,
+                            display: "flex",
+                            alignItems: "flex-start",
+                            gap: "12px",
+                            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.15)"
+                          }}>
+                            <div style={{
+                              width: "40px",
+                              height: "40px",
+                              borderRadius: "50%",
+                              backgroundColor: "rgba(255, 255, 255, 0.2)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              flexShrink: 0
+                            }}>
+                              {importResults.duplicates > 0 ? (
+                                <AlertTriangle size={20} color="white" />
+                              ) : (
+                                <CheckCircle size={20} color="white" />
+                              )}
+                            </div>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ 
+                                color: "white", 
+                                fontSize: "16px", 
+                                fontWeight: "600",
+                                marginBottom: "8px"
+                              }}>
+                                {importResults.duplicates > 0 
+                                  ? "Import Complete with Warnings" 
+                                  : "Trades Imported Successfully!"
+                                }
+                              </div>
+                              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                <div style={{ 
+                                  color: "rgba(255, 255, 255, 0.95)", 
+                                  fontSize: "14px"
+                                }}>
+                                  <strong>{importResults.newTrades}</strong> new trade{importResults.newTrades !== 1 ? "s" : ""} imported and assigned to this strategy
+                                  {importResults.duplicates > 0 && (
+                                    <span style={{ display: "block", marginTop: "4px", color: "rgba(255, 255, 255, 0.9)", fontSize: "13px" }}>
+                                      ⚠️ <strong>{importResults.duplicates}</strong> duplicate trade{importResults.duplicates !== 1 ? "s" : ""} skipped (already exist in database)
+                                    </span>
+                                  )}
+                                  {importResults.errors > 0 && (
+                                    <span style={{ display: "block", marginTop: "4px", color: "rgba(255, 200, 200, 0.95)", fontSize: "13px" }}>
+                                      ❌ <strong>{importResults.errors}</strong> file{importResults.errors !== 1 ? "s" : ""} failed to import
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => setImportResults(null)}
+                              style={{
+                                background: "transparent",
+                                border: "none",
+                                color: "white",
+                                cursor: "pointer",
+                                padding: "4px",
+                                display: "flex",
+                                alignItems: "center",
+                                opacity: 0.8
+                              }}
+                              title="Dismiss"
+                            >
+                              <X size={18} />
+                            </button>
+                          </div>
+                        )}
+                        <div style={{
+                          display: "flex",
+                          gap: "32px",
+                          marginBottom: "24px",
+                          padding: "16px",
                   backgroundColor: "var(--bg-tertiary)",
                   borderRadius: "6px",
-                        border: "1px solid var(--border-color)"
-                      }}>
+                          border: "1px solid var(--border-color)"
+                        }}>
                         <div>
                           <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px", textTransform: "uppercase" }}>
                             TOTAL TRADES
@@ -3422,9 +3732,7 @@ export default function Strategies() {
                           </div>
                         </div>
                       </div>
-                    );
-                  })()}
-                  {isLoadingPairs ? (
+                      {isLoadingPairs ? (
                     <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "40px" }}>
                       Loading trades...
                     </p>
@@ -3562,6 +3870,9 @@ export default function Strategies() {
                       </table>
                     </div>
                   )}
+                      </>
+                    );
+                  })()}
                 </div>
               )}
 
