@@ -3,7 +3,7 @@
  * Handles lock screen style preferences
  */
 
-export type LockScreenStyle = "default" | "galaxy";
+export type LockScreenStyle = "default" | "galaxy" | "aurora" | "milkyway";
 
 const LOCK_SCREEN_STYLE_KEY = "tradebutler_lock_screen_style";
 
@@ -12,7 +12,10 @@ const LOCK_SCREEN_STYLE_KEY = "tradebutler_lock_screen_style";
  */
 export function getLockScreenStyle(): LockScreenStyle {
   const style = localStorage.getItem(LOCK_SCREEN_STYLE_KEY);
-  return style === "galaxy" ? "galaxy" : "default";
+  if (style === "galaxy" || style === "aurora" || style === "milkyway") {
+    return style;
+  }
+  return "default";
 }
 
 /**

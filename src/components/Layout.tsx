@@ -26,6 +26,8 @@ import appIcon from "../assets/app-icon.png";
 import { applyTheme } from "../utils/themeManager";
 import LockScreen from "./LockScreen";
 import GalaxyLockScreen from "./GalaxyLockScreen";
+import AuroraLockScreen from "./AuroraLockScreen";
+import MilkyWayLockScreen from "./MilkyWayLockScreen";
 import { isLocked, setLocked, hasPassword, lockApp } from "../utils/passwordManager";
 import { getLockScreenStyle } from "../utils/lockScreenManager";
 
@@ -640,11 +642,18 @@ export default function Layout({ children }: LayoutProps) {
       
       {/* Lock Screen Overlay */}
       {isAppLocked && (
-        getLockScreenStyle() === "galaxy" ? (
-          <GalaxyLockScreen onUnlock={handleUnlock} />
-        ) : (
-          <LockScreen onUnlock={handleUnlock} />
-        )
+        (() => {
+          const style = getLockScreenStyle();
+          if (style === "galaxy") {
+            return <GalaxyLockScreen onUnlock={handleUnlock} />;
+          } else if (style === "aurora") {
+            return <AuroraLockScreen onUnlock={handleUnlock} />;
+          } else if (style === "milkyway") {
+            return <MilkyWayLockScreen onUnlock={handleUnlock} />;
+          } else {
+            return <LockScreen onUnlock={handleUnlock} />;
+          }
+        })()
       )}
 
       {/* Clear Data Confirmation Modal */}

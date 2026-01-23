@@ -817,6 +817,50 @@ export default function Settings() {
                     >
                       Galaxy
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newStyle: LockScreenStyle = "aurora";
+                        setLockScreenStyle(newStyle);
+                        saveLockScreenStyle(newStyle);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                        border: "none",
+                        backgroundColor: lockScreenStyle === "aurora" ? "var(--accent)" : "transparent",
+                        color: lockScreenStyle === "aurora" ? "white" : "var(--text-primary)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      Aurora
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newStyle: LockScreenStyle = "milkyway";
+                        setLockScreenStyle(newStyle);
+                        saveLockScreenStyle(newStyle);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                        border: "none",
+                        backgroundColor: lockScreenStyle === "milkyway" ? "var(--accent)" : "transparent",
+                        color: lockScreenStyle === "milkyway" ? "white" : "var(--text-primary)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      Milky Way
+                    </button>
                   </div>
                 </div>
               </div>
