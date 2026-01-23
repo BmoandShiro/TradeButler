@@ -311,7 +311,6 @@ function SortableStrategy({
     </div>
   );
 }
->>>>>>> origin/main
 
 function SortableChecklistItem({ 
   item, 
@@ -1630,39 +1629,6 @@ export default function Strategies() {
       setStrategyStats(new Map(strategyStats.set(strategyId, stats)));
     } catch (error) {
       console.error("Error loading strategy stats:", error);
-    }
-  };
-
-  // Handle strategy drag end
-  const handleStrategyDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-    
-    if (over && active.id !== over.id) {
-      setStrategyOrder((items) => {
-        const currentStrategyIds = strategies.map(s => s.id!);
-        let newOrder = [...items];
-        
-        // Ensure all strategy IDs are in the order
-        currentStrategyIds.forEach(id => {
-          if (!newOrder.includes(id)) {
-            newOrder.push(id);
-          }
-        });
-        
-        // Remove any IDs that are no longer valid strategies
-        newOrder = newOrder.filter(id => currentStrategyIds.includes(id));
-        
-        const oldIndex = newOrder.indexOf(active.id as number);
-        const newIndex = newOrder.indexOf(over.id as number);
-        
-        if (oldIndex !== -1 && newIndex !== -1) {
-          const finalOrder = arrayMove(newOrder, oldIndex, newIndex);
-          localStorage.setItem(STRATEGY_ORDER_KEY, JSON.stringify(finalOrder));
-          return finalOrder;
-        }
-        
-        return newOrder;
-      });
     }
   };
 
@@ -3352,22 +3318,39 @@ export default function Strategies() {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
     
-    const oldIndex = strategies.findIndex(s => s.id === active.id);
-    const newIndex = strategies.findIndex(s => s.id === over.id);
+    // Use sortedStrategies to find indices since that's what's being displayed
+    const oldIndex = sortedStrategies.findIndex(s => s.id === active.id);
+    const newIndex = sortedStrategies.findIndex(s => s.id === over.id);
     
     if (oldIndex === -1 || newIndex === -1) return;
     
-    const reorderedStrategies = arrayMove(strategies, oldIndex, newIndex);
+    // Reorder the sortedStrategies array
+    const reorderedStrategies = arrayMove(sortedStrategies, oldIndex, newIndex);
     
-    // Update display_order for all strategies
+    // Update the strategyOrder state with the new order
+    const newOrder = reorderedStrategies.map(s => s.id!);
+    setStrategyOrder(newOrder);
+    localStorage.setItem(STRATEGY_ORDER_KEY, JSON.stringify(newOrder));
+    
+    // Update display_order for all strategies in the database
     const strategyOrders = reorderedStrategies.map((strategy, index) => [strategy.id, index]);
     
     try {
       await invoke("update_strategy_order", { strategyOrders });
+      // Reload strategies to ensure everything is in sync
       await loadStrategies();
     } catch (error) {
       console.error("Error updating strategy order:", error);
       alert("Failed to update strategy order: " + error);
+      // Revert the order change on error
+      const saved = localStorage.getItem(STRATEGY_ORDER_KEY);
+      if (saved) {
+        try {
+          setStrategyOrder(JSON.parse(saved));
+        } catch {
+          setStrategyOrder([]);
+        }
+      }
     }
   };
 
