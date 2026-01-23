@@ -13,7 +13,9 @@ import {
   Calculator,
   DollarSign,
   FileText,
-  Settings
+  Settings,
+  Lock,
+  Unlock
 } from "lucide-react";
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
@@ -22,6 +24,15 @@ import { readTextFile, writeTextFile } from "@tauri-apps/api/fs";
 import { createPortal } from "react-dom";
 import appIcon from "../assets/app-icon.png";
 import { applyTheme } from "../utils/themeManager";
+import LockScreen from "./LockScreen";
+import GalaxyLockScreen from "./GalaxyLockScreen";
+import AuroraLockScreen from "./AuroraLockScreen";
+import MilkyWayLockScreen from "./MilkyWayLockScreen";
+import GalaxyBackground from "./GalaxyBackground";
+import { isLocked, setLocked, hasPassword, lockApp } from "../utils/passwordManager";
+import { getLockScreenStyle } from "../utils/lockScreenManager";
+import { getGalaxyThemeSettings } from "../utils/galaxyThemeManager";
+import { applyGalaxyBackgroundStyles } from "../utils/galaxyBackgroundStyles";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -33,6 +44,13 @@ export default function Layout({ children }: LayoutProps) {
   const [isExporting, setIsExporting] = useState(false);
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [isAppLocked, setIsAppLocked] = useState(() => isLocked());
+  const [useGalaxyBackground, setUseGalaxyBackground] = useState(() => {
+    const settings = getGalaxyThemeSettings();
+    console.log("Initial galaxy background state:", settings.useAsBackground, settings);
+    return settings.useAsBackground;
+  });
+  const [galaxyBgColor, setGalaxyBgColor] = useState(() => getGalaxyThemeSettings().backgroundColor);
   const mainContentRef = useRef<HTMLElement>(null);
   const scrollPositions = useRef<Map<string, number>>(new Map());
   const previousPathRef = useRef<string>(location.pathname);
@@ -50,7 +68,141 @@ export default function Layout({ children }: LayoutProps) {
         }
       }
     });
+    
+    // Check lock state on mount
+    setIsAppLocked(isLocked());
+    
+    // Check galaxy background setting
+    const initialSettings = getGalaxyThemeSettings();
+    setUseGalaxyBackground(initialSettings.useAsBackground);
+    setGalaxyBgColor(initialSettings.backgroundColor);
+    
+    // Listen for galaxy settings changes
+    const checkGalaxySettings = () => {
+      const settings = getGalaxyThemeSettings();
+      const newUseBackground = settings.useAsBackground;
+      const newBgColor = settings.backgroundColor;
+      
+      console.log("checkGalaxySettings called - useAsBackground:", newUseBackground, "backgroundColor:", newBgColor);
+      
+      setUseGalaxyBackground((prev) => {
+        if (prev !== newUseBackground) {
+          console.log("Updating useGalaxyBackground from", prev, "to", newUseBackground);
+          return newUseBackground;
+        }
+        return prev;
+      });
+      setGalaxyBgColor((prev) => {
+        if (prev !== newBgColor) {
+          return newBgColor;
+        }
+        return prev;
+      });
+    };
+    
+    // Check more frequently to catch changes
+    const interval = setInterval(checkGalaxySettings, 50);
+    window.addEventListener("storage", checkGalaxySettings);
+    
+    // Also listen for custom event that Settings can dispatch
+    const handleGalaxySettingsChange = (e: Event) => {
+      // Immediately check and update
+      const settings = getGalaxyThemeSettings();
+      const newUseBackground = settings.useAsBackground;
+      const newBgColor = settings.backgroundColor;
+      
+      console.log("Galaxy settings changed:", { newUseBackground, newBgColor });
+      
+      setUseGalaxyBackground(newUseBackground);
+      setGalaxyBgColor(newBgColor);
+      
+      // Apply styles after a brief delay to ensure DOM is ready
+      if (newUseBackground) {
+        setTimeout(() => {
+          applyGalaxyBackgroundStyles();
+          // Also force a re-render check
+          setTimeout(applyGalaxyBackgroundStyles, 200);
+        }, 100);
+      }
+    };
+    window.addEventListener("galaxySettingsChanged", handleGalaxySettingsChange);
+    
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("storage", checkGalaxySettings);
+      window.removeEventListener("galaxySettingsChanged", handleGalaxySettingsChange);
+    };
   }, []);
+
+  // Debug: Log state changes
+  useEffect(() => {
+    console.log("useGalaxyBackground changed to:", useGalaxyBackground);
+  }, [useGalaxyBackground]);
+
+  // Apply styles to make page backgrounds transparent when galaxy background is enabled
+  useEffect(() => {
+    if (useGalaxyBackground) {
+      // Use multiple timeouts to catch DOM updates at different stages
+      const timeouts: NodeJS.Timeout[] = [];
+      
+      const applyStyles = () => {
+        applyGalaxyBackgroundStyles();
+      };
+      
+      // Apply immediately and at intervals
+      timeouts.push(setTimeout(applyStyles, 50));
+      timeouts.push(setTimeout(applyStyles, 150));
+      timeouts.push(setTimeout(applyStyles, 300));
+      
+      // Also apply when route changes
+      const applyOnRouteChange = () => {
+        setTimeout(applyStyles, 100);
+      };
+      window.addEventListener("popstate", applyOnRouteChange);
+      
+      // Also listen for navigation events
+      const handleLocationChange = () => {
+        setTimeout(applyStyles, 100);
+      };
+      window.addEventListener("pushstate", handleLocationChange);
+      window.addEventListener("replacestate", handleLocationChange);
+      
+      return () => {
+        timeouts.forEach(clearTimeout);
+        window.removeEventListener("popstate", applyOnRouteChange);
+        window.removeEventListener("pushstate", handleLocationChange);
+        window.removeEventListener("replacestate", handleLocationChange);
+      };
+    } else {
+      // When disabled, restore page backgrounds
+      const contentWrapper = document.querySelector(".galaxy-background-content");
+      if (contentWrapper) {
+        const pageRoots = Array.from(contentWrapper.children) as HTMLElement[];
+        pageRoots.forEach((pageRoot) => {
+          if (pageRoot && pageRoot.tagName === "DIV") {
+            const currentStyle = pageRoot.getAttribute("style") || "";
+            // Remove the transparent background override
+            const newStyle = currentStyle.replace(/background-color\s*:\s*transparent\s*!important;?/gi, "");
+            pageRoot.setAttribute("style", newStyle);
+          }
+        });
+      }
+    }
+  }, [useGalaxyBackground, location.pathname]);
+
+  const handleLockToggle = () => {
+    if (hasPassword()) {
+      lockApp();
+      setIsAppLocked(true);
+    } else {
+      // If no password is set, navigate to settings
+      window.location.href = "/settings";
+    }
+  };
+
+  const handleUnlock = () => {
+    setIsAppLocked(false);
+  };
 
   const handleImport = async () => {
     try {
@@ -509,7 +661,36 @@ export default function Layout({ children }: LayoutProps) {
           </div>
         </div>
 
-        <nav style={{ flex: 1 }}>
+        <nav style={{ flex: 1, overflowY: "auto", padding: "0" }}>
+          {/* Lock Button - Above Dashboard */}
+          <div style={{ padding: "8px 20px", borderBottom: "1px solid var(--border-color)" }}>
+            <button
+              onClick={handleLockToggle}
+              disabled={!hasPassword()}
+              style={{
+                width: "100%",
+                padding: "10px",
+                backgroundColor: isAppLocked ? "var(--accent)" : "var(--bg-tertiary)",
+                color: isAppLocked ? "white" : "var(--text-primary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                cursor: hasPassword() ? "pointer" : "not-allowed",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+                fontSize: "13px",
+                fontWeight: "500",
+                opacity: hasPassword() ? 1 : 0.5,
+                transition: "all 0.2s",
+              }}
+              title={hasPassword() ? (isAppLocked ? "App is locked" : "Lock app") : "Set a password in Settings first"}
+            >
+              {isAppLocked ? <Lock size={16} /> : <Unlock size={16} />}
+              {isAppLocked ? "Locked" : "Lock"}
+            </button>
+          </div>
+          
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
@@ -564,7 +745,7 @@ export default function Layout({ children }: LayoutProps) {
               lineHeight: "1.4",
             }}
           >
-            v1.1.0 Created By:
+            v1.2.0 Created By:
             <br />
             @BMOandShiro @PlaneStation
           </div>
@@ -574,16 +755,52 @@ export default function Layout({ children }: LayoutProps) {
       {/* Main Content */}
       <main
         ref={mainContentRef}
+        data-galaxy-background={useGalaxyBackground ? "true" : "false"}
         style={{
           flex: 1,
           overflow: "auto",
-          backgroundColor: "var(--bg-primary)",
+          backgroundColor: useGalaxyBackground 
+            ? galaxyBgColor 
+            : "var(--bg-primary)",
           display: "flex",
           flexDirection: "column",
+          position: "relative",
         }}
       >
-        {children}
+        {useGalaxyBackground && (
+          <GalaxyBackground />
+        )}
+        <div 
+          className={useGalaxyBackground ? "galaxy-background-content" : ""}
+          style={{ 
+            position: "relative", 
+            zIndex: useGalaxyBackground ? 1 : 0, 
+            flex: 1, 
+            display: "flex", 
+            flexDirection: "column",
+            minHeight: "100%",
+            backgroundColor: useGalaxyBackground ? "transparent" : undefined,
+          }}
+        >
+          {children}
+        </div>
       </main>
+      
+      {/* Lock Screen Overlay */}
+      {isAppLocked && (
+        (() => {
+          const style = getLockScreenStyle();
+          if (style === "galaxy") {
+            return <GalaxyLockScreen onUnlock={handleUnlock} />;
+          } else if (style === "aurora") {
+            return <AuroraLockScreen onUnlock={handleUnlock} />;
+          } else if (style === "milkyway") {
+            return <MilkyWayLockScreen onUnlock={handleUnlock} />;
+          } else {
+            return <LockScreen onUnlock={handleUnlock} />;
+          }
+        })()
+      )}
 
       {/* Clear Data Confirmation Modal */}
       {showClearDataModal && createPortal(

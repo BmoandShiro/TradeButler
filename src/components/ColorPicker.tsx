@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { ChevronUp, ChevronDown } from "lucide-react";
 
 interface ColorPickerProps {
   value: string;
@@ -303,64 +304,184 @@ export function ColorPicker({ value, onChange, onClose }: ColorPickerProps) {
                   <label style={{ display: "block", fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>
                     R
                   </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="255"
-                    value={rgb.r}
-                    onChange={(e) => handleRgbChange("r", parseInt(e.target.value) || 0)}
-                    style={{
-                      width: "100%",
-                      padding: "6px 8px",
-                      backgroundColor: "var(--bg-primary)",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: "4px",
-                      color: "var(--text-primary)",
-                      fontSize: "13px",
-                    }}
-                  />
+                  <div style={{ position: "relative" }}>
+                    <input
+                      type="number"
+                      min="0"
+                      max="255"
+                      value={rgb.r}
+                      onChange={(e) => handleRgbChange("r", parseInt(e.target.value) || 0)}
+                      style={{
+                        width: "100%",
+                        padding: "6px 24px 6px 8px",
+                        backgroundColor: "var(--bg-primary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "4px",
+                        color: "var(--text-primary)",
+                        fontSize: "13px",
+                      }}
+                    />
+                    <div style={{ position: "absolute", right: "4px", top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "column", gap: "0" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleRgbChange("r", Math.min(255, rgb.r + 1))}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          padding: "0",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: "var(--text-secondary)",
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.color = "var(--text-primary)"}
+                        onMouseLeave={(e) => e.currentTarget.style.color = "var(--text-secondary)"}
+                      >
+                        <ChevronUp size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRgbChange("r", Math.max(0, rgb.r - 1))}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          padding: "0",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: "var(--text-secondary)",
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.color = "var(--text-primary)"}
+                        onMouseLeave={(e) => e.currentTarget.style.color = "var(--text-secondary)"}
+                      >
+                        <ChevronDown size={12} />
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 <div style={{ flex: 1 }}>
                   <label style={{ display: "block", fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>
                     G
                   </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="255"
-                    value={rgb.g}
-                    onChange={(e) => handleRgbChange("g", parseInt(e.target.value) || 0)}
-                    style={{
-                      width: "100%",
-                      padding: "6px 8px",
-                      backgroundColor: "var(--bg-primary)",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: "4px",
-                      color: "var(--text-primary)",
-                      fontSize: "13px",
-                    }}
-                  />
+                  <div style={{ position: "relative" }}>
+                    <input
+                      type="number"
+                      min="0"
+                      max="255"
+                      value={rgb.g}
+                      onChange={(e) => handleRgbChange("g", parseInt(e.target.value) || 0)}
+                      style={{
+                        width: "100%",
+                        padding: "6px 24px 6px 8px",
+                        backgroundColor: "var(--bg-primary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "4px",
+                        color: "var(--text-primary)",
+                        fontSize: "13px",
+                      }}
+                    />
+                    <div style={{ position: "absolute", right: "4px", top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "column", gap: "0" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleRgbChange("g", Math.min(255, rgb.g + 1))}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          padding: "0",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: "var(--text-secondary)",
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.color = "var(--text-primary)"}
+                        onMouseLeave={(e) => e.currentTarget.style.color = "var(--text-secondary)"}
+                      >
+                        <ChevronUp size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRgbChange("g", Math.max(0, rgb.g - 1))}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          padding: "0",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: "var(--text-secondary)",
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.color = "var(--text-primary)"}
+                        onMouseLeave={(e) => e.currentTarget.style.color = "var(--text-secondary)"}
+                      >
+                        <ChevronDown size={12} />
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 <div style={{ flex: 1 }}>
                   <label style={{ display: "block", fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>
                     B
                   </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="255"
-                    value={rgb.b}
-                    onChange={(e) => handleRgbChange("b", parseInt(e.target.value) || 0)}
-                    style={{
-                      width: "100%",
-                      padding: "6px 8px",
-                      backgroundColor: "var(--bg-primary)",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: "4px",
-                      color: "var(--text-primary)",
-                      fontSize: "13px",
-                    }}
-                  />
+                  <div style={{ position: "relative" }}>
+                    <input
+                      type="number"
+                      min="0"
+                      max="255"
+                      value={rgb.b}
+                      onChange={(e) => handleRgbChange("b", parseInt(e.target.value) || 0)}
+                      style={{
+                        width: "100%",
+                        padding: "6px 24px 6px 8px",
+                        backgroundColor: "var(--bg-primary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "4px",
+                        color: "var(--text-primary)",
+                        fontSize: "13px",
+                      }}
+                    />
+                    <div style={{ position: "absolute", right: "4px", top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "column", gap: "0" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleRgbChange("b", Math.min(255, rgb.b + 1))}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          padding: "0",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: "var(--text-secondary)",
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.color = "var(--text-primary)"}
+                        onMouseLeave={(e) => e.currentTarget.style.color = "var(--text-secondary)"}
+                      >
+                        <ChevronUp size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRgbChange("b", Math.max(0, rgb.b - 1))}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          padding: "0",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: "var(--text-secondary)",
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.color = "var(--text-primary)"}
+                        onMouseLeave={(e) => e.currentTarget.style.color = "var(--text-secondary)"}
+                      >
+                        <ChevronDown size={12} />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
