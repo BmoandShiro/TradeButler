@@ -61,3 +61,18 @@ code {
   background: #3a3a3a;
 }
 
+/* Galaxy Background Overrides - Make page backgrounds transparent when galaxy background is enabled */
+main[data-galaxy-background="true"] .galaxy-background-content > div {
+  background-color: transparent !important;
+}
+
+/* Target any div with inline background-color style */
+main[data-galaxy-background="true"] .galaxy-background-content > div[style*="background"] {
+  background-color: transparent !important;
+}
+
+/* Also target nested divs that might have backgrounds */
+main[data-galaxy-background="true"] .galaxy-background-content > div > div[style*="background-color"] {
+  background-color: transparent !important;
+}
+

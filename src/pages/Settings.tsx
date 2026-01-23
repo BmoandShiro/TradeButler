@@ -92,6 +92,13 @@ export default function Settings() {
     const updated = { ...galaxySettings, [key]: value };
     setGalaxySettings(updated);
     setGalaxyThemeSettings({ [key]: value });
+    // Dispatch custom event to notify other components immediately
+    window.dispatchEvent(new CustomEvent("galaxySettingsChanged", { detail: { key, value } }));
+    // Also trigger a storage event for cross-tab sync
+    window.dispatchEvent(new StorageEvent("storage", {
+      key: "tradebutler_galaxy_theme_settings",
+      newValue: JSON.stringify({ ...getGalaxyThemeSettings(), [key]: value }),
+    }));
   };
 
   // Ensure orbitRadius exists in state (for users who had settings before this was added)
@@ -1173,6 +1180,34 @@ export default function Settings() {
                           <span>50px</span>
                           <span>300px</span>
                         </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Use as Background */}
+                  <div>
+                    <h4 style={{ fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+                      Background
+                    </h4>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      <div>
+                        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={galaxySettings.useAsBackground}
+                            onChange={(e) => updateGalaxySetting("useAsBackground", e.target.checked)}
+                            style={{
+                              width: "16px",
+                              height: "16px",
+                              cursor: "pointer",
+                              accentColor: "var(--accent)",
+                            }}
+                          />
+                          <span>Use Galaxy Theme as App Background</span>
+                        </label>
+                        <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "4px", marginLeft: "24px" }}>
+                          Apply the galaxy particle effect to the background of all tabs
+                        </p>
                       </div>
                     </div>
                   </div>

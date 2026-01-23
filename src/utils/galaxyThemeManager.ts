@@ -21,6 +21,7 @@ export interface GalaxyThemeSettings {
   orbitSpeed: number;
   orbitRadius: number;
   orbitGravity: number;
+  useAsBackground: boolean;
 }
 
 const GALAXY_THEME_KEY = "tradebutler_galaxy_theme_settings";
@@ -43,6 +44,7 @@ const defaultSettings: GalaxyThemeSettings = {
   orbitSpeed: 0.5,
   orbitRadius: 200,
   orbitGravity: 0.0001,
+  useAsBackground: false,
 };
 
 /**
