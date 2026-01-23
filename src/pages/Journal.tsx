@@ -19,6 +19,7 @@ interface JournalTrade {
   journal_entry_id: number;
   symbol: string | null;
   position: string | null;
+  timeframe: string | null;
   entry_type: string | null;
   exit_type: string | null;
   trade: string | null;
@@ -89,6 +90,7 @@ export default function Journal() {
     id: number | null;
     symbol: string;
     position: string;
+    timeframe: string;
     entry_type: string;
     exit_type: string;
     trade: string;
@@ -102,6 +104,7 @@ export default function Journal() {
     id: null,
     symbol: "",
     position: "",
+    timeframe: "",
     entry_type: "",
     exit_type: "",
     trade: "",
@@ -132,6 +135,7 @@ export default function Journal() {
       id: number | null;
       symbol: string;
       position: string;
+      timeframe: string;
       entry_type: string;
       exit_type: string;
       trade: string;
@@ -152,6 +156,7 @@ export default function Journal() {
       id: number | null;
       symbol: string;
       position: string;
+      timeframe: string;
       entry_type: string;
       exit_type: string;
       trade: string;
@@ -494,6 +499,7 @@ export default function Journal() {
       id: null,
       symbol: "",
       position: "",
+      timeframe: "",
       entry_type: "",
       exit_type: "",
       trade: "",
@@ -530,6 +536,7 @@ export default function Journal() {
         id: number | null;
         symbol: string;
         position: string;
+        timeframe: string;
         entry_type: string;
         exit_type: string;
         trade: string;
@@ -543,6 +550,7 @@ export default function Journal() {
         id: trade.id,
         symbol: trade.symbol || "",
         position: trade.position || "",
+        timeframe: trade.timeframe || "",
         entry_type: trade.entry_type || "",
         exit_type: trade.exit_type || "",
         trade: trade.trade || "",
@@ -559,6 +567,7 @@ export default function Journal() {
           id: null,
           symbol: "",
           position: "",
+          timeframe: "",
           entry_type: "",
           exit_type: "",
           trade: "",
@@ -622,6 +631,7 @@ export default function Journal() {
       id: null,
       symbol: "",
       position: "",
+      timeframe: "",
       entry_type: "",
       exit_type: "",
       trade: "",
@@ -719,6 +729,7 @@ export default function Journal() {
             id: tradeData.id,
             symbol: tradeData.symbol || null,
             position: tradeData.position || null,
+            timeframe: tradeData.timeframe || null,
             entryType: tradeData.entry_type || null,
             exitType: tradeData.exit_type || null,
             trade: tradeData.trade || null,
@@ -734,6 +745,7 @@ export default function Journal() {
             journalEntryId: entryId,
             symbol: tradeData.symbol || null,
             position: tradeData.position || null,
+            timeframe: tradeData.timeframe || null,
             entryType: tradeData.entry_type || null,
             exitType: tradeData.exit_type || null,
             trade: tradeData.trade || null,
@@ -935,6 +947,7 @@ export default function Journal() {
             id: tradeData.id,
             symbol: tradeData.symbol || null,
             position: tradeData.position || null,
+            timeframe: tradeData.timeframe || null,
             entryType: tradeData.entry_type || null,
             exitType: tradeData.exit_type || null,
             trade: tradeData.trade || null,
@@ -950,6 +963,7 @@ export default function Journal() {
             journalEntryId: entryId,
             symbol: tradeData.symbol || null,
             position: tradeData.position || null,
+            timeframe: tradeData.timeframe || null,
             entryType: tradeData.entry_type || null,
             exitType: tradeData.exit_type || null,
             trade: tradeData.trade || null,
@@ -1022,6 +1036,7 @@ export default function Journal() {
         id: null,
         symbol: "",
         position: "",
+        timeframe: "",
         entry_type: "",
         exit_type: "",
         trade: "",
@@ -1355,6 +1370,16 @@ export default function Journal() {
                             </label>
                             <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
                               {trade.position}
+                            </div>
+                          </div>
+                        )}
+                        {trade.timeframe && (
+                          <div style={{ marginBottom: "8px" }}>
+                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
+                              Trade Timeframe
+                            </label>
+                            <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
+                              {trade.timeframe}
                             </div>
                           </div>
                         )}
@@ -1774,6 +1799,52 @@ export default function Journal() {
                           <option value="Strangle">Strangle</option>
                           <option value="Covered Call">Covered Call</option>
                           <option value="Protective Put">Protective Put</option>
+                        </select>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                          Trade Timeframe
+                        </label>
+                        <select
+                          value={currentTrade.timeframe}
+                          onChange={(e) => updateTradeFormData(activeTradeIndex, "timeframe", e.target.value)}
+                          style={{
+                            width: "100%",
+                            padding: "8px",
+                            backgroundColor: "var(--bg-primary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "4px",
+                            color: "var(--text-primary)",
+                            fontSize: "14px",
+                          }}
+                        >
+                          <option value="">Select timeframe...</option>
+                          <option value="1s">1 Second</option>
+                          <option value="5s">5 Seconds</option>
+                          <option value="10s">10 Seconds</option>
+                          <option value="15s">15 Seconds</option>
+                          <option value="30s">30 Seconds</option>
+                          <option value="1m">1 Minute</option>
+                          <option value="2m">2 Minutes</option>
+                          <option value="3m">3 Minutes</option>
+                          <option value="5m">5 Minutes</option>
+                          <option value="7m">7 Minutes</option>
+                          <option value="10m">10 Minutes</option>
+                          <option value="15m">15 Minutes</option>
+                          <option value="20m">20 Minutes</option>
+                          <option value="30m">30 Minutes</option>
+                          <option value="1h">1 Hour</option>
+                          <option value="2h">2 Hours</option>
+                          <option value="3h">3 Hours</option>
+                          <option value="4h">4 Hours</option>
+                          <option value="6h">6 Hours</option>
+                          <option value="8h">8 Hours</option>
+                          <option value="12h">12 Hours</option>
+                          <option value="1d">1 Day</option>
+                          <option value="2d">2 Days</option>
+                          <option value="3d">3 Days</option>
+                          <option value="1w">1 Week</option>
+                          <option value="1M">1 Month</option>
                         </select>
                       </div>
                       <div style={{ flex: 1 }}>

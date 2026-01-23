@@ -83,6 +83,7 @@ pub struct JournalTrade {
     pub journal_entry_id: i64,
     pub symbol: Option<String>,
     pub position: Option<String>,
+    pub timeframe: Option<String>,
     pub entry_type: Option<String>,
     pub exit_type: Option<String>,
     pub trade: Option<String>,
@@ -250,6 +251,7 @@ pub fn init_database(db_path: &Path) -> Result<()> {
             journal_entry_id INTEGER NOT NULL,
             symbol TEXT,
             position TEXT,
+            timeframe TEXT,
             entry_type TEXT,
             exit_type TEXT,
             trade TEXT,
@@ -268,6 +270,7 @@ pub fn init_database(db_path: &Path) -> Result<()> {
     
     // Add new columns if they don't exist (migration)
     let _ = conn.execute("ALTER TABLE journal_trades ADD COLUMN position TEXT", []);
+    let _ = conn.execute("ALTER TABLE journal_trades ADD COLUMN timeframe TEXT", []);
     let _ = conn.execute("ALTER TABLE journal_trades ADD COLUMN entry_type TEXT", []);
     let _ = conn.execute("ALTER TABLE journal_trades ADD COLUMN exit_type TEXT", []);
 
