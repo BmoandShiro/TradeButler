@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, Dispatch, SetStateAction } from "react";
+import React, { useEffect, useState, useRef, Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
@@ -65,6 +65,253 @@ interface ChecklistItem {
 
 /** Placeholder item text used to persist empty custom checklist types. Filtered out when displaying. */
 const EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER = "__empty_custom_checklist_placeholder__";
+
+// Sortable Strategy Component
+function SortableStrategy({
+  strategy,
+  isSelected,
+  selectedStrategy,
+  strategyStats,
+  expandedStats,
+  setExpandedStats,
+  onSelect,
+  saveAllScrollPositions,
+  tabScrollPositions,
+  leftPanelScrollRef,
+  rightPanelScrollRef,
+  clearWorkInProgress,
+  setSelectedStrategy,
+  setActiveTab,
+  setIsEditing,
+  setIsCreating,
+}: {
+  strategy: Strategy;
+  isSelected: boolean;
+  selectedStrategy: number | null;
+  strategyStats: Map<number, { totalTrades: number; totalPnL: number; winRate: number }>;
+  expandedStats: Set<number>;
+  setExpandedStats: React.Dispatch<React.SetStateAction<Set<number>>>;
+  onSelect: () => void;
+  saveAllScrollPositions: (tabPositions: React.MutableRefObject<Map<TabType, number>>, leftScroll: number | null, rightScroll: number | null, page: string) => void;
+  tabScrollPositions: React.MutableRefObject<Map<TabType, number>>;
+  leftPanelScrollRef: React.RefObject<HTMLDivElement>;
+  rightPanelScrollRef: React.RefObject<HTMLDivElement>;
+  clearWorkInProgress: () => void;
+  setSelectedStrategy: React.Dispatch<React.SetStateAction<number | null>>;
+  setActiveTab: React.Dispatch<React.SetStateAction<TabType>>;
+  setIsEditing: React.Dispatch<React.SetStateAction<boolean>>;
+  setIsCreating: React.Dispatch<React.SetStateAction<boolean>>;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: strategy.id! });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  const handleStrategyClick = (e: React.MouseEvent) => {
+    // Don't trigger selection if clicking on the drag handle
+    if ((e.target as HTMLElement).closest('[data-drag-handle]')) {
+      return;
+    }
+    
+    saveAllScrollPositions(
+      tabScrollPositions,
+      leftPanelScrollRef.current?.scrollTop ?? null,
+      rightPanelScrollRef.current?.scrollTop ?? null,
+      "strategies"
+    );
+    clearWorkInProgress();
+    setSelectedStrategy(strategy.id!);
+    setActiveTab("notes");
+    if (selectedStrategy !== strategy.id) {
+      setIsEditing(false);
+      setIsCreating(false);
+    }
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      onClick={handleStrategyClick}
+      style={{
+        ...style,
+        padding: "12px",
+        backgroundColor: isSelected ? "var(--accent)" : "var(--bg-tertiary)",
+        border: `1px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
+        borderRadius: "6px",
+        cursor: "pointer",
+        transition: "all 0.2s",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+        <div
+          {...attributes}
+          {...listeners}
+          data-drag-handle
+          style={{
+            cursor: isDragging ? "grabbing" : "grab",
+            display: "flex",
+            alignItems: "center",
+            padding: "4px",
+            margin: "-4px",
+            color: isSelected ? "rgba(255,255,255,0.7)" : "var(--text-secondary)",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <GripVertical size={16} />
+        </div>
+        <div
+          style={{
+            width: "10px",
+            height: "10px",
+            borderRadius: "50%",
+            backgroundColor: strategy.color || "var(--accent)",
+          }}
+        />
+        <h3
+          style={{
+            fontSize: "14px",
+            fontWeight: "600",
+            color: isSelected ? "white" : "var(--text-primary)",
+          }}
+        >
+          {strategy.name}
+        </h3>
+      </div>
+      {strategy.description && (
+        <p
+          style={{
+            color: isSelected ? "rgba(255,255,255,0.8)" : "var(--text-secondary)",
+            fontSize: "12px",
+            marginTop: "4px",
+          }}
+        >
+          {strategy.description}
+        </p>
+      )}
+      {strategy.id && strategyStats.has(strategy.id) && (() => {
+        const stats = strategyStats.get(strategy.id)!;
+        const hasTrades = stats.totalTrades > 0;
+        const isCollapsed = expandedStats.has(strategy.id);
+        
+        if (!hasTrades) {
+          return null;
+        }
+        
+        const toggleStats = (e: React.MouseEvent) => {
+          e.stopPropagation();
+          setExpandedStats(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(strategy.id!)) {
+              newSet.delete(strategy.id!);
+            } else {
+              newSet.add(strategy.id!);
+            }
+            return newSet;
+          });
+        };
+        
+        return (
+          <div>
+            <div 
+              style={{ 
+                display: "flex", 
+                alignItems: "center", 
+                justifyContent: "space-between",
+                marginTop: "8px",
+                paddingTop: "8px",
+                borderTop: `1px solid ${isSelected ? "rgba(255,255,255,0.2)" : "var(--border-color)"}`
+              }}
+            >
+              <button
+                onClick={toggleStats}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: isSelected ? "rgba(255,255,255,0.7)" : "var(--text-secondary)",
+                  cursor: "pointer",
+                  padding: "2px",
+                  display: "flex",
+                  alignItems: "center",
+                  transition: "transform 0.2s",
+                }}
+                title={isCollapsed ? "Show stats" : "Hide stats"}
+              >
+                {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+              </button>
+            </div>
+            {!isCollapsed && (
+              <div style={{ 
+                display: "flex", 
+                gap: "16px", 
+                marginTop: "8px",
+              }}>
+                <div>
+                  <div style={{ 
+                    fontSize: "10px", 
+                    color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
+                    marginBottom: "2px"
+                  }}>
+                    TOTAL TRADES
+                  </div>
+                  <div style={{ 
+                    fontSize: "14px", 
+                    fontWeight: "600",
+                    color: isSelected ? "white" : "var(--text-primary)"
+                  }}>
+                    {stats.totalTrades}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ 
+                    fontSize: "10px", 
+                    color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
+                    marginBottom: "2px"
+                  }}>
+                    TOTAL P&L
+                  </div>
+                  <div style={{ 
+                    fontSize: "14px", 
+                    fontWeight: "600",
+                    color: stats.totalPnL >= 0 ? "var(--profit)" : "var(--loss)"
+                  }}>
+                    ${stats.totalPnL >= 0 ? "+" : ""}{stats.totalPnL.toFixed(2)}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ 
+                    fontSize: "10px", 
+                    color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
+                    marginBottom: "2px"
+                  }}>
+                    WIN %
+                  </div>
+                  <div style={{ 
+                    fontSize: "14px", 
+                    fontWeight: "600",
+                    color: stats.winRate >= 50 ? "var(--profit)" : "var(--loss)"
+                  }}>
+                    {stats.winRate.toFixed(1)}%
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+>>>>>>> origin/main
 
 function SortableChecklistItem({ 
   item, 
@@ -1019,6 +1266,8 @@ export default function Strategies() {
   const [loadingAssociatedRecords, setLoadingAssociatedRecords] = useState(false);
   const [showNameRequiredModal, setShowNameRequiredModal] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  // Track if we're in the middle of a save/cancel operation to prevent unwanted restorations
+  const isSavingOrCancelingRef = useRef(false);
   const [tempChecklists, setTempChecklists] = useState<Map<string, ChecklistItem[]>>(new Map());
   const [pendingTradeIds, setPendingTradeIds] = useState<number[]>([]);
   const [isImportingCSV, setIsImportingCSV] = useState(false);
@@ -1036,8 +1285,26 @@ export default function Strategies() {
   const [originalChecklists, setOriginalChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [checklistEditHistory, setChecklistEditHistory] = useState<Map<number, Array<Map<string, ChecklistItem[]>>>>(new Map());
   
+  // Strategy order state (similar to metric card order)
+  const STRATEGY_ORDER_KEY = "tradebutler_strategy_order";
+  const [strategyOrder, setStrategyOrder] = useState<number[]>(() => {
+    const saved = localStorage.getItem(STRATEGY_ORDER_KEY);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
+  
   const sensors = useSensors(
-    useSensor(PointerSensor),
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // Require 8px of movement before drag starts
+      },
+    }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
     })
@@ -1275,9 +1542,9 @@ export default function Strategies() {
     loadStrategies();
   }, []);
 
-  // Restore state after strategies are loaded
+  // Restore state after strategies are loaded (but not during save/cancel operations)
   useEffect(() => {
-    if (strategies.length > 0) {
+    if (strategies.length > 0 && !isSavingOrCancelingRef.current) {
       restoreState();
       
       // Restore work in progress after loading, but only if we're not in the middle of a save operation
@@ -1305,6 +1572,12 @@ export default function Strategies() {
           console.error("Error checking work in progress:", error);
         }
       }
+    }
+    // Reset the flag after a brief delay
+    if (isSavingOrCancelingRef.current) {
+      setTimeout(() => {
+        isSavingOrCancelingRef.current = false;
+      }, 500);
     }
   }, [strategies]);
 
@@ -1360,7 +1633,64 @@ export default function Strategies() {
     }
   };
 
-  const loadStrategies = async () => {
+  // Handle strategy drag end
+  const handleStrategyDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    
+    if (over && active.id !== over.id) {
+      setStrategyOrder((items) => {
+        const currentStrategyIds = strategies.map(s => s.id!);
+        let newOrder = [...items];
+        
+        // Ensure all strategy IDs are in the order
+        currentStrategyIds.forEach(id => {
+          if (!newOrder.includes(id)) {
+            newOrder.push(id);
+          }
+        });
+        
+        // Remove any IDs that are no longer valid strategies
+        newOrder = newOrder.filter(id => currentStrategyIds.includes(id));
+        
+        const oldIndex = newOrder.indexOf(active.id as number);
+        const newIndex = newOrder.indexOf(over.id as number);
+        
+        if (oldIndex !== -1 && newIndex !== -1) {
+          const finalOrder = arrayMove(newOrder, oldIndex, newIndex);
+          localStorage.setItem(STRATEGY_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        }
+        
+        return newOrder;
+      });
+    }
+  };
+
+  // Sort strategies based on order
+  const sortedStrategies = React.useMemo(() => {
+    if (strategyOrder.length === 0) {
+      return strategies;
+    }
+    
+    const ordered = [...strategies].sort((a, b) => {
+      const aIndex = strategyOrder.indexOf(a.id!);
+      const bIndex = strategyOrder.indexOf(b.id!);
+      
+      // If both are in order, sort by order
+      if (aIndex !== -1 && bIndex !== -1) {
+        return aIndex - bIndex;
+      }
+      // If only one is in order, prioritize it
+      if (aIndex !== -1) return -1;
+      if (bIndex !== -1) return 1;
+      // If neither is in order, maintain original order
+      return 0;
+    });
+    
+    return ordered;
+  }, [strategies, strategyOrder]);
+
+  const loadStrategies = async (preserveEditingState = false) => {
     try {
       const data = await invoke<Strategy[]>("get_strategies");
       setStrategies(data);
@@ -1371,7 +1701,10 @@ export default function Strategies() {
           notesMap.set(s.id, s.notes);
         }
       });
-      setNotesContent(notesMap);
+      // Only update notesContent if we're not preserving editing state
+      if (!preserveEditingState) {
+        setNotesContent(notesMap);
+      }
       // Load stats for all strategies
       for (const strategy of data) {
         if (strategy.id) {
@@ -2492,6 +2825,7 @@ export default function Strategies() {
       return;
     }
     try {
+      isSavingOrCancelingRef.current = true; // Prevent state restoration during save
       clearWorkInProgress(); // Clear work in progress when saving
       // Create the strategy - returns just the ID
       const newStrategyId = await invoke<number>("create_strategy", {
@@ -2632,6 +2966,7 @@ export default function Strategies() {
   };
 
   const handleCancelNew = () => {
+    isSavingOrCancelingRef.current = true; // Prevent state restoration during cancel
     clearWorkInProgress(); // Clear work in progress when canceling
     setIsCreating(false);
     setEditingFormData({ name: "", description: "", color: "#3b82f6" });
@@ -2794,6 +3129,7 @@ export default function Strategies() {
   };
 
   const handleSaveEdit = async () => {
+    isSavingOrCancelingRef.current = true; // Prevent state restoration during save
     clearWorkInProgress(); // Clear work in progress when saving
     if (!selectedStrategyData) return;
     try {
@@ -2839,16 +3175,27 @@ export default function Strategies() {
         updatedHistory.delete(selectedStrategyData.id);
         setChecklistEditHistory(updatedHistory);
       }
-      await loadStrategies();
+      // Save the strategy ID before clearing editing state
+      const savedStrategyId = selectedStrategyData.id;
+      
+      // Reload strategies - this will update the strategies array
+      await loadStrategies(true);
       
       // Clear work-in-progress AFTER loading strategies to prevent restoration
       clearWorkInProgress();
       
-      // Ensure strategy is selected and reload data to show updated information
-      if (selectedStrategyData?.id) {
-        setSelectedStrategy(selectedStrategyData.id);
-        await loadStrategyData(selectedStrategyData.id);
-        await loadChecklists(selectedStrategyData.id);
+      // After reload, ensure selectedStrategy is still set (this will update selectedStrategyData)
+      if (savedStrategyId) {
+        setSelectedStrategy(savedStrategyId);
+        // Update notesContent with saved notes
+        setNotesContent(prev => {
+          const updated = new Map(prev);
+          updated.set(savedStrategyId, currentNotes || "");
+          return updated;
+        });
+        
+        await loadStrategyData(savedStrategyId);
+        await loadChecklists(savedStrategyId);
         
         // Switch to Details tab after saving
         setActiveTab("notes");
@@ -2856,7 +3203,7 @@ export default function Strategies() {
         // Scroll to the selected strategy in the list
         setTimeout(() => {
           if (leftPanelScrollRef.current) {
-            const strategyElement = leftPanelScrollRef.current.querySelector(`[data-strategy-id="${selectedStrategyData.id}"]`);
+            const strategyElement = leftPanelScrollRef.current.querySelector(`[data-strategy-id="${savedStrategyId}"]`);
             if (strategyElement) {
               strategyElement.scrollIntoView({ behavior: "smooth", block: "nearest" });
             }
@@ -2872,6 +3219,7 @@ export default function Strategies() {
   };
 
   const handleCancelEdit = () => {
+    isSavingOrCancelingRef.current = true; // Prevent state restoration during cancel
     clearWorkInProgress(); // Clear work in progress when canceling
     setIsEditing(false);
     if (selectedStrategyData) {
@@ -3216,19 +3564,16 @@ export default function Strategies() {
             </div>
           ) : (
             <DndContext
-              sensors={strategySensors}
+              sensors={sensors}
               collisionDetection={closestCenter}
               onDragEnd={handleStrategyDragEnd}
             >
-              <SortableContext
-                items={strategies.map(s => s.id)}
-                strategy={verticalListSortingStrategy}
-              >
+              <SortableContext items={sortedStrategies.map(s => s.id!)} strategy={verticalListSortingStrategy}>
                 <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                  {strategies.map((strategy) => {
+                  {sortedStrategies.map((strategy) => {
                     const isSelected = selectedStrategy === strategy.id;
                     return (
-                      <SortableStrategyItem
+                      <SortableStrategy
                         key={strategy.id}
                         strategy={strategy}
                         isSelected={isSelected}
@@ -3236,15 +3581,16 @@ export default function Strategies() {
                         strategyStats={strategyStats}
                         expandedStats={expandedStats}
                         setExpandedStats={setExpandedStats}
-                        setSelectedStrategy={setSelectedStrategy}
-                        setActiveTab={setActiveTab}
-                        setIsEditing={setIsEditing}
-                        setIsCreating={setIsCreating}
+                        onSelect={() => {}}
                         saveAllScrollPositions={saveAllScrollPositions}
                         tabScrollPositions={tabScrollPositions}
                         leftPanelScrollRef={leftPanelScrollRef}
                         rightPanelScrollRef={rightPanelScrollRef}
                         clearWorkInProgress={clearWorkInProgress}
+                        setSelectedStrategy={setSelectedStrategy}
+                        setActiveTab={setActiveTab}
+                        setIsEditing={setIsEditing}
+                        setIsCreating={setIsCreating}
                       />
                     );
                   })}
@@ -3342,7 +3688,10 @@ export default function Strategies() {
                 {isCreating ? (
                   <div style={{ display: "flex", gap: "8px" }}>
                     <button
-                      onClick={handleSaveNew}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSaveNew();
+                      }}
                       style={{
                         background: "var(--accent)",
                         border: "none",
@@ -3358,7 +3707,10 @@ export default function Strategies() {
                       Save
                     </button>
                     <button
-                      onClick={handleCancelNew}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCancelNew();
+                      }}
                       style={{
                         background: "var(--bg-tertiary)",
                         border: "1px solid var(--border-color)",
@@ -3465,7 +3817,10 @@ export default function Strategies() {
                       ) : null;
                     })()}
                     <button
-                      onClick={handleSaveEdit}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSaveEdit();
+                      }}
                       style={{
                         background: "var(--accent)",
                         border: "none",
@@ -3481,7 +3836,10 @@ export default function Strategies() {
                       Save
                     </button>
                     <button
-                      onClick={handleCancelEdit}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCancelEdit();
+                      }}
                       style={{
                         background: "var(--bg-tertiary)",
                         border: "1px solid var(--border-color)",

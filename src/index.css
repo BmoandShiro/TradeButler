@@ -61,3 +61,134 @@ code {
   background: #3a3a3a;
 }
 
+/* Galaxy Background Overrides - Make page backgrounds transparent when galaxy background is enabled */
+main[data-galaxy-background="true"] .galaxy-background-content > div {
+  background-color: transparent !important;
+}
+
+/* Target any div with inline background-color style */
+main[data-galaxy-background="true"] .galaxy-background-content > div[style*="background"] {
+  background-color: transparent !important;
+}
+
+/* Also target nested divs that might have backgrounds */
+main[data-galaxy-background="true"] .galaxy-background-content > div > div[style*="background-color"] {
+  background-color: transparent !important;
+}
+
+/* Dark-themed range sliders */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  height: 6px;
+}
+
+input[type="range"]::-webkit-slider-track {
+  background: var(--bg-tertiary);
+  height: 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  background: var(--bg-tertiary);
+  height: 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--text-secondary);
+  height: 16px;
+  width: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  margin-top: -5px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2);
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  background: var(--text-primary);
+  border-color: var(--text-primary);
+}
+
+input[type="range"]::-moz-range-track {
+  background: var(--bg-tertiary);
+  height: 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+}
+
+input[type="range"]::-moz-range-progress {
+  background: var(--border-color);
+  height: 6px;
+  border-radius: 3px;
+}
+
+input[type="range"]::-moz-range-thumb {
+  background: var(--text-secondary);
+  height: 16px;
+  width: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2);
+}
+
+input[type="range"]::-moz-range-thumb:hover {
+  background: var(--text-primary);
+  border-color: var(--text-primary);
+}
+
+/* Dark-themed checkboxes */
+input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+}
+
+input[type="checkbox"]:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+input[type="checkbox"]:checked::after {
+  content: "✓";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 1;
+}
+
+/* Dark-themed number input spinners */
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+

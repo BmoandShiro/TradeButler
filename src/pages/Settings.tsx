@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
-import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, X } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, X, Lock, Key, Eye, EyeOff } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
+import { save } from "@tauri-apps/api/dialog";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { ColorPicker } from "../components/ColorPicker";
@@ -19,6 +20,24 @@ import {
   ThemePreset,
   presetThemes
 } from "../utils/themeManager";
+import { 
+  hasPassword, 
+  getPasswordType, 
+  setPassword, 
+  deletePassword,
+  verifyPassword
+} from "../utils/passwordManager";
+import { 
+  getLockScreenStyle, 
+  setLockScreenStyle as saveLockScreenStyle, 
+  LockScreenStyle 
+} from "../utils/lockScreenManager";
+import {
+  getGalaxyThemeSettings,
+  setGalaxyThemeSettings,
+  resetGalaxyThemeSettings,
+  GalaxyThemeSettings,
+} from "../utils/galaxyThemeManager";
 
 interface VersionInfo {
   current: string;
@@ -44,6 +63,54 @@ export default function Settings() {
   const [presetName, setPresetName] = useState("");
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [editingPresetName, setEditingPresetName] = useState("");
+  
+  // Password/PIN state
+  const [passwordType, setPasswordType] = useState<"pin" | "password">(() => getPasswordType() || "pin");
+  const [newPassword, setNewPassword] = useState("");
+  const [newPinDigits, setNewPinDigits] = useState<string[]>(["", "", "", "", "", ""]);
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [confirmPinDigits, setConfirmPinDigits] = useState<string[]>(["", "", "", "", "", ""]);
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordSuccess, setPasswordSuccess] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [showNewPin, setShowNewPin] = useState(false);
+  const [showConfirmPin, setShowConfirmPin] = useState(false);
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
+  const [showRemovePin, setShowRemovePin] = useState(false);
+  const [removeVerification, setRemoveVerification] = useState("");
+  const [removePinDigits, setRemovePinDigits] = useState<string[]>(["", "", "", "", "", ""]);
+  const [lockScreenStyle, setLockScreenStyle] = useState<LockScreenStyle>(() => getLockScreenStyle());
+  const [galaxySettings, setGalaxySettings] = useState<GalaxyThemeSettings>(() => getGalaxyThemeSettings());
+  const newPasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const confirmPasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const removePasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  const updateGalaxySetting = <K extends keyof GalaxyThemeSettings>(
+    key: K,
+    value: GalaxyThemeSettings[K]
+  ) => {
+    const updated = { ...galaxySettings, [key]: value };
+    setGalaxySettings(updated);
+    setGalaxyThemeSettings({ [key]: value });
+    // Dispatch custom event to notify other components immediately
+    window.dispatchEvent(new CustomEvent("galaxySettingsChanged", { detail: { key, value } }));
+    // Also trigger a storage event for cross-tab sync
+    window.dispatchEvent(new StorageEvent("storage", {
+      key: "tradebutler_galaxy_theme_settings",
+      newValue: JSON.stringify({ ...getGalaxyThemeSettings(), [key]: value }),
+    }));
+  };
+
+  // Ensure orbitRadius exists in state (for users who had settings before this was added)
+  useEffect(() => {
+    if (galaxySettings.orbitRadius === undefined) {
+      const currentSettings = getGalaxyThemeSettings();
+      if (currentSettings.orbitRadius !== undefined) {
+        setGalaxySettings(currentSettings);
+      }
+    }
+  }, [galaxySettings.orbitRadius]);
 
   const checkVersion = async () => {
     try {
@@ -97,16 +164,31 @@ export default function Settings() {
         });
         alert("Update downloaded and installer started. Please follow the installation wizard. Your data will be preserved.");
       } else {
-        // For portable version, download and auto-update
-        await invoke("download_portable_update", { 
-          download_url: versionInfo.download_url 
+        // For portable version, let user choose where to save it
+        const filePath = await save({
+          filters: [
+            { 
+              name: "Executable", 
+              extensions: versionInfo.download_url.includes(".exe") ? ["exe"] : 
+                         versionInfo.download_url.includes(".AppImage") ? ["AppImage"] :
+                         versionInfo.download_url.includes(".app") ? ["app"] : ["*"]
+            },
+          ],
+          defaultPath: `TradeButler-${versionInfo.latest}${versionInfo.download_url.includes(".exe") ? ".exe" : versionInfo.download_url.includes(".AppImage") ? ".AppImage" : versionInfo.download_url.includes(".app") ? ".app" : ""}`,
         });
-        alert(`Update downloaded successfully!\n\nThe new version will launch automatically and this window will close.\n\nThe old version will be automatically deleted after the new one starts.\n\nYour data will be preserved.`);
-        
-        // Close the app after a short delay to allow the update script to launch
-        setTimeout(() => {
-          invoke("exit_app");
-        }, 1500);
+
+        if (!filePath) {
+          // User cancelled
+          setIsDownloading(false);
+          return;
+        }
+
+        // Download to user-selected location
+        await invoke("download_portable_update", { 
+          download_url: versionInfo.download_url,
+          file_path: filePath
+        });
+        alert(`Update downloaded successfully!\n\nSaved to: ${filePath}\n\nYou can now run the new version from that location. Your data will be preserved.`);
       }
       
       setShowUpdateModal(false);
@@ -214,6 +296,139 @@ export default function Settings() {
   const handleCancelEditPreset = () => {
     setEditingPresetId(null);
     setEditingPresetName("");
+  };
+
+  // Password handlers
+  const handleNewPinDigitChange = (index: number, value: string) => {
+    const digit = value.replace(/\D/g, "").slice(0, 1);
+    const newDigits = [...newPinDigits];
+    newDigits[index] = digit;
+    setNewPinDigits(newDigits);
+    setPasswordError("");
+    if (digit && index < 5 && newPasswordInputRefs.current[index + 1]) {
+      newPasswordInputRefs.current[index + 1].focus();
+    }
+  };
+
+  const handleConfirmPinDigitChange = (index: number, value: string) => {
+    const digit = value.replace(/\D/g, "").slice(0, 1);
+    const newDigits = [...confirmPinDigits];
+    newDigits[index] = digit;
+    setConfirmPinDigits(newDigits);
+    setPasswordError("");
+    if (digit && index < 5 && confirmPasswordInputRefs.current[index + 1]) {
+      confirmPasswordInputRefs.current[index + 1].focus();
+    }
+  };
+
+  const handleRemovePinDigitChange = (index: number, value: string) => {
+    const digit = value.replace(/\D/g, "").slice(0, 1);
+    const newDigits = [...removePinDigits];
+    newDigits[index] = digit;
+    setRemovePinDigits(newDigits);
+    setPasswordError("");
+    if (digit && index < 5 && removePasswordInputRefs.current[index + 1]) {
+      removePasswordInputRefs.current[index + 1].focus();
+    }
+  };
+
+  const handleSetPassword = async () => {
+    setPasswordError("");
+    setPasswordSuccess("");
+    
+    const passwordValue = passwordType === "pin" ? newPinDigits.join("") : newPassword;
+    const confirmValue = passwordType === "pin" ? confirmPinDigits.join("") : confirmPassword;
+    
+    if (!passwordValue.trim()) {
+      setPasswordError(`Please enter a ${passwordType === "pin" ? "PIN" : "password"}`);
+      return;
+    }
+    
+    if (passwordType === "pin" && !/^\d{6}$/.test(passwordValue)) {
+      setPasswordError("PIN must be exactly 6 digits");
+      return;
+    }
+    
+    if (passwordType === "password" && passwordValue.length < 4) {
+      setPasswordError("Password must be at least 4 characters");
+      return;
+    }
+    
+    if (passwordValue !== confirmValue) {
+      setPasswordError(`${passwordType === "pin" ? "PINs" : "Passwords"} do not match`);
+      return;
+    }
+    
+    try {
+      await setPassword(passwordValue, passwordType);
+      setPasswordSuccess(`${passwordType === "pin" ? "PIN" : "Password"} set successfully!`);
+      setNewPassword("");
+      setNewPinDigits(["", "", "", "", "", ""]);
+      setConfirmPassword("");
+      setConfirmPinDigits(["", "", "", "", "", ""]);
+      setTimeout(() => {
+        setPasswordSuccess("");
+      }, 3000);
+    } catch (error) {
+      setPasswordError(error instanceof Error ? error.message : "Failed to set password");
+    }
+  };
+
+  const handleChangePassword = () => {
+    setPasswordError("");
+    setPasswordSuccess("");
+    setNewPassword("");
+    setNewPinDigits(["", "", "", "", "", ""]);
+    setConfirmPassword("");
+    setConfirmPinDigits(["", "", "", "", "", ""]);
+  };
+
+  const handleRemovePassword = () => {
+    if (!hasPassword()) {
+      setPasswordError("No password is currently set");
+      return;
+    }
+    setShowRemoveConfirm(true);
+    setPasswordError("");
+    setRemoveVerification("");
+    setRemovePinDigits(["", "", "", "", "", ""]);
+    // Focus first input after a brief delay to ensure modal is rendered
+    setTimeout(() => {
+      if (getPasswordType() === "pin" && removePasswordInputRefs.current[0]) {
+        removePasswordInputRefs.current[0].focus();
+      }
+    }, 100);
+  };
+
+  const handleConfirmRemovePassword = () => {
+    setPasswordError("");
+    const currentType = getPasswordType();
+    const verificationValue = currentType === "pin" ? removePinDigits.join("") : removeVerification;
+    
+    if (!verificationValue.trim()) {
+      setPasswordError(`Please enter your current ${currentType === "pin" ? "PIN" : "password"} to remove it`);
+      return;
+    }
+    
+    if (!verifyPassword(verificationValue)) {
+      setPasswordError(`Incorrect ${currentType === "pin" ? "PIN" : "password"}`);
+      setRemoveVerification("");
+      setRemovePinDigits(["", "", "", "", "", ""]);
+      return;
+    }
+    
+    deletePassword();
+    setPasswordSuccess("Password removed successfully!");
+    setShowRemoveConfirm(false);
+    setRemoveVerification("");
+    setRemovePinDigits(["", "", "", "", "", ""]);
+    setNewPassword("");
+    setNewPinDigits(["", "", "", "", "", ""]);
+    setConfirmPassword("");
+    setConfirmPinDigits(["", "", "", "", "", ""]);
+    setTimeout(() => {
+      setPasswordSuccess("");
+    }, 3000);
   };
 
   return (
@@ -561,7 +776,1324 @@ export default function Settings() {
                 </div>
               </div>
             </div>
+
+            {/* Lock Screen Style */}
+            <div>
+              <h3 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "12px" }}>
+                Lock Screen Style
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Lock Screen Theme
+                  </label>
+                  <div
+                    style={{
+                      display: "flex",
+                      backgroundColor: "var(--bg-tertiary)",
+                      borderRadius: "6px",
+                      padding: "2px",
+                      border: "1px solid var(--border-color)",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newStyle: LockScreenStyle = "default";
+                        setLockScreenStyle(newStyle);
+                        saveLockScreenStyle(newStyle);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                        border: "none",
+                        backgroundColor: lockScreenStyle === "default" ? "var(--accent)" : "transparent",
+                        color: lockScreenStyle === "default" ? "white" : "var(--text-primary)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      Default
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newStyle: LockScreenStyle = "galaxy";
+                        setLockScreenStyle(newStyle);
+                        saveLockScreenStyle(newStyle);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                        border: "none",
+                        backgroundColor: lockScreenStyle === "galaxy" ? "var(--accent)" : "transparent",
+                        color: lockScreenStyle === "galaxy" ? "white" : "var(--text-primary)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      Galaxy
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newStyle: LockScreenStyle = "aurora";
+                        setLockScreenStyle(newStyle);
+                        saveLockScreenStyle(newStyle);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                        border: "none",
+                        backgroundColor: lockScreenStyle === "aurora" ? "var(--accent)" : "transparent",
+                        color: lockScreenStyle === "aurora" ? "white" : "var(--text-primary)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      Aurora
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newStyle: LockScreenStyle = "milkyway";
+                        setLockScreenStyle(newStyle);
+                        saveLockScreenStyle(newStyle);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                        border: "none",
+                        backgroundColor: lockScreenStyle === "milkyway" ? "var(--accent)" : "transparent",
+                        color: lockScreenStyle === "milkyway" ? "white" : "var(--text-primary)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      Milky Way
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Galaxy Theme Customization */}
+            {lockScreenStyle === "galaxy" && (
+              <div>
+                <h3 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "12px" }}>
+                  Galaxy Theme Settings
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                  {/* Colors */}
+                  <div>
+                    <h4 style={{ fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+                      Colors
+                    </h4>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px" }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Particle Color
+                        </label>
+                        <ColorPicker
+                          value={galaxySettings.particleColor}
+                          onChange={(color) => updateGalaxySetting("particleColor", color)}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Line Color
+                        </label>
+                        <ColorPicker
+                          value={galaxySettings.lineColor}
+                          onChange={(color) => updateGalaxySetting("lineColor", color)}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Background Color
+                        </label>
+                        <ColorPicker
+                          value={galaxySettings.backgroundColor}
+                          onChange={(color) => updateGalaxySetting("backgroundColor", color)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Physics */}
+                  <div>
+                    <h4 style={{ fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+                      Physics
+                    </h4>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Friction: {galaxySettings.friction.toFixed(2)}
+                        </label>
+                        <input
+                          type="range"
+                          min="0.9"
+                          max="1"
+                          step="0.01"
+                          value={galaxySettings.friction}
+                          onChange={(e) => updateGalaxySetting("friction", parseFloat(e.target.value))}
+                          className="dark-slider"
+                          style={{
+                            width: "100%",
+                          }}
+                        />
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                          <span>Low (0.90)</span>
+                          <span>High (1.00)</span>
+                        </div>
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Mouse Force: {galaxySettings.mouseForce.toFixed(2)}
+                        </label>
+                        <input
+                          type="range"
+                          min="0.1"
+                          max="2"
+                          step="0.1"
+                          value={galaxySettings.mouseForce}
+                          onChange={(e) => updateGalaxySetting("mouseForce", parseFloat(e.target.value))}
+                          className="dark-slider"
+                          style={{
+                            width: "100%",
+                          }}
+                        />
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                          <span>Weak (0.1)</span>
+                          <span>Strong (2.0)</span>
+                        </div>
+                      </div>
+                      <div>
+                        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={galaxySettings.reverseGravity}
+                            onChange={(e) => updateGalaxySetting("reverseGravity", e.target.checked)}
+                            className="dark-checkbox"
+                            style={{
+                              width: "16px",
+                              height: "16px",
+                              cursor: "pointer",
+                            }}
+                          />
+                          <span>Reverse Gravity (Pull towards mouse)</span>
+                        </label>
+                      </div>
+                      <div>
+                        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={galaxySettings.particleCollisions}
+                            onChange={(e) => updateGalaxySetting("particleCollisions", e.target.checked)}
+                            className="dark-checkbox"
+                            style={{
+                              width: "16px",
+                              height: "16px",
+                              cursor: "pointer",
+                            }}
+                          />
+                          <span>Particle Collisions (Bounce off each other)</span>
+                        </label>
+                      </div>
+                      <div>
+                        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer", marginBottom: "8px" }}>
+                          <input
+                            type="checkbox"
+                            checked={galaxySettings.orbitAroundCenter}
+                            onChange={(e) => updateGalaxySetting("orbitAroundCenter", e.target.checked)}
+                            className="dark-checkbox"
+                            style={{
+                              width: "16px",
+                              height: "16px",
+                              cursor: "pointer",
+                            }}
+                          />
+                          <span>Orbit Around Center</span>
+                        </label>
+                        {galaxySettings.orbitAroundCenter && (
+                          <div style={{ marginLeft: "24px", marginTop: "8px", display: "flex", flexDirection: "column", gap: "12px" }}>
+                            <div>
+                              <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                Orbit Speed: {galaxySettings.orbitSpeed.toFixed(2)}
+                              </label>
+                              <input
+                                type="range"
+                                min="0.1"
+                                max="2"
+                                step="0.1"
+                                value={galaxySettings.orbitSpeed}
+                                onChange={(e) => updateGalaxySetting("orbitSpeed", parseFloat(e.target.value))}
+                                className="dark-slider"
+                                style={{
+                                  width: "100%",
+                                }}
+                              />
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                                <span>Slow (0.1)</span>
+                                <span>Fast (2.0)</span>
+                              </div>
+                            </div>
+                            <div>
+                              <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                Orbit Radius: {galaxySettings.orbitRadius || 200}px
+                              </label>
+                              <input
+                                type="range"
+                                min="50"
+                                max="500"
+                                step="10"
+                                value={galaxySettings.orbitRadius || 200}
+                                onChange={(e) => updateGalaxySetting("orbitRadius", parseInt(e.target.value))}
+                                className="dark-slider"
+                                style={{
+                                  width: "100%",
+                                }}
+                              />
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                                <span>50px</span>
+                                <span>500px</span>
+                              </div>
+                            </div>
+                            <div>
+                              <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                Orbit Gravity: {(galaxySettings.orbitGravity || 0.0001).toFixed(5)}
+                              </label>
+                              <input
+                                type="range"
+                                min="0.00001"
+                                max="0.0003"
+                                step="0.00001"
+                                value={galaxySettings.orbitGravity || 0.0001}
+                                onChange={(e) => updateGalaxySetting("orbitGravity", parseFloat(e.target.value))}
+                                className="dark-slider"
+                                style={{
+                                  width: "100%",
+                                }}
+                              />
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                                <span>Weak (0.00001)</span>
+                                <span>Strong (0.0003)</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Particle Settings */}
+                  <div>
+                    <h4 style={{ fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+                      Particles
+                    </h4>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Particle Count: {galaxySettings.particleCount}
+                        </label>
+                        <input
+                          type="range"
+                          min="20"
+                          max="1000"
+                          step="10"
+                          value={galaxySettings.particleCount}
+                          onChange={(e) => updateGalaxySetting("particleCount", parseInt(e.target.value))}
+                          className="dark-slider"
+                          style={{
+                            width: "100%",
+                          }}
+                        />
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                          <span>20</span>
+                          <span>1000</span>
+                        </div>
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Particle Size: {galaxySettings.particleSize.min} - {galaxySettings.particleSize.max}
+                        </label>
+                        <div style={{ display: "flex", gap: "12px" }}>
+                          <div style={{ flex: 1 }}>
+                            <label style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px", display: "block" }}>
+                              Min: {galaxySettings.particleSize.min}
+                            </label>
+                            <input
+                              type="range"
+                              min="0.5"
+                              max="5"
+                              step="0.5"
+                              value={galaxySettings.particleSize.min}
+                              onChange={(e) =>
+                                updateGalaxySetting("particleSize", {
+                                  ...galaxySettings.particleSize,
+                                  min: parseFloat(e.target.value),
+                                })
+                              }
+                              className="dark-slider"
+                              style={{
+                                width: "100%",
+                              }}
+                            />
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <label style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px", display: "block" }}>
+                              Max: {galaxySettings.particleSize.max}
+                            </label>
+                            <input
+                              type="range"
+                              min="1"
+                              max="10"
+                              step="0.5"
+                              value={galaxySettings.particleSize.max}
+                              onChange={(e) =>
+                                updateGalaxySetting("particleSize", {
+                                  ...galaxySettings.particleSize,
+                                  max: parseFloat(e.target.value),
+                                })
+                              }
+                              className="dark-slider"
+                              style={{
+                                width: "100%",
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Connection Distance: {galaxySettings.connectionDistance}
+                        </label>
+                        <input
+                          type="range"
+                          min="50"
+                          max="300"
+                          step="10"
+                          value={galaxySettings.connectionDistance}
+                          onChange={(e) => updateGalaxySetting("connectionDistance", parseInt(e.target.value))}
+                          className="dark-slider"
+                          style={{
+                            width: "100%",
+                          }}
+                        />
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                          <span>50px</span>
+                          <span>300px</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Use as Background */}
+                  <div>
+                    <h4 style={{ fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+                      Background
+                    </h4>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      <div>
+                        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={galaxySettings.useAsBackground}
+                            onChange={(e) => updateGalaxySetting("useAsBackground", e.target.checked)}
+                            className="dark-checkbox"
+                            style={{
+                              width: "16px",
+                              height: "16px",
+                              cursor: "pointer",
+                            }}
+                          />
+                          <span>Use Galaxy Theme as App Background</span>
+                        </label>
+                        <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "4px", marginLeft: "24px" }}>
+                          Apply the galaxy particle effect to the background of all tabs
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Reset Button */}
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetGalaxyThemeSettings();
+                        setGalaxySettings(getGalaxyThemeSettings());
+                      }}
+                      style={{
+                        padding: "10px 16px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        color: "var(--text-primary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "6px",
+                        fontSize: "13px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Reset to Defaults
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
+        </div>
+
+        {/* Password/PIN Lock Section */}
+        <div
+          style={{
+            backgroundColor: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "12px",
+            padding: "24px",
+            marginBottom: "24px",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+            <h2
+              style={{
+                fontSize: "20px",
+                fontWeight: "600",
+                color: "var(--text-primary)",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              <Lock size={20} />
+              App Lock
+            </h2>
+          </div>
+
+          <p
+            style={{
+              fontSize: "14px",
+              color: "var(--text-secondary)",
+              marginBottom: "24px",
+              lineHeight: "1.6",
+            }}
+          >
+            Set a password or 6-digit PIN to lock your TradeButler app. Use the lock button in the sidebar to lock/unlock the app.
+          </p>
+
+          {hasPassword() && (
+            <div
+              style={{
+                padding: "12px 16px",
+                backgroundColor: "var(--bg-tertiary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "8px",
+                marginBottom: "20px",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              <CheckCircle size={16} color="var(--profit)" />
+              <span style={{ fontSize: "14px", color: "var(--text-primary)" }}>
+                {getPasswordType() === "pin" ? "6-digit PIN" : "Password"} is set
+              </span>
+            </div>
+          )}
+
+          {/* Password Type Toggle */}
+          <div style={{ marginBottom: "20px" }}>
+            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+              Lock Type
+            </label>
+            <div
+              style={{
+                display: "flex",
+                backgroundColor: "var(--bg-tertiary)",
+                borderRadius: "6px",
+                padding: "2px",
+                border: "1px solid var(--border-color)",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setPasswordType("pin");
+                  setNewPassword("");
+                  setNewPinDigits(["", "", "", "", "", ""]);
+                  setConfirmPassword("");
+                  setConfirmPinDigits(["", "", "", "", "", ""]);
+                  setPasswordError("");
+                }}
+                style={{
+                  flex: 1,
+                  padding: "10px",
+                  borderRadius: "4px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor: "pointer",
+                  border: "none",
+                  backgroundColor: passwordType === "pin" ? "var(--accent)" : "transparent",
+                  color: passwordType === "pin" ? "white" : "var(--text-primary)",
+                  transition: "all 0.2s",
+                }}
+              >
+                6-Digit PIN
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPasswordType("password");
+                  setNewPassword("");
+                  setNewPinDigits(["", "", "", "", "", ""]);
+                  setConfirmPassword("");
+                  setConfirmPinDigits(["", "", "", "", "", ""]);
+                  setPasswordError("");
+                }}
+                style={{
+                  flex: 1,
+                  padding: "10px",
+                  borderRadius: "4px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor: "pointer",
+                  border: "none",
+                  backgroundColor: passwordType === "password" ? "var(--accent)" : "transparent",
+                  color: passwordType === "password" ? "white" : "var(--text-primary)",
+                  transition: "all 0.2s",
+                }}
+              >
+                Password
+              </button>
+            </div>
+          </div>
+
+          {/* Password Input Fields */}
+          <div style={{ marginBottom: "16px" }}>
+            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+              {hasPassword() ? "New " : ""}{passwordType === "pin" ? "PIN" : "Password"}
+            </label>
+            {passwordType === "pin" ? (
+              <div style={{ position: "relative" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "12px",
+                    justifyContent: "center",
+                    marginBottom: "8px",
+                  }}
+                >
+                  {newPinDigits.map((digit, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        width: "50px",
+                        height: "60px",
+                        position: "relative",
+                        backgroundColor: "var(--bg-tertiary)",
+                        border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                        borderRadius: "8px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      {showNewPin ? (
+                        <span
+                          style={{
+                            fontSize: "28px",
+                            fontFamily: "monospace",
+                            fontWeight: "600",
+                            color: "var(--text-primary)",
+                          }}
+                        >
+                          {digit || ""}
+                        </span>
+                      ) : (
+                        <div
+                          style={{
+                            width: "12px",
+                            height: "12px",
+                            borderRadius: "50%",
+                            backgroundColor: digit ? "var(--text-primary)" : "transparent",
+                            border: digit ? "none" : "2px solid var(--border-color)",
+                          }}
+                        />
+                      )}
+                      <input
+                        ref={(el) => (newPasswordInputRefs.current[index] = el)}
+                        type="tel"
+                        inputMode="numeric"
+                        value={digit}
+                        onChange={(e) => handleNewPinDigitChange(index, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Backspace" && !digit && index > 0 && newPasswordInputRefs.current[index - 1]) {
+                            newPasswordInputRefs.current[index - 1].focus();
+                          }
+                        }}
+                        maxLength={1}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: "100%",
+                          opacity: 0,
+                          cursor: "pointer",
+                          fontSize: "28px",
+                          textAlign: "center",
+                          fontFamily: "monospace",
+                          outline: "none",
+                        }}
+                        onFocus={(e) => {
+                          const container = e.target.parentElement;
+                          if (container) {
+                            container.style.borderColor = "var(--accent)";
+                            container.style.borderWidth = "2px";
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const container = e.target.parentElement;
+                          if (container) {
+                            container.style.borderColor = passwordError ? "var(--danger)" : "var(--border-color)";
+                            container.style.borderWidth = "1px";
+                          }
+                        }}
+                        autoComplete="off"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowNewPin(!showNewPin)}
+                  style={{
+                    position: "absolute",
+                    right: "0",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "4px",
+                    display: "flex",
+                    alignItems: "center",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  {showNewPin ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            ) : (
+              <div style={{ position: "relative" }}>
+                <input
+                  type={showNewPassword ? "text" : "password"}
+                  value={newPassword}
+                  onChange={(e) => {
+                    setNewPassword(e.target.value);
+                    setPasswordError("");
+                  }}
+                  placeholder="Enter password"
+                  style={{
+                    width: "100%",
+                    padding: "12px 40px 12px 12px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                    borderRadius: "8px",
+                    color: "var(--text-primary)",
+                    fontSize: "16px",
+                    outline: "none",
+                  }}
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowNewPassword(!showNewPassword)}
+                  style={{
+                    position: "absolute",
+                    right: "8px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "4px",
+                    display: "flex",
+                    alignItems: "center",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  {showNewPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginBottom: "20px" }}>
+            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+              Confirm {passwordType === "pin" ? "PIN" : "Password"}
+            </label>
+            {passwordType === "pin" ? (
+              <div style={{ position: "relative" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "12px",
+                    justifyContent: "center",
+                    marginBottom: "8px",
+                  }}
+                >
+                  {confirmPinDigits.map((digit, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        width: "50px",
+                        height: "60px",
+                        position: "relative",
+                        backgroundColor: "var(--bg-tertiary)",
+                        border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                        borderRadius: "8px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      {showConfirmPin ? (
+                        <span
+                          style={{
+                            fontSize: "28px",
+                            fontFamily: "monospace",
+                            fontWeight: "600",
+                            color: "var(--text-primary)",
+                          }}
+                        >
+                          {digit || ""}
+                        </span>
+                      ) : (
+                        <div
+                          style={{
+                            width: "12px",
+                            height: "12px",
+                            borderRadius: "50%",
+                            backgroundColor: digit ? "var(--text-primary)" : "transparent",
+                            border: digit ? "none" : "2px solid var(--border-color)",
+                          }}
+                        />
+                      )}
+                      <input
+                        ref={(el) => (confirmPasswordInputRefs.current[index] = el)}
+                        type="tel"
+                        inputMode="numeric"
+                        value={digit}
+                        onChange={(e) => handleConfirmPinDigitChange(index, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Backspace" && !digit && index > 0 && confirmPasswordInputRefs.current[index - 1]) {
+                            confirmPasswordInputRefs.current[index - 1].focus();
+                          }
+                        }}
+                        maxLength={1}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: "100%",
+                          opacity: 0,
+                          cursor: "pointer",
+                          fontSize: "28px",
+                          textAlign: "center",
+                          fontFamily: "monospace",
+                          outline: "none",
+                        }}
+                        onFocus={(e) => {
+                          const container = e.target.parentElement;
+                          if (container) {
+                            container.style.borderColor = "var(--accent)";
+                            container.style.borderWidth = "2px";
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const container = e.target.parentElement;
+                          if (container) {
+                            container.style.borderColor = passwordError ? "var(--danger)" : "var(--border-color)";
+                            container.style.borderWidth = "1px";
+                          }
+                        }}
+                        autoComplete="off"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPin(!showConfirmPin)}
+                  style={{
+                    position: "absolute",
+                    right: "0",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "4px",
+                    display: "flex",
+                    alignItems: "center",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  {showConfirmPin ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            ) : (
+              <div style={{ position: "relative" }}>
+                <input
+                  type={showConfirmPassword ? "text" : "password"}
+                  value={confirmPassword}
+                  onChange={(e) => {
+                    setConfirmPassword(e.target.value);
+                    setPasswordError("");
+                  }}
+                  placeholder="Confirm password"
+                  style={{
+                    width: "100%",
+                    padding: "12px 40px 12px 12px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                    borderRadius: "8px",
+                    color: "var(--text-primary)",
+                    fontSize: "16px",
+                    outline: "none",
+                  }}
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  style={{
+                    position: "absolute",
+                    right: "8px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "4px",
+                    display: "flex",
+                    alignItems: "center",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {passwordError && (
+            <div
+              style={{
+                marginBottom: "16px",
+                padding: "12px",
+                backgroundColor: "var(--bg-tertiary)",
+                border: "1px solid var(--danger)",
+                borderRadius: "8px",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                color: "var(--danger)",
+                fontSize: "13px",
+              }}
+            >
+              <AlertCircle size={16} />
+              <span>{passwordError}</span>
+            </div>
+          )}
+
+          {passwordSuccess && (
+            <div
+              style={{
+                marginBottom: "16px",
+                padding: "12px",
+                backgroundColor: "var(--bg-tertiary)",
+                border: "1px solid var(--profit)",
+                borderRadius: "8px",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                color: "var(--profit)",
+                fontSize: "13px",
+              }}
+            >
+              <CheckCircle size={16} />
+              <span>{passwordSuccess}</span>
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: "12px" }}>
+            {hasPassword() ? (
+              <button
+                type="button"
+                onClick={handleRemovePassword}
+                style={{
+                  width: "100%",
+                  padding: "12px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  color: "var(--text-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                }}
+              >
+                <Trash2 size={16} />
+                Remove {getPasswordType() === "pin" ? "PIN" : "Password"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSetPassword}
+                disabled={
+                  passwordType === "pin"
+                    ? newPinDigits.join("").length !== 6 || confirmPinDigits.join("").length !== 6
+                    : !newPassword || !confirmPassword
+                }
+                style={{
+                  width: "100%",
+                  padding: "12px",
+                  backgroundColor:
+                    passwordType === "pin"
+                      ? newPinDigits.join("").length === 6 && confirmPinDigits.join("").length === 6
+                        ? "var(--accent)"
+                        : "var(--bg-tertiary)"
+                      : newPassword && confirmPassword
+                      ? "var(--accent)"
+                      : "var(--bg-tertiary)",
+                  color:
+                    passwordType === "pin"
+                      ? newPinDigits.join("").length === 6 && confirmPinDigits.join("").length === 6
+                        ? "white"
+                        : "var(--text-secondary)"
+                      : newPassword && confirmPassword
+                      ? "white"
+                      : "var(--text-secondary)",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor:
+                    passwordType === "pin"
+                      ? newPinDigits.join("").length === 6 && confirmPinDigits.join("").length === 6
+                        ? "pointer"
+                        : "not-allowed"
+                      : newPassword && confirmPassword
+                      ? "pointer"
+                      : "not-allowed",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                  opacity:
+                    passwordType === "pin"
+                      ? newPinDigits.join("").length === 6 && confirmPinDigits.join("").length === 6
+                        ? 1
+                        : 0.5
+                      : newPassword && confirmPassword
+                      ? 1
+                      : 0.5,
+                }}
+              >
+                <Lock size={16} />
+                Set {passwordType === "pin" ? "PIN" : "Password"}
+              </button>
+            )}
+          </div>
+
+          {/* Remove Password Verification Modal */}
+          {showRemoveConfirm && (
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: "var(--bg-primary)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 10000,
+              }}
+            >
+              <div
+                style={{
+                  width: "100%",
+                  maxWidth: "400px",
+                  padding: "40px",
+                  backgroundColor: "var(--bg-secondary)",
+                  borderRadius: "12px",
+                  border: "1px solid var(--border-color)",
+                  boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3)",
+                }}
+              >
+                <div style={{ textAlign: "center", marginBottom: "32px" }}>
+                  <h3
+                    style={{
+                      fontSize: "24px",
+                      fontWeight: "bold",
+                      marginBottom: "8px",
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    Verify {getPasswordType() === "pin" ? "PIN" : "Password"} to Remove
+                  </h3>
+                  <p
+                    style={{
+                      fontSize: "14px",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Please enter your current {getPasswordType() === "pin" ? "PIN" : "password"} to confirm removal.
+                  </p>
+                </div>
+
+                {getPasswordType() === "pin" ? (
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "12px",
+                      justifyContent: "center",
+                      marginBottom: "20px",
+                      padding: "0 20px",
+                    }}
+                  >
+                    {removePinDigits.map((digit, index) => (
+                      <div
+                        key={index}
+                        style={{
+                          width: "50px",
+                          height: "60px",
+                          position: "relative",
+                          backgroundColor: "var(--bg-tertiary)",
+                          border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                          borderRadius: "8px",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          transition: "all 0.2s",
+                          boxSizing: "border-box",
+                          flexShrink: 0,
+                        }}
+                      >
+                        {digit && (
+                          <div
+                            style={{
+                              width: "12px",
+                              height: "12px",
+                              borderRadius: "50%",
+                              backgroundColor: "var(--text-primary)",
+                              position: "absolute",
+                              pointerEvents: "none",
+                            }}
+                          />
+                        )}
+                        <input
+                          ref={(el) => (removePasswordInputRefs.current[index] = el)}
+                          type="tel"
+                          inputMode="numeric"
+                          value={digit}
+                          onChange={(e) => handleRemovePinDigitChange(index, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Backspace" && !digit && index > 0 && removePasswordInputRefs.current[index - 1]) {
+                              removePasswordInputRefs.current[index - 1].focus();
+                            }
+                          }}
+                          maxLength={1}
+                          style={{
+                            position: "absolute",
+                            top: 0,
+                            left: 0,
+                            width: "100%",
+                            height: "100%",
+                            padding: "0",
+                            margin: "0",
+                            opacity: 0,
+                            cursor: "pointer",
+                            fontSize: "28px",
+                            textAlign: "center",
+                            fontFamily: "monospace",
+                            fontWeight: "600",
+                            outline: "none",
+                            border: "none",
+                            backgroundColor: "transparent",
+                            boxSizing: "border-box",
+                          }}
+                          onFocus={(e) => {
+                            const container = e.target.parentElement;
+                            if (container) {
+                              container.style.borderColor = "var(--accent)";
+                              container.style.borderWidth = "2px";
+                            }
+                          }}
+                          onBlur={(e) => {
+                            const container = e.target.parentElement;
+                            if (container) {
+                              container.style.borderColor = passwordError ? "var(--danger)" : "var(--border-color)";
+                              container.style.borderWidth = "1px";
+                            }
+                          }}
+                          autoComplete="off"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ position: "relative", marginBottom: "20px" }}>
+                    <input
+                      type="password"
+                      value={removeVerification}
+                      onChange={(e) => {
+                        setRemoveVerification(e.target.value);
+                        setPasswordError("");
+                      }}
+                      placeholder="Enter current password"
+                      style={{
+                        width: "100%",
+                        padding: "12px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                        borderRadius: "8px",
+                        color: "var(--text-primary)",
+                        fontSize: "16px",
+                        outline: "none",
+                      }}
+                      autoComplete="off"
+                      autoFocus
+                    />
+                  </div>
+                )}
+
+                {passwordError && (
+                  <div
+                    style={{
+                      marginBottom: "16px",
+                      padding: "12px",
+                      backgroundColor: "var(--bg-tertiary)",
+                      border: "1px solid var(--danger)",
+                      borderRadius: "8px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      color: "var(--danger)",
+                      fontSize: "13px",
+                    }}
+                  >
+                    <AlertCircle size={16} />
+                    <span>{passwordError}</span>
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: "12px" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowRemoveConfirm(false);
+                      setRemoveVerification("");
+                      setRemovePinDigits(["", "", "", "", "", ""]);
+                      setPasswordError("");
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: "12px",
+                      backgroundColor: "var(--bg-tertiary)",
+                      color: "var(--text-primary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                      fontSize: "14px",
+                      fontWeight: "500",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmRemovePassword}
+                    disabled={
+                      getPasswordType() === "pin"
+                        ? removePinDigits.join("").length !== 6
+                        : !removeVerification.trim()
+                    }
+                    style={{
+                      flex: 1,
+                      padding: "12px",
+                      backgroundColor:
+                        getPasswordType() === "pin"
+                          ? removePinDigits.join("").length === 6
+                            ? "var(--danger)"
+                            : "var(--bg-tertiary)"
+                          : removeVerification.trim()
+                          ? "var(--danger)"
+                          : "var(--bg-tertiary)",
+                      color:
+                        getPasswordType() === "pin"
+                          ? removePinDigits.join("").length === 6
+                            ? "white"
+                            : "var(--text-secondary)"
+                          : removeVerification.trim()
+                          ? "white"
+                          : "var(--text-secondary)",
+                      border: "none",
+                      borderRadius: "8px",
+                      fontSize: "14px",
+                      fontWeight: "600",
+                      cursor:
+                        getPasswordType() === "pin"
+                          ? removePinDigits.join("").length === 6
+                            ? "pointer"
+                            : "not-allowed"
+                          : removeVerification.trim()
+                          ? "pointer"
+                          : "not-allowed",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "6px",
+                      opacity:
+                        getPasswordType() === "pin"
+                          ? removePinDigits.join("").length === 6
+                            ? 1
+                            : 0.5
+                          : removeVerification.trim()
+                          ? 1
+                          : 0.5,
+                    }}
+                  >
+                    <Trash2 size={16} />
+                    Remove
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Version Checker Section */}
@@ -829,7 +2361,7 @@ export default function Settings() {
             >
               {versionInfo.is_installer 
                 ? "The installer will update your application. Your data will be preserved."
-                : "The new version will download and launch automatically. This window will close, and the old version will be automatically deleted. Your data will be preserved."}
+                : "You will be prompted to choose where to save the new portable version. You can then run it from that location. Your data will be preserved."}
             </p>
             <div
               style={{

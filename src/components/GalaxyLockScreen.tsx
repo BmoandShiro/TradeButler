@@ -1,0 +1,900 @@
+import { useState, useEffect, useRef } from "react";
+import { Lock, Unlock, AlertCircle, Trash2 } from "lucide-react";
+import { unlockApp, hasPassword, getPasswordType, deletePassword } from "../utils/passwordManager";
+import { invoke } from "@tauri-apps/api/tauri";
+import { getGalaxyThemeSettings } from "../utils/galaxyThemeManager";
+
+interface GalaxyLockScreenProps {
+  onUnlock: () => void;
+}
+
+interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+}
+
+export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
+  const [input, setInput] = useState("");
+  const [pinDigits, setPinDigits] = useState<string[]>(["", "", "", "", "", ""]);
+  const [error, setError] = useState("");
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animationFrameRef = useRef<number>();
+  const particlesRef = useRef<Particle[]>([]);
+  const mouseRef = useRef({ x: 0, y: 0 });
+  const settingsRef = useRef(getGalaxyThemeSettings());
+  const passwordType = getPasswordType();
+
+  // Update settings when they change
+  useEffect(() => {
+    settingsRef.current = getGalaxyThemeSettings();
+    // Recreate particles if count changed
+    const canvas = canvasRef.current;
+    if (canvas && particlesRef.current.length > 0) {
+      const settings = settingsRef.current;
+      const currentCount = particlesRef.current.length;
+      if (currentCount !== settings.particleCount) {
+        const particles: Particle[] = [];
+        for (let i = 0; i < settings.particleCount; i++) {
+          particles.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            vx: (Math.random() - 0.5) * 0.5,
+            vy: (Math.random() - 0.5) * 0.5,
+            radius: Math.random() * (settings.particleSize.max - settings.particleSize.min) + settings.particleSize.min,
+          });
+        }
+        particlesRef.current = particles;
+      }
+    }
+  }, []);
+
+  // Listen for storage changes to update settings dynamically
+  useEffect(() => {
+    const handleStorageChange = () => {
+      const newSettings = getGalaxyThemeSettings();
+      const oldSettings = settingsRef.current;
+      settingsRef.current = newSettings;
+      
+      // Recreate particles if count changed
+      const canvas = canvasRef.current;
+      if (canvas && oldSettings.particleCount !== newSettings.particleCount) {
+        const particles: Particle[] = [];
+        for (let i = 0; i < newSettings.particleCount; i++) {
+          particles.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            vx: (Math.random() - 0.5) * 0.5,
+            vy: (Math.random() - 0.5) * 0.5,
+            radius: Math.random() * (newSettings.particleSize.max - newSettings.particleSize.min) + newSettings.particleSize.min,
+          });
+        }
+        particlesRef.current = particles;
+      }
+    };
+    window.addEventListener("storage", handleStorageChange);
+    // Also check periodically for same-tab updates
+    const interval = setInterval(() => {
+      const newSettings = getGalaxyThemeSettings();
+      const oldSettings = settingsRef.current;
+      if (JSON.stringify(newSettings) !== JSON.stringify(oldSettings)) {
+        settingsRef.current = newSettings;
+        
+        // Recreate particles if count changed
+        const canvas = canvasRef.current;
+        if (canvas && oldSettings.particleCount !== newSettings.particleCount) {
+          const particles: Particle[] = [];
+          for (let i = 0; i < newSettings.particleCount; i++) {
+            particles.push({
+              x: Math.random() * canvas.width,
+              y: Math.random() * canvas.height,
+              vx: (Math.random() - 0.5) * 0.5,
+              vy: (Math.random() - 0.5) * 0.5,
+              radius: Math.random() * (newSettings.particleSize.max - newSettings.particleSize.min) + newSettings.particleSize.min,
+            });
+          }
+          particlesRef.current = particles;
+        }
+      }
+    }, 100);
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Initialize particles
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Set canvas size
+    const resizeCanvas = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      // Recreate particles on resize
+      const settings = settingsRef.current;
+      const particles: Particle[] = [];
+      for (let i = 0; i < settings.particleCount; i++) {
+        particles.push({
+          x: Math.random() * canvas.width,
+          y: Math.random() * canvas.height,
+          vx: (Math.random() - 0.5) * 0.5,
+          vy: (Math.random() - 0.5) * 0.5,
+          radius: Math.random() * (settings.particleSize.max - settings.particleSize.min) + settings.particleSize.min,
+        });
+      }
+      particlesRef.current = particles;
+    };
+    resizeCanvas();
+    window.addEventListener("resize", resizeCanvas);
+
+    // Create initial particles
+    const settings = settingsRef.current;
+    const particles: Particle[] = [];
+    for (let i = 0; i < settings.particleCount; i++) {
+      particles.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        vx: (Math.random() - 0.5) * 0.5,
+        vy: (Math.random() - 0.5) * 0.5,
+        radius: Math.random() * (settings.particleSize.max - settings.particleSize.min) + settings.particleSize.min,
+      });
+    }
+    particlesRef.current = particles;
+
+    // Mouse tracking
+    const handleMouseMove = (e: MouseEvent) => {
+      mouseRef.current = { x: e.clientX, y: e.clientY };
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+
+    // Helper function to convert hex to rgba
+    const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result
+        ? {
+            r: parseInt(result[1], 16),
+            g: parseInt(result[2], 16),
+            b: parseInt(result[3], 16),
+          }
+        : { r: 100, g: 150, b: 255 };
+    };
+
+    // Animation loop
+    const animate = () => {
+      const settings = settingsRef.current;
+      const particleColor = hexToRgb(settings.particleColor);
+      const lineColor = hexToRgb(settings.lineColor);
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = settings.backgroundColor;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const particles = particlesRef.current;
+      const mouse = mouseRef.current;
+
+      // Calculate center of lock screen modal (approximate center of screen)
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+
+      // Update and draw particles
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+
+        // Orbital motion around center
+        if (settings.orbitAroundCenter) {
+          const dxToCenter = p.x - centerX;
+          const dyToCenter = p.y - centerY;
+          const distanceToCenter = Math.sqrt(dxToCenter * dxToCenter + dyToCenter * dyToCenter);
+          
+          if (distanceToCenter > 0) {
+            // Calculate angle from center to particle
+            const angleToCenter = Math.atan2(dyToCenter, dxToCenter);
+            // Apply tangential force (perpendicular to radius) for orbital motion
+            const tangentialAngle = angleToCenter + Math.PI / 2; // 90 degrees from radius
+            const orbitalForce = settings.orbitSpeed * 0.01; // Slow orbital motion
+            p.vx += Math.cos(tangentialAngle) * orbitalForce;
+            p.vy += Math.sin(tangentialAngle) * orbitalForce;
+            
+            // Optional: slight centripetal force to maintain orbit radius
+            const centripetalForce = (distanceToCenter - settings.orbitRadius) * settings.orbitGravity; // Pull towards ideal radius
+            p.vx -= Math.cos(angleToCenter) * centripetalForce;
+            p.vy -= Math.sin(angleToCenter) * centripetalForce;
+          }
+        }
+
+        // Calculate distance from mouse
+        const dx = p.x - mouse.x;
+        const dy = p.y - mouse.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const minDistance = 100;
+
+        // Apply mouse force (push away or pull towards)
+        if (distance < minDistance) {
+          const force = (minDistance - distance) / minDistance;
+          const angle = Math.atan2(dy, dx);
+          const forceMultiplier = settings.reverseGravity ? -1 : 1;
+          p.vx += Math.cos(angle) * force * settings.mouseForce * forceMultiplier;
+          p.vy += Math.sin(angle) * force * settings.mouseForce * forceMultiplier;
+        }
+
+        // Particle collisions (bounce off each other)
+        if (settings.particleCollisions) {
+          for (let j = i + 1; j < particles.length; j++) {
+            const p2 = particles[j];
+            const dx = p.x - p2.x;
+            const dy = p.y - p2.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const minDist = p.radius + p2.radius;
+
+            if (distance < minDist && distance > 0) {
+              // Calculate collision angle
+              const angle = Math.atan2(dy, dx);
+              const sin = Math.sin(angle);
+              const cos = Math.cos(angle);
+
+              // Rotate velocities to collision frame
+              const vx1 = p.vx * cos + p.vy * sin;
+              const vy1 = p.vy * cos - p.vx * sin;
+              const vx2 = p2.vx * cos + p2.vy * sin;
+              const vy2 = p2.vy * cos - p2.vx * sin;
+
+              // Swap velocities (elastic collision with equal mass)
+              const swappedVx1 = vx2;
+              const swappedVx2 = vx1;
+
+              // Rotate back to world frame
+              p.vx = swappedVx1 * cos - vy1 * sin;
+              p.vy = vy1 * cos + swappedVx1 * sin;
+              p2.vx = swappedVx2 * cos - vy2 * sin;
+              p2.vy = vy2 * cos + swappedVx2 * sin;
+
+              // Separate particles to prevent overlap
+              const overlap = minDist - distance;
+              const separationX = (dx / distance) * overlap * 0.5;
+              const separationY = (dy / distance) * overlap * 0.5;
+              p.x += separationX;
+              p.y += separationY;
+              p2.x -= separationX;
+              p2.y -= separationY;
+            }
+          }
+        }
+
+        // Update position
+        p.x += p.vx;
+        p.y += p.vy;
+
+        // Boundary wrapping
+        if (p.x < 0) p.x = canvas.width;
+        if (p.x > canvas.width) p.x = 0;
+        if (p.y < 0) p.y = canvas.height;
+        if (p.y > canvas.height) p.y = 0;
+
+        // Apply friction
+        p.vx *= settings.friction;
+        p.vy *= settings.friction;
+
+        // Draw particle
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${particleColor.r}, ${particleColor.g}, ${particleColor.b}, ${0.6 + Math.random() * 0.4})`;
+        ctx.fill();
+      }
+
+      // Draw connections between nearby particles
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x;
+          const dy = particles[i].y - particles[j].y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < settings.connectionDistance) {
+            const opacity = 1 - distance / settings.connectionDistance;
+            ctx.beginPath();
+            ctx.moveTo(particles[i].x, particles[i].y);
+            ctx.lineTo(particles[j].x, particles[j].y);
+            ctx.strokeStyle = `rgba(${lineColor.r}, ${lineColor.g}, ${lineColor.b}, ${opacity * 0.3})`;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+        }
+      }
+
+      animationFrameRef.current = requestAnimationFrame(animate);
+    };
+
+    animate();
+
+    return () => {
+      window.removeEventListener("resize", resizeCanvas);
+      window.removeEventListener("mousemove", handleMouseMove);
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    // Focus first input on mount
+    if (passwordType === "pin" && inputRefs.current[0]) {
+      inputRefs.current[0].focus();
+    } else if (passwordType === "password" && passwordInputRef.current) {
+      passwordInputRef.current.focus();
+    }
+  }, [passwordType]);
+
+  // Auto-unlock when PIN is complete and correct
+  useEffect(() => {
+    if (passwordType === "pin") {
+      const pinString = pinDigits.join("");
+      if (pinString.length === 6) {
+        const timer = setTimeout(async () => {
+          const unlocked = await unlockApp(pinString);
+          if (unlocked) {
+            setPinDigits(["", "", "", "", "", ""]);
+            onUnlock();
+          } else {
+            setError("Incorrect PIN");
+            setPinDigits(["", "", "", "", "", ""]);
+            if (inputRefs.current[0]) {
+              inputRefs.current[0].focus();
+            }
+          }
+        }, 100);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [pinDigits, passwordType, onUnlock]);
+
+  const handlePinDigitChange = (index: number, value: string) => {
+    const digit = value.replace(/\D/g, "").slice(0, 1);
+    const newDigits = [...pinDigits];
+    newDigits[index] = digit;
+    setPinDigits(newDigits);
+    setError("");
+
+    if (digit && index < 5 && inputRefs.current[index + 1]) {
+      inputRefs.current[index + 1].focus();
+    }
+  };
+
+  const handlePinKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Backspace" && !pinDigits[index] && index > 0 && inputRefs.current[index - 1]) {
+      inputRefs.current[index - 1].focus();
+    }
+    if (e.key === "v" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      navigator.clipboard.readText().then((text) => {
+        const digits = text.replace(/\D/g, "").slice(0, 6).split("");
+        const newDigits = [...pinDigits];
+        digits.forEach((digit, i) => {
+          if (index + i < 6) {
+            newDigits[index + i] = digit;
+          }
+        });
+        setPinDigits(newDigits);
+        const lastFilledIndex = Math.min(index + digits.length - 1, 5);
+        if (inputRefs.current[lastFilledIndex]) {
+          inputRefs.current[lastFilledIndex].focus();
+        }
+      });
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+
+    if (passwordType === "pin") {
+      const pinString = pinDigits.join("");
+      if (pinString.length !== 6) {
+        setError("Please enter your 6-digit PIN");
+        return;
+      }
+      const unlocked = await unlockApp(pinString);
+      if (unlocked) {
+        setPinDigits(["", "", "", "", "", ""]);
+        onUnlock();
+      } else {
+        setError("Incorrect PIN");
+        setPinDigits(["", "", "", "", "", ""]);
+        if (inputRefs.current[0]) {
+          inputRefs.current[0].focus();
+        }
+      }
+    } else {
+      if (!input.trim()) {
+        setError("Please enter your password");
+        return;
+      }
+      const unlocked = await unlockApp(input);
+      if (unlocked) {
+        setInput("");
+        onUnlock();
+      } else {
+        setError("Incorrect password");
+        setInput("");
+        if (passwordInputRef.current) {
+          passwordInputRef.current.focus();
+        }
+      }
+    }
+  };
+
+  const handleForgotPassword = () => {
+    setShowForgotPassword(true);
+  };
+
+  const handleDeleteAllData = async () => {
+    if (deleteConfirmText !== "I FORGOT MY PASSWORD I WILL LOSE ALL DATA") {
+      setError("Please type 'I FORGOT MY PASSWORD I WILL LOSE ALL DATA' to confirm");
+      return;
+    }
+
+    try {
+      await invoke("clear_all_data");
+      deletePassword();
+      const themeColors = localStorage.getItem("tradebutler_theme_colors");
+      const customPresets = localStorage.getItem("tradebutler_custom_theme_presets");
+      localStorage.clear();
+      if (themeColors) {
+        localStorage.setItem("tradebutler_theme_colors", themeColors);
+      }
+      if (customPresets) {
+        localStorage.setItem("tradebutler_custom_theme_presets", customPresets);
+      }
+      window.location.reload();
+    } catch (error) {
+      console.error("Error deleting data:", error);
+      setError("Failed to delete data: " + (error instanceof Error ? error.message : String(error)));
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: settingsRef.current.backgroundColor,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 10000,
+        overflow: "hidden",
+      }}
+    >
+      {/* Galaxy Canvas Background */}
+      <canvas
+        ref={canvasRef}
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: "100%",
+          height: "100%",
+          zIndex: 0,
+        }}
+      />
+
+      {/* Lock Screen Content */}
+      <div
+        style={{
+          width: "100%",
+          maxWidth: "400px",
+          padding: "40px",
+          backgroundColor: "rgba(20, 20, 30, 0.9)",
+          borderRadius: "12px",
+          border: "1px solid rgba(100, 150, 255, 0.3)",
+          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.5)",
+          position: "relative",
+          zIndex: 1,
+          backdropFilter: "blur(10px)",
+        }}
+      >
+        <div style={{ textAlign: "center", marginBottom: "32px" }}>
+          <div
+            style={{
+              width: "80px",
+              height: "80px",
+              margin: "0 auto 20px",
+              backgroundColor: "rgba(100, 150, 255, 0.2)",
+              borderRadius: "50%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              border: "2px solid rgba(100, 150, 255, 0.5)",
+            }}
+          >
+            <Lock size={40} color="#6496ff" />
+          </div>
+          <h1 style={{ fontSize: "24px", fontWeight: "bold", marginBottom: "8px", color: "#ffffff" }}>
+            TradeButler Locked
+          </h1>
+          <p style={{ fontSize: "14px", color: "rgba(255, 255, 255, 0.7)" }}>
+            Enter your {passwordType === "pin" ? "6-digit PIN" : "password"} to unlock
+          </p>
+        </div>
+
+        {!showForgotPassword && !showDeleteConfirm && (
+          <form onSubmit={handleSubmit}>
+            <div style={{ marginBottom: "16px" }}>
+              {passwordType === "pin" ? (
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "12px",
+                    justifyContent: "center",
+                    marginBottom: "16px",
+                    padding: "0 20px",
+                  }}
+                >
+                  {pinDigits.map((digit, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        width: "50px",
+                        height: "60px",
+                        position: "relative",
+                        backgroundColor: "rgba(20, 20, 30, 0.8)",
+                        border: error ? "2px solid #ff4444" : "1px solid rgba(100, 150, 255, 0.5)",
+                        borderRadius: "8px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        transition: "all 0.2s",
+                        boxSizing: "border-box",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {digit && (
+                        <div
+                          style={{
+                            width: "12px",
+                            height: "12px",
+                            borderRadius: "50%",
+                            backgroundColor: "#6496ff",
+                            position: "absolute",
+                            pointerEvents: "none",
+                          }}
+                        />
+                      )}
+                      <input
+                        ref={(el) => (inputRefs.current[index] = el)}
+                        type="tel"
+                        inputMode="numeric"
+                        value={digit}
+                        onChange={(e) => handlePinDigitChange(index, e.target.value)}
+                        onKeyDown={(e) => handlePinKeyDown(index, e)}
+                        maxLength={1}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: "100%",
+                          padding: "0",
+                          margin: "0",
+                          opacity: 0,
+                          cursor: "pointer",
+                          fontSize: "28px",
+                          textAlign: "center",
+                          fontFamily: "monospace",
+                          fontWeight: "600",
+                          outline: "none",
+                          border: "none",
+                          backgroundColor: "transparent",
+                          boxSizing: "border-box",
+                        }}
+                        onFocus={(e) => {
+                          const container = e.target.parentElement;
+                          if (container) {
+                            container.style.borderColor = "#6496ff";
+                            container.style.borderWidth = "2px";
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const container = e.target.parentElement;
+                          if (container) {
+                            container.style.borderColor = error ? "#ff4444" : "rgba(100, 150, 255, 0.5)";
+                            container.style.borderWidth = "1px";
+                          }
+                        }}
+                        autoComplete="off"
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <input
+                  ref={passwordInputRef}
+                  type="password"
+                  value={input}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    setError("");
+                  }}
+                  placeholder="Enter password"
+                  style={{
+                    width: "100%",
+                    padding: "14px 16px",
+                    backgroundColor: "rgba(20, 20, 30, 0.8)",
+                    border: error ? "2px solid #ff4444" : "1px solid rgba(100, 150, 255, 0.5)",
+                    borderRadius: "8px",
+                    color: "#ffffff",
+                    fontSize: "16px",
+                    textAlign: "left",
+                    outline: "none",
+                  }}
+                  autoComplete="off"
+                />
+              )}
+              {error && (
+                <div
+                  style={{
+                    marginTop: "8px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    color: "#ff4444",
+                    fontSize: "13px",
+                  }}
+                >
+                  <AlertCircle size={14} />
+                  <span>{error}</span>
+                </div>
+              )}
+            </div>
+
+            {passwordType === "password" && (
+              <button
+                type="submit"
+                style={{
+                  width: "100%",
+                  padding: "14px",
+                  backgroundColor: "#6496ff",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontSize: "16px",
+                  fontWeight: "600",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                  marginBottom: "16px",
+                }}
+              >
+                <Unlock size={18} />
+                Unlock
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleForgotPassword}
+              style={{
+                width: "100%",
+                padding: "10px",
+                backgroundColor: "transparent",
+                color: "rgba(255, 255, 255, 0.7)",
+                border: "none",
+                fontSize: "13px",
+                cursor: "pointer",
+                textDecoration: "underline",
+              }}
+            >
+              Forgot {passwordType === "pin" ? "PIN" : "Password"}?
+            </button>
+          </form>
+        )}
+
+        {showForgotPassword && !showDeleteConfirm && (
+          <div>
+            <div style={{ marginBottom: "20px", textAlign: "center" }}>
+              <AlertCircle size={32} color="#ffaa00" style={{ marginBottom: "12px" }} />
+              <h2 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "8px", color: "#ffffff" }}>
+                Forgot {passwordType === "pin" ? "PIN" : "Password"}?
+              </h2>
+              <p style={{ fontSize: "14px", color: "rgba(255, 255, 255, 0.7)", lineHeight: "1.5" }}>
+                If you've forgotten your {passwordType === "pin" ? "PIN" : "password"}, you can reset it by deleting all app data.
+                This will remove all your trades, strategies, journal entries, and settings.
+              </p>
+            </div>
+
+            <div style={{ display: "flex", gap: "12px" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowForgotPassword(false);
+                  setError("");
+                }}
+                style={{
+                  flex: 1,
+                  padding: "12px",
+                  backgroundColor: "rgba(20, 20, 30, 0.8)",
+                  color: "#ffffff",
+                  border: "1px solid rgba(100, 150, 255, 0.5)",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(true)}
+                style={{
+                  flex: 1,
+                  padding: "12px",
+                  backgroundColor: "#ff4444",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                }}
+              >
+                <Trash2 size={16} />
+                Delete All Data
+              </button>
+            </div>
+          </div>
+        )}
+
+        {showDeleteConfirm && (
+          <div>
+            <div style={{ marginBottom: "20px", textAlign: "center" }}>
+              <AlertCircle size={32} color="#ff4444" style={{ marginBottom: "12px" }} />
+              <h2 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "8px", color: "#ffffff" }}>
+                Delete All Data?
+              </h2>
+              <p style={{ fontSize: "14px", color: "rgba(255, 255, 255, 0.7)", lineHeight: "1.5", marginBottom: "16px" }}>
+                This will permanently delete ALL your data including:
+              </p>
+              <ul
+                style={{
+                  textAlign: "left",
+                  fontSize: "13px",
+                  color: "rgba(255, 255, 255, 0.7)",
+                  lineHeight: "1.8",
+                  marginBottom: "20px",
+                  paddingLeft: "20px",
+                }}
+              >
+                <li>All trades</li>
+                <li>All strategies</li>
+                <li>All journal entries</li>
+                <li>All emotional states</li>
+                <li>All settings and preferences</li>
+                <li>Your {passwordType === "PIN" ? "PIN" : "password"}</li>
+              </ul>
+              <p style={{ fontSize: "13px", color: "#ff4444", fontWeight: "600", marginBottom: "16px" }}>
+                This action cannot be undone!
+              </p>
+            </div>
+
+            <div style={{ marginBottom: "16px" }}>
+              <label
+                style={{
+                  display: "block",
+                  marginBottom: "8px",
+                  fontSize: "13px",
+                  color: "rgba(255, 255, 255, 0.7)",
+                  fontWeight: "500",
+                }}
+              >
+                Type <strong>I FORGOT MY PASSWORD I WILL LOSE ALL DATA</strong> to confirm:
+              </label>
+              <input
+                type="text"
+                value={deleteConfirmText}
+                onChange={(e) => {
+                  setDeleteConfirmText(e.target.value);
+                  setError("");
+                }}
+                placeholder="I FORGOT MY PASSWORD I WILL LOSE ALL DATA"
+                style={{
+                  width: "100%",
+                  padding: "12px",
+                  backgroundColor: "rgba(20, 20, 30, 0.8)",
+                  border: error ? "2px solid #ff4444" : "1px solid rgba(100, 150, 255, 0.5)",
+                  borderRadius: "8px",
+                  color: "#ffffff",
+                  fontSize: "14px",
+                  outline: "none",
+                }}
+                autoFocus
+              />
+              {error && (
+                <div
+                  style={{
+                    marginTop: "8px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    color: "#ff4444",
+                    fontSize: "12px",
+                  }}
+                >
+                  <AlertCircle size={12} />
+                  <span>{error}</span>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: "flex", gap: "12px" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeleteConfirm(false);
+                  setDeleteConfirmText("");
+                  setError("");
+                }}
+                style={{
+                  flex: 1,
+                  padding: "12px",
+                  backgroundColor: "rgba(20, 20, 30, 0.8)",
+                  color: "#ffffff",
+                  border: "1px solid rgba(100, 150, 255, 0.5)",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteAllData}
+                disabled={deleteConfirmText !== "I FORGOT MY PASSWORD I WILL LOSE ALL DATA"}
+                style={{
+                  flex: 1,
+                  padding: "12px",
+                  backgroundColor: deleteConfirmText === "I FORGOT MY PASSWORD I WILL LOSE ALL DATA" ? "#ff4444" : "rgba(20, 20, 30, 0.8)",
+                  color: deleteConfirmText === "I FORGOT MY PASSWORD I WILL LOSE ALL DATA" ? "white" : "rgba(255, 255, 255, 0.5)",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: "600",
+                  cursor: deleteConfirmText === "I FORGOT MY PASSWORD I WILL LOSE ALL DATA" ? "pointer" : "not-allowed",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                  opacity: deleteConfirmText === "I FORGOT MY PASSWORD I WILL LOSE ALL DATA" ? 1 : 0.5,
+                }}
+              >
+                <Trash2 size={16} />
+                Delete Everything
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
