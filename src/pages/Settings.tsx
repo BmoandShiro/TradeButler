@@ -933,9 +933,9 @@ export default function Settings() {
                           step="0.01"
                           value={galaxySettings.friction}
                           onChange={(e) => updateGalaxySetting("friction", parseFloat(e.target.value))}
+                          className="dark-slider"
                           style={{
                             width: "100%",
-                            accentColor: "var(--accent)",
                           }}
                         />
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
@@ -954,9 +954,9 @@ export default function Settings() {
                           step="0.1"
                           value={galaxySettings.mouseForce}
                           onChange={(e) => updateGalaxySetting("mouseForce", parseFloat(e.target.value))}
+                          className="dark-slider"
                           style={{
                             width: "100%",
-                            accentColor: "var(--accent)",
                           }}
                         />
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
@@ -970,11 +970,11 @@ export default function Settings() {
                             type="checkbox"
                             checked={galaxySettings.reverseGravity}
                             onChange={(e) => updateGalaxySetting("reverseGravity", e.target.checked)}
+                            className="dark-checkbox"
                             style={{
                               width: "16px",
                               height: "16px",
                               cursor: "pointer",
-                              accentColor: "var(--accent)",
                             }}
                           />
                           <span>Reverse Gravity (Pull towards mouse)</span>
@@ -986,11 +986,11 @@ export default function Settings() {
                             type="checkbox"
                             checked={galaxySettings.particleCollisions}
                             onChange={(e) => updateGalaxySetting("particleCollisions", e.target.checked)}
+                            className="dark-checkbox"
                             style={{
                               width: "16px",
                               height: "16px",
                               cursor: "pointer",
-                              accentColor: "var(--accent)",
                             }}
                           />
                           <span>Particle Collisions (Bounce off each other)</span>
@@ -1002,11 +1002,11 @@ export default function Settings() {
                             type="checkbox"
                             checked={galaxySettings.orbitAroundCenter}
                             onChange={(e) => updateGalaxySetting("orbitAroundCenter", e.target.checked)}
+                            className="dark-checkbox"
                             style={{
                               width: "16px",
                               height: "16px",
                               cursor: "pointer",
-                              accentColor: "var(--accent)",
                             }}
                           />
                           <span>Orbit Around Center</span>
@@ -1024,9 +1024,9 @@ export default function Settings() {
                                 step="0.1"
                                 value={galaxySettings.orbitSpeed}
                                 onChange={(e) => updateGalaxySetting("orbitSpeed", parseFloat(e.target.value))}
+                                className="dark-slider"
                                 style={{
                                   width: "100%",
-                                  accentColor: "var(--accent)",
                                 }}
                               />
                               <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
@@ -1045,9 +1045,9 @@ export default function Settings() {
                                 step="10"
                                 value={galaxySettings.orbitRadius || 200}
                                 onChange={(e) => updateGalaxySetting("orbitRadius", parseInt(e.target.value))}
+                                className="dark-slider"
                                 style={{
                                   width: "100%",
-                                  accentColor: "var(--accent)",
                                 }}
                               />
                               <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
@@ -1066,9 +1066,9 @@ export default function Settings() {
                                 step="0.00001"
                                 value={galaxySettings.orbitGravity || 0.0001}
                                 onChange={(e) => updateGalaxySetting("orbitGravity", parseFloat(e.target.value))}
+                                className="dark-slider"
                                 style={{
                                   width: "100%",
-                                  accentColor: "var(--accent)",
                                 }}
                               />
                               <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
@@ -1099,9 +1099,9 @@ export default function Settings() {
                           step="10"
                           value={galaxySettings.particleCount}
                           onChange={(e) => updateGalaxySetting("particleCount", parseInt(e.target.value))}
+                          className="dark-slider"
                           style={{
                             width: "100%",
-                            accentColor: "var(--accent)",
                           }}
                         />
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
@@ -1130,9 +1130,9 @@ export default function Settings() {
                                   min: parseFloat(e.target.value),
                                 })
                               }
+                              className="dark-slider"
                               style={{
                                 width: "100%",
-                                accentColor: "var(--accent)",
                               }}
                             />
                           </div>
@@ -1152,9 +1152,9 @@ export default function Settings() {
                                   max: parseFloat(e.target.value),
                                 })
                               }
+                              className="dark-slider"
                               style={{
                                 width: "100%",
-                                accentColor: "var(--accent)",
                               }}
                             />
                           </div>
@@ -1171,9 +1171,9 @@ export default function Settings() {
                           step="10"
                           value={galaxySettings.connectionDistance}
                           onChange={(e) => updateGalaxySetting("connectionDistance", parseInt(e.target.value))}
+                          className="dark-slider"
                           style={{
                             width: "100%",
-                            accentColor: "var(--accent)",
                           }}
                         />
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
@@ -1196,11 +1196,11 @@ export default function Settings() {
                             type="checkbox"
                             checked={galaxySettings.useAsBackground}
                             onChange={(e) => updateGalaxySetting("useAsBackground", e.target.checked)}
+                            className="dark-checkbox"
                             style={{
                               width: "16px",
                               height: "16px",
                               cursor: "pointer",
-                              accentColor: "var(--accent)",
                             }}
                           />
                           <span>Use Galaxy Theme as App Background</span>

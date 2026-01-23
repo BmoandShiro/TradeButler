@@ -15,7 +15,8 @@ export function getLockScreenStyle(): LockScreenStyle {
   if (style === "galaxy" || style === "aurora" || style === "milkyway") {
     return style;
   }
-  return "default";
+  // Default to "galaxy" instead of "default"
+  return "galaxy";
 }
 
 /**
