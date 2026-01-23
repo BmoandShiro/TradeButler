@@ -30,7 +30,7 @@ const defaultSettings: GalaxyThemeSettings = {
   particleColor: "#6496ff",
   lineColor: "#6496ff",
   backgroundColor: "#000011",
-  particleCount: 100,
+  particleCount: 300,
   friction: 0.98,
   reverseGravity: false,
   mouseForce: 0.5,

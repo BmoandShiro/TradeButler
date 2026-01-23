@@ -1095,7 +1095,7 @@ export default function Settings() {
                         <input
                           type="range"
                           min="20"
-                          max="300"
+                          max="1000"
                           step="10"
                           value={galaxySettings.particleCount}
                           onChange={(e) => updateGalaxySetting("particleCount", parseInt(e.target.value))}
@@ -1106,7 +1106,7 @@ export default function Settings() {
                         />
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
                           <span>20</span>
-                          <span>300</span>
+                          <span>1000</span>
                         </div>
                       </div>
                       <div>
