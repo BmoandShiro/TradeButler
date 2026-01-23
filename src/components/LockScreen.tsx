@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Lock, Unlock, AlertCircle, Trash2 } from "lucide-react";
+import { Lock, Unlock, AlertCircle, Trash2, Eye, EyeOff } from "lucide-react";
 import { unlockApp, hasPassword, getPasswordType, deletePassword } from "../utils/passwordManager";
 import { invoke } from "@tauri-apps/api/tauri";
 
@@ -9,37 +9,123 @@ interface LockScreenProps {
 
 export default function LockScreen({ onUnlock }: LockScreenProps) {
   const [input, setInput] = useState("");
+  const [pinDigits, setPinDigits] = useState<string[]>(["", "", "", "", "", ""]);
   const [error, setError] = useState("");
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [showPin, setShowPin] = useState(false);
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
   const passwordType = getPasswordType();
 
   useEffect(() => {
-    // Focus input on mount
-    if (inputRef.current) {
-      inputRef.current.focus();
+    // Focus first input on mount
+    if (passwordType === "pin" && inputRefs.current[0]) {
+      inputRefs.current[0].focus();
+    } else if (passwordType === "password" && passwordInputRef.current) {
+      passwordInputRef.current.focus();
     }
-  }, []);
+  }, [passwordType]);
+
+  // Auto-unlock when PIN is complete and correct
+  useEffect(() => {
+    if (passwordType === "pin") {
+      const pinString = pinDigits.join("");
+      if (pinString.length === 6) {
+        // Small delay to ensure all digits are set
+        const timer = setTimeout(() => {
+          if (unlockApp(pinString)) {
+            setPinDigits(["", "", "", "", "", ""]);
+            onUnlock();
+          } else {
+            setError("Incorrect PIN");
+            setPinDigits(["", "", "", "", "", ""]);
+            if (inputRefs.current[0]) {
+              inputRefs.current[0].focus();
+            }
+          }
+        }, 100);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [pinDigits, passwordType, onUnlock]);
+
+  const handlePinDigitChange = (index: number, value: string) => {
+    // Only allow digits
+    const digit = value.replace(/\D/g, "").slice(0, 1);
+    
+    const newDigits = [...pinDigits];
+    newDigits[index] = digit;
+    setPinDigits(newDigits);
+    setError("");
+
+    // Auto-focus next input
+    if (digit && index < 5 && inputRefs.current[index + 1]) {
+      inputRefs.current[index + 1].focus();
+    }
+  };
+
+  const handlePinKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Handle backspace
+    if (e.key === "Backspace" && !pinDigits[index] && index > 0 && inputRefs.current[index - 1]) {
+      inputRefs.current[index - 1].focus();
+    }
+    // Handle paste
+    if (e.key === "v" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      navigator.clipboard.readText().then((text) => {
+        const digits = text.replace(/\D/g, "").slice(0, 6).split("");
+        const newDigits = [...pinDigits];
+        digits.forEach((digit, i) => {
+          if (index + i < 6) {
+            newDigits[index + i] = digit;
+          }
+        });
+        setPinDigits(newDigits);
+        // Focus the last filled input or the last input
+        const lastFilledIndex = Math.min(index + digits.length - 1, 5);
+        if (inputRefs.current[lastFilledIndex]) {
+          inputRefs.current[lastFilledIndex].focus();
+        }
+      });
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     
-    if (!input.trim()) {
-      setError("Please enter your " + (passwordType === "pin" ? "PIN" : "password"));
-      return;
-    }
-
-    if (unlockApp(input)) {
-      setInput("");
-      onUnlock();
+    if (passwordType === "pin") {
+      const pinString = pinDigits.join("");
+      if (pinString.length !== 6) {
+        setError("Please enter your 6-digit PIN");
+        return;
+      }
+      if (unlockApp(pinString)) {
+        setPinDigits(["", "", "", "", "", ""]);
+        onUnlock();
+      } else {
+        setError("Incorrect PIN");
+        setPinDigits(["", "", "", "", "", ""]);
+        if (inputRefs.current[0]) {
+          inputRefs.current[0].focus();
+        }
+      }
     } else {
-      setError("Incorrect " + (passwordType === "pin" ? "PIN" : "password"));
-      setInput("");
-      if (inputRef.current) {
-        inputRef.current.focus();
+      if (!input.trim()) {
+        setError("Please enter your password");
+        return;
+      }
+      if (unlockApp(input)) {
+        setInput("");
+        onUnlock();
+      } else {
+        setError("Incorrect password");
+        setInput("");
+        if (passwordInputRef.current) {
+          passwordInputRef.current.focus();
+        }
       }
     }
   };
@@ -49,8 +135,8 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
   };
 
   const handleDeleteAllData = async () => {
-    if (deleteConfirmText !== "DELETE ALL DATA") {
-      setError("Please type 'DELETE ALL DATA' to confirm");
+    if (deleteConfirmText !== "I FORGOT MY PASSWORD I WILL LOSE ALL DATA") {
+      setError("Please type 'I FORGOT MY PASSWORD I WILL LOSE ALL DATA' to confirm");
       return;
     }
 
@@ -135,38 +221,116 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
         {!showForgotPassword && !showDeleteConfirm && (
           <form onSubmit={handleSubmit}>
             <div style={{ marginBottom: "16px" }}>
-              <input
-                ref={inputRef}
-                type={passwordType === "pin" ? "tel" : "password"}
-                value={input}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (passwordType === "pin") {
-                    // Only allow digits and limit to 6
-                    const digitsOnly = value.replace(/\D/g, "").slice(0, 6);
-                    setInput(digitsOnly);
-                  } else {
-                    setInput(value);
-                  }
-                  setError("");
-                }}
-                placeholder={passwordType === "pin" ? "Enter 6-digit PIN" : "Enter password"}
-                style={{
-                  width: "100%",
-                  padding: "14px 16px",
-                  backgroundColor: "var(--bg-tertiary)",
-                  border: error ? "2px solid var(--danger)" : "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                  color: "var(--text-primary)",
-                  fontSize: passwordType === "pin" ? "24px" : "16px",
-                  textAlign: passwordType === "pin" ? "center" : "left",
-                  letterSpacing: passwordType === "pin" ? "8px" : "normal",
-                  fontFamily: passwordType === "pin" ? "monospace" : "inherit",
-                  outline: "none",
-                }}
-                autoComplete="off"
-                maxLength={passwordType === "pin" ? 6 : undefined}
-              />
+              {passwordType === "pin" ? (
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "12px",
+                    justifyContent: "center",
+                    marginBottom: "16px",
+                    padding: "0 20px",
+                  }}
+                >
+                  {pinDigits.map((digit, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        width: "50px",
+                        height: "60px",
+                        position: "relative",
+                        backgroundColor: "var(--bg-tertiary)",
+                        border: error ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                        borderRadius: "8px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        transition: "all 0.2s",
+                        boxSizing: "border-box",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {digit && (
+                        <div
+                          style={{
+                            width: "12px",
+                            height: "12px",
+                            borderRadius: "50%",
+                            backgroundColor: "var(--text-primary)",
+                            position: "absolute",
+                            pointerEvents: "none",
+                          }}
+                        />
+                      )}
+                      <input
+                        ref={(el) => (inputRefs.current[index] = el)}
+                        type="tel"
+                        inputMode="numeric"
+                        value={digit}
+                        onChange={(e) => handlePinDigitChange(index, e.target.value)}
+                        onKeyDown={(e) => handlePinKeyDown(index, e)}
+                        maxLength={1}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: "100%",
+                          padding: "0",
+                          margin: "0",
+                          opacity: 0,
+                          cursor: "pointer",
+                          fontSize: "28px",
+                          textAlign: "center",
+                          fontFamily: "monospace",
+                          fontWeight: "600",
+                          outline: "none",
+                          border: "none",
+                          backgroundColor: "transparent",
+                          boxSizing: "border-box",
+                        }}
+                        onFocus={(e) => {
+                          const container = e.target.parentElement;
+                          if (container) {
+                            container.style.borderColor = "var(--accent)";
+                            container.style.borderWidth = "2px";
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const container = e.target.parentElement;
+                          if (container) {
+                            container.style.borderColor = error ? "var(--danger)" : "var(--border-color)";
+                            container.style.borderWidth = "1px";
+                          }
+                        }}
+                        autoComplete="off"
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <input
+                  ref={passwordInputRef}
+                  type="password"
+                  value={input}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    setError("");
+                  }}
+                  placeholder="Enter password"
+                  style={{
+                    width: "100%",
+                    padding: "14px 16px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    border: error ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                    borderRadius: "8px",
+                    color: "var(--text-primary)",
+                    fontSize: "16px",
+                    textAlign: "left",
+                    outline: "none",
+                  }}
+                  autoComplete="off"
+                />
+              )}
               {error && (
                 <div
                   style={{
@@ -184,28 +348,30 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
               )}
             </div>
 
-            <button
-              type="submit"
-              style={{
-                width: "100%",
-                padding: "14px",
-                backgroundColor: "var(--accent)",
-                color: "white",
-                border: "none",
-                borderRadius: "8px",
-                fontSize: "16px",
-                fontWeight: "600",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: "8px",
-                marginBottom: "16px",
-              }}
-            >
-              <Unlock size={18} />
-              Unlock
-            </button>
+            {passwordType === "password" && (
+              <button
+                type="submit"
+                style={{
+                  width: "100%",
+                  padding: "14px",
+                  backgroundColor: "var(--accent)",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontSize: "16px",
+                  fontWeight: "600",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                  marginBottom: "16px",
+                }}
+              >
+                <Unlock size={18} />
+                Unlock
+              </button>
+            )}
 
             <button
               type="button"
@@ -328,7 +494,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
                   fontWeight: "500",
                 }}
               >
-                Type <strong>DELETE ALL DATA</strong> to confirm:
+                Type <strong>I FORGOT MY PASSWORD I WILL LOSE ALL DATA</strong> to confirm:
               </label>
               <input
                 type="text"
@@ -337,7 +503,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
                   setDeleteConfirmText(e.target.value);
                   setError("");
                 }}
-                placeholder="DELETE ALL DATA"
+                placeholder="I FORGOT MY PASSWORD I WILL LOSE ALL DATA"
                 style={{
                   width: "100%",
                   padding: "12px",
@@ -392,22 +558,22 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
               <button
                 type="button"
                 onClick={handleDeleteAllData}
-                disabled={deleteConfirmText !== "DELETE ALL DATA"}
+                disabled={deleteConfirmText !== "I FORGOT MY PASSWORD I WILL LOSE ALL DATA"}
                 style={{
                   flex: 1,
                   padding: "12px",
-                  backgroundColor: deleteConfirmText === "DELETE ALL DATA" ? "var(--danger)" : "var(--bg-tertiary)",
-                  color: deleteConfirmText === "DELETE ALL DATA" ? "white" : "var(--text-secondary)",
+                  backgroundColor: deleteConfirmText === "I FORGOT MY PASSWORD I WILL LOSE ALL DATA" ? "var(--danger)" : "var(--bg-tertiary)",
+                  color: deleteConfirmText === "I FORGOT MY PASSWORD I WILL LOSE ALL DATA" ? "white" : "var(--text-secondary)",
                   border: "none",
                   borderRadius: "8px",
                   fontSize: "14px",
                   fontWeight: "600",
-                  cursor: deleteConfirmText === "DELETE ALL DATA" ? "pointer" : "not-allowed",
+                  cursor: deleteConfirmText === "I FORGOT MY PASSWORD I WILL LOSE ALL DATA" ? "pointer" : "not-allowed",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   gap: "6px",
-                  opacity: deleteConfirmText === "DELETE ALL DATA" ? 1 : 0.5,
+                  opacity: deleteConfirmText === "I FORGOT MY PASSWORD I WILL LOSE ALL DATA" ? 1 : 0.5,
                 }}
               >
                 <Trash2 size={16} />

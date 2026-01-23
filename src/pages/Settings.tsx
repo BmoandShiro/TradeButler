@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, X, Lock, Key } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, X, Lock, Key, Eye, EyeOff } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -23,7 +23,8 @@ import {
   hasPassword, 
   getPasswordType, 
   setPassword, 
-  deletePassword
+  deletePassword,
+  verifyPassword
 } from "../utils/passwordManager";
 
 interface VersionInfo {
@@ -54,9 +55,22 @@ export default function Settings() {
   // Password/PIN state
   const [passwordType, setPasswordType] = useState<"pin" | "password">(() => getPasswordType() || "pin");
   const [newPassword, setNewPassword] = useState("");
+  const [newPinDigits, setNewPinDigits] = useState<string[]>(["", "", "", "", "", ""]);
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [confirmPinDigits, setConfirmPinDigits] = useState<string[]>(["", "", "", "", "", ""]);
   const [passwordError, setPasswordError] = useState("");
   const [passwordSuccess, setPasswordSuccess] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [showNewPin, setShowNewPin] = useState(false);
+  const [showConfirmPin, setShowConfirmPin] = useState(false);
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
+  const [showRemovePin, setShowRemovePin] = useState(false);
+  const [removeVerification, setRemoveVerification] = useState("");
+  const [removePinDigits, setRemovePinDigits] = useState<string[]>(["", "", "", "", "", ""]);
+  const newPasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const confirmPasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const removePasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   const checkVersion = async () => {
     try {
@@ -230,35 +244,73 @@ export default function Settings() {
   };
 
   // Password handlers
+  const handleNewPinDigitChange = (index: number, value: string) => {
+    const digit = value.replace(/\D/g, "").slice(0, 1);
+    const newDigits = [...newPinDigits];
+    newDigits[index] = digit;
+    setNewPinDigits(newDigits);
+    setPasswordError("");
+    if (digit && index < 5 && newPasswordInputRefs.current[index + 1]) {
+      newPasswordInputRefs.current[index + 1].focus();
+    }
+  };
+
+  const handleConfirmPinDigitChange = (index: number, value: string) => {
+    const digit = value.replace(/\D/g, "").slice(0, 1);
+    const newDigits = [...confirmPinDigits];
+    newDigits[index] = digit;
+    setConfirmPinDigits(newDigits);
+    setPasswordError("");
+    if (digit && index < 5 && confirmPasswordInputRefs.current[index + 1]) {
+      confirmPasswordInputRefs.current[index + 1].focus();
+    }
+  };
+
+  const handleRemovePinDigitChange = (index: number, value: string) => {
+    const digit = value.replace(/\D/g, "").slice(0, 1);
+    const newDigits = [...removePinDigits];
+    newDigits[index] = digit;
+    setRemovePinDigits(newDigits);
+    setPasswordError("");
+    if (digit && index < 5 && removePasswordInputRefs.current[index + 1]) {
+      removePasswordInputRefs.current[index + 1].focus();
+    }
+  };
+
   const handleSetPassword = () => {
     setPasswordError("");
     setPasswordSuccess("");
     
-    if (!newPassword.trim()) {
+    const passwordValue = passwordType === "pin" ? newPinDigits.join("") : newPassword;
+    const confirmValue = passwordType === "pin" ? confirmPinDigits.join("") : confirmPassword;
+    
+    if (!passwordValue.trim()) {
       setPasswordError(`Please enter a ${passwordType === "pin" ? "PIN" : "password"}`);
       return;
     }
     
-    if (passwordType === "pin" && !/^\d{6}$/.test(newPassword)) {
+    if (passwordType === "pin" && !/^\d{6}$/.test(passwordValue)) {
       setPasswordError("PIN must be exactly 6 digits");
       return;
     }
     
-    if (passwordType === "password" && newPassword.length < 4) {
+    if (passwordType === "password" && passwordValue.length < 4) {
       setPasswordError("Password must be at least 4 characters");
       return;
     }
     
-    if (newPassword !== confirmPassword) {
-      setPasswordError("Passwords do not match");
+    if (passwordValue !== confirmValue) {
+      setPasswordError(`${passwordType === "pin" ? "PINs" : "Passwords"} do not match`);
       return;
     }
     
     try {
-      setPassword(newPassword, passwordType);
+      setPassword(passwordValue, passwordType);
       setPasswordSuccess(`${passwordType === "pin" ? "PIN" : "Password"} set successfully!`);
       setNewPassword("");
+      setNewPinDigits(["", "", "", "", "", ""]);
       setConfirmPassword("");
+      setConfirmPinDigits(["", "", "", "", "", ""]);
       setTimeout(() => {
         setPasswordSuccess("");
       }, 3000);
@@ -271,19 +323,57 @@ export default function Settings() {
     setPasswordError("");
     setPasswordSuccess("");
     setNewPassword("");
+    setNewPinDigits(["", "", "", "", "", ""]);
     setConfirmPassword("");
+    setConfirmPinDigits(["", "", "", "", "", ""]);
   };
 
   const handleRemovePassword = () => {
-    if (confirm("Are you sure you want to remove the password/PIN? The app will no longer be locked.")) {
-      deletePassword();
-      setPasswordSuccess("Password removed successfully!");
-      setNewPassword("");
-      setConfirmPassword("");
-      setTimeout(() => {
-        setPasswordSuccess("");
-      }, 3000);
+    if (!hasPassword()) {
+      setPasswordError("No password is currently set");
+      return;
     }
+    setShowRemoveConfirm(true);
+    setPasswordError("");
+    setRemoveVerification("");
+    setRemovePinDigits(["", "", "", "", "", ""]);
+    // Focus first input after a brief delay to ensure modal is rendered
+    setTimeout(() => {
+      if (getPasswordType() === "pin" && removePasswordInputRefs.current[0]) {
+        removePasswordInputRefs.current[0].focus();
+      }
+    }, 100);
+  };
+
+  const handleConfirmRemovePassword = () => {
+    setPasswordError("");
+    const currentType = getPasswordType();
+    const verificationValue = currentType === "pin" ? removePinDigits.join("") : removeVerification;
+    
+    if (!verificationValue.trim()) {
+      setPasswordError(`Please enter your current ${currentType === "pin" ? "PIN" : "password"} to remove it`);
+      return;
+    }
+    
+    if (!verifyPassword(verificationValue)) {
+      setPasswordError(`Incorrect ${currentType === "pin" ? "PIN" : "password"}`);
+      setRemoveVerification("");
+      setRemovePinDigits(["", "", "", "", "", ""]);
+      return;
+    }
+    
+    deletePassword();
+    setPasswordSuccess("Password removed successfully!");
+    setShowRemoveConfirm(false);
+    setRemoveVerification("");
+    setRemovePinDigits(["", "", "", "", "", ""]);
+    setNewPassword("");
+    setNewPinDigits(["", "", "", "", "", ""]);
+    setConfirmPassword("");
+    setConfirmPinDigits(["", "", "", "", "", ""]);
+    setTimeout(() => {
+      setPasswordSuccess("");
+    }, 3000);
   };
 
   return (
@@ -710,7 +800,9 @@ export default function Settings() {
                 onClick={() => {
                   setPasswordType("pin");
                   setNewPassword("");
+                  setNewPinDigits(["", "", "", "", "", ""]);
                   setConfirmPassword("");
+                  setConfirmPinDigits(["", "", "", "", "", ""]);
                   setPasswordError("");
                 }}
                 style={{
@@ -733,7 +825,9 @@ export default function Settings() {
                 onClick={() => {
                   setPasswordType("password");
                   setNewPassword("");
+                  setNewPinDigits(["", "", "", "", "", ""]);
                   setConfirmPassword("");
+                  setConfirmPinDigits(["", "", "", "", "", ""]);
                   setPasswordError("");
                 }}
                 style={{
@@ -759,72 +853,322 @@ export default function Settings() {
             <label style={{ display: "block", fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
               {hasPassword() ? "New " : ""}{passwordType === "pin" ? "PIN" : "Password"}
             </label>
-            <input
-              type={passwordType === "pin" ? "tel" : "password"}
-              value={newPassword}
-              onChange={(e) => {
-                const value = e.target.value;
-                if (passwordType === "pin") {
-                  // Only allow digits and limit to 6
-                  const digitsOnly = value.replace(/\D/g, "").slice(0, 6);
-                  setNewPassword(digitsOnly);
-                } else {
-                  setNewPassword(value);
-                }
-                setPasswordError("");
-              }}
-              placeholder={passwordType === "pin" ? "Enter 6-digit PIN" : "Enter password"}
-              style={{
-                width: "100%",
-                padding: "12px",
-                backgroundColor: "var(--bg-tertiary)",
-                border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
-                borderRadius: "8px",
-                color: "var(--text-primary)",
-                fontSize: passwordType === "pin" ? "20px" : "16px",
-                textAlign: passwordType === "pin" ? "center" : "left",
-                letterSpacing: passwordType === "pin" ? "4px" : "normal",
-                fontFamily: passwordType === "pin" ? "monospace" : "inherit",
-                outline: "none",
-              }}
-              maxLength={passwordType === "pin" ? 6 : undefined}
-            />
+            {passwordType === "pin" ? (
+              <div style={{ position: "relative" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "12px",
+                    justifyContent: "center",
+                    marginBottom: "8px",
+                  }}
+                >
+                  {newPinDigits.map((digit, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        width: "50px",
+                        height: "60px",
+                        position: "relative",
+                        backgroundColor: "var(--bg-tertiary)",
+                        border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                        borderRadius: "8px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      {showNewPin ? (
+                        <span
+                          style={{
+                            fontSize: "28px",
+                            fontFamily: "monospace",
+                            fontWeight: "600",
+                            color: "var(--text-primary)",
+                          }}
+                        >
+                          {digit || ""}
+                        </span>
+                      ) : (
+                        <div
+                          style={{
+                            width: "12px",
+                            height: "12px",
+                            borderRadius: "50%",
+                            backgroundColor: digit ? "var(--text-primary)" : "transparent",
+                            border: digit ? "none" : "2px solid var(--border-color)",
+                          }}
+                        />
+                      )}
+                      <input
+                        ref={(el) => (newPasswordInputRefs.current[index] = el)}
+                        type="tel"
+                        inputMode="numeric"
+                        value={digit}
+                        onChange={(e) => handleNewPinDigitChange(index, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Backspace" && !digit && index > 0 && newPasswordInputRefs.current[index - 1]) {
+                            newPasswordInputRefs.current[index - 1].focus();
+                          }
+                        }}
+                        maxLength={1}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: "100%",
+                          opacity: 0,
+                          cursor: "pointer",
+                          fontSize: "28px",
+                          textAlign: "center",
+                          fontFamily: "monospace",
+                          outline: "none",
+                        }}
+                        onFocus={(e) => {
+                          const container = e.target.parentElement;
+                          if (container) {
+                            container.style.borderColor = "var(--accent)";
+                            container.style.borderWidth = "2px";
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const container = e.target.parentElement;
+                          if (container) {
+                            container.style.borderColor = passwordError ? "var(--danger)" : "var(--border-color)";
+                            container.style.borderWidth = "1px";
+                          }
+                        }}
+                        autoComplete="off"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowNewPin(!showNewPin)}
+                  style={{
+                    position: "absolute",
+                    right: "0",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "4px",
+                    display: "flex",
+                    alignItems: "center",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  {showNewPin ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            ) : (
+              <div style={{ position: "relative" }}>
+                <input
+                  type={showNewPassword ? "text" : "password"}
+                  value={newPassword}
+                  onChange={(e) => {
+                    setNewPassword(e.target.value);
+                    setPasswordError("");
+                  }}
+                  placeholder="Enter password"
+                  style={{
+                    width: "100%",
+                    padding: "12px 40px 12px 12px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                    borderRadius: "8px",
+                    color: "var(--text-primary)",
+                    fontSize: "16px",
+                    outline: "none",
+                  }}
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowNewPassword(!showNewPassword)}
+                  style={{
+                    position: "absolute",
+                    right: "8px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "4px",
+                    display: "flex",
+                    alignItems: "center",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  {showNewPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            )}
           </div>
 
           <div style={{ marginBottom: "20px" }}>
             <label style={{ display: "block", fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
               Confirm {passwordType === "pin" ? "PIN" : "Password"}
             </label>
-            <input
-              type={passwordType === "pin" ? "tel" : "password"}
-              value={confirmPassword}
-              onChange={(e) => {
-                const value = e.target.value;
-                if (passwordType === "pin") {
-                  // Only allow digits and limit to 6
-                  const digitsOnly = value.replace(/\D/g, "").slice(0, 6);
-                  setConfirmPassword(digitsOnly);
-                } else {
-                  setConfirmPassword(value);
-                }
-                setPasswordError("");
-              }}
-              placeholder={passwordType === "pin" ? "Confirm 6-digit PIN" : "Confirm password"}
-              style={{
-                width: "100%",
-                padding: "12px",
-                backgroundColor: "var(--bg-tertiary)",
-                border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
-                borderRadius: "8px",
-                color: "var(--text-primary)",
-                fontSize: passwordType === "pin" ? "20px" : "16px",
-                textAlign: passwordType === "pin" ? "center" : "left",
-                letterSpacing: passwordType === "pin" ? "4px" : "normal",
-                fontFamily: passwordType === "pin" ? "monospace" : "inherit",
-                outline: "none",
-              }}
-              maxLength={passwordType === "pin" ? 6 : undefined}
-            />
+            {passwordType === "pin" ? (
+              <div style={{ position: "relative" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "12px",
+                    justifyContent: "center",
+                    marginBottom: "8px",
+                  }}
+                >
+                  {confirmPinDigits.map((digit, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        width: "50px",
+                        height: "60px",
+                        position: "relative",
+                        backgroundColor: "var(--bg-tertiary)",
+                        border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                        borderRadius: "8px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      {showConfirmPin ? (
+                        <span
+                          style={{
+                            fontSize: "28px",
+                            fontFamily: "monospace",
+                            fontWeight: "600",
+                            color: "var(--text-primary)",
+                          }}
+                        >
+                          {digit || ""}
+                        </span>
+                      ) : (
+                        <div
+                          style={{
+                            width: "12px",
+                            height: "12px",
+                            borderRadius: "50%",
+                            backgroundColor: digit ? "var(--text-primary)" : "transparent",
+                            border: digit ? "none" : "2px solid var(--border-color)",
+                          }}
+                        />
+                      )}
+                      <input
+                        ref={(el) => (confirmPasswordInputRefs.current[index] = el)}
+                        type="tel"
+                        inputMode="numeric"
+                        value={digit}
+                        onChange={(e) => handleConfirmPinDigitChange(index, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Backspace" && !digit && index > 0 && confirmPasswordInputRefs.current[index - 1]) {
+                            confirmPasswordInputRefs.current[index - 1].focus();
+                          }
+                        }}
+                        maxLength={1}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: "100%",
+                          opacity: 0,
+                          cursor: "pointer",
+                          fontSize: "28px",
+                          textAlign: "center",
+                          fontFamily: "monospace",
+                          outline: "none",
+                        }}
+                        onFocus={(e) => {
+                          const container = e.target.parentElement;
+                          if (container) {
+                            container.style.borderColor = "var(--accent)";
+                            container.style.borderWidth = "2px";
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const container = e.target.parentElement;
+                          if (container) {
+                            container.style.borderColor = passwordError ? "var(--danger)" : "var(--border-color)";
+                            container.style.borderWidth = "1px";
+                          }
+                        }}
+                        autoComplete="off"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPin(!showConfirmPin)}
+                  style={{
+                    position: "absolute",
+                    right: "0",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "4px",
+                    display: "flex",
+                    alignItems: "center",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  {showConfirmPin ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            ) : (
+              <div style={{ position: "relative" }}>
+                <input
+                  type={showConfirmPassword ? "text" : "password"}
+                  value={confirmPassword}
+                  onChange={(e) => {
+                    setConfirmPassword(e.target.value);
+                    setPasswordError("");
+                  }}
+                  placeholder="Confirm password"
+                  style={{
+                    width: "100%",
+                    padding: "12px 40px 12px 12px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                    borderRadius: "8px",
+                    color: "var(--text-primary)",
+                    fontSize: "16px",
+                    outline: "none",
+                  }}
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  style={{
+                    position: "absolute",
+                    right: "8px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "4px",
+                    display: "flex",
+                    alignItems: "center",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            )}
           </div>
 
           {passwordError && (
@@ -869,73 +1213,80 @@ export default function Settings() {
 
           <div style={{ display: "flex", gap: "12px" }}>
             {hasPassword() ? (
-              <>
-                <button
-                  type="button"
-                  onClick={handleSetPassword}
-                  disabled={!newPassword || !confirmPassword}
-                  style={{
-                    flex: 1,
-                    padding: "12px",
-                    backgroundColor: newPassword && confirmPassword ? "var(--accent)" : "var(--bg-tertiary)",
-                    color: newPassword && confirmPassword ? "white" : "var(--text-secondary)",
-                    border: "none",
-                    borderRadius: "8px",
-                    fontSize: "14px",
-                    fontWeight: "500",
-                    cursor: newPassword && confirmPassword ? "pointer" : "not-allowed",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "6px",
-                    opacity: newPassword && confirmPassword ? 1 : 0.5,
-                  }}
-                >
-                  <Key size={16} />
-                  Change {passwordType === "pin" ? "PIN" : "Password"}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRemovePassword}
-                  style={{
-                    padding: "12px 20px",
-                    backgroundColor: "var(--bg-tertiary)",
-                    color: "var(--text-secondary)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "8px",
-                    fontSize: "14px",
-                    fontWeight: "500",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "6px",
-                  }}
-                >
-                  <Trash2 size={16} />
-                  Remove
-                </button>
-              </>
-            ) : (
               <button
                 type="button"
-                onClick={handleSetPassword}
-                disabled={!newPassword || !confirmPassword}
+                onClick={handleRemovePassword}
                 style={{
                   width: "100%",
                   padding: "12px",
-                  backgroundColor: newPassword && confirmPassword ? "var(--accent)" : "var(--bg-tertiary)",
-                  color: newPassword && confirmPassword ? "white" : "var(--text-secondary)",
-                  border: "none",
+                  backgroundColor: "var(--bg-tertiary)",
+                  color: "var(--text-secondary)",
+                  border: "1px solid var(--border-color)",
                   borderRadius: "8px",
                   fontSize: "14px",
                   fontWeight: "500",
-                  cursor: newPassword && confirmPassword ? "pointer" : "not-allowed",
+                  cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   gap: "6px",
-                  opacity: newPassword && confirmPassword ? 1 : 0.5,
+                }}
+              >
+                <Trash2 size={16} />
+                Remove {getPasswordType() === "pin" ? "PIN" : "Password"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSetPassword}
+                disabled={
+                  passwordType === "pin"
+                    ? newPinDigits.join("").length !== 6 || confirmPinDigits.join("").length !== 6
+                    : !newPassword || !confirmPassword
+                }
+                style={{
+                  width: "100%",
+                  padding: "12px",
+                  backgroundColor:
+                    passwordType === "pin"
+                      ? newPinDigits.join("").length === 6 && confirmPinDigits.join("").length === 6
+                        ? "var(--accent)"
+                        : "var(--bg-tertiary)"
+                      : newPassword && confirmPassword
+                      ? "var(--accent)"
+                      : "var(--bg-tertiary)",
+                  color:
+                    passwordType === "pin"
+                      ? newPinDigits.join("").length === 6 && confirmPinDigits.join("").length === 6
+                        ? "white"
+                        : "var(--text-secondary)"
+                      : newPassword && confirmPassword
+                      ? "white"
+                      : "var(--text-secondary)",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor:
+                    passwordType === "pin"
+                      ? newPinDigits.join("").length === 6 && confirmPinDigits.join("").length === 6
+                        ? "pointer"
+                        : "not-allowed"
+                      : newPassword && confirmPassword
+                      ? "pointer"
+                      : "not-allowed",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                  opacity:
+                    passwordType === "pin"
+                      ? newPinDigits.join("").length === 6 && confirmPinDigits.join("").length === 6
+                        ? 1
+                        : 0.5
+                      : newPassword && confirmPassword
+                      ? 1
+                      : 0.5,
                 }}
               >
                 <Lock size={16} />
@@ -943,6 +1294,274 @@ export default function Settings() {
               </button>
             )}
           </div>
+
+          {/* Remove Password Verification Modal */}
+          {showRemoveConfirm && (
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: "var(--bg-primary)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 10000,
+              }}
+            >
+              <div
+                style={{
+                  width: "100%",
+                  maxWidth: "400px",
+                  padding: "40px",
+                  backgroundColor: "var(--bg-secondary)",
+                  borderRadius: "12px",
+                  border: "1px solid var(--border-color)",
+                  boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3)",
+                }}
+              >
+                <div style={{ textAlign: "center", marginBottom: "32px" }}>
+                  <h3
+                    style={{
+                      fontSize: "24px",
+                      fontWeight: "bold",
+                      marginBottom: "8px",
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    Verify {getPasswordType() === "pin" ? "PIN" : "Password"} to Remove
+                  </h3>
+                  <p
+                    style={{
+                      fontSize: "14px",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Please enter your current {getPasswordType() === "pin" ? "PIN" : "password"} to confirm removal.
+                  </p>
+                </div>
+
+                {getPasswordType() === "pin" ? (
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "12px",
+                      justifyContent: "center",
+                      marginBottom: "20px",
+                      padding: "0 20px",
+                    }}
+                  >
+                    {removePinDigits.map((digit, index) => (
+                      <div
+                        key={index}
+                        style={{
+                          width: "50px",
+                          height: "60px",
+                          position: "relative",
+                          backgroundColor: "var(--bg-tertiary)",
+                          border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                          borderRadius: "8px",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          transition: "all 0.2s",
+                          boxSizing: "border-box",
+                          flexShrink: 0,
+                        }}
+                      >
+                        {digit && (
+                          <div
+                            style={{
+                              width: "12px",
+                              height: "12px",
+                              borderRadius: "50%",
+                              backgroundColor: "var(--text-primary)",
+                              position: "absolute",
+                              pointerEvents: "none",
+                            }}
+                          />
+                        )}
+                        <input
+                          ref={(el) => (removePasswordInputRefs.current[index] = el)}
+                          type="tel"
+                          inputMode="numeric"
+                          value={digit}
+                          onChange={(e) => handleRemovePinDigitChange(index, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Backspace" && !digit && index > 0 && removePasswordInputRefs.current[index - 1]) {
+                              removePasswordInputRefs.current[index - 1].focus();
+                            }
+                          }}
+                          maxLength={1}
+                          style={{
+                            position: "absolute",
+                            top: 0,
+                            left: 0,
+                            width: "100%",
+                            height: "100%",
+                            padding: "0",
+                            margin: "0",
+                            opacity: 0,
+                            cursor: "pointer",
+                            fontSize: "28px",
+                            textAlign: "center",
+                            fontFamily: "monospace",
+                            fontWeight: "600",
+                            outline: "none",
+                            border: "none",
+                            backgroundColor: "transparent",
+                            boxSizing: "border-box",
+                          }}
+                          onFocus={(e) => {
+                            const container = e.target.parentElement;
+                            if (container) {
+                              container.style.borderColor = "var(--accent)";
+                              container.style.borderWidth = "2px";
+                            }
+                          }}
+                          onBlur={(e) => {
+                            const container = e.target.parentElement;
+                            if (container) {
+                              container.style.borderColor = passwordError ? "var(--danger)" : "var(--border-color)";
+                              container.style.borderWidth = "1px";
+                            }
+                          }}
+                          autoComplete="off"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ position: "relative", marginBottom: "20px" }}>
+                    <input
+                      type="password"
+                      value={removeVerification}
+                      onChange={(e) => {
+                        setRemoveVerification(e.target.value);
+                        setPasswordError("");
+                      }}
+                      placeholder="Enter current password"
+                      style={{
+                        width: "100%",
+                        padding: "12px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                        borderRadius: "8px",
+                        color: "var(--text-primary)",
+                        fontSize: "16px",
+                        outline: "none",
+                      }}
+                      autoComplete="off"
+                      autoFocus
+                    />
+                  </div>
+                )}
+
+                {passwordError && (
+                  <div
+                    style={{
+                      marginBottom: "16px",
+                      padding: "12px",
+                      backgroundColor: "var(--bg-tertiary)",
+                      border: "1px solid var(--danger)",
+                      borderRadius: "8px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      color: "var(--danger)",
+                      fontSize: "13px",
+                    }}
+                  >
+                    <AlertCircle size={16} />
+                    <span>{passwordError}</span>
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: "12px" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowRemoveConfirm(false);
+                      setRemoveVerification("");
+                      setRemovePinDigits(["", "", "", "", "", ""]);
+                      setPasswordError("");
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: "12px",
+                      backgroundColor: "var(--bg-tertiary)",
+                      color: "var(--text-primary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                      fontSize: "14px",
+                      fontWeight: "500",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmRemovePassword}
+                    disabled={
+                      getPasswordType() === "pin"
+                        ? removePinDigits.join("").length !== 6
+                        : !removeVerification.trim()
+                    }
+                    style={{
+                      flex: 1,
+                      padding: "12px",
+                      backgroundColor:
+                        getPasswordType() === "pin"
+                          ? removePinDigits.join("").length === 6
+                            ? "var(--danger)"
+                            : "var(--bg-tertiary)"
+                          : removeVerification.trim()
+                          ? "var(--danger)"
+                          : "var(--bg-tertiary)",
+                      color:
+                        getPasswordType() === "pin"
+                          ? removePinDigits.join("").length === 6
+                            ? "white"
+                            : "var(--text-secondary)"
+                          : removeVerification.trim()
+                          ? "white"
+                          : "var(--text-secondary)",
+                      border: "none",
+                      borderRadius: "8px",
+                      fontSize: "14px",
+                      fontWeight: "600",
+                      cursor:
+                        getPasswordType() === "pin"
+                          ? removePinDigits.join("").length === 6
+                            ? "pointer"
+                            : "not-allowed"
+                          : removeVerification.trim()
+                          ? "pointer"
+                          : "not-allowed",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "6px",
+                      opacity:
+                        getPasswordType() === "pin"
+                          ? removePinDigits.join("").length === 6
+                            ? 1
+                            : 0.5
+                          : removeVerification.trim()
+                          ? 1
+                          : 0.5,
+                    }}
+                  >
+                    <Trash2 size={16} />
+                    Remove
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Version Checker Section */}
