@@ -117,119 +117,132 @@ function SortableStrategy({
     opacity: isDragging ? 0.5 : 1,
   };
 
-  const mouseDownRef = React.useRef<{ x: number; y: number; time: number } | null>(null);
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    // Don't track if clicking on drag handle
-    if ((e.target as HTMLElement).closest('[data-drag-handle]')) {
-      return;
-    }
-    mouseDownRef.current = {
-      x: e.clientX,
-      y: e.clientY,
-      time: Date.now(),
-    };
-  };
-
-  const handleMouseUp = (e: React.MouseEvent) => {
-    // Don't trigger selection if currently dragging
+  const handleClick = (e: React.MouseEvent) => {
+    // Prevent drag system from interfering with click
+    e.stopPropagation();
+    
+    // Don't trigger if currently dragging
     if (isDragging) {
-      mouseDownRef.current = null;
       return;
     }
     
-    // Don't trigger selection if clicking on the drag handle
-    if ((e.target as HTMLElement).closest('[data-drag-handle]')) {
-      mouseDownRef.current = null;
-      return;
-    }
-
-    // Check if this was a click (not a drag) by comparing mouse position
-    if (mouseDownRef.current) {
-      const deltaX = Math.abs(e.clientX - mouseDownRef.current.x);
-      const deltaY = Math.abs(e.clientY - mouseDownRef.current.y);
-      const deltaTime = Date.now() - mouseDownRef.current.time;
-      
-      // If mouse moved more than 5px or took more than 500ms, it was likely a drag
-      if (deltaX > 5 || deltaY > 5 || deltaTime > 500) {
-        mouseDownRef.current = null;
-        return;
-      }
-    }
-
-    mouseDownRef.current = null;
+    console.log('Strategy clicked:', strategy.id, strategy.name);
+    console.log('Setting selectedStrategy to:', strategy.id);
     
+    // Save scroll position before switching
     saveAllScrollPositions(
-      tabScrollPositions,
+      tabScrollPositions.current,
       leftPanelScrollRef.current?.scrollTop ?? null,
       rightPanelScrollRef.current?.scrollTop ?? null,
       "strategies"
     );
-    clearWorkInProgress();
-    setSelectedStrategy(strategy.id!);
+    clearWorkInProgress(); // Clear work in progress when selecting an existing strategy
+    
+    // Set selection - use a function to ensure state update
+    setSelectedStrategy(() => {
+      console.log('setSelectedStrategy called with:', strategy.id);
+      return strategy.id!;
+    });
     setActiveTab("notes");
+    // Only reset editing/creating when switching to a different strategy
     if (selectedStrategy !== strategy.id) {
       setIsEditing(false);
       setIsCreating(false);
     }
   };
 
+  const handleMouseDown = (e: React.MouseEvent) => {
+    // Don't prevent if clicking on drag handle - let it work normally
+    if ((e.target as HTMLElement).closest('[data-drag-handle]')) {
+      return;
+    }
+    // Stop drag sensor from capturing this event, but allow click to fire
+    e.stopPropagation();
+  };
+
   return (
     <div
       ref={setNodeRef}
-      onMouseDown={handleMouseDown}
-      onMouseUp={handleMouseUp}
+      data-strategy-id={strategy.id}
       style={{
         ...style,
         padding: "12px",
         backgroundColor: isSelected ? "var(--accent)" : "var(--bg-tertiary)",
         border: `1px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
         borderRadius: "6px",
-        cursor: "pointer",
         transition: "all 0.2s",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+        {/* Left side - Drag handle area */}
         <div
           {...attributes}
           {...listeners}
           data-drag-handle
           style={{
-            cursor: isDragging ? "grabbing" : "grab",
+            cursor: "grab",
+            color: isSelected ? "rgba(255,255,255,0.7)" : "var(--text-secondary)",
             display: "flex",
             alignItems: "center",
-            padding: "4px",
-            margin: "-4px",
-            color: isSelected ? "rgba(255,255,255,0.7)" : "var(--text-secondary)",
+            padding: "4px 8px",
+            marginLeft: "-4px",
+            marginRight: "4px",
           }}
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+          }}
+          title="Drag to reorder"
         >
           <GripVertical size={16} />
         </div>
+        {/* Right side - Clickable content area */}
         <div
-          style={{
-            width: "10px",
-            height: "10px",
-            borderRadius: "50%",
-            backgroundColor: strategy.color || "var(--accent)",
-          }}
-        />
-        <h3
-          style={{
-            fontSize: "14px",
-            fontWeight: "600",
-            color: isSelected ? "white" : "var(--text-primary)",
+          onClick={handleClick}
+          onMouseDown={handleMouseDown}
+          style={{ 
+            display: "flex", 
+            alignItems: "center", 
+            gap: "8px", 
+            flex: 1,
+            cursor: "pointer",
+            padding: "4px 0",
+            pointerEvents: "auto",
           }}
         >
-          {strategy.name}
-        </h3>
+          <div
+            style={{
+              width: "10px",
+              height: "10px",
+              borderRadius: "50%",
+              backgroundColor: strategy.color || "var(--accent)",
+            }}
+          />
+          <h3
+            style={{
+              fontSize: "14px",
+              fontWeight: "600",
+              color: isSelected ? "white" : "var(--text-primary)",
+              flex: 1,
+              userSelect: "none", // Prevent text selection on click
+            }}
+          >
+            {strategy.name}
+          </h3>
+        </div>
       </div>
       {strategy.description && (
         <p
+          onClick={handleClick}
+          onMouseDown={handleMouseDown}
           style={{
             color: isSelected ? "rgba(255,255,255,0.8)" : "var(--text-secondary)",
             fontSize: "12px",
             marginTop: "4px",
+            marginLeft: "28px",
+            cursor: "pointer",
+            userSelect: "none", // Prevent text selection on click
+            pointerEvents: "auto",
           }}
         >
           {strategy.description}
@@ -1272,7 +1285,17 @@ export default function Strategies() {
   
   // Sensors for strategy drag-and-drop
   const strategySensors = useSensors(
-    useSensor(PointerSensor),
+    useSensor(PointerSensor, {
+      activationConstraint: (event) => {
+        const target = event.target as HTMLElement | null;
+        // Only activate drag if clicking on the drag handle
+        if (target?.closest('[data-drag-handle]')) {
+          return { distance: 8 }; // Require 8px movement before drag starts
+        }
+        // Never activate if not clicking on drag handle - allow clicks to work
+        return { distance: Infinity };
+      },
+    }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
     })
@@ -3606,7 +3629,7 @@ export default function Strategies() {
             </div>
           ) : (
             <DndContext
-              sensors={sensors}
+              sensors={strategySensors}
               collisionDetection={closestCenter}
               onDragEnd={handleStrategyDragEnd}
             >

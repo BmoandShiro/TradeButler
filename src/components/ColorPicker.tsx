@@ -106,7 +106,8 @@ export function ColorPicker({ value, onChange, onClose }: ColorPickerProps) {
     } else {
       skipOnChange.current = false;
     }
-  }, [hue, saturation, lightness, onChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hue, saturation, lightness]); // onChange is intentionally excluded to prevent infinite loops
 
   // Update when value prop changes externally
   useEffect(() => {
