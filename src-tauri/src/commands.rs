@@ -2013,7 +2013,7 @@ pub fn get_strategies() -> Result<Vec<Strategy>, String> {
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     let mut stmt = conn
-        .prepare("SELECT id, name, description, notes, created_at, color FROM strategies ORDER BY name")
+        .prepare("SELECT id, name, description, notes, created_at, color, COALESCE(display_order, id) FROM strategies ORDER BY COALESCE(display_order, id)")
         .map_err(|e| e.to_string())?;
     
     let strategy_iter = stmt
@@ -2025,6 +2025,7 @@ pub fn get_strategies() -> Result<Vec<Strategy>, String> {
                 notes: row.get(3)?,
                 created_at: row.get(4)?,
                 color: row.get(5)?,
+                display_order: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -2051,6 +2052,21 @@ pub fn update_strategy(id: i64, name: String, description: Option<String>, notes
 }
 
 #[tauri::command]
+pub fn update_strategy_order(strategy_orders: Vec<(i64, i64)>) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    for (id, order) in strategy_orders {
+        conn.execute(
+            "UPDATE strategies SET display_order = ?1 WHERE id = ?2",
+            params![order, id],
+        ).map_err(|e| e.to_string())?;
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
 pub fn delete_strategy(id: i64) -> Result<(), String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
@@ -2059,10 +2075,124 @@ pub fn delete_strategy(id: i64) -> Result<(), String> {
     conn.execute("UPDATE trades SET strategy_id = NULL WHERE strategy_id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     
+    // Set strategy_id to NULL for journal entries using this strategy
+    // (Foreign key constraint prevents deletion if journal entries reference it)
+    conn.execute("UPDATE journal_entries SET strategy_id = NULL WHERE strategy_id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    
+    // Delete strategy checklist items (should cascade, but being explicit)
+    conn.execute("DELETE FROM strategy_checklists WHERE strategy_id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    
+    // Now delete the strategy
     conn.execute("DELETE FROM strategies WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     
     Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StrategyAssociatedRecords {
+    pub trade_count: i64,
+    pub journal_entry_count: i64,
+    pub checklist_item_count: i64,
+    pub sample_trades: Vec<(i64, String, String, String)>, // (id, symbol, side, timestamp)
+    pub sample_journal_entries: Vec<(i64, String, String)>, // (id, date, title)
+}
+
+#[tauri::command]
+pub fn get_strategy_associated_records(strategy_id: i64) -> Result<StrategyAssociatedRecords, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    // Count trades
+    let trade_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM trades WHERE strategy_id = ?1",
+            params![strategy_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    
+    // Count journal entries (using DISTINCT to avoid duplicates)
+    let journal_entry_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT id) FROM journal_entries WHERE strategy_id = ?1",
+            params![strategy_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    
+    // Count checklist items
+    let checklist_item_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM strategy_checklists WHERE strategy_id = ?1",
+            params![strategy_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    
+    // Get sample trades (up to 5 most recent)
+    let mut stmt = conn
+        .prepare("SELECT id, symbol, side, timestamp FROM trades WHERE strategy_id = ?1 ORDER BY timestamp DESC LIMIT 5")
+        .map_err(|e| e.to_string())?;
+    
+    let trade_iter = stmt
+        .query_map(params![strategy_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut sample_trades = Vec::new();
+    for trade in trade_iter {
+        sample_trades.push(trade.map_err(|e| e.to_string())?);
+    }
+    
+    // Get sample journal entries (up to 5 most recent, ensuring uniqueness by id)
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, date, title FROM journal_entries 
+             WHERE strategy_id = ?1 
+             ORDER BY date DESC, created_at DESC 
+             LIMIT 10"
+        )
+        .map_err(|e| e.to_string())?;
+    
+    let journal_iter = stmt
+        .query_map(params![strategy_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    
+    // Use a HashSet to deduplicate by id in case of any remaining duplicates
+    use std::collections::HashSet;
+    let mut seen_ids = HashSet::new();
+    let mut sample_journal_entries = Vec::new();
+    for entry in journal_iter {
+        let entry_result = entry.map_err(|e| e.to_string())?;
+        let entry_id: i64 = entry_result.0;
+        if !seen_ids.contains(&entry_id) {
+            seen_ids.insert(entry_id);
+            sample_journal_entries.push(entry_result);
+        }
+    }
+    
+    Ok(StrategyAssociatedRecords {
+        trade_count,
+        journal_entry_count,
+        checklist_item_count,
+        sample_trades,
+        sample_journal_entries,
+    })
 }
 
 #[tauri::command]
@@ -2247,6 +2377,7 @@ pub fn create_journal_trade(
     journal_entry_id: i64,
     symbol: Option<String>,
     position: Option<String>,
+    timeframe: Option<String>,
     entry_type: Option<String>,
     exit_type: Option<String>,
     trade: Option<String>,
@@ -2261,8 +2392,8 @@ pub fn create_journal_trade(
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     conn.execute(
-        "INSERT INTO journal_trades (journal_entry_id, symbol, position, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        params![journal_entry_id, symbol, position, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order],
+        "INSERT INTO journal_trades (journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order],
     ).map_err(|e| e.to_string())?;
     
     Ok(conn.last_insert_rowid())
@@ -2274,7 +2405,7 @@ pub fn get_journal_trades(journal_entry_id: i64) -> Result<Vec<JournalTrade>, St
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     let mut stmt = conn
-        .prepare("SELECT id, journal_entry_id, symbol, position, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, created_at, updated_at FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order ASC")
+        .prepare("SELECT id, journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, created_at, updated_at FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order ASC")
         .map_err(|e| e.to_string())?;
     
     let trade_iter = stmt
@@ -2284,17 +2415,18 @@ pub fn get_journal_trades(journal_entry_id: i64) -> Result<Vec<JournalTrade>, St
                 journal_entry_id: row.get(1)?,
                 symbol: row.get(2)?,
                 position: row.get(3)?,
-                entry_type: row.get(4)?,
-                exit_type: row.get(5)?,
-                trade: row.get(6)?,
-                what_went_well: row.get(7)?,
-                what_could_be_improved: row.get(8)?,
-                emotional_state: row.get(9)?,
-                notes: row.get(10)?,
-                outcome: row.get(11)?,
-                trade_order: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
+                timeframe: row.get(4)?,
+                entry_type: row.get(5)?,
+                exit_type: row.get(6)?,
+                trade: row.get(7)?,
+                what_went_well: row.get(8)?,
+                what_could_be_improved: row.get(9)?,
+                emotional_state: row.get(10)?,
+                notes: row.get(11)?,
+                outcome: row.get(12)?,
+                trade_order: row.get(13)?,
+                created_at: row.get(14)?,
+                updated_at: row.get(15)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -2312,6 +2444,7 @@ pub fn update_journal_trade(
     id: i64,
     symbol: Option<String>,
     position: Option<String>,
+    timeframe: Option<String>,
     entry_type: Option<String>,
     exit_type: Option<String>,
     trade: Option<String>,
@@ -2326,8 +2459,8 @@ pub fn update_journal_trade(
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     conn.execute(
-        "UPDATE journal_trades SET symbol = ?1, position = ?2, entry_type = ?3, exit_type = ?4, trade = ?5, what_went_well = ?6, what_could_be_improved = ?7, emotional_state = ?8, notes = ?9, outcome = ?10, trade_order = ?11, updated_at = CURRENT_TIMESTAMP WHERE id = ?12",
-        params![symbol, position, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, id],
+        "UPDATE journal_trades SET symbol = ?1, position = ?2, timeframe = ?3, entry_type = ?4, exit_type = ?5, trade = ?6, what_went_well = ?7, what_could_be_improved = ?8, emotional_state = ?9, notes = ?10, outcome = ?11, trade_order = ?12, updated_at = CURRENT_TIMESTAMP WHERE id = ?13",
+        params![symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, id],
     ).map_err(|e| e.to_string())?;
     
     Ok(())
@@ -4616,7 +4749,7 @@ pub fn export_data() -> Result<String, String> {
     
     // Export strategies
     let mut stmt = conn
-        .prepare("SELECT id, name, description, notes, created_at, color FROM strategies ORDER BY name")
+        .prepare("SELECT id, name, description, notes, created_at, color, COALESCE(display_order, id) FROM strategies ORDER BY COALESCE(display_order, id)")
         .map_err(|e| e.to_string())?;
     let strategy_iter = stmt
         .query_map([], |row| {
@@ -4627,6 +4760,7 @@ pub fn export_data() -> Result<String, String> {
                 notes: row.get(3)?,
                 created_at: row.get(4)?,
                 color: row.get(5)?,
+                display_order: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -4679,7 +4813,7 @@ pub fn export_data() -> Result<String, String> {
     
     // Export journal trades
     let mut stmt = conn
-        .prepare("SELECT id, journal_entry_id, symbol, position, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, created_at, updated_at FROM journal_trades ORDER BY journal_entry_id, trade_order")
+        .prepare("SELECT id, journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, created_at, updated_at FROM journal_trades ORDER BY journal_entry_id, trade_order")
         .map_err(|e| e.to_string())?;
     let journal_trade_iter = stmt
         .query_map([], |row| {
@@ -4688,17 +4822,18 @@ pub fn export_data() -> Result<String, String> {
                 journal_entry_id: row.get(1)?,
                 symbol: row.get(2)?,
                 position: row.get(3)?,
-                entry_type: row.get(4)?,
-                exit_type: row.get(5)?,
-                trade: row.get(6)?,
-                what_went_well: row.get(7)?,
-                what_could_be_improved: row.get(8)?,
-                emotional_state: row.get(9)?,
-                notes: row.get(10)?,
-                outcome: row.get(11)?,
-                trade_order: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
+                timeframe: row.get(4)?,
+                entry_type: row.get(5)?,
+                exit_type: row.get(6)?,
+                trade: row.get(7)?,
+                what_went_well: row.get(8)?,
+                what_could_be_improved: row.get(9)?,
+                emotional_state: row.get(10)?,
+                notes: row.get(11)?,
+                outcome: row.get(12)?,
+                trade_order: row.get(13)?,
+                created_at: row.get(14)?,
+                updated_at: row.get(15)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -4986,12 +5121,13 @@ pub fn import_data(json_data: String) -> Result<ImportResult, String> {
         }
         
         conn.execute(
-            "INSERT INTO journal_trades (journal_entry_id, symbol, position, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order) 
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO journal_trades (journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 mapped_entry_id,
                 trade.symbol,
                 trade.position,
+                trade.timeframe,
                 trade.entry_type,
                 trade.exit_type,
                 trade.trade,

@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, Dispatch, SetStateAction } from "re
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
-import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, AlertTriangle, CheckCircle } from "lucide-react";
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import { ColorPicker } from "../components/ColorPicker";
@@ -32,6 +32,7 @@ interface Strategy {
   notes: string | null;
   created_at: string | null;
   color: string | null;
+  display_order: number | null;
 }
 
 interface PairedTrade {
@@ -61,6 +62,9 @@ interface ChecklistItem {
   checklist_type: string;
   parent_id: number | null;
 }
+
+/** Placeholder item text used to persist empty custom checklist types. Filtered out when displaying. */
+const EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER = "__empty_custom_checklist_placeholder__";
 
 // Sortable Strategy Component
 function SortableStrategy({
@@ -113,82 +117,132 @@ function SortableStrategy({
     opacity: isDragging ? 0.5 : 1,
   };
 
-  const handleStrategyClick = (e: React.MouseEvent) => {
-    // Don't trigger selection if clicking on the drag handle
-    if ((e.target as HTMLElement).closest('[data-drag-handle]')) {
+  const handleClick = (e: React.MouseEvent) => {
+    // Prevent drag system from interfering with click
+    e.stopPropagation();
+    
+    // Don't trigger if currently dragging
+    if (isDragging) {
       return;
     }
     
+    console.log('Strategy clicked:', strategy.id, strategy.name);
+    console.log('Setting selectedStrategy to:', strategy.id);
+    
+    // Save scroll position before switching
     saveAllScrollPositions(
-      tabScrollPositions,
+      tabScrollPositions.current,
       leftPanelScrollRef.current?.scrollTop ?? null,
       rightPanelScrollRef.current?.scrollTop ?? null,
       "strategies"
     );
-    clearWorkInProgress();
-    setSelectedStrategy(strategy.id!);
+    clearWorkInProgress(); // Clear work in progress when selecting an existing strategy
+    
+    // Set selection - use a function to ensure state update
+    setSelectedStrategy(() => {
+      console.log('setSelectedStrategy called with:', strategy.id);
+      return strategy.id!;
+    });
     setActiveTab("notes");
+    // Only reset editing/creating when switching to a different strategy
     if (selectedStrategy !== strategy.id) {
       setIsEditing(false);
       setIsCreating(false);
     }
   };
 
+  const handleMouseDown = (e: React.MouseEvent) => {
+    // Don't prevent if clicking on drag handle - let it work normally
+    if ((e.target as HTMLElement).closest('[data-drag-handle]')) {
+      return;
+    }
+    // Stop drag sensor from capturing this event, but allow click to fire
+    e.stopPropagation();
+  };
+
   return (
     <div
       ref={setNodeRef}
-      onClick={handleStrategyClick}
+      data-strategy-id={strategy.id}
       style={{
         ...style,
         padding: "12px",
         backgroundColor: isSelected ? "var(--accent)" : "var(--bg-tertiary)",
         border: `1px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
         borderRadius: "6px",
-        cursor: "pointer",
         transition: "all 0.2s",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+        {/* Left side - Drag handle area */}
         <div
           {...attributes}
           {...listeners}
           data-drag-handle
           style={{
-            cursor: isDragging ? "grabbing" : "grab",
+            cursor: "grab",
+            color: isSelected ? "rgba(255,255,255,0.7)" : "var(--text-secondary)",
             display: "flex",
             alignItems: "center",
-            padding: "4px",
-            margin: "-4px",
-            color: isSelected ? "rgba(255,255,255,0.7)" : "var(--text-secondary)",
+            padding: "4px 8px",
+            marginLeft: "-4px",
+            marginRight: "4px",
           }}
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+          }}
+          title="Drag to reorder"
         >
           <GripVertical size={16} />
         </div>
+        {/* Right side - Clickable content area */}
         <div
-          style={{
-            width: "10px",
-            height: "10px",
-            borderRadius: "50%",
-            backgroundColor: strategy.color || "var(--accent)",
-          }}
-        />
-        <h3
-          style={{
-            fontSize: "14px",
-            fontWeight: "600",
-            color: isSelected ? "white" : "var(--text-primary)",
+          onClick={handleClick}
+          onMouseDown={handleMouseDown}
+          style={{ 
+            display: "flex", 
+            alignItems: "center", 
+            gap: "8px", 
+            flex: 1,
+            cursor: "pointer",
+            padding: "4px 0",
+            pointerEvents: "auto",
           }}
         >
-          {strategy.name}
-        </h3>
+          <div
+            style={{
+              width: "10px",
+              height: "10px",
+              borderRadius: "50%",
+              backgroundColor: strategy.color || "var(--accent)",
+            }}
+          />
+          <h3
+            style={{
+              fontSize: "14px",
+              fontWeight: "600",
+              color: isSelected ? "white" : "var(--text-primary)",
+              flex: 1,
+              userSelect: "none", // Prevent text selection on click
+            }}
+          >
+            {strategy.name}
+          </h3>
+        </div>
       </div>
       {strategy.description && (
         <p
+          onClick={handleClick}
+          onMouseDown={handleMouseDown}
           style={{
             color: isSelected ? "rgba(255,255,255,0.8)" : "var(--text-secondary)",
             fontSize: "12px",
             marginTop: "4px",
+            marginLeft: "28px",
+            cursor: "pointer",
+            userSelect: "none", // Prevent text selection on click
+            pointerEvents: "auto",
           }}
         >
           {strategy.description}
@@ -459,6 +513,247 @@ function SortableChecklistItem({
           <X size={16} />
         </button>
       )}
+    </div>
+  );
+}
+
+function SortableStrategyItem({
+  strategy,
+  isSelected,
+  selectedStrategy,
+  strategyStats,
+  expandedStats,
+  setExpandedStats,
+  setSelectedStrategy,
+  setActiveTab,
+  setIsEditing,
+  setIsCreating,
+  saveAllScrollPositions,
+  tabScrollPositions,
+  leftPanelScrollRef,
+  rightPanelScrollRef,
+  clearWorkInProgress,
+}: {
+  strategy: Strategy;
+  isSelected: boolean;
+  selectedStrategy: number | null;
+  strategyStats: Map<number, { totalTrades: number; totalPnL: number; winRate: number }>;
+  expandedStats: Set<number>;
+  setExpandedStats: Dispatch<SetStateAction<Set<number>>>;
+  setSelectedStrategy: Dispatch<SetStateAction<number | null>>;
+  setActiveTab: Dispatch<SetStateAction<TabType>>;
+  setIsEditing: Dispatch<SetStateAction<boolean>>;
+  setIsCreating: Dispatch<SetStateAction<boolean>>;
+  saveAllScrollPositions: (tabPositions: Map<TabType, number>, leftPanelScroll: number | null, rightPanelScroll: number | null, storageKey: string) => void;
+  tabScrollPositions: React.MutableRefObject<Map<TabType, number>>;
+  leftPanelScrollRef: React.RefObject<HTMLDivElement>;
+  rightPanelScrollRef: React.RefObject<HTMLDivElement>;
+  clearWorkInProgress: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: strategy.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        ...style,
+        padding: "12px",
+        backgroundColor: isSelected ? "var(--accent)" : "var(--bg-tertiary)",
+        border: `1px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
+        borderRadius: "6px",
+        cursor: "pointer",
+        transition: "all 0.2s",
+      }}
+      data-strategy-id={strategy.id}
+      onClick={() => {
+        // Save scroll position before switching
+        saveAllScrollPositions(
+          tabScrollPositions.current,
+          leftPanelScrollRef.current?.scrollTop ?? null,
+          rightPanelScrollRef.current?.scrollTop ?? null,
+          "strategies"
+        );
+        clearWorkInProgress(); // Clear work in progress when selecting an existing strategy
+        setSelectedStrategy(strategy.id);
+        setActiveTab("notes");
+        // Only reset editing/creating when switching to a different strategy
+        if (selectedStrategy !== strategy.id) {
+          setIsEditing(false);
+          setIsCreating(false);
+        }
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+        <div
+          {...attributes}
+          {...listeners}
+          style={{
+            cursor: "grab",
+            color: isSelected ? "rgba(255,255,255,0.7)" : "var(--text-secondary)",
+            display: "flex",
+            alignItems: "center",
+            padding: "4px",
+          }}
+          onClick={(e) => e.stopPropagation()}
+          title="Drag to reorder"
+        >
+          <GripVertical size={16} />
+        </div>
+        <div
+          style={{
+            width: "10px",
+            height: "10px",
+            borderRadius: "50%",
+            backgroundColor: strategy.color || "var(--accent)",
+          }}
+        />
+        <h3
+          style={{
+            fontSize: "14px",
+            fontWeight: "600",
+            color: isSelected ? "white" : "var(--text-primary)",
+            flex: 1,
+          }}
+        >
+          {strategy.name}
+        </h3>
+      </div>
+      {strategy.description && (
+        <p
+          style={{
+            color: isSelected ? "rgba(255,255,255,0.8)" : "var(--text-secondary)",
+            fontSize: "12px",
+            marginTop: "4px",
+            marginLeft: "28px",
+          }}
+        >
+          {strategy.description}
+        </p>
+      )}
+      {strategy.id && strategyStats.has(strategy.id) && (() => {
+        const stats = strategyStats.get(strategy.id)!;
+        const hasTrades = stats.totalTrades > 0;
+        const isCollapsed = expandedStats.has(strategy.id);
+        
+        if (!hasTrades) {
+          return null;
+        }
+        
+        const toggleStats = (e: React.MouseEvent) => {
+          e.stopPropagation();
+          setExpandedStats(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(strategy.id!)) {
+              newSet.delete(strategy.id!);
+            } else {
+              newSet.add(strategy.id!);
+            }
+            return newSet;
+          });
+        };
+        
+        return (
+          <div>
+            <div 
+              style={{ 
+                display: "flex", 
+                alignItems: "center", 
+                justifyContent: "space-between",
+                marginTop: "8px",
+                paddingTop: "8px",
+                borderTop: `1px solid ${isSelected ? "rgba(255,255,255,0.2)" : "var(--border-color)"}`
+              }}
+            >
+              <button
+                onClick={toggleStats}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: isSelected ? "rgba(255,255,255,0.7)" : "var(--text-secondary)",
+                  cursor: "pointer",
+                  padding: "2px",
+                  display: "flex",
+                  alignItems: "center",
+                  transition: "transform 0.2s",
+                }}
+                title={isCollapsed ? "Show stats" : "Hide stats"}
+              >
+                {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+              </button>
+            </div>
+            {!isCollapsed && (
+              <div style={{ 
+                display: "flex", 
+                gap: "16px", 
+                marginTop: "8px",
+                marginLeft: "28px",
+              }}>
+                <div>
+                  <div style={{ 
+                    fontSize: "10px", 
+                    color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
+                    marginBottom: "2px"
+                  }}>
+                    TOTAL TRADES
+                  </div>
+                  <div style={{ 
+                    fontSize: "14px", 
+                    fontWeight: "600",
+                    color: isSelected ? "white" : "var(--text-primary)"
+                  }}>
+                    {stats.totalTrades}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ 
+                    fontSize: "10px", 
+                    color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
+                    marginBottom: "2px"
+                  }}>
+                    TOTAL P&L
+                  </div>
+                  <div style={{ 
+                    fontSize: "14px", 
+                    fontWeight: "600",
+                    color: stats.totalPnL >= 0 ? "var(--profit)" : "var(--loss)"
+                  }}>
+                    ${stats.totalPnL >= 0 ? "+" : ""}{stats.totalPnL.toFixed(2)}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ 
+                    fontSize: "10px", 
+                    color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
+                    marginBottom: "2px"
+                  }}>
+                    WIN %
+                  </div>
+                  <div style={{ 
+                    fontSize: "14px", 
+                    fontWeight: "600",
+                    color: stats.winRate >= 50 ? "var(--profit)" : "var(--loss)"
+                  }}>
+                    {stats.winRate.toFixed(1)}%
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -987,6 +1282,24 @@ export default function Strategies() {
   const [strategyPairs, setStrategyPairs] = useState<Map<number, PairedTrade[]>>(new Map());
   const [loadingPairs, setLoadingPairs] = useState<Set<number>>(new Set());
   const [strategyStats, setStrategyStats] = useState<Map<number, { totalTrades: number; totalPnL: number; winRate: number }>>(new Map());
+  
+  // Sensors for strategy drag-and-drop
+  const strategySensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: (event) => {
+        const target = event.target as HTMLElement | null;
+        // Only activate drag if clicking on the drag handle
+        if (target?.closest('[data-drag-handle]')) {
+          return { distance: 8 }; // Require 8px movement before drag starts
+        }
+        // Never activate if not clicking on drag handle - allow clicks to work
+        return { distance: Infinity };
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
   const [notesContent, setNotesContent] = useState<Map<number, string>>(new Map());
   const [checklists, setChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [newChecklistItem, setNewChecklistItem] = useState<Map<string, string>>(new Map());
@@ -1002,6 +1315,14 @@ export default function Strategies() {
   const [editingItemText, setEditingItemText] = useState<string>("");
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [strategyToDelete, setStrategyToDelete] = useState<number | null>(null);
+  const [associatedRecords, setAssociatedRecords] = useState<{
+    trade_count: number;
+    journal_entry_count: number;
+    checklist_item_count: number;
+    sample_trades: Array<[number, string, string, string]>;
+    sample_journal_entries: Array<[number, string, string]>;
+  } | null>(null);
+  const [loadingAssociatedRecords, setLoadingAssociatedRecords] = useState(false);
   const [showNameRequiredModal, setShowNameRequiredModal] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
   // Track if we're in the middle of a save/cancel operation to prevent unwanted restorations
@@ -1011,6 +1332,13 @@ export default function Strategies() {
   const [isImportingCSV, setIsImportingCSV] = useState(false);
   const [showCSVFormatModal, setShowCSVFormatModal] = useState(false);
   const [pendingCSVFile, setPendingCSVFile] = useState<{ path: string; isForExisting: boolean } | null>(null);
+  const [pendingCSVFiles, setPendingCSVFiles] = useState<{ path: string; isForExisting: boolean }[]>([]);
+  const [importResults, setImportResults] = useState<{
+    totalAttempted: number;
+    newTrades: number;
+    duplicates: number;
+    errors: number;
+  } | null>(null);
   const [editHistory, setEditHistory] = useState<Array<{ name: string; description: string; color: string; notes: string }>>([]);
   const [editingChecklists, setEditingChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [originalChecklists, setOriginalChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
@@ -1278,12 +1606,30 @@ export default function Strategies() {
     if (strategies.length > 0 && !isSavingOrCancelingRef.current) {
       restoreState();
       
-      // Restore work in progress after loading
+      // Restore work in progress after loading, but only if we're not in the middle of a save operation
+      // Check if work-in-progress indicates we're creating/editing, otherwise skip restoration
       const hasWorkInProgress = localStorage.getItem('strategies_work_in_progress');
       if (hasWorkInProgress) {
-        setTimeout(() => {
-          restoreWorkInProgress();
-        }, 200);
+        try {
+          const workInProgress = JSON.parse(hasWorkInProgress);
+          // Only restore if we're actually in a creating or editing state
+          // This prevents restoring after a save when isCreating/isEditing are false
+          if (workInProgress.isCreating || workInProgress.isEditing) {
+            setTimeout(() => {
+              // Double-check the state hasn't changed (e.g., by a save operation)
+              const stillHasWorkInProgress = localStorage.getItem('strategies_work_in_progress');
+              if (stillHasWorkInProgress) {
+                const currentState = JSON.parse(stillHasWorkInProgress);
+                // Only restore if still in creating/editing state
+                if (currentState.isCreating || currentState.isEditing) {
+                  restoreWorkInProgress();
+                }
+              }
+            }, 200);
+          }
+        } catch (error) {
+          console.error("Error checking work in progress:", error);
+        }
       }
     }
     // Reset the flag after a brief delay
@@ -1343,39 +1689,6 @@ export default function Strategies() {
       setStrategyStats(new Map(strategyStats.set(strategyId, stats)));
     } catch (error) {
       console.error("Error loading strategy stats:", error);
-    }
-  };
-
-  // Handle strategy drag end
-  const handleStrategyDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-    
-    if (over && active.id !== over.id) {
-      setStrategyOrder((items) => {
-        const currentStrategyIds = strategies.map(s => s.id!);
-        let newOrder = [...items];
-        
-        // Ensure all strategy IDs are in the order
-        currentStrategyIds.forEach(id => {
-          if (!newOrder.includes(id)) {
-            newOrder.push(id);
-          }
-        });
-        
-        // Remove any IDs that are no longer valid strategies
-        newOrder = newOrder.filter(id => currentStrategyIds.includes(id));
-        
-        const oldIndex = newOrder.indexOf(active.id as number);
-        const newIndex = newOrder.indexOf(over.id as number);
-        
-        if (oldIndex !== -1 && newIndex !== -1) {
-          const finalOrder = arrayMove(newOrder, oldIndex, newIndex);
-          localStorage.setItem(STRATEGY_ORDER_KEY, JSON.stringify(finalOrder));
-          return finalOrder;
-        }
-        
-        return newOrder;
-      });
     }
   };
 
@@ -1469,8 +1782,8 @@ export default function Strategies() {
         setLoadingPairs(newLoading);
       }
     }
-    // Load checklists
-    if ((activeTab === "checklists" || activeTab === "survey") && !checklists.has(strategyId)) {
+    // Load checklists - always load when strategy is selected (not creating) to ensure custom checklists are available
+    if (!isCreating && !checklists.has(strategyId)) {
       await loadChecklists(strategyId);
     }
     
@@ -1529,34 +1842,52 @@ export default function Strategies() {
       const checklistMap = new Map<string, ChecklistItem[]>();
       const customTypesSet = new Set<string>();
       
+      // Placeholder items used to persist empty custom checklist types - filter them out when displaying
+      
       // Initialize default types
       for (const type of defaultTypes) {
         checklistMap.set(type, []);
       }
       
-      // Group items by type
+      // Group items by type (exclude placeholder items from display, but ensure their type is registered)
       for (const item of allItems) {
         const type = item.checklist_type;
         if (!checklistMap.has(type)) {
           checklistMap.set(type, []);
-          // Exclude "survey" from being treated as a custom type - it has its own tab
           if (!defaultTypes.includes(type) && type !== "survey") {
             customTypesSet.add(type);
           }
         }
+        if (item.item_text === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER) continue;
         checklistMap.get(type)!.push(item);
       }
       
-      setChecklists(new Map(checklists.set(strategyId, checklistMap)));
-      setCustomChecklistTypes(new Map(customChecklistTypes.set(strategyId, customTypesSet)));
+      setChecklists((prev) => {
+        const next = new Map(prev);
+        next.set(strategyId, checklistMap);
+        return next;
+      });
+      setCustomChecklistTypes((prev) => {
+        const next = new Map(prev);
+        next.set(strategyId, customTypesSet);
+        return next;
+      });
     } catch (error) {
       console.error("Error loading checklists:", error);
       // Fallback to default structure
       const checklistMap = new Map<string, ChecklistItem[]>();
       checklistMap.set("entry", []);
       checklistMap.set("take_profit", []);
-      setChecklists(new Map(checklists.set(strategyId, checklistMap)));
-      setCustomChecklistTypes(new Map(customChecklistTypes.set(strategyId, new Set())));
+      setChecklists((prev) => {
+        const next = new Map(prev);
+        next.set(strategyId, checklistMap);
+        return next;
+      });
+      setCustomChecklistTypes((prev) => {
+        const next = new Map(prev);
+        next.set(strategyId, new Set());
+        return next;
+      });
     }
   };
 
@@ -1603,8 +1934,30 @@ export default function Strategies() {
     }
     
     // If editing, use editingChecklists instead of saving directly
-    if (isEditing && editingChecklists.has(strategyId)) {
-      const currentChecklist = editingChecklists.get(strategyId)!;
+    if (isEditing) {
+      // Initialize editingChecklists if it doesn't have this strategy yet
+      let currentChecklist: Map<string, ChecklistItem[]>;
+      if (editingChecklists.has(strategyId)) {
+        currentChecklist = editingChecklists.get(strategyId)!;
+      } else {
+        // Initialize from current checklists state
+        const existingChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
+        currentChecklist = new Map<string, ChecklistItem[]>();
+        for (const [checklistType, items] of existingChecklist.entries()) {
+          currentChecklist.set(checklistType, items.map(item => ({ ...item })));
+        }
+        setEditingChecklists(new Map(editingChecklists.set(strategyId, currentChecklist)));
+        
+        // Initialize history if needed
+        if (!checklistEditHistory.has(strategyId)) {
+          const originalCopy = new Map<string, ChecklistItem[]>();
+          for (const [checklistType, items] of existingChecklist.entries()) {
+            originalCopy.set(checklistType, items.map(item => ({ ...item })));
+          }
+          setChecklistEditHistory(new Map(checklistEditHistory.set(strategyId, [originalCopy])));
+        }
+      }
+      
       const items = currentChecklist.get(type) || [];
       const maxOrder = items.length > 0 ? Math.max(...items.map(i => i.item_order)) : -1;
       
@@ -1753,8 +2106,30 @@ export default function Strategies() {
     }
 
     // If editing, use editingChecklists instead of deleting directly
-    if (isEditing && editingChecklists.has(strategyId)) {
-      const currentChecklist = editingChecklists.get(strategyId)!;
+    if (isEditing) {
+      // Initialize editingChecklists if it doesn't have this strategy yet
+      let currentChecklist: Map<string, ChecklistItem[]>;
+      if (editingChecklists.has(strategyId)) {
+        currentChecklist = editingChecklists.get(strategyId)!;
+      } else {
+        // Initialize from current checklists state
+        const existingChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
+        currentChecklist = new Map<string, ChecklistItem[]>();
+        for (const [checklistType, items] of existingChecklist.entries()) {
+          currentChecklist.set(checklistType, items.map(item => ({ ...item })));
+        }
+        setEditingChecklists(new Map(editingChecklists.set(strategyId, currentChecklist)));
+        
+        // Initialize history if needed
+        if (!checklistEditHistory.has(strategyId)) {
+          const originalCopy = new Map<string, ChecklistItem[]>();
+          for (const [checklistType, items] of existingChecklist.entries()) {
+            originalCopy.set(checklistType, items.map(item => ({ ...item })));
+          }
+          setChecklistEditHistory(new Map(checklistEditHistory.set(strategyId, [originalCopy])));
+        }
+      }
+      
       const updatedChecklist = new Map(currentChecklist);
       updatedChecklist.delete(type);
       setEditingChecklists(new Map(editingChecklists.set(strategyId, updatedChecklist)));
@@ -2229,6 +2604,7 @@ export default function Strategies() {
     setSelectedStrategy(null);
     setEditingFormData({ name: "", description: "", color: "#3b82f6" });
     setNewStrategyNotes("");
+    setTempChecklists(new Map()); // Explicitly clear temp checklists when creating new strategy
     setActiveTab("notes");
     tabScrollPositions.current.clear();
   };
@@ -2236,26 +2612,27 @@ export default function Strategies() {
   const handleImportCSVForStrategy = async () => {
     try {
       setIsImportingCSV(true);
-      const file = await open({
+      const files = await open({
         filters: [{ name: "CSV", extensions: ["csv"] }],
-        multiple: false,
+        multiple: true,
       });
 
-      if (!file) {
+      if (!files) {
         setIsImportingCSV(false);
         return;
       }
 
       // Handle both string (single file) and array (multiple files) cases
-      const filePath = Array.isArray(file) ? file[0] : file;
+      const fileArray = Array.isArray(files) ? files : [files];
+      const validFiles = fileArray.filter((f): f is string => typeof f === "string");
       
-      if (filePath && typeof filePath === "string") {
-        // Store the file and show format selection modal
-        setPendingCSVFile({ path: filePath, isForExisting: false });
+      if (validFiles.length > 0) {
+        // Store the files and show format selection modal
+        setPendingCSVFiles(validFiles.map(path => ({ path, isForExisting: false })));
         setShowCSVFormatModal(true);
         setIsImportingCSV(false);
       } else {
-        alert("Please select a valid CSV file.");
+        alert("Please select valid CSV files.");
         setIsImportingCSV(false);
       }
     } catch (error) {
@@ -2265,62 +2642,165 @@ export default function Strategies() {
     }
   };
 
+  // Helper function to count trades in CSV content
+  const countTradesInCSV = (csvContent: string): number => {
+    try {
+      const lines = csvContent.split('\n').filter(line => line.trim().length > 0);
+      // Subtract 1 for header row, but ensure at least 0
+      return Math.max(0, lines.length - 1);
+    } catch {
+      return 0;
+    }
+  };
+
   const handleCSVFormatSelection = async (_format: "webull" | "coinbase") => {
-    if (!pendingCSVFile) return;
+    if (pendingCSVFiles.length === 0 && !pendingCSVFile) return;
+    
+    // Support both old single file and new multiple files
+    const filesToProcess = pendingCSVFiles.length > 0 
+      ? pendingCSVFiles 
+      : (pendingCSVFile ? [pendingCSVFile] : []);
+    
+    if (filesToProcess.length === 0) return;
     
     try {
       setIsImportingCSV(true);
       setShowCSVFormatModal(false);
       
-      const contents = await readTextFile(pendingCSVFile.path);
-      const importedTradeIds = await invoke<number[]>("import_trades_csv", { csvData: contents });
+      let totalAttempted = 0;
+      let totalNewTrades = 0;
+      let totalDuplicates = 0;
+      let totalErrors = 0;
+      const allImportedTradeIds: number[] = [];
       
-      if (pendingCSVFile.isForExisting) {
+      // Process each file
+      for (const fileInfo of filesToProcess) {
+        try {
+          const contents = await readTextFile(fileInfo.path);
+          const tradesInFile = countTradesInCSV(contents);
+          totalAttempted += tradesInFile;
+          
+          const importedTradeIds = await invoke<number[]>("import_trades_csv", { csvData: contents });
+          
+          if (importedTradeIds && importedTradeIds.length > 0) {
+            allImportedTradeIds.push(...importedTradeIds);
+            totalNewTrades += importedTradeIds.length;
+            // Calculate duplicates for this file
+            const duplicatesInFile = tradesInFile - importedTradeIds.length;
+            totalDuplicates += duplicatesInFile;
+          } else {
+            // All trades in this file were duplicates
+            totalDuplicates += tradesInFile;
+          }
+        } catch (error) {
+          totalErrors++;
+          console.error(`Error importing file ${fileInfo.path}:`, error);
+        }
+      }
+      
+      // Set import results for UI display
+      setImportResults({
+        totalAttempted,
+        newTrades: totalNewTrades,
+        duplicates: totalDuplicates,
+        errors: totalErrors,
+      });
+      
+      if (filesToProcess[0].isForExisting) {
         // Handle existing strategy import
         if (!selectedStrategy) {
           setIsImportingCSV(false);
+          setPendingCSVFiles([]);
           setPendingCSVFile(null);
           return;
         }
         
-        if (importedTradeIds && importedTradeIds.length > 0) {
+        if (allImportedTradeIds.length > 0) {
           // Immediately assign all imported trades to the selected strategy
-          for (const tradeId of importedTradeIds) {
+          for (const tradeId of allImportedTradeIds) {
             await invoke("update_trade_strategy", { tradeId, strategyId: selectedStrategy });
           }
           
+          // Switch to Trades tab to show the imported trades immediately
+          setActiveTab("trades");
+          
+          // Set loading state
+          setLoadingPairs(new Set([selectedStrategy]));
+          
           // Reload trades for this strategy
-          const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-          const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
-            strategyId: selectedStrategy,
-            pairingMethod: pairingMethod,
-            startDate: null,
-            endDate: null,
-          });
-          setStrategyPairs(new Map(strategyPairs.set(selectedStrategy, pairs)));
-          
-          // Update stats
-          const stats = calculateStrategyStats(pairs);
-          setStrategyStats(new Map(strategyStats.set(selectedStrategy, stats)));
-          
-          alert(`Trades imported successfully! ${importedTradeIds.length} trade(s) have been assigned to this strategy.`);
-        } else {
-          alert("No new trades were imported. They may have been duplicates.");
+          try {
+            const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+            const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
+              strategyId: selectedStrategy,
+              pairingMethod: pairingMethod,
+              startDate: null,
+              endDate: null,
+            });
+            
+            // Update pairs and stats
+            setStrategyPairs(new Map(strategyPairs.set(selectedStrategy, pairs)));
+            const stats = calculateStrategyStats(pairs);
+            setStrategyStats(new Map(strategyStats.set(selectedStrategy, stats)));
+          } catch (error) {
+            console.error("Error loading trades after import:", error);
+          } finally {
+            // Clear loading state
+            setLoadingPairs(prev => {
+              const newSet = new Set(prev);
+              newSet.delete(selectedStrategy);
+              return newSet;
+            });
+          }
         }
       } else {
         // Handle new strategy import
-        if (importedTradeIds && importedTradeIds.length > 0) {
-          setPendingTradeIds(prev => [...prev, ...importedTradeIds]);
-          alert(`Trades imported successfully! ${importedTradeIds.length} trade(s) will be assigned to this strategy when you save.`);
-        } else {
-          alert("No new trades were imported. They may have been duplicates.");
+        if (allImportedTradeIds.length > 0) {
+          setPendingTradeIds(prev => [...prev, ...allImportedTradeIds]);
+          
+          // Switch to Trades tab to show imported trades
+          setActiveTab("trades");
+          
+          // Get all paired trades and filter to show only the imported ones
+          // This allows us to display trades immediately even for new strategies
+          try {
+            setLoadingPairs(new Set([-1])); // Use -1 as a temporary ID for new strategies
+            
+            const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+            const allPairs = await invoke<PairedTrade[]>("get_paired_trades", {
+              pairingMethod: pairingMethod || null,
+            });
+            
+            // Filter to only pairs where both entry and exit trades are in our imported list
+            const importedTradeIdsSet = new Set(allImportedTradeIds);
+            const filteredPairs = allPairs.filter(pair => 
+              importedTradeIdsSet.has(pair.entry_trade_id) && 
+              importedTradeIdsSet.has(pair.exit_trade_id)
+            );
+            
+            // Store pairs with temporary key for new strategies
+            setStrategyPairs(new Map(strategyPairs.set(-1, filteredPairs)));
+            
+            // Update stats for the imported trades
+            const stats = calculateStrategyStats(filteredPairs);
+            setStrategyStats(new Map(strategyStats.set(-1, stats)));
+          } catch (error) {
+            console.error("Error loading imported trades for new strategy:", error);
+          } finally {
+            setLoadingPairs(prev => {
+              const newSet = new Set(prev);
+              newSet.delete(-1);
+              return newSet;
+            });
+          }
         }
       }
       
+      setPendingCSVFiles([]);
       setPendingCSVFile(null);
     } catch (error) {
       console.error("Error importing CSV:", error);
       alert("Failed to import CSV: " + (error instanceof Error ? error.message : String(error)));
+      setImportResults(null);
     } finally {
       setIsImportingCSV(false);
     }
@@ -2331,26 +2811,27 @@ export default function Strategies() {
     
     try {
       setIsImportingCSV(true);
-      const file = await open({
+      const files = await open({
         filters: [{ name: "CSV", extensions: ["csv"] }],
-        multiple: false,
+        multiple: true,
       });
 
-      if (!file) {
+      if (!files) {
         setIsImportingCSV(false);
         return;
       }
 
       // Handle both string (single file) and array (multiple files) cases
-      const filePath = Array.isArray(file) ? file[0] : file;
+      const fileArray = Array.isArray(files) ? files : [files];
+      const validFiles = fileArray.filter((f): f is string => typeof f === "string");
       
-      if (filePath && typeof filePath === "string") {
-        // Store the file and show format selection modal
-        setPendingCSVFile({ path: filePath, isForExisting: true });
+      if (validFiles.length > 0) {
+        // Store the files and show format selection modal
+        setPendingCSVFiles(validFiles.map(path => ({ path, isForExisting: true })));
         setShowCSVFormatModal(true);
         setIsImportingCSV(false);
       } else {
-        alert("Please select a valid CSV file.");
+        alert("Please select valid CSV files.");
         setIsImportingCSV(false);
       }
     } catch (error) {
@@ -2427,27 +2908,83 @@ export default function Strategies() {
             }
           }
         }
+
+        // Third pass: Persist empty custom checklist types with a placeholder item so they display when viewing
+        const defaultTypes = ["entry", "take_profit"];
+        for (const [type, items] of tempChecklists.entries()) {
+          if (defaultTypes.includes(type) || type === "survey") continue;
+          if (items.length > 0) continue;
+          await invoke<number>("save_strategy_checklist_item", {
+            id: null,
+            strategyId: newStrategyId,
+            itemText: EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER,
+            isChecked: false,
+            itemOrder: 0,
+            checklistType: type,
+            parentId: null,
+          });
+        }
       }
 
       // Reset and reload
       setIsCreating(false);
+      setIsEditing(false); // Ensure we're in view mode, not edit mode
       setNewStrategyNotes("");
       setEditingFormData({ name: "", description: "", color: "#3b82f6" });
       setPendingTradeIds([]);
       setTempChecklists(new Map());
+      setImportResults(null); // Clear any import results
+      
+      // Clear work-in-progress AFTER setting isCreating to false to prevent restoration
+      clearWorkInProgress();
+      
       await loadStrategies();
+      // Select the newly created strategy
       setSelectedStrategy(newStrategyId);
       
-      // If there were pending trades, switch to trades tab and reload trades
+      // Always load checklists for the new strategy to ensure custom checklists are loaded
+      await loadChecklists(newStrategyId);
+      
+      // Always load strategy data to display it properly
+      await loadStrategyData(newStrategyId);
+      
+      // If there were pending trades, reload trades
       if (hadPendingTrades) {
-        setActiveTab("trades");
         // Clear the cached pairs so they reload
         const updatedPairs = new Map(strategyPairs);
         updatedPairs.delete(newStrategyId);
         setStrategyPairs(updatedPairs);
-        // Load the trades for the new strategy
-        await loadStrategyData(newStrategyId);
+        // Reload trades for the new strategy
+        const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+        const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
+          strategyId: newStrategyId,
+          pairingMethod: pairingMethod,
+          startDate: null,
+          endDate: null,
+        });
+        setStrategyPairs(new Map(strategyPairs.set(newStrategyId, pairs)));
+        // Update stats
+        const stats = calculateStrategyStats(pairs);
+        setStrategyStats(new Map(strategyStats.set(newStrategyId, stats)));
       }
+      
+      // Always switch to Details tab after saving
+      setActiveTab("notes");
+      
+      // Clear work-in-progress one more time after all state updates to prevent restoration
+      clearWorkInProgress();
+      
+      // Scroll to the selected strategy in the list
+      setTimeout(() => {
+        if (leftPanelScrollRef.current) {
+          const strategyElement = leftPanelScrollRef.current.querySelector(`[data-strategy-id="${newStrategyId}"]`);
+          if (strategyElement) {
+            strategyElement.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          }
+        }
+        // Final clear to ensure work-in-progress is not restored
+        clearWorkInProgress();
+      }, 300);
     } catch (error) {
       console.error("Error creating strategy:", error);
       alert("Failed to create strategy: " + error);
@@ -2613,6 +3150,28 @@ export default function Strategies() {
       }
     }
     
+    // Third pass: Persist empty custom checklist types with a placeholder item so they display when viewing
+    const defaultTypes = ["entry", "take_profit"];
+    for (const [type, items] of editingChecklist.entries()) {
+      if (defaultTypes.includes(type) || type === "survey") continue;
+      if (items.length > 0) continue;
+      
+      // Check if this type existed in the original checklist
+      const originalItems = originalChecklist.get(type) || [];
+      // Only create placeholder if this is a new type (didn't exist before)
+      if (originalItems.length === 0) {
+        await invoke<number>("save_strategy_checklist_item", {
+          id: null,
+          strategyId: strategyId,
+          itemText: EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER,
+          isChecked: false,
+          itemOrder: 0,
+          checklistType: type,
+          parentId: null,
+        });
+      }
+    }
+    
     // Reload checklists to get updated IDs for new items
     await loadChecklists(strategyId);
   };
@@ -2670,6 +3229,9 @@ export default function Strategies() {
       // Reload strategies - this will update the strategies array
       await loadStrategies(true);
       
+      // Clear work-in-progress AFTER loading strategies to prevent restoration
+      clearWorkInProgress();
+      
       // After reload, ensure selectedStrategy is still set (this will update selectedStrategyData)
       if (savedStrategyId) {
         setSelectedStrategy(savedStrategyId);
@@ -2679,6 +3241,24 @@ export default function Strategies() {
           updated.set(savedStrategyId, currentNotes || "");
           return updated;
         });
+        
+        await loadStrategyData(savedStrategyId);
+        await loadChecklists(savedStrategyId);
+        
+        // Switch to Details tab after saving
+        setActiveTab("notes");
+        
+        // Scroll to the selected strategy in the list
+        setTimeout(() => {
+          if (leftPanelScrollRef.current) {
+            const strategyElement = leftPanelScrollRef.current.querySelector(`[data-strategy-id="${savedStrategyId}"]`);
+            if (strategyElement) {
+              strategyElement.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }
+          }
+          // Final clear to ensure work-in-progress is not restored
+          clearWorkInProgress();
+        }, 300);
       }
     } catch (error) {
       console.error("Error saving strategy:", error);
@@ -2770,9 +3350,26 @@ export default function Strategies() {
     setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, restored)));
   };
 
-  const handleDeleteClick = (id: number) => {
+  const handleDeleteClick = async (id: number) => {
     setStrategyToDelete(id);
+    setLoadingAssociatedRecords(true);
     setShowDeleteConfirmModal(true);
+    
+    try {
+      const records = await invoke<{
+        trade_count: number;
+        journal_entry_count: number;
+        checklist_item_count: number;
+        sample_trades: Array<[number, string, string, string]>;
+        sample_journal_entries: Array<[number, string, string]>;
+      }>("get_strategy_associated_records", { strategyId: id });
+      setAssociatedRecords(records);
+    } catch (error) {
+      console.error("Error fetching associated records:", error);
+      setAssociatedRecords(null);
+    } finally {
+      setLoadingAssociatedRecords(false);
+    }
   };
 
   const handleDeleteConfirm = async () => {
@@ -2783,9 +3380,10 @@ export default function Strategies() {
       if (selectedStrategy === strategyToDelete) {
         setSelectedStrategy(null);
       }
-      loadStrategies();
+      await loadStrategies();
       setShowDeleteConfirmModal(false);
       setStrategyToDelete(null);
+      setAssociatedRecords(null);
     } catch (error) {
       console.error("Error deleting strategy:", error);
       alert("Failed to delete strategy: " + error);
@@ -2795,6 +3393,47 @@ export default function Strategies() {
   const handleDeleteCancel = () => {
     setShowDeleteConfirmModal(false);
     setStrategyToDelete(null);
+    setAssociatedRecords(null);
+  };
+
+  const handleStrategyDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    
+    // Use sortedStrategies to find indices since that's what's being displayed
+    const oldIndex = sortedStrategies.findIndex(s => s.id === active.id);
+    const newIndex = sortedStrategies.findIndex(s => s.id === over.id);
+    
+    if (oldIndex === -1 || newIndex === -1) return;
+    
+    // Reorder the sortedStrategies array
+    const reorderedStrategies = arrayMove(sortedStrategies, oldIndex, newIndex);
+    
+    // Update the strategyOrder state with the new order
+    const newOrder = reorderedStrategies.map(s => s.id!);
+    setStrategyOrder(newOrder);
+    localStorage.setItem(STRATEGY_ORDER_KEY, JSON.stringify(newOrder));
+    
+    // Update display_order for all strategies in the database
+    const strategyOrders = reorderedStrategies.map((strategy, index) => [strategy.id, index]);
+    
+    try {
+      await invoke("update_strategy_order", { strategyOrders });
+      // Reload strategies to ensure everything is in sync
+      await loadStrategies();
+    } catch (error) {
+      console.error("Error updating strategy order:", error);
+      alert("Failed to update strategy order: " + error);
+      // Revert the order change on error
+      const saved = localStorage.getItem(STRATEGY_ORDER_KEY);
+      if (saved) {
+        try {
+          setStrategyOrder(JSON.parse(saved));
+        } catch {
+          setStrategyOrder([]);
+        }
+      }
+    }
   };
 
   const handleDuplicate = async (strategyId: number) => {
@@ -2913,8 +3552,15 @@ export default function Strategies() {
   }
 
   const selectedStrategyData = strategies.find((s) => s.id === selectedStrategy);
-  const pairs = selectedStrategy ? strategyPairs.get(selectedStrategy) || [] : [];
-  const isLoadingPairs = selectedStrategy ? loadingPairs.has(selectedStrategy) : false;
+  const pairs = isCreating 
+    ? (strategyPairs.get(-1) || []) 
+    : (selectedStrategy ? strategyPairs.get(selectedStrategy) || [] : []);
+  const isLoadingPairs = isCreating 
+    ? loadingPairs.has(-1) 
+    : (selectedStrategy ? loadingPairs.has(selectedStrategy) : false);
+  const displayStats = isCreating 
+    ? strategyStats.get(-1) 
+    : (selectedStrategy ? strategyStats.get(selectedStrategy) : null);
 
   return (
     <div style={{ display: "flex", height: "100%", overflow: "hidden", flex: 1 }}>
@@ -2983,7 +3629,7 @@ export default function Strategies() {
             </div>
           ) : (
             <DndContext
-              sensors={sensors}
+              sensors={strategySensors}
               collisionDetection={closestCenter}
               onDragEnd={handleStrategyDragEnd}
             >
@@ -3179,7 +3825,12 @@ export default function Strategies() {
                       <Copy size={16} />
                     </button>
                     <button
-                      onClick={() => selectedStrategyData && handleDeleteClick(selectedStrategyData.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (selectedStrategyData?.id) {
+                          handleDeleteClick(selectedStrategyData.id);
+                        }
+                      }}
                       style={{
                         background: "var(--bg-tertiary)",
                         border: "1px solid var(--border-color)",
@@ -3487,7 +4138,108 @@ export default function Strategies() {
                       </button>
                     )}
                   </div>
-                  {isCreating ? (
+                  {/* Import Results Banner - for both creating and existing strategies */}
+                  {importResults && (
+                    <div style={{
+                      padding: "16px",
+                      marginBottom: "16px",
+                      backgroundColor: importResults && importResults.duplicates > 0 ? "var(--warning)" : "var(--accent)",
+                      borderRadius: "8px",
+                      border: `2px solid ${importResults && importResults.duplicates > 0 ? "var(--warning)" : "var(--accent)"}`,
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "12px",
+                      boxShadow: "0 2px 8px rgba(0, 0, 0, 0.15)"
+                    }}>
+                      <div style={{
+                        width: "40px",
+                        height: "40px",
+                        borderRadius: "50%",
+                        backgroundColor: "rgba(255, 255, 255, 0.2)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0
+                      }}>
+                        {importResults && importResults.duplicates > 0 ? (
+                          <AlertTriangle size={20} color="white" />
+                        ) : (
+                          <CheckCircle size={20} color="white" />
+                        )}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ 
+                          color: "white", 
+                          fontSize: "16px", 
+                          fontWeight: "600",
+                          marginBottom: "8px"
+                        }}>
+                          {importResults 
+                            ? (importResults.duplicates > 0 
+                                ? "Import Complete with Warnings" 
+                                : "Trades Imported Successfully!")
+                            : "Trades Imported Successfully!"
+                          }
+                        </div>
+                        {importResults ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                            <div style={{ 
+                              color: "rgba(255, 255, 255, 0.95)", 
+                              fontSize: "14px"
+                            }}>
+                              <strong>{importResults.newTrades}</strong> new trade{importResults.newTrades !== 1 ? "s" : ""} imported
+                              {importResults.duplicates > 0 && (
+                                <span style={{ display: "block", marginTop: "4px", color: "rgba(255, 255, 255, 0.9)", fontSize: "13px" }}>
+                                  ⚠️ <strong>{importResults.duplicates}</strong> duplicate trade{importResults.duplicates !== 1 ? "s" : ""} skipped (already exist in database)
+                                </span>
+                              )}
+                              {importResults.errors > 0 && (
+                                <span style={{ display: "block", marginTop: "4px", color: "rgba(255, 200, 200, 0.95)", fontSize: "13px" }}>
+                                  ❌ <strong>{importResults.errors}</strong> file{importResults.errors !== 1 ? "s" : ""} failed to import
+                                </span>
+                              )}
+                            </div>
+                            {isCreating && importResults.newTrades > 0 && (
+                              <div style={{ 
+                                color: "rgba(255, 255, 255, 0.85)", 
+                                fontSize: "13px",
+                                marginTop: "4px",
+                                fontStyle: "italic"
+                              }}>
+                                {importResults.newTrades} trade{importResults.newTrades !== 1 ? "s" : ""} {importResults.newTrades === 1 ? "will be" : "will be"} assigned to this strategy when you save.
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div style={{ 
+                            color: "rgba(255, 255, 255, 0.9)", 
+                            fontSize: "14px"
+                          }}>
+                            {pendingTradeIds.length} trade{pendingTradeIds.length !== 1 ? "s" : ""} {pendingTradeIds.length === 1 ? "has" : "have"} been imported and {pendingTradeIds.length === 1 ? "will be" : "will be"} assigned to this strategy when you save.
+                          </div>
+                        )}
+                      </div>
+                      {importResults && (
+                        <button
+                          onClick={() => setImportResults(null)}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: "white",
+                            cursor: "pointer",
+                            padding: "4px",
+                            display: "flex",
+                            alignItems: "center",
+                            opacity: 0.8
+                          }}
+                          title="Dismiss"
+                        >
+                          <X size={18} />
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {isCreating && !displayStats && pairs.length === 0 ? (
                     <div style={{ 
                       padding: "40px", 
                       textAlign: "center",
@@ -3502,24 +4254,21 @@ export default function Strategies() {
                       <p style={{ color: "var(--text-secondary)", fontSize: "14px", marginBottom: "20px" }}>
                         Click "Import CSV" above to upload trades. They will be automatically assigned to this strategy when you save.
                       </p>
-                      {pendingTradeIds.length > 0 && (
-                        <p style={{ color: "var(--accent)", fontSize: "14px", fontWeight: "500" }}>
-                          {pendingTradeIds.length} trade{pendingTradeIds.length !== 1 ? "s" : ""} ready to be assigned
-                        </p>
-                      )}
                     </div>
-                  ) : selectedStrategy && strategyStats.has(selectedStrategy) && (() => {
-                    const stats = strategyStats.get(selectedStrategy)!;
+                  ) : ((isCreating && displayStats) || (selectedStrategy && strategyStats.has(selectedStrategy))) ? (() => {
+                    const stats = displayStats || (selectedStrategy ? strategyStats.get(selectedStrategy)! : null);
+                    if (!stats) return null;
                     return (
-                      <div style={{
-                        display: "flex",
-                        gap: "32px",
-                        marginBottom: "24px",
-                        padding: "16px",
+                      <>
+                        <div style={{
+                          display: "flex",
+                          gap: "32px",
+                          marginBottom: "24px",
+                          padding: "16px",
                   backgroundColor: "var(--bg-tertiary)",
                   borderRadius: "6px",
-                        border: "1px solid var(--border-color)"
-                      }}>
+                          border: "1px solid var(--border-color)"
+                        }}>
                         <div>
                           <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px", textTransform: "uppercase" }}>
                             TOTAL TRADES
@@ -3553,9 +4302,7 @@ export default function Strategies() {
                           </div>
                         </div>
                       </div>
-                    );
-                  })()}
-                  {isLoadingPairs ? (
+                      {isLoadingPairs ? (
                     <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "40px" }}>
                       Loading trades...
                     </p>
@@ -3693,6 +4440,9 @@ export default function Strategies() {
                       </table>
                     </div>
                   )}
+                      </>
+                    );
+                  })() : null}
                 </div>
               )}
 
@@ -3761,7 +4511,16 @@ export default function Strategies() {
                 const defaultTypes = ["entry", "take_profit"];
                 const tempCustomTypes = isCreating 
                   ? Array.from(new Set(Array.from(tempChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")))
-                  : Array.from(customChecklistTypes.get(selectedStrategy || 0) || []).filter(t => t !== "survey");
+                  : isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)
+                    ? Array.from(new Set(Array.from(currentChecklist.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")))
+                    : (() => {
+                        // When viewing (not creating/editing), combine types from currentChecklist and customChecklistTypes
+                        // to ensure custom types are displayed even if they have no items
+                        const checklistKeys = Array.from(currentChecklist.keys());
+                        const customTypes = selectedStrategy ? Array.from(customChecklistTypes.get(selectedStrategy) || []) : [];
+                        const allCustomKeys = new Set([...checklistKeys, ...customTypes]);
+                        return Array.from(allCustomKeys).filter(t => !defaultTypes.includes(t) && t !== "survey");
+                      })();
                 const allTypes = [...defaultTypes, ...tempCustomTypes.filter(t => !defaultTypes.includes(t) && t !== "survey")];
 
                 return (
@@ -4158,9 +4917,31 @@ export default function Strategies() {
                       updatedChecklist.set(typeName, []);
                     }
                     setTempChecklists(updatedChecklist);
-                  } else if (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)) {
+                  } else if (isEditing && selectedStrategy) {
                     // Add to editingChecklists when editing
-                    const currentChecklist = editingChecklists.get(selectedStrategy)!;
+                    // Initialize editingChecklists if it doesn't have this strategy yet
+                    let currentChecklist: Map<string, ChecklistItem[]>;
+                    if (editingChecklists.has(selectedStrategy)) {
+                      currentChecklist = editingChecklists.get(selectedStrategy)!;
+                    } else {
+                      // Initialize from current checklists state
+                      const existingChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
+                      currentChecklist = new Map<string, ChecklistItem[]>();
+                      for (const [checklistType, items] of existingChecklist.entries()) {
+                        currentChecklist.set(checklistType, items.map(item => ({ ...item })));
+                      }
+                      setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, currentChecklist)));
+                      
+                      // Initialize history if needed
+                      if (!checklistEditHistory.has(selectedStrategy)) {
+                        const originalCopy = new Map<string, ChecklistItem[]>();
+                        for (const [checklistType, items] of existingChecklist.entries()) {
+                          originalCopy.set(checklistType, items.map(item => ({ ...item })));
+                        }
+                        setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, [originalCopy])));
+                      }
+                    }
+                    
                     const updatedChecklist = new Map(currentChecklist);
                     if (!updatedChecklist.has(typeName)) {
                       updatedChecklist.set(typeName, []);
@@ -4243,9 +5024,31 @@ export default function Strategies() {
                         updatedChecklist.set(typeName, []);
                       }
                       setTempChecklists(updatedChecklist);
-                    } else if (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)) {
+                    } else if (isEditing && selectedStrategy) {
                       // Add to editingChecklists when editing
-                      const currentChecklist = editingChecklists.get(selectedStrategy)!;
+                      // Initialize editingChecklists if it doesn't have this strategy yet
+                      let currentChecklist: Map<string, ChecklistItem[]>;
+                      if (editingChecklists.has(selectedStrategy)) {
+                        currentChecklist = editingChecklists.get(selectedStrategy)!;
+                      } else {
+                        // Initialize from current checklists state
+                        const existingChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
+                        currentChecklist = new Map<string, ChecklistItem[]>();
+                        for (const [checklistType, items] of existingChecklist.entries()) {
+                          currentChecklist.set(checklistType, items.map(item => ({ ...item })));
+                        }
+                        setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, currentChecklist)));
+                        
+                        // Initialize history if needed
+                        if (!checklistEditHistory.has(selectedStrategy)) {
+                          const originalCopy = new Map<string, ChecklistItem[]>();
+                          for (const [checklistType, items] of existingChecklist.entries()) {
+                            originalCopy.set(checklistType, items.map(item => ({ ...item })));
+                          }
+                          setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, [originalCopy])));
+                        }
+                      }
+                      
                       const updatedChecklist = new Map(currentChecklist);
                       if (!updatedChecklist.has(typeName)) {
                         updatedChecklist.set(typeName, []);
@@ -4321,7 +5124,9 @@ export default function Strategies() {
                 borderRadius: "12px",
                 padding: "24px",
                 width: "90%",
-                maxWidth: "450px",
+                maxWidth: "550px",
+                maxHeight: "80vh",
+                overflowY: "auto",
                 boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
               }}
               onClick={(e) => e.stopPropagation()}
@@ -4340,22 +5145,148 @@ export default function Strategies() {
                 style={{
                   fontSize: "14px",
                   color: "var(--text-primary)",
-                  marginBottom: "8px",
+                  marginBottom: "16px",
                   lineHeight: "1.5",
                 }}
               >
                 Are you sure you want to delete <strong>"{strategyName}"</strong>?
               </p>
-              <p
-                style={{
-                  fontSize: "13px",
-                  color: "var(--text-secondary)",
-                  marginBottom: "20px",
-                  lineHeight: "1.5",
-                }}
-              >
-                This action cannot be undone. All trades using this strategy will be unassigned, and all checklist items and notes will be permanently deleted.
-              </p>
+              
+              {loadingAssociatedRecords ? (
+                <div style={{ marginBottom: "20px", textAlign: "center", color: "var(--text-secondary)", fontSize: "13px" }}>
+                  Loading associated records...
+                </div>
+              ) : associatedRecords && (
+                <div style={{ marginBottom: "20px" }}>
+                  <p
+                    style={{
+                      fontSize: "13px",
+                      color: "var(--text-secondary)",
+                      marginBottom: "12px",
+                      lineHeight: "1.5",
+                    }}
+                  >
+                    This strategy is associated with the following records:
+                  </p>
+                  
+                  <div style={{ 
+                    backgroundColor: "var(--bg-tertiary)", 
+                    borderRadius: "8px", 
+                    padding: "12px",
+                    marginBottom: "12px",
+                    border: "1px solid var(--border-color)"
+                  }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      {associatedRecords.trade_count > 0 && (
+                        <div>
+                          <div style={{ 
+                            display: "flex", 
+                            alignItems: "center", 
+                            gap: "8px",
+                            marginBottom: "4px"
+                          }}>
+                            <TrendingUp size={14} style={{ color: "var(--accent)" }} />
+                            <span style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-primary)" }}>
+                              {associatedRecords.trade_count} {associatedRecords.trade_count === 1 ? "Trade" : "Trades"}
+                            </span>
+                          </div>
+                          {associatedRecords.sample_trades.length > 0 && (
+                            <div style={{ marginLeft: "22px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                              {associatedRecords.sample_trades.slice(0, 3).map(([id, symbol, side, timestamp]) => (
+                                <div key={id} style={{ marginBottom: "2px" }}>
+                                  {symbol} {side} • {new Date(timestamp).toLocaleDateString()}
+                                </div>
+                              ))}
+                              {associatedRecords.trade_count > 3 && (
+                                <div style={{ fontStyle: "italic", opacity: 0.7 }}>
+                                  +{associatedRecords.trade_count - 3} more
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
+                      {associatedRecords.journal_entry_count > 0 && (
+                        <div>
+                          <div style={{ 
+                            display: "flex", 
+                            alignItems: "center", 
+                            gap: "8px",
+                            marginBottom: "4px"
+                          }}>
+                            <FileText size={14} style={{ color: "var(--accent)" }} />
+                            <span style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-primary)" }}>
+                              {associatedRecords.journal_entry_count} Journal {associatedRecords.journal_entry_count === 1 ? "Entry" : "Entries"}
+                            </span>
+                          </div>
+                          {associatedRecords.sample_journal_entries.length > 0 && (
+                            <div style={{ marginLeft: "22px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                              {associatedRecords.sample_journal_entries.slice(0, 3).map(([id, date, title]) => (
+                                <div key={id} style={{ marginBottom: "2px" }}>
+                                  {title} • {new Date(date).toLocaleDateString()}
+                                </div>
+                              ))}
+                              {associatedRecords.journal_entry_count > 3 && (
+                                <div style={{ fontStyle: "italic", opacity: 0.7 }}>
+                                  +{associatedRecords.journal_entry_count - 3} more
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
+                      {associatedRecords.checklist_item_count > 0 && (
+                        <div>
+                          <div style={{ 
+                            display: "flex", 
+                            alignItems: "center", 
+                            gap: "8px",
+                            marginBottom: "4px"
+                          }}>
+                            <ListChecks size={14} style={{ color: "var(--accent)" }} />
+                            <span style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-primary)" }}>
+                              {associatedRecords.checklist_item_count} Checklist {associatedRecords.checklist_item_count === 1 ? "Item" : "Items"}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {associatedRecords.trade_count === 0 && 
+                       associatedRecords.journal_entry_count === 0 && 
+                       associatedRecords.checklist_item_count === 0 && (
+                        <div style={{ fontSize: "12px", color: "var(--text-secondary)", fontStyle: "italic" }}>
+                          No associated records
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <p
+                    style={{
+                      fontSize: "12px",
+                      color: "var(--text-secondary)",
+                      lineHeight: "1.5",
+                    }}
+                  >
+                    <strong>Note:</strong> Trades will be unassigned, journal entries will lose their strategy association, and checklist items will be permanently deleted.
+                  </p>
+                </div>
+              )}
+              
+              {!loadingAssociatedRecords && (
+                <p
+                  style={{
+                    fontSize: "13px",
+                    color: "var(--text-secondary)",
+                    marginBottom: "20px",
+                    lineHeight: "1.5",
+                  }}
+                >
+                  This action cannot be undone.
+                </p>
+              )}
               <div
                 style={{
                   display: "flex",
@@ -4364,7 +5295,10 @@ export default function Strategies() {
                 }}
               >
                 <button
-                  onClick={handleDeleteCancel}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteCancel();
+                  }}
                   style={{
                     background: "var(--bg-tertiary)",
                     border: "1px solid var(--border-color)",
@@ -4379,7 +5313,10 @@ export default function Strategies() {
                   Cancel
                 </button>
                 <button
-                  onClick={handleDeleteConfirm}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteConfirm();
+                  }}
                   style={{
                     background: "var(--danger)",
                     border: "none",
