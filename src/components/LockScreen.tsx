@@ -34,8 +34,9 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
       const pinString = pinDigits.join("");
       if (pinString.length === 6) {
         // Small delay to ensure all digits are set
-        const timer = setTimeout(() => {
-          if (unlockApp(pinString)) {
+        const timer = setTimeout(async () => {
+          const unlocked = await unlockApp(pinString);
+          if (unlocked) {
             setPinDigits(["", "", "", "", "", ""]);
             onUnlock();
           } else {
@@ -92,7 +93,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     
@@ -102,7 +103,8 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
         setError("Please enter your 6-digit PIN");
         return;
       }
-      if (unlockApp(pinString)) {
+      const unlocked = await unlockApp(pinString);
+      if (unlocked) {
         setPinDigits(["", "", "", "", "", ""]);
         onUnlock();
       } else {
@@ -117,7 +119,8 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
         setError("Please enter your password");
         return;
       }
-      if (unlockApp(input)) {
+      const unlocked = await unlockApp(input);
+      if (unlocked) {
         setInput("");
         onUnlock();
       } else {

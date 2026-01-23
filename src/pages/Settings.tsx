@@ -316,7 +316,7 @@ export default function Settings() {
     }
   };
 
-  const handleSetPassword = () => {
+  const handleSetPassword = async () => {
     setPasswordError("");
     setPasswordSuccess("");
     
@@ -344,7 +344,7 @@ export default function Settings() {
     }
     
     try {
-      setPassword(passwordValue, passwordType);
+      await setPassword(passwordValue, passwordType);
       setPasswordSuccess(`${passwordType === "pin" ? "PIN" : "Password"} set successfully!`);
       setNewPassword("");
       setNewPinDigits(["", "", "", "", "", ""]);

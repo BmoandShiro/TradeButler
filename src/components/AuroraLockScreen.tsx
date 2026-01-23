@@ -294,8 +294,9 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
     if (passwordType === "pin") {
       const pinString = pinDigits.join("");
       if (pinString.length === 6) {
-        const timer = setTimeout(() => {
-          if (unlockApp(pinString)) {
+        const timer = setTimeout(async () => {
+          const unlocked = await unlockApp(pinString);
+          if (unlocked) {
             setPinDigits(["", "", "", "", "", ""]);
             onUnlock();
           } else {
@@ -346,7 +347,7 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
 
@@ -356,7 +357,8 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
         setError("Please enter your 6-digit PIN");
         return;
       }
-      if (unlockApp(pinString)) {
+      const unlocked = await unlockApp(pinString);
+      if (unlocked) {
         setPinDigits(["", "", "", "", "", ""]);
         onUnlock();
       } else {
@@ -371,7 +373,8 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
         setError("Please enter your password");
         return;
       }
-      if (unlockApp(input)) {
+      const unlocked = await unlockApp(input);
+      if (unlocked) {
         setInput("");
         onUnlock();
       } else {

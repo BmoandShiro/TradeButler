@@ -197,8 +197,9 @@ export default function MilkyWayLockScreen({ onUnlock }: MilkyWayLockScreenProps
     if (passwordType === "pin") {
       const pinString = pinDigits.join("");
       if (pinString.length === 6) {
-        const timer = setTimeout(() => {
-          if (unlockApp(pinString)) {
+        const timer = setTimeout(async () => {
+          const unlocked = await unlockApp(pinString);
+          if (unlocked) {
             setPinDigits(["", "", "", "", "", ""]);
             onUnlock();
           } else {
@@ -249,7 +250,7 @@ export default function MilkyWayLockScreen({ onUnlock }: MilkyWayLockScreenProps
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
 
@@ -259,7 +260,8 @@ export default function MilkyWayLockScreen({ onUnlock }: MilkyWayLockScreenProps
         setError("Please enter your 6-digit PIN");
         return;
       }
-      if (unlockApp(pinString)) {
+      const unlocked = await unlockApp(pinString);
+      if (unlocked) {
         setPinDigits(["", "", "", "", "", ""]);
         onUnlock();
       } else {
@@ -274,7 +276,8 @@ export default function MilkyWayLockScreen({ onUnlock }: MilkyWayLockScreenProps
         setError("Please enter your password");
         return;
       }
-      if (unlockApp(input)) {
+      const unlocked = await unlockApp(input);
+      if (unlocked) {
         setInput("");
         onUnlock();
       } else {
