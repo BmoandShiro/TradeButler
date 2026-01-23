@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, X } from "lucide-react";
+import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, X, Lock, Key } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -19,6 +19,12 @@ import {
   ThemePreset,
   presetThemes
 } from "../utils/themeManager";
+import { 
+  hasPassword, 
+  getPasswordType, 
+  setPassword, 
+  deletePassword
+} from "../utils/passwordManager";
 
 interface VersionInfo {
   current: string;
@@ -44,6 +50,13 @@ export default function Settings() {
   const [presetName, setPresetName] = useState("");
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [editingPresetName, setEditingPresetName] = useState("");
+  
+  // Password/PIN state
+  const [passwordType, setPasswordType] = useState<"pin" | "password">(() => getPasswordType() || "pin");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordSuccess, setPasswordSuccess] = useState("");
 
   const checkVersion = async () => {
     try {
@@ -214,6 +227,63 @@ export default function Settings() {
   const handleCancelEditPreset = () => {
     setEditingPresetId(null);
     setEditingPresetName("");
+  };
+
+  // Password handlers
+  const handleSetPassword = () => {
+    setPasswordError("");
+    setPasswordSuccess("");
+    
+    if (!newPassword.trim()) {
+      setPasswordError(`Please enter a ${passwordType === "pin" ? "PIN" : "password"}`);
+      return;
+    }
+    
+    if (passwordType === "pin" && !/^\d{6}$/.test(newPassword)) {
+      setPasswordError("PIN must be exactly 6 digits");
+      return;
+    }
+    
+    if (passwordType === "password" && newPassword.length < 4) {
+      setPasswordError("Password must be at least 4 characters");
+      return;
+    }
+    
+    if (newPassword !== confirmPassword) {
+      setPasswordError("Passwords do not match");
+      return;
+    }
+    
+    try {
+      setPassword(newPassword, passwordType);
+      setPasswordSuccess(`${passwordType === "pin" ? "PIN" : "Password"} set successfully!`);
+      setNewPassword("");
+      setConfirmPassword("");
+      setTimeout(() => {
+        setPasswordSuccess("");
+      }, 3000);
+    } catch (error) {
+      setPasswordError(error instanceof Error ? error.message : "Failed to set password");
+    }
+  };
+
+  const handleChangePassword = () => {
+    setPasswordError("");
+    setPasswordSuccess("");
+    setNewPassword("");
+    setConfirmPassword("");
+  };
+
+  const handleRemovePassword = () => {
+    if (confirm("Are you sure you want to remove the password/PIN? The app will no longer be locked.")) {
+      deletePassword();
+      setPasswordSuccess("Password removed successfully!");
+      setNewPassword("");
+      setConfirmPassword("");
+      setTimeout(() => {
+        setPasswordSuccess("");
+      }, 3000);
+    }
   };
 
   return (
@@ -561,6 +631,317 @@ export default function Settings() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Password/PIN Lock Section */}
+        <div
+          style={{
+            backgroundColor: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "12px",
+            padding: "24px",
+            marginBottom: "24px",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+            <h2
+              style={{
+                fontSize: "20px",
+                fontWeight: "600",
+                color: "var(--text-primary)",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              <Lock size={20} />
+              App Lock
+            </h2>
+          </div>
+
+          <p
+            style={{
+              fontSize: "14px",
+              color: "var(--text-secondary)",
+              marginBottom: "24px",
+              lineHeight: "1.6",
+            }}
+          >
+            Set a password or 6-digit PIN to lock your TradeButler app. Use the lock button in the sidebar to lock/unlock the app.
+          </p>
+
+          {hasPassword() && (
+            <div
+              style={{
+                padding: "12px 16px",
+                backgroundColor: "var(--bg-tertiary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "8px",
+                marginBottom: "20px",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              <CheckCircle size={16} color="var(--profit)" />
+              <span style={{ fontSize: "14px", color: "var(--text-primary)" }}>
+                {getPasswordType() === "pin" ? "6-digit PIN" : "Password"} is set
+              </span>
+            </div>
+          )}
+
+          {/* Password Type Toggle */}
+          <div style={{ marginBottom: "20px" }}>
+            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+              Lock Type
+            </label>
+            <div
+              style={{
+                display: "flex",
+                backgroundColor: "var(--bg-tertiary)",
+                borderRadius: "6px",
+                padding: "2px",
+                border: "1px solid var(--border-color)",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setPasswordType("pin");
+                  setNewPassword("");
+                  setConfirmPassword("");
+                  setPasswordError("");
+                }}
+                style={{
+                  flex: 1,
+                  padding: "10px",
+                  borderRadius: "4px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor: "pointer",
+                  border: "none",
+                  backgroundColor: passwordType === "pin" ? "var(--accent)" : "transparent",
+                  color: passwordType === "pin" ? "white" : "var(--text-primary)",
+                  transition: "all 0.2s",
+                }}
+              >
+                6-Digit PIN
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPasswordType("password");
+                  setNewPassword("");
+                  setConfirmPassword("");
+                  setPasswordError("");
+                }}
+                style={{
+                  flex: 1,
+                  padding: "10px",
+                  borderRadius: "4px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor: "pointer",
+                  border: "none",
+                  backgroundColor: passwordType === "password" ? "var(--accent)" : "transparent",
+                  color: passwordType === "password" ? "white" : "var(--text-primary)",
+                  transition: "all 0.2s",
+                }}
+              >
+                Password
+              </button>
+            </div>
+          </div>
+
+          {/* Password Input Fields */}
+          <div style={{ marginBottom: "16px" }}>
+            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+              {hasPassword() ? "New " : ""}{passwordType === "pin" ? "PIN" : "Password"}
+            </label>
+            <input
+              type={passwordType === "pin" ? "tel" : "password"}
+              value={newPassword}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (passwordType === "pin") {
+                  // Only allow digits and limit to 6
+                  const digitsOnly = value.replace(/\D/g, "").slice(0, 6);
+                  setNewPassword(digitsOnly);
+                } else {
+                  setNewPassword(value);
+                }
+                setPasswordError("");
+              }}
+              placeholder={passwordType === "pin" ? "Enter 6-digit PIN" : "Enter password"}
+              style={{
+                width: "100%",
+                padding: "12px",
+                backgroundColor: "var(--bg-tertiary)",
+                border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                borderRadius: "8px",
+                color: "var(--text-primary)",
+                fontSize: passwordType === "pin" ? "20px" : "16px",
+                textAlign: passwordType === "pin" ? "center" : "left",
+                letterSpacing: passwordType === "pin" ? "4px" : "normal",
+                fontFamily: passwordType === "pin" ? "monospace" : "inherit",
+                outline: "none",
+              }}
+              maxLength={passwordType === "pin" ? 6 : undefined}
+            />
+          </div>
+
+          <div style={{ marginBottom: "20px" }}>
+            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+              Confirm {passwordType === "pin" ? "PIN" : "Password"}
+            </label>
+            <input
+              type={passwordType === "pin" ? "tel" : "password"}
+              value={confirmPassword}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (passwordType === "pin") {
+                  // Only allow digits and limit to 6
+                  const digitsOnly = value.replace(/\D/g, "").slice(0, 6);
+                  setConfirmPassword(digitsOnly);
+                } else {
+                  setConfirmPassword(value);
+                }
+                setPasswordError("");
+              }}
+              placeholder={passwordType === "pin" ? "Confirm 6-digit PIN" : "Confirm password"}
+              style={{
+                width: "100%",
+                padding: "12px",
+                backgroundColor: "var(--bg-tertiary)",
+                border: passwordError ? "2px solid var(--danger)" : "1px solid var(--border-color)",
+                borderRadius: "8px",
+                color: "var(--text-primary)",
+                fontSize: passwordType === "pin" ? "20px" : "16px",
+                textAlign: passwordType === "pin" ? "center" : "left",
+                letterSpacing: passwordType === "pin" ? "4px" : "normal",
+                fontFamily: passwordType === "pin" ? "monospace" : "inherit",
+                outline: "none",
+              }}
+              maxLength={passwordType === "pin" ? 6 : undefined}
+            />
+          </div>
+
+          {passwordError && (
+            <div
+              style={{
+                marginBottom: "16px",
+                padding: "12px",
+                backgroundColor: "var(--bg-tertiary)",
+                border: "1px solid var(--danger)",
+                borderRadius: "8px",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                color: "var(--danger)",
+                fontSize: "13px",
+              }}
+            >
+              <AlertCircle size={16} />
+              <span>{passwordError}</span>
+            </div>
+          )}
+
+          {passwordSuccess && (
+            <div
+              style={{
+                marginBottom: "16px",
+                padding: "12px",
+                backgroundColor: "var(--bg-tertiary)",
+                border: "1px solid var(--profit)",
+                borderRadius: "8px",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                color: "var(--profit)",
+                fontSize: "13px",
+              }}
+            >
+              <CheckCircle size={16} />
+              <span>{passwordSuccess}</span>
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: "12px" }}>
+            {hasPassword() ? (
+              <>
+                <button
+                  type="button"
+                  onClick={handleSetPassword}
+                  disabled={!newPassword || !confirmPassword}
+                  style={{
+                    flex: 1,
+                    padding: "12px",
+                    backgroundColor: newPassword && confirmPassword ? "var(--accent)" : "var(--bg-tertiary)",
+                    color: newPassword && confirmPassword ? "white" : "var(--text-secondary)",
+                    border: "none",
+                    borderRadius: "8px",
+                    fontSize: "14px",
+                    fontWeight: "500",
+                    cursor: newPassword && confirmPassword ? "pointer" : "not-allowed",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "6px",
+                    opacity: newPassword && confirmPassword ? 1 : 0.5,
+                  }}
+                >
+                  <Key size={16} />
+                  Change {passwordType === "pin" ? "PIN" : "Password"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRemovePassword}
+                  style={{
+                    padding: "12px 20px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    color: "var(--text-secondary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "8px",
+                    fontSize: "14px",
+                    fontWeight: "500",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "6px",
+                  }}
+                >
+                  <Trash2 size={16} />
+                  Remove
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSetPassword}
+                disabled={!newPassword || !confirmPassword}
+                style={{
+                  width: "100%",
+                  padding: "12px",
+                  backgroundColor: newPassword && confirmPassword ? "var(--accent)" : "var(--bg-tertiary)",
+                  color: newPassword && confirmPassword ? "white" : "var(--text-secondary)",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor: newPassword && confirmPassword ? "pointer" : "not-allowed",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                  opacity: newPassword && confirmPassword ? 1 : 0.5,
+                }}
+              >
+                <Lock size={16} />
+                Set {passwordType === "pin" ? "PIN" : "Password"}
+              </button>
+            )}
           </div>
         </div>
 

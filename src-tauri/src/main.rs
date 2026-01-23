@@ -75,6 +75,7 @@ fn main() {
             commands::save_journal_checklist_responses,
             commands::get_journal_checklist_responses,
             commands::get_all_symbols,
+            commands::clear_all_data,
             commands::export_data,
             commands::import_data,
             commands::check_version,

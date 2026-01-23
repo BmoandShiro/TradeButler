@@ -13,7 +13,9 @@ import {
   Calculator,
   DollarSign,
   FileText,
-  Settings
+  Settings,
+  Lock,
+  Unlock
 } from "lucide-react";
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
@@ -22,6 +24,8 @@ import { readTextFile, writeTextFile } from "@tauri-apps/api/fs";
 import { createPortal } from "react-dom";
 import appIcon from "../assets/app-icon.png";
 import { applyTheme } from "../utils/themeManager";
+import LockScreen from "./LockScreen";
+import { isLocked, setLocked, hasPassword, lockApp } from "../utils/passwordManager";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -33,6 +37,7 @@ export default function Layout({ children }: LayoutProps) {
   const [isExporting, setIsExporting] = useState(false);
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [isAppLocked, setIsAppLocked] = useState(() => isLocked());
   const mainContentRef = useRef<HTMLElement>(null);
   const scrollPositions = useRef<Map<string, number>>(new Map());
   const previousPathRef = useRef<string>(location.pathname);
@@ -50,7 +55,24 @@ export default function Layout({ children }: LayoutProps) {
         }
       }
     });
+    
+    // Check lock state on mount
+    setIsAppLocked(isLocked());
   }, []);
+
+  const handleLockToggle = () => {
+    if (hasPassword()) {
+      lockApp();
+      setIsAppLocked(true);
+    } else {
+      // If no password is set, navigate to settings
+      window.location.href = "/settings";
+    }
+  };
+
+  const handleUnlock = () => {
+    setIsAppLocked(false);
+  };
 
   const handleImport = async () => {
     try {
@@ -509,7 +531,36 @@ export default function Layout({ children }: LayoutProps) {
           </div>
         </div>
 
-        <nav style={{ flex: 1 }}>
+        <nav style={{ flex: 1, overflowY: "auto", padding: "0" }}>
+          {/* Lock Button - Above Dashboard */}
+          <div style={{ padding: "8px 20px", borderBottom: "1px solid var(--border-color)" }}>
+            <button
+              onClick={handleLockToggle}
+              disabled={!hasPassword()}
+              style={{
+                width: "100%",
+                padding: "10px",
+                backgroundColor: isAppLocked ? "var(--accent)" : "var(--bg-tertiary)",
+                color: isAppLocked ? "white" : "var(--text-primary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                cursor: hasPassword() ? "pointer" : "not-allowed",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+                fontSize: "13px",
+                fontWeight: "500",
+                opacity: hasPassword() ? 1 : 0.5,
+                transition: "all 0.2s",
+              }}
+              title={hasPassword() ? (isAppLocked ? "App is locked" : "Lock app") : "Set a password in Settings first"}
+            >
+              {isAppLocked ? <Lock size={16} /> : <Unlock size={16} />}
+              {isAppLocked ? "Locked" : "Lock"}
+            </button>
+          </div>
+          
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
@@ -584,6 +635,9 @@ export default function Layout({ children }: LayoutProps) {
       >
         {children}
       </main>
+      
+      {/* Lock Screen Overlay */}
+      {isAppLocked && <LockScreen onUnlock={handleUnlock} />}
 
       {/* Clear Data Confirmation Modal */}
       {showClearDataModal && createPortal(

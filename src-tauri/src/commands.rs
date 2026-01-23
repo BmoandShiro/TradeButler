@@ -2345,6 +2345,32 @@ pub fn delete_journal_trade(id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn clear_all_data() -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    // Delete all data from all tables
+    conn.execute("DELETE FROM journal_checklist_responses", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM journal_trades", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM journal_entries", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM emotion_surveys", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM emotional_states", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM strategy_checklists", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM strategies", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM trades", [])
+        .map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_all_symbols() -> Result<Vec<String>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
