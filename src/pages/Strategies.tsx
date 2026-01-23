@@ -62,6 +62,9 @@ interface ChecklistItem {
   parent_id: number | null;
 }
 
+/** Placeholder item text used to persist empty custom checklist types. Filtered out when displaying. */
+const EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER = "__empty_custom_checklist_placeholder__";
+
 function SortableChecklistItem({ 
   item, 
   onDelete, 
@@ -1137,8 +1140,8 @@ export default function Strategies() {
         setLoadingPairs(newLoading);
       }
     }
-    // Load checklists
-    if ((activeTab === "checklists" || activeTab === "survey") && !checklists.has(strategyId)) {
+    // Load checklists - always load when strategy is selected (not creating) to ensure custom checklists are available
+    if (!isCreating && !checklists.has(strategyId)) {
       await loadChecklists(strategyId);
     }
     
@@ -1197,34 +1200,52 @@ export default function Strategies() {
       const checklistMap = new Map<string, ChecklistItem[]>();
       const customTypesSet = new Set<string>();
       
+      // Placeholder items used to persist empty custom checklist types - filter them out when displaying
+      
       // Initialize default types
       for (const type of defaultTypes) {
         checklistMap.set(type, []);
       }
       
-      // Group items by type
+      // Group items by type (exclude placeholder items from display, but ensure their type is registered)
       for (const item of allItems) {
         const type = item.checklist_type;
         if (!checklistMap.has(type)) {
           checklistMap.set(type, []);
-          // Exclude "survey" from being treated as a custom type - it has its own tab
           if (!defaultTypes.includes(type) && type !== "survey") {
             customTypesSet.add(type);
           }
         }
+        if (item.item_text === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER) continue;
         checklistMap.get(type)!.push(item);
       }
       
-      setChecklists(new Map(checklists.set(strategyId, checklistMap)));
-      setCustomChecklistTypes(new Map(customChecklistTypes.set(strategyId, customTypesSet)));
+      setChecklists((prev) => {
+        const next = new Map(prev);
+        next.set(strategyId, checklistMap);
+        return next;
+      });
+      setCustomChecklistTypes((prev) => {
+        const next = new Map(prev);
+        next.set(strategyId, customTypesSet);
+        return next;
+      });
     } catch (error) {
       console.error("Error loading checklists:", error);
       // Fallback to default structure
       const checklistMap = new Map<string, ChecklistItem[]>();
       checklistMap.set("entry", []);
       checklistMap.set("take_profit", []);
-      setChecklists(new Map(checklists.set(strategyId, checklistMap)));
-      setCustomChecklistTypes(new Map(customChecklistTypes.set(strategyId, new Set())));
+      setChecklists((prev) => {
+        const next = new Map(prev);
+        next.set(strategyId, checklistMap);
+        return next;
+      });
+      setCustomChecklistTypes((prev) => {
+        const next = new Map(prev);
+        next.set(strategyId, new Set());
+        return next;
+      });
     }
   };
 
@@ -1271,8 +1292,30 @@ export default function Strategies() {
     }
     
     // If editing, use editingChecklists instead of saving directly
-    if (isEditing && editingChecklists.has(strategyId)) {
-      const currentChecklist = editingChecklists.get(strategyId)!;
+    if (isEditing) {
+      // Initialize editingChecklists if it doesn't have this strategy yet
+      let currentChecklist: Map<string, ChecklistItem[]>;
+      if (editingChecklists.has(strategyId)) {
+        currentChecklist = editingChecklists.get(strategyId)!;
+      } else {
+        // Initialize from current checklists state
+        const existingChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
+        currentChecklist = new Map<string, ChecklistItem[]>();
+        for (const [checklistType, items] of existingChecklist.entries()) {
+          currentChecklist.set(checklistType, items.map(item => ({ ...item })));
+        }
+        setEditingChecklists(new Map(editingChecklists.set(strategyId, currentChecklist)));
+        
+        // Initialize history if needed
+        if (!checklistEditHistory.has(strategyId)) {
+          const originalCopy = new Map<string, ChecklistItem[]>();
+          for (const [checklistType, items] of existingChecklist.entries()) {
+            originalCopy.set(checklistType, items.map(item => ({ ...item })));
+          }
+          setChecklistEditHistory(new Map(checklistEditHistory.set(strategyId, [originalCopy])));
+        }
+      }
+      
       const items = currentChecklist.get(type) || [];
       const maxOrder = items.length > 0 ? Math.max(...items.map(i => i.item_order)) : -1;
       
@@ -1421,8 +1464,30 @@ export default function Strategies() {
     }
 
     // If editing, use editingChecklists instead of deleting directly
-    if (isEditing && editingChecklists.has(strategyId)) {
-      const currentChecklist = editingChecklists.get(strategyId)!;
+    if (isEditing) {
+      // Initialize editingChecklists if it doesn't have this strategy yet
+      let currentChecklist: Map<string, ChecklistItem[]>;
+      if (editingChecklists.has(strategyId)) {
+        currentChecklist = editingChecklists.get(strategyId)!;
+      } else {
+        // Initialize from current checklists state
+        const existingChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
+        currentChecklist = new Map<string, ChecklistItem[]>();
+        for (const [checklistType, items] of existingChecklist.entries()) {
+          currentChecklist.set(checklistType, items.map(item => ({ ...item })));
+        }
+        setEditingChecklists(new Map(editingChecklists.set(strategyId, currentChecklist)));
+        
+        // Initialize history if needed
+        if (!checklistEditHistory.has(strategyId)) {
+          const originalCopy = new Map<string, ChecklistItem[]>();
+          for (const [checklistType, items] of existingChecklist.entries()) {
+            originalCopy.set(checklistType, items.map(item => ({ ...item })));
+          }
+          setChecklistEditHistory(new Map(checklistEditHistory.set(strategyId, [originalCopy])));
+        }
+      }
+      
       const updatedChecklist = new Map(currentChecklist);
       updatedChecklist.delete(type);
       setEditingChecklists(new Map(editingChecklists.set(strategyId, updatedChecklist)));
@@ -1897,6 +1962,7 @@ export default function Strategies() {
     setSelectedStrategy(null);
     setEditingFormData({ name: "", description: "", color: "#3b82f6" });
     setNewStrategyNotes("");
+    setTempChecklists(new Map()); // Explicitly clear temp checklists when creating new strategy
     setActiveTab("notes");
     tabScrollPositions.current.clear();
   };
@@ -2094,6 +2160,22 @@ export default function Strategies() {
             }
           }
         }
+
+        // Third pass: Persist empty custom checklist types with a placeholder item so they display when viewing
+        const defaultTypes = ["entry", "take_profit"];
+        for (const [type, items] of tempChecklists.entries()) {
+          if (defaultTypes.includes(type) || type === "survey") continue;
+          if (items.length > 0) continue;
+          await invoke<number>("save_strategy_checklist_item", {
+            id: null,
+            strategyId: newStrategyId,
+            itemText: EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER,
+            isChecked: false,
+            itemOrder: 0,
+            checklistType: type,
+            parentId: null,
+          });
+        }
       }
 
       // Reset and reload
@@ -2105,6 +2187,9 @@ export default function Strategies() {
       await loadStrategies();
       setSelectedStrategy(newStrategyId);
       
+      // Always load checklists for the new strategy to ensure custom checklists are loaded
+      await loadChecklists(newStrategyId);
+      
       // If there were pending trades, switch to trades tab and reload trades
       if (hadPendingTrades) {
         setActiveTab("trades");
@@ -2113,6 +2198,11 @@ export default function Strategies() {
         updatedPairs.delete(newStrategyId);
         setStrategyPairs(updatedPairs);
         // Load the trades for the new strategy
+        await loadStrategyData(newStrategyId);
+      } else {
+        // If we had checklists (including custom), switch to Checklists tab so they're visible
+        const hadChecklists = tempChecklists.size > 0;
+        if (hadChecklists) setActiveTab("checklists");
         await loadStrategyData(newStrategyId);
       }
     } catch (error) {
@@ -3540,7 +3630,16 @@ export default function Strategies() {
                 const defaultTypes = ["entry", "take_profit"];
                 const tempCustomTypes = isCreating 
                   ? Array.from(new Set(Array.from(tempChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")))
-                  : Array.from(customChecklistTypes.get(selectedStrategy || 0) || []).filter(t => t !== "survey");
+                  : isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)
+                    ? Array.from(new Set(Array.from(currentChecklist.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")))
+                    : (() => {
+                        // When viewing (not creating/editing), combine types from currentChecklist and customChecklistTypes
+                        // to ensure custom types are displayed even if they have no items
+                        const checklistKeys = Array.from(currentChecklist.keys());
+                        const customTypes = selectedStrategy ? Array.from(customChecklistTypes.get(selectedStrategy) || []) : [];
+                        const allCustomKeys = new Set([...checklistKeys, ...customTypes]);
+                        return Array.from(allCustomKeys).filter(t => !defaultTypes.includes(t) && t !== "survey");
+                      })();
                 const allTypes = [...defaultTypes, ...tempCustomTypes.filter(t => !defaultTypes.includes(t) && t !== "survey")];
 
                 return (
@@ -3937,9 +4036,31 @@ export default function Strategies() {
                       updatedChecklist.set(typeName, []);
                     }
                     setTempChecklists(updatedChecklist);
-                  } else if (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)) {
+                  } else if (isEditing && selectedStrategy) {
                     // Add to editingChecklists when editing
-                    const currentChecklist = editingChecklists.get(selectedStrategy)!;
+                    // Initialize editingChecklists if it doesn't have this strategy yet
+                    let currentChecklist: Map<string, ChecklistItem[]>;
+                    if (editingChecklists.has(selectedStrategy)) {
+                      currentChecklist = editingChecklists.get(selectedStrategy)!;
+                    } else {
+                      // Initialize from current checklists state
+                      const existingChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
+                      currentChecklist = new Map<string, ChecklistItem[]>();
+                      for (const [checklistType, items] of existingChecklist.entries()) {
+                        currentChecklist.set(checklistType, items.map(item => ({ ...item })));
+                      }
+                      setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, currentChecklist)));
+                      
+                      // Initialize history if needed
+                      if (!checklistEditHistory.has(selectedStrategy)) {
+                        const originalCopy = new Map<string, ChecklistItem[]>();
+                        for (const [checklistType, items] of existingChecklist.entries()) {
+                          originalCopy.set(checklistType, items.map(item => ({ ...item })));
+                        }
+                        setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, [originalCopy])));
+                      }
+                    }
+                    
                     const updatedChecklist = new Map(currentChecklist);
                     if (!updatedChecklist.has(typeName)) {
                       updatedChecklist.set(typeName, []);
@@ -4022,9 +4143,31 @@ export default function Strategies() {
                         updatedChecklist.set(typeName, []);
                       }
                       setTempChecklists(updatedChecklist);
-                    } else if (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)) {
+                    } else if (isEditing && selectedStrategy) {
                       // Add to editingChecklists when editing
-                      const currentChecklist = editingChecklists.get(selectedStrategy)!;
+                      // Initialize editingChecklists if it doesn't have this strategy yet
+                      let currentChecklist: Map<string, ChecklistItem[]>;
+                      if (editingChecklists.has(selectedStrategy)) {
+                        currentChecklist = editingChecklists.get(selectedStrategy)!;
+                      } else {
+                        // Initialize from current checklists state
+                        const existingChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
+                        currentChecklist = new Map<string, ChecklistItem[]>();
+                        for (const [checklistType, items] of existingChecklist.entries()) {
+                          currentChecklist.set(checklistType, items.map(item => ({ ...item })));
+                        }
+                        setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, currentChecklist)));
+                        
+                        // Initialize history if needed
+                        if (!checklistEditHistory.has(selectedStrategy)) {
+                          const originalCopy = new Map<string, ChecklistItem[]>();
+                          for (const [checklistType, items] of existingChecklist.entries()) {
+                            originalCopy.set(checklistType, items.map(item => ({ ...item })));
+                          }
+                          setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, [originalCopy])));
+                        }
+                      }
+                      
                       const updatedChecklist = new Map(currentChecklist);
                       if (!updatedChecklist.has(typeName)) {
                         updatedChecklist.set(typeName, []);
