@@ -2104,24 +2104,77 @@ export default function Strategies() {
             await invoke("update_trade_strategy", { tradeId, strategyId: selectedStrategy });
           }
           
-          // Reload trades for this strategy
-          const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-          const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
-            strategyId: selectedStrategy,
-            pairingMethod: pairingMethod,
-            startDate: null,
-            endDate: null,
-          });
-          setStrategyPairs(new Map(strategyPairs.set(selectedStrategy, pairs)));
+          // Switch to Trades tab to show the imported trades immediately
+          setActiveTab("trades");
           
-          // Update stats
-          const stats = calculateStrategyStats(pairs);
-          setStrategyStats(new Map(strategyStats.set(selectedStrategy, stats)));
+          // Set loading state
+          setLoadingPairs(new Set([selectedStrategy]));
+          
+          // Reload trades for this strategy
+          try {
+            const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+            const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
+              strategyId: selectedStrategy,
+              pairingMethod: pairingMethod,
+              startDate: null,
+              endDate: null,
+            });
+            
+            // Update pairs and stats
+            setStrategyPairs(new Map(strategyPairs.set(selectedStrategy, pairs)));
+            const stats = calculateStrategyStats(pairs);
+            setStrategyStats(new Map(strategyStats.set(selectedStrategy, stats)));
+          } catch (error) {
+            console.error("Error loading trades after import:", error);
+          } finally {
+            // Clear loading state
+            setLoadingPairs(prev => {
+              const newSet = new Set(prev);
+              newSet.delete(selectedStrategy);
+              return newSet;
+            });
+          }
         }
       } else {
         // Handle new strategy import
         if (allImportedTradeIds.length > 0) {
           setPendingTradeIds(prev => [...prev, ...allImportedTradeIds]);
+          
+          // Switch to Trades tab to show imported trades
+          setActiveTab("trades");
+          
+          // Get all paired trades and filter to show only the imported ones
+          // This allows us to display trades immediately even for new strategies
+          try {
+            setLoadingPairs(new Set([-1])); // Use -1 as a temporary ID for new strategies
+            
+            const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+            const allPairs = await invoke<PairedTrade[]>("get_paired_trades", {
+              pairingMethod: pairingMethod || null,
+            });
+            
+            // Filter to only pairs where both entry and exit trades are in our imported list
+            const importedTradeIdsSet = new Set(allImportedTradeIds);
+            const filteredPairs = allPairs.filter(pair => 
+              importedTradeIdsSet.has(pair.entry_trade_id) && 
+              importedTradeIdsSet.has(pair.exit_trade_id)
+            );
+            
+            // Store pairs with temporary key for new strategies
+            setStrategyPairs(new Map(strategyPairs.set(-1, filteredPairs)));
+            
+            // Update stats for the imported trades
+            const stats = calculateStrategyStats(filteredPairs);
+            setStrategyStats(new Map(strategyStats.set(-1, stats)));
+          } catch (error) {
+            console.error("Error loading imported trades for new strategy:", error);
+          } finally {
+            setLoadingPairs(prev => {
+              const newSet = new Set(prev);
+              newSet.delete(-1);
+              return newSet;
+            });
+          }
         }
       }
       
@@ -2786,8 +2839,15 @@ export default function Strategies() {
   }
 
   const selectedStrategyData = strategies.find((s) => s.id === selectedStrategy);
-  const pairs = selectedStrategy ? strategyPairs.get(selectedStrategy) || [] : [];
-  const isLoadingPairs = selectedStrategy ? loadingPairs.has(selectedStrategy) : false;
+  const pairs = isCreating 
+    ? (strategyPairs.get(-1) || []) 
+    : (selectedStrategy ? strategyPairs.get(selectedStrategy) || [] : []);
+  const isLoadingPairs = isCreating 
+    ? loadingPairs.has(-1) 
+    : (selectedStrategy ? loadingPairs.has(selectedStrategy) : false);
+  const displayStats = isCreating 
+    ? strategyStats.get(-1) 
+    : (selectedStrategy ? strategyStats.get(selectedStrategy) : null);
 
   return (
     <div style={{ display: "flex", height: "100%", overflow: "hidden", flex: 1 }}>
@@ -3592,7 +3652,7 @@ export default function Strategies() {
                       )}
                     </div>
                   )}
-                  {isCreating ? (
+                  {isCreating && !displayStats && pairs.length === 0 ? (
                     <div style={{ 
                       padding: "40px", 
                       textAlign: "center",
@@ -3608,88 +3668,11 @@ export default function Strategies() {
                         Click "Import CSV" above to upload trades. They will be automatically assigned to this strategy when you save.
                       </p>
                     </div>
-                  ) : selectedStrategy && strategyStats.has(selectedStrategy) && (() => {
-                    const stats = strategyStats.get(selectedStrategy)!;
+                  ) : ((isCreating && displayStats) || (selectedStrategy && strategyStats.has(selectedStrategy))) ? (() => {
+                    const stats = displayStats || (selectedStrategy ? strategyStats.get(selectedStrategy)! : null);
+                    if (!stats) return null;
                     return (
                       <>
-                        {/* Import Results Banner for existing strategies */}
-                        {importResults && (
-                          <div style={{
-                            padding: "16px",
-                            marginBottom: "16px",
-                            backgroundColor: importResults.duplicates > 0 ? "var(--warning)" : "var(--accent)",
-                            borderRadius: "8px",
-                            border: `2px solid ${importResults.duplicates > 0 ? "var(--warning)" : "var(--accent)"}`,
-                            display: "flex",
-                            alignItems: "flex-start",
-                            gap: "12px",
-                            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.15)"
-                          }}>
-                            <div style={{
-                              width: "40px",
-                              height: "40px",
-                              borderRadius: "50%",
-                              backgroundColor: "rgba(255, 255, 255, 0.2)",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              flexShrink: 0
-                            }}>
-                              {importResults.duplicates > 0 ? (
-                                <AlertTriangle size={20} color="white" />
-                              ) : (
-                                <CheckCircle size={20} color="white" />
-                              )}
-                            </div>
-                            <div style={{ flex: 1 }}>
-                              <div style={{ 
-                                color: "white", 
-                                fontSize: "16px", 
-                                fontWeight: "600",
-                                marginBottom: "8px"
-                              }}>
-                                {importResults.duplicates > 0 
-                                  ? "Import Complete with Warnings" 
-                                  : "Trades Imported Successfully!"
-                                }
-                              </div>
-                              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                                <div style={{ 
-                                  color: "rgba(255, 255, 255, 0.95)", 
-                                  fontSize: "14px"
-                                }}>
-                                  <strong>{importResults.newTrades}</strong> new trade{importResults.newTrades !== 1 ? "s" : ""} imported and assigned to this strategy
-                                  {importResults.duplicates > 0 && (
-                                    <span style={{ display: "block", marginTop: "4px", color: "rgba(255, 255, 255, 0.9)", fontSize: "13px" }}>
-                                      ⚠️ <strong>{importResults.duplicates}</strong> duplicate trade{importResults.duplicates !== 1 ? "s" : ""} skipped (already exist in database)
-                                    </span>
-                                  )}
-                                  {importResults.errors > 0 && (
-                                    <span style={{ display: "block", marginTop: "4px", color: "rgba(255, 200, 200, 0.95)", fontSize: "13px" }}>
-                                      ❌ <strong>{importResults.errors}</strong> file{importResults.errors !== 1 ? "s" : ""} failed to import
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                            <button
-                              onClick={() => setImportResults(null)}
-                              style={{
-                                background: "transparent",
-                                border: "none",
-                                color: "white",
-                                cursor: "pointer",
-                                padding: "4px",
-                                display: "flex",
-                                alignItems: "center",
-                                opacity: 0.8
-                              }}
-                              title="Dismiss"
-                            >
-                              <X size={18} />
-                            </button>
-                          </div>
-                        )}
                         <div style={{
                           display: "flex",
                           gap: "32px",
@@ -3872,7 +3855,7 @@ export default function Strategies() {
                   )}
                       </>
                     );
-                  })()}
+                  })() : null}
                 </div>
               )}
 
