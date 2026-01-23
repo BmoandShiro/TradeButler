@@ -2013,7 +2013,7 @@ pub fn get_strategies() -> Result<Vec<Strategy>, String> {
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     let mut stmt = conn
-        .prepare("SELECT id, name, description, notes, created_at, color FROM strategies ORDER BY name")
+        .prepare("SELECT id, name, description, notes, created_at, color, COALESCE(display_order, id) FROM strategies ORDER BY COALESCE(display_order, id)")
         .map_err(|e| e.to_string())?;
     
     let strategy_iter = stmt
@@ -2025,6 +2025,7 @@ pub fn get_strategies() -> Result<Vec<Strategy>, String> {
                 notes: row.get(3)?,
                 created_at: row.get(4)?,
                 color: row.get(5)?,
+                display_order: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -2051,6 +2052,21 @@ pub fn update_strategy(id: i64, name: String, description: Option<String>, notes
 }
 
 #[tauri::command]
+pub fn update_strategy_order(strategy_orders: Vec<(i64, i64)>) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    for (id, order) in strategy_orders {
+        conn.execute(
+            "UPDATE strategies SET display_order = ?1 WHERE id = ?2",
+            params![order, id],
+        ).map_err(|e| e.to_string())?;
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
 pub fn delete_strategy(id: i64) -> Result<(), String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
@@ -2059,6 +2075,16 @@ pub fn delete_strategy(id: i64) -> Result<(), String> {
     conn.execute("UPDATE trades SET strategy_id = NULL WHERE strategy_id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     
+    // Set strategy_id to NULL for journal entries using this strategy
+    // (Foreign key constraint prevents deletion if journal entries reference it)
+    conn.execute("UPDATE journal_entries SET strategy_id = NULL WHERE strategy_id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    
+    // Delete strategy checklist items (should cascade, but being explicit)
+    conn.execute("DELETE FROM strategy_checklists WHERE strategy_id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    
+    // Now delete the strategy
     conn.execute("DELETE FROM strategies WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     
@@ -4593,7 +4619,7 @@ pub fn export_data() -> Result<String, String> {
     
     // Export strategies
     let mut stmt = conn
-        .prepare("SELECT id, name, description, notes, created_at, color FROM strategies ORDER BY name")
+        .prepare("SELECT id, name, description, notes, created_at, color, COALESCE(display_order, id) FROM strategies ORDER BY COALESCE(display_order, id)")
         .map_err(|e| e.to_string())?;
     let strategy_iter = stmt
         .query_map([], |row| {
@@ -4604,6 +4630,7 @@ pub fn export_data() -> Result<String, String> {
                 notes: row.get(3)?,
                 created_at: row.get(4)?,
                 color: row.get(5)?,
+                display_order: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;

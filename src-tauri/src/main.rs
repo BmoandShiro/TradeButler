@@ -44,6 +44,7 @@ fn main() {
             commands::create_strategy,
             commands::get_strategies,
             commands::update_strategy,
+            commands::update_strategy_order,
             commands::delete_strategy,
             commands::update_trade_strategy,
             commands::get_top_symbols,

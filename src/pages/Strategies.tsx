@@ -32,6 +32,7 @@ interface Strategy {
   notes: string | null;
   created_at: string | null;
   color: string | null;
+  display_order: number | null;
 }
 
 interface PairedTrade {
@@ -216,6 +217,247 @@ function SortableChecklistItem({
           <X size={16} />
         </button>
       )}
+    </div>
+  );
+}
+
+function SortableStrategyItem({
+  strategy,
+  isSelected,
+  selectedStrategy,
+  strategyStats,
+  expandedStats,
+  setExpandedStats,
+  setSelectedStrategy,
+  setActiveTab,
+  setIsEditing,
+  setIsCreating,
+  saveAllScrollPositions,
+  tabScrollPositions,
+  leftPanelScrollRef,
+  rightPanelScrollRef,
+  clearWorkInProgress,
+}: {
+  strategy: Strategy;
+  isSelected: boolean;
+  selectedStrategy: number | null;
+  strategyStats: Map<number, { totalTrades: number; totalPnL: number; winRate: number }>;
+  expandedStats: Set<number>;
+  setExpandedStats: Dispatch<SetStateAction<Set<number>>>;
+  setSelectedStrategy: Dispatch<SetStateAction<number | null>>;
+  setActiveTab: Dispatch<SetStateAction<TabType>>;
+  setIsEditing: Dispatch<SetStateAction<boolean>>;
+  setIsCreating: Dispatch<SetStateAction<boolean>>;
+  saveAllScrollPositions: (tabPositions: Map<TabType, number>, leftPanelScroll: number | null, rightPanelScroll: number | null, storageKey: string) => void;
+  tabScrollPositions: React.MutableRefObject<Map<TabType, number>>;
+  leftPanelScrollRef: React.RefObject<HTMLDivElement>;
+  rightPanelScrollRef: React.RefObject<HTMLDivElement>;
+  clearWorkInProgress: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: strategy.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        ...style,
+        padding: "12px",
+        backgroundColor: isSelected ? "var(--accent)" : "var(--bg-tertiary)",
+        border: `1px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
+        borderRadius: "6px",
+        cursor: "pointer",
+        transition: "all 0.2s",
+      }}
+      data-strategy-id={strategy.id}
+      onClick={() => {
+        // Save scroll position before switching
+        saveAllScrollPositions(
+          tabScrollPositions.current,
+          leftPanelScrollRef.current?.scrollTop ?? null,
+          rightPanelScrollRef.current?.scrollTop ?? null,
+          "strategies"
+        );
+        clearWorkInProgress(); // Clear work in progress when selecting an existing strategy
+        setSelectedStrategy(strategy.id);
+        setActiveTab("notes");
+        // Only reset editing/creating when switching to a different strategy
+        if (selectedStrategy !== strategy.id) {
+          setIsEditing(false);
+          setIsCreating(false);
+        }
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+        <div
+          {...attributes}
+          {...listeners}
+          style={{
+            cursor: "grab",
+            color: isSelected ? "rgba(255,255,255,0.7)" : "var(--text-secondary)",
+            display: "flex",
+            alignItems: "center",
+            padding: "4px",
+          }}
+          onClick={(e) => e.stopPropagation()}
+          title="Drag to reorder"
+        >
+          <GripVertical size={16} />
+        </div>
+        <div
+          style={{
+            width: "10px",
+            height: "10px",
+            borderRadius: "50%",
+            backgroundColor: strategy.color || "var(--accent)",
+          }}
+        />
+        <h3
+          style={{
+            fontSize: "14px",
+            fontWeight: "600",
+            color: isSelected ? "white" : "var(--text-primary)",
+            flex: 1,
+          }}
+        >
+          {strategy.name}
+        </h3>
+      </div>
+      {strategy.description && (
+        <p
+          style={{
+            color: isSelected ? "rgba(255,255,255,0.8)" : "var(--text-secondary)",
+            fontSize: "12px",
+            marginTop: "4px",
+            marginLeft: "28px",
+          }}
+        >
+          {strategy.description}
+        </p>
+      )}
+      {strategy.id && strategyStats.has(strategy.id) && (() => {
+        const stats = strategyStats.get(strategy.id)!;
+        const hasTrades = stats.totalTrades > 0;
+        const isCollapsed = expandedStats.has(strategy.id);
+        
+        if (!hasTrades) {
+          return null;
+        }
+        
+        const toggleStats = (e: React.MouseEvent) => {
+          e.stopPropagation();
+          setExpandedStats(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(strategy.id!)) {
+              newSet.delete(strategy.id!);
+            } else {
+              newSet.add(strategy.id!);
+            }
+            return newSet;
+          });
+        };
+        
+        return (
+          <div>
+            <div 
+              style={{ 
+                display: "flex", 
+                alignItems: "center", 
+                justifyContent: "space-between",
+                marginTop: "8px",
+                paddingTop: "8px",
+                borderTop: `1px solid ${isSelected ? "rgba(255,255,255,0.2)" : "var(--border-color)"}`
+              }}
+            >
+              <button
+                onClick={toggleStats}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: isSelected ? "rgba(255,255,255,0.7)" : "var(--text-secondary)",
+                  cursor: "pointer",
+                  padding: "2px",
+                  display: "flex",
+                  alignItems: "center",
+                  transition: "transform 0.2s",
+                }}
+                title={isCollapsed ? "Show stats" : "Hide stats"}
+              >
+                {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+              </button>
+            </div>
+            {!isCollapsed && (
+              <div style={{ 
+                display: "flex", 
+                gap: "16px", 
+                marginTop: "8px",
+                marginLeft: "28px",
+              }}>
+                <div>
+                  <div style={{ 
+                    fontSize: "10px", 
+                    color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
+                    marginBottom: "2px"
+                  }}>
+                    TOTAL TRADES
+                  </div>
+                  <div style={{ 
+                    fontSize: "14px", 
+                    fontWeight: "600",
+                    color: isSelected ? "white" : "var(--text-primary)"
+                  }}>
+                    {stats.totalTrades}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ 
+                    fontSize: "10px", 
+                    color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
+                    marginBottom: "2px"
+                  }}>
+                    TOTAL P&L
+                  </div>
+                  <div style={{ 
+                    fontSize: "14px", 
+                    fontWeight: "600",
+                    color: stats.totalPnL >= 0 ? "var(--profit)" : "var(--loss)"
+                  }}>
+                    ${stats.totalPnL >= 0 ? "+" : ""}{stats.totalPnL.toFixed(2)}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ 
+                    fontSize: "10px", 
+                    color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
+                    marginBottom: "2px"
+                  }}>
+                    WIN %
+                  </div>
+                  <div style={{ 
+                    fontSize: "14px", 
+                    fontWeight: "600",
+                    color: stats.winRate >= 50 ? "var(--profit)" : "var(--loss)"
+                  }}>
+                    {stats.winRate.toFixed(1)}%
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -744,6 +986,14 @@ export default function Strategies() {
   const [strategyPairs, setStrategyPairs] = useState<Map<number, PairedTrade[]>>(new Map());
   const [loadingPairs, setLoadingPairs] = useState<Set<number>>(new Set());
   const [strategyStats, setStrategyStats] = useState<Map<number, { totalTrades: number; totalPnL: number; winRate: number }>>(new Map());
+  
+  // Sensors for strategy drag-and-drop
+  const strategySensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
   const [notesContent, setNotesContent] = useState<Map<number, string>>(new Map());
   const [checklists, setChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [newChecklistItem, setNewChecklistItem] = useState<Map<string, string>>(new Map());
@@ -2709,7 +2959,7 @@ export default function Strategies() {
       if (selectedStrategy === strategyToDelete) {
         setSelectedStrategy(null);
       }
-      loadStrategies();
+      await loadStrategies();
       setShowDeleteConfirmModal(false);
       setStrategyToDelete(null);
     } catch (error) {
@@ -2721,6 +2971,29 @@ export default function Strategies() {
   const handleDeleteCancel = () => {
     setShowDeleteConfirmModal(false);
     setStrategyToDelete(null);
+  };
+
+  const handleStrategyDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    
+    const oldIndex = strategies.findIndex(s => s.id === active.id);
+    const newIndex = strategies.findIndex(s => s.id === over.id);
+    
+    if (oldIndex === -1 || newIndex === -1) return;
+    
+    const reorderedStrategies = arrayMove(strategies, oldIndex, newIndex);
+    
+    // Update display_order for all strategies
+    const strategyOrders = reorderedStrategies.map((strategy, index) => [strategy.id, index]);
+    
+    try {
+      await invoke("update_strategy_order", { strategyOrders });
+      await loadStrategies();
+    } catch (error) {
+      console.error("Error updating strategy order:", error);
+      alert("Failed to update strategy order: " + error);
+    }
   };
 
   const handleDuplicate = async (strategyId: number) => {
@@ -2915,183 +3188,42 @@ export default function Strategies() {
               </p>
             </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              {strategies.map((strategy) => {
-                const isSelected = selectedStrategy === strategy.id;
-                return (
-                  <div
-                    key={strategy.id}
-                    data-strategy-id={strategy.id}
-                    onClick={() => {
-                      // Save scroll position before switching
-                      saveAllScrollPositions(
-                        tabScrollPositions.current,
-                        leftPanelScrollRef.current?.scrollTop ?? null,
-                        rightPanelScrollRef.current?.scrollTop ?? null,
-                        "strategies"
-                      );
-                      clearWorkInProgress(); // Clear work in progress when selecting an existing strategy
-                      setSelectedStrategy(strategy.id);
-                      setActiveTab("notes");
-                      // Only reset editing/creating when switching to a different strategy
-                      if (selectedStrategy !== strategy.id) {
-                        setIsEditing(false);
-                        setIsCreating(false);
-                      }
-                    }}
-                    style={{
-                      padding: "12px",
-                      backgroundColor: isSelected ? "var(--accent)" : "var(--bg-tertiary)",
-                      border: `1px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                      transition: "all 0.2s",
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-                      <div
-                        style={{
-                          width: "10px",
-                          height: "10px",
-                          borderRadius: "50%",
-                          backgroundColor: strategy.color || "var(--accent)",
-                        }}
+            <DndContext
+              sensors={strategySensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleStrategyDragEnd}
+            >
+              <SortableContext
+                items={strategies.map(s => s.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                  {strategies.map((strategy) => {
+                    const isSelected = selectedStrategy === strategy.id;
+                    return (
+                      <SortableStrategyItem
+                        key={strategy.id}
+                        strategy={strategy}
+                        isSelected={isSelected}
+                        selectedStrategy={selectedStrategy}
+                        strategyStats={strategyStats}
+                        expandedStats={expandedStats}
+                        setExpandedStats={setExpandedStats}
+                        setSelectedStrategy={setSelectedStrategy}
+                        setActiveTab={setActiveTab}
+                        setIsEditing={setIsEditing}
+                        setIsCreating={setIsCreating}
+                        saveAllScrollPositions={saveAllScrollPositions}
+                        tabScrollPositions={tabScrollPositions}
+                        leftPanelScrollRef={leftPanelScrollRef}
+                        rightPanelScrollRef={rightPanelScrollRef}
+                        clearWorkInProgress={clearWorkInProgress}
                       />
-                      <h3
-                        style={{
-                          fontSize: "14px",
-                          fontWeight: "600",
-                          color: isSelected ? "white" : "var(--text-primary)",
-                        }}
-                      >
-                        {strategy.name}
-                      </h3>
-                    </div>
-                    {strategy.description && (
-                      <p
-                        style={{
-                          color: isSelected ? "rgba(255,255,255,0.8)" : "var(--text-secondary)",
-                          fontSize: "12px",
-                          marginTop: "4px",
-                        }}
-                      >
-                        {strategy.description}
-                      </p>
-                    )}
-                    {strategy.id && strategyStats.has(strategy.id) && (() => {
-                      const stats = strategyStats.get(strategy.id)!;
-                      const hasTrades = stats.totalTrades > 0;
-                      const isCollapsed = expandedStats.has(strategy.id); // expandedStats tracks collapsed state (inverted)
-                      
-                      if (!hasTrades) {
-                        return null;
-                      }
-                      
-                      const toggleStats = (e: React.MouseEvent) => {
-                        e.stopPropagation();
-                        setExpandedStats(prev => {
-                          const newSet = new Set(prev);
-                          if (newSet.has(strategy.id!)) {
-                            newSet.delete(strategy.id!);
-                          } else {
-                            newSet.add(strategy.id!);
-                          }
-                          return newSet;
-                        });
-                      };
-                      
-                      return (
-            <div>
-                          <div 
-                            style={{ 
-                              display: "flex", 
-                              alignItems: "center", 
-                              justifyContent: "space-between",
-                              marginTop: "8px",
-                              paddingTop: "8px",
-                              borderTop: `1px solid ${isSelected ? "rgba(255,255,255,0.2)" : "var(--border-color)"}`
-                            }}
-                          >
-                            <button
-                              onClick={toggleStats}
-                              style={{
-                                background: "transparent",
-                                border: "none",
-                                color: isSelected ? "rgba(255,255,255,0.7)" : "var(--text-secondary)",
-                                cursor: "pointer",
-                                padding: "2px",
-                                display: "flex",
-                                alignItems: "center",
-                                transition: "transform 0.2s",
-                              }}
-                              title={isCollapsed ? "Show stats" : "Hide stats"}
-                            >
-                              {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-                            </button>
-                          </div>
-                          {!isCollapsed && (
-                            <div style={{ 
-                              display: "flex", 
-                              gap: "16px", 
-                              marginTop: "8px",
-                            }}>
-                              <div>
-                                <div style={{ 
-                                  fontSize: "10px", 
-                                  color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
-                                  marginBottom: "2px"
-                                }}>
-                                  TOTAL TRADES
-                                </div>
-                                <div style={{ 
-                                  fontSize: "14px", 
-                                  fontWeight: "600",
-                                  color: isSelected ? "white" : "var(--text-primary)"
-                                }}>
-                                  {stats.totalTrades}
-                                </div>
-                              </div>
-                              <div>
-                                <div style={{ 
-                                  fontSize: "10px", 
-                                  color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
-                                  marginBottom: "2px"
-                                }}>
-                                  TOTAL P&L
-                                </div>
-                                <div style={{ 
-                                  fontSize: "14px", 
-                                  fontWeight: "600",
-                                  color: stats.totalPnL >= 0 ? "var(--profit)" : "var(--loss)"
-                                }}>
-                                  ${stats.totalPnL >= 0 ? "+" : ""}{stats.totalPnL.toFixed(2)}
-                                </div>
-                              </div>
-                              <div>
-                                <div style={{ 
-                                  fontSize: "10px", 
-                                  color: isSelected ? "rgba(255,255,255,0.6)" : "var(--text-secondary)",
-                                  marginBottom: "2px"
-                                }}>
-                                  WIN %
-                                </div>
-                                <div style={{ 
-                                  fontSize: "14px", 
-                                  fontWeight: "600",
-                                  color: stats.winRate >= 50 ? "var(--profit)" : "var(--loss)"
-                                }}>
-                                  {stats.winRate.toFixed(1)}%
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                );
-              })}
-            </div>
+                    );
+                  })}
+                </div>
+              </SortableContext>
+            </DndContext>
           )}
         </div>
       </div>
@@ -3249,7 +3381,12 @@ export default function Strategies() {
                       <Copy size={16} />
                     </button>
                     <button
-                      onClick={() => selectedStrategyData && handleDeleteClick(selectedStrategyData.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (selectedStrategyData?.id) {
+                          handleDeleteClick(selectedStrategyData.id);
+                        }
+                      }}
                       style={{
                         background: "var(--bg-tertiary)",
                         border: "1px solid var(--border-color)",
@@ -4580,7 +4717,10 @@ export default function Strategies() {
                 }}
               >
                 <button
-                  onClick={handleDeleteCancel}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteCancel();
+                  }}
                   style={{
                     background: "var(--bg-tertiary)",
                     border: "1px solid var(--border-color)",
@@ -4595,7 +4735,10 @@ export default function Strategies() {
                   Cancel
                 </button>
                 <button
-                  onClick={handleDeleteConfirm}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteConfirm();
+                  }}
                   style={{
                     background: "var(--danger)",
                     border: "none",
