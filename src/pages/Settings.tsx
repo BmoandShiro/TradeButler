@@ -31,6 +31,12 @@ import {
   setLockScreenStyle as saveLockScreenStyle, 
   LockScreenStyle 
 } from "../utils/lockScreenManager";
+import {
+  getGalaxyThemeSettings,
+  setGalaxyThemeSettings,
+  resetGalaxyThemeSettings,
+  GalaxyThemeSettings,
+} from "../utils/galaxyThemeManager";
 
 interface VersionInfo {
   current: string;
@@ -74,9 +80,19 @@ export default function Settings() {
   const [removeVerification, setRemoveVerification] = useState("");
   const [removePinDigits, setRemovePinDigits] = useState<string[]>(["", "", "", "", "", ""]);
   const [lockScreenStyle, setLockScreenStyle] = useState<LockScreenStyle>(() => getLockScreenStyle());
+  const [galaxySettings, setGalaxySettings] = useState<GalaxyThemeSettings>(() => getGalaxyThemeSettings());
   const newPasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const confirmPasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const removePasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  const updateGalaxySetting = <K extends keyof GalaxyThemeSettings>(
+    key: K,
+    value: GalaxyThemeSettings[K]
+  ) => {
+    const updated = { ...galaxySettings, [key]: value };
+    setGalaxySettings(updated);
+    setGalaxyThemeSettings({ [key]: value });
+  };
 
   const checkVersion = async () => {
     try {
@@ -795,6 +811,244 @@ export default function Settings() {
                 </div>
               </div>
             </div>
+
+            {/* Galaxy Theme Customization */}
+            {lockScreenStyle === "galaxy" && (
+              <div>
+                <h3 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "12px" }}>
+                  Galaxy Theme Settings
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                  {/* Colors */}
+                  <div>
+                    <h4 style={{ fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+                      Colors
+                    </h4>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px" }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Particle Color
+                        </label>
+                        <ColorPicker
+                          value={galaxySettings.particleColor}
+                          onChange={(color) => updateGalaxySetting("particleColor", color)}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Line Color
+                        </label>
+                        <ColorPicker
+                          value={galaxySettings.lineColor}
+                          onChange={(color) => updateGalaxySetting("lineColor", color)}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Background Color
+                        </label>
+                        <ColorPicker
+                          value={galaxySettings.backgroundColor}
+                          onChange={(color) => updateGalaxySetting("backgroundColor", color)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Physics */}
+                  <div>
+                    <h4 style={{ fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+                      Physics
+                    </h4>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Friction: {galaxySettings.friction.toFixed(2)}
+                        </label>
+                        <input
+                          type="range"
+                          min="0.9"
+                          max="1"
+                          step="0.01"
+                          value={galaxySettings.friction}
+                          onChange={(e) => updateGalaxySetting("friction", parseFloat(e.target.value))}
+                          style={{
+                            width: "100%",
+                            accentColor: "var(--accent)",
+                          }}
+                        />
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                          <span>Low (0.90)</span>
+                          <span>High (1.00)</span>
+                        </div>
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Mouse Force: {galaxySettings.mouseForce.toFixed(2)}
+                        </label>
+                        <input
+                          type="range"
+                          min="0.1"
+                          max="2"
+                          step="0.1"
+                          value={galaxySettings.mouseForce}
+                          onChange={(e) => updateGalaxySetting("mouseForce", parseFloat(e.target.value))}
+                          style={{
+                            width: "100%",
+                            accentColor: "var(--accent)",
+                          }}
+                        />
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                          <span>Weak (0.1)</span>
+                          <span>Strong (2.0)</span>
+                        </div>
+                      </div>
+                      <div>
+                        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={galaxySettings.reverseGravity}
+                            onChange={(e) => updateGalaxySetting("reverseGravity", e.target.checked)}
+                            style={{
+                              width: "16px",
+                              height: "16px",
+                              cursor: "pointer",
+                              accentColor: "var(--accent)",
+                            }}
+                          />
+                          <span>Reverse Gravity (Pull towards mouse)</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Particle Settings */}
+                  <div>
+                    <h4 style={{ fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+                      Particles
+                    </h4>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Particle Count: {galaxySettings.particleCount}
+                        </label>
+                        <input
+                          type="range"
+                          min="20"
+                          max="300"
+                          step="10"
+                          value={galaxySettings.particleCount}
+                          onChange={(e) => updateGalaxySetting("particleCount", parseInt(e.target.value))}
+                          style={{
+                            width: "100%",
+                            accentColor: "var(--accent)",
+                          }}
+                        />
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                          <span>20</span>
+                          <span>300</span>
+                        </div>
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Particle Size: {galaxySettings.particleSize.min} - {galaxySettings.particleSize.max}
+                        </label>
+                        <div style={{ display: "flex", gap: "12px" }}>
+                          <div style={{ flex: 1 }}>
+                            <label style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px", display: "block" }}>
+                              Min: {galaxySettings.particleSize.min}
+                            </label>
+                            <input
+                              type="range"
+                              min="0.5"
+                              max="5"
+                              step="0.5"
+                              value={galaxySettings.particleSize.min}
+                              onChange={(e) =>
+                                updateGalaxySetting("particleSize", {
+                                  ...galaxySettings.particleSize,
+                                  min: parseFloat(e.target.value),
+                                })
+                              }
+                              style={{
+                                width: "100%",
+                                accentColor: "var(--accent)",
+                              }}
+                            />
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <label style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px", display: "block" }}>
+                              Max: {galaxySettings.particleSize.max}
+                            </label>
+                            <input
+                              type="range"
+                              min="1"
+                              max="10"
+                              step="0.5"
+                              value={galaxySettings.particleSize.max}
+                              onChange={(e) =>
+                                updateGalaxySetting("particleSize", {
+                                  ...galaxySettings.particleSize,
+                                  max: parseFloat(e.target.value),
+                                })
+                              }
+                              style={{
+                                width: "100%",
+                                accentColor: "var(--accent)",
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          Connection Distance: {galaxySettings.connectionDistance}
+                        </label>
+                        <input
+                          type="range"
+                          min="50"
+                          max="300"
+                          step="10"
+                          value={galaxySettings.connectionDistance}
+                          onChange={(e) => updateGalaxySetting("connectionDistance", parseInt(e.target.value))}
+                          style={{
+                            width: "100%",
+                            accentColor: "var(--accent)",
+                          }}
+                        />
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                          <span>50px</span>
+                          <span>300px</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Reset Button */}
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetGalaxyThemeSettings();
+                        setGalaxySettings(getGalaxyThemeSettings());
+                      }}
+                      style={{
+                        padding: "10px 16px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        color: "var(--text-primary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "6px",
+                        fontSize: "13px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Reset to Defaults
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

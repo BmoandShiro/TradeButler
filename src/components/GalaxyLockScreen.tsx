@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Lock, Unlock, AlertCircle, Trash2 } from "lucide-react";
 import { unlockApp, hasPassword, getPasswordType, deletePassword } from "../utils/passwordManager";
 import { invoke } from "@tauri-apps/api/tauri";
+import { getGalaxyThemeSettings } from "../utils/galaxyThemeManager";
 
 interface GalaxyLockScreenProps {
   onUnlock: () => void;
@@ -28,7 +29,86 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
   const animationFrameRef = useRef<number>();
   const particlesRef = useRef<Particle[]>([]);
   const mouseRef = useRef({ x: 0, y: 0 });
+  const settingsRef = useRef(getGalaxyThemeSettings());
   const passwordType = getPasswordType();
+
+  // Update settings when they change
+  useEffect(() => {
+    settingsRef.current = getGalaxyThemeSettings();
+    // Recreate particles if count changed
+    const canvas = canvasRef.current;
+    if (canvas && particlesRef.current.length > 0) {
+      const settings = settingsRef.current;
+      const currentCount = particlesRef.current.length;
+      if (currentCount !== settings.particleCount) {
+        const particles: Particle[] = [];
+        for (let i = 0; i < settings.particleCount; i++) {
+          particles.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            vx: (Math.random() - 0.5) * 0.5,
+            vy: (Math.random() - 0.5) * 0.5,
+            radius: Math.random() * (settings.particleSize.max - settings.particleSize.min) + settings.particleSize.min,
+          });
+        }
+        particlesRef.current = particles;
+      }
+    }
+  }, []);
+
+  // Listen for storage changes to update settings dynamically
+  useEffect(() => {
+    const handleStorageChange = () => {
+      const newSettings = getGalaxyThemeSettings();
+      const oldSettings = settingsRef.current;
+      settingsRef.current = newSettings;
+      
+      // Recreate particles if count changed
+      const canvas = canvasRef.current;
+      if (canvas && oldSettings.particleCount !== newSettings.particleCount) {
+        const particles: Particle[] = [];
+        for (let i = 0; i < newSettings.particleCount; i++) {
+          particles.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            vx: (Math.random() - 0.5) * 0.5,
+            vy: (Math.random() - 0.5) * 0.5,
+            radius: Math.random() * (newSettings.particleSize.max - newSettings.particleSize.min) + newSettings.particleSize.min,
+          });
+        }
+        particlesRef.current = particles;
+      }
+    };
+    window.addEventListener("storage", handleStorageChange);
+    // Also check periodically for same-tab updates
+    const interval = setInterval(() => {
+      const newSettings = getGalaxyThemeSettings();
+      const oldSettings = settingsRef.current;
+      if (JSON.stringify(newSettings) !== JSON.stringify(oldSettings)) {
+        settingsRef.current = newSettings;
+        
+        // Recreate particles if count changed
+        const canvas = canvasRef.current;
+        if (canvas && oldSettings.particleCount !== newSettings.particleCount) {
+          const particles: Particle[] = [];
+          for (let i = 0; i < newSettings.particleCount; i++) {
+            particles.push({
+              x: Math.random() * canvas.width,
+              y: Math.random() * canvas.height,
+              vx: (Math.random() - 0.5) * 0.5,
+              vy: (Math.random() - 0.5) * 0.5,
+              radius: Math.random() * (newSettings.particleSize.max - newSettings.particleSize.min) + newSettings.particleSize.min,
+            });
+          }
+          particlesRef.current = particles;
+        }
+      }
+    }, 100);
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+      clearInterval(interval);
+    };
+  }, []);
 
   // Initialize particles
   useEffect(() => {
@@ -42,20 +122,33 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
+      // Recreate particles on resize
+      const settings = settingsRef.current;
+      const particles: Particle[] = [];
+      for (let i = 0; i < settings.particleCount; i++) {
+        particles.push({
+          x: Math.random() * canvas.width,
+          y: Math.random() * canvas.height,
+          vx: (Math.random() - 0.5) * 0.5,
+          vy: (Math.random() - 0.5) * 0.5,
+          radius: Math.random() * (settings.particleSize.max - settings.particleSize.min) + settings.particleSize.min,
+        });
+      }
+      particlesRef.current = particles;
     };
     resizeCanvas();
     window.addEventListener("resize", resizeCanvas);
 
-    // Create particles
-    const particleCount = 100;
+    // Create initial particles
+    const settings = settingsRef.current;
     const particles: Particle[] = [];
-    for (let i = 0; i < particleCount; i++) {
+    for (let i = 0; i < settings.particleCount; i++) {
       particles.push({
         x: Math.random() * canvas.width,
         y: Math.random() * canvas.height,
         vx: (Math.random() - 0.5) * 0.5,
         vy: (Math.random() - 0.5) * 0.5,
-        radius: Math.random() * 2 + 1,
+        radius: Math.random() * (settings.particleSize.max - settings.particleSize.min) + settings.particleSize.min,
       });
     }
     particlesRef.current = particles;
@@ -66,10 +159,26 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
     };
     window.addEventListener("mousemove", handleMouseMove);
 
+    // Helper function to convert hex to rgba
+    const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result
+        ? {
+            r: parseInt(result[1], 16),
+            g: parseInt(result[2], 16),
+            b: parseInt(result[3], 16),
+          }
+        : { r: 100, g: 150, b: 255 };
+    };
+
     // Animation loop
     const animate = () => {
+      const settings = settingsRef.current;
+      const particleColor = hexToRgb(settings.particleColor);
+      const lineColor = hexToRgb(settings.lineColor);
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "#000011";
+      ctx.fillStyle = settings.backgroundColor;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       const particles = particlesRef.current;
@@ -85,12 +194,13 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
         const distance = Math.sqrt(dx * dx + dy * dy);
         const minDistance = 100;
 
-        // Push particles away from mouse
+        // Apply mouse force (push away or pull towards)
         if (distance < minDistance) {
           const force = (minDistance - distance) / minDistance;
           const angle = Math.atan2(dy, dx);
-          p.vx += Math.cos(angle) * force * 0.5;
-          p.vy += Math.sin(angle) * force * 0.5;
+          const forceMultiplier = settings.reverseGravity ? -1 : 1;
+          p.vx += Math.cos(angle) * force * settings.mouseForce * forceMultiplier;
+          p.vy += Math.sin(angle) * force * settings.mouseForce * forceMultiplier;
         }
 
         // Update position
@@ -103,31 +213,30 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
         if (p.y < 0) p.y = canvas.height;
         if (p.y > canvas.height) p.y = 0;
 
-        // Damping
-        p.vx *= 0.98;
-        p.vy *= 0.98;
+        // Apply friction
+        p.vx *= settings.friction;
+        p.vy *= settings.friction;
 
         // Draw particle
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(100, 150, 255, ${0.6 + Math.random() * 0.4})`;
+        ctx.fillStyle = `rgba(${particleColor.r}, ${particleColor.g}, ${particleColor.b}, ${0.6 + Math.random() * 0.4})`;
         ctx.fill();
       }
 
       // Draw connections between nearby particles
-      const connectionDistance = 150;
       for (let i = 0; i < particles.length; i++) {
         for (let j = i + 1; j < particles.length; j++) {
           const dx = particles[i].x - particles[j].x;
           const dy = particles[i].y - particles[j].y;
           const distance = Math.sqrt(dx * dx + dy * dy);
 
-          if (distance < connectionDistance) {
-            const opacity = 1 - distance / connectionDistance;
+          if (distance < settings.connectionDistance) {
+            const opacity = 1 - distance / settings.connectionDistance;
             ctx.beginPath();
             ctx.moveTo(particles[i].x, particles[i].y);
             ctx.lineTo(particles[j].x, particles[j].y);
-            ctx.strokeStyle = `rgba(100, 150, 255, ${opacity * 0.3})`;
+            ctx.strokeStyle = `rgba(${lineColor.r}, ${lineColor.g}, ${lineColor.b}, ${opacity * 0.3})`;
             ctx.lineWidth = 1;
             ctx.stroke();
           }
@@ -289,7 +398,7 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
         left: 0,
         right: 0,
         bottom: 0,
-        backgroundColor: "#000011",
+        backgroundColor: settingsRef.current.backgroundColor,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
