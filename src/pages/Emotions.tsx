@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
 import { Plus, X, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Heart, ClipboardList, Maximize2, Minimize2, Edit2, Trash2 } from "lucide-react";
@@ -523,12 +523,69 @@ export default function Emotions() {
     return { emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false };
   });
   const [surveyResponses, setSurveyResponses] = useState<Record<string, number>>({});
+  
+  // Ref for main scroll container
+  const mainScrollRef = useRef<HTMLDivElement>(null);
+
+  // Save scroll position
+  const saveScrollPosition = () => {
+    if (mainScrollRef.current) {
+      localStorage.setItem('emotions_scroll_position', mainScrollRef.current.scrollTop.toString());
+    }
+  };
+
+  // Restore scroll position
+  const restoreScrollPosition = () => {
+    if (mainScrollRef.current) {
+      const saved = localStorage.getItem('emotions_scroll_position');
+      if (saved) {
+        const position = parseInt(saved, 10);
+        if (!isNaN(position) && position > 0) {
+          // Use requestAnimationFrame to ensure DOM is ready
+          requestAnimationFrame(() => {
+            if (mainScrollRef.current) {
+              mainScrollRef.current.scrollTop = position;
+            }
+          });
+        }
+      }
+    }
+  };
 
   // Save form state
   useEffect(() => {
     localStorage.setItem('emotions_show_form', showForm.toString());
     localStorage.setItem('emotions_form_data', JSON.stringify(formData));
   }, [showForm, formData]);
+
+  // Save scroll position when form opens/closes
+  useEffect(() => {
+    saveScrollPosition();
+  }, [showForm]);
+
+  // Restore scroll position on mount
+  useEffect(() => {
+    // Wait a bit for content to load
+    const timer = setTimeout(() => {
+      restoreScrollPosition();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Save scroll position on scroll
+  useEffect(() => {
+    const container = mainScrollRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      saveScrollPosition();
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+    };
+  }, []);
 
   useEffect(() => {
     loadStates();
@@ -584,6 +641,7 @@ export default function Emotions() {
         await loadSurveys();
         
         // Close form after successful save
+        saveScrollPosition();
         setShowForm(false);
         setEditingState(null);
         setIsEditingSelectedState(false);
@@ -643,6 +701,7 @@ export default function Emotions() {
       await loadSurveys();
       
       // Reset form
+      saveScrollPosition();
       setShowForm(false);
       setEditingState(null);
       setIsEditingSelectedState(false);
@@ -673,6 +732,7 @@ export default function Emotions() {
       await loadSurveys();
       // Close form if deleting the currently selected state
       if (editingState?.id === state.id) {
+        saveScrollPosition();
         setShowForm(false);
         setEditingState(null);
         setIsEditingSelectedState(false);
@@ -709,11 +769,12 @@ export default function Emotions() {
   const currentSurveyQuestions = formTab !== "basic" ? SURVEY_QUESTIONS[formTab] : [];
 
   return (
-    <div style={{ padding: "30px", overflowY: "auto", height: "100%", minHeight: 0 }}>
+    <div ref={mainScrollRef} style={{ padding: "30px", overflowY: "auto", height: "100%", minHeight: 0 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
         <h1 style={{ fontSize: "32px", fontWeight: "bold" }}>Emotional States</h1>
         <button
           onClick={() => {
+            saveScrollPosition();
             setEditingState(null);
             setIsEditingSelectedState(true);
             setFormData({ emotion: "Neutral", intensity: 5, notes: "" });
@@ -780,12 +841,15 @@ export default function Emotions() {
                     onClick={() => {
                       if (editingState?.id === state.id && showForm) {
                         // Clicking the same state again - unselect it
+                        saveScrollPosition();
                         setShowForm(false);
                         setEditingState(null);
                         setIsEditingSelectedState(false);
                         setIsMaximized(false);
                         return;
                       }
+                      // Save scroll position before opening form
+                      saveScrollPosition();
                       // Open in read-only mode first
                       setEditingState(state);
                       setIsEditingSelectedState(false);
@@ -1177,6 +1241,7 @@ export default function Emotions() {
                       <button
                         type="button"
                         onClick={() => {
+                          saveScrollPosition();
                           setShowForm(false);
                           setEditingState(null);
                           setIsEditingSelectedState(false);
@@ -1216,6 +1281,7 @@ export default function Emotions() {
                         type="button"
                         onClick={(e) => {
                           e.preventDefault();
+                          saveScrollPosition();
                           handleDelete(editingState);
                           setShowForm(false);
                           setEditingState(null);
@@ -1283,6 +1349,7 @@ export default function Emotions() {
                   <button
                     type="button"
                     onClick={() => {
+                      saveScrollPosition();
                       setShowForm(false);
                       setEditingState(null);
                       setIsEditingSelectedState(false);

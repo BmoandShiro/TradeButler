@@ -973,19 +973,34 @@ export default function Strategies() {
   // Save scroll positions on scroll
   useEffect(() => {
     const leftPanel = leftPanelScrollRef.current;
+    const rightPanel = rightPanelScrollRef.current;
+    
+    const handleScroll = () => {
+      // Save all scroll positions when either panel scrolls
+      saveAllScrollPositions(
+        tabScrollPositions.current,
+        leftPanelScrollRef.current?.scrollTop ?? null,
+        rightPanelScrollRef.current?.scrollTop ?? null,
+        "strategies"
+      );
+    };
     
     if (leftPanel) {
-      const handleLeftScroll = () => {
-        if (leftPanelScrollRef.current) {
-          localStorage.setItem('strategies_left_panel_scroll', leftPanelScrollRef.current.scrollTop.toString());
-        }
-      };
-      leftPanel.addEventListener('scroll', handleLeftScroll, { passive: true });
-      
-      return () => {
-        leftPanel.removeEventListener('scroll', handleLeftScroll);
-      };
+      leftPanel.addEventListener('scroll', handleScroll, { passive: true });
     }
+    
+    if (rightPanel) {
+      rightPanel.addEventListener('scroll', handleScroll, { passive: true });
+    }
+    
+    return () => {
+      if (leftPanel) {
+        leftPanel.removeEventListener('scroll', handleScroll);
+      }
+      if (rightPanel) {
+        rightPanel.removeEventListener('scroll', handleScroll);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -1085,6 +1100,8 @@ export default function Strategies() {
   };
 
   const loadStrategyData = async (strategyId: number) => {
+    // Save selected strategy ID to localStorage
+    localStorage.setItem('strategies_selected_strategy', strategyId.toString());
     // Always sync notes from strategies array to notesContent to ensure they're up to date
     const strategy = strategies.find((s) => s.id === strategyId);
     if (strategy) {
@@ -1124,6 +1141,47 @@ export default function Strategies() {
     if ((activeTab === "checklists" || activeTab === "survey") && !checklists.has(strategyId)) {
       await loadChecklists(strategyId);
     }
+    
+    // Restore scroll positions after strategy data is loaded
+    setTimeout(() => {
+      const scrollState = restoreAllScrollPositions("strategies");
+      // Restore left panel scroll
+      if (leftPanelScrollRef.current && scrollState.leftPanelScroll !== null) {
+        requestAnimationFrame(() => {
+          if (leftPanelScrollRef.current) {
+            leftPanelScrollRef.current.scrollTop = scrollState.leftPanelScroll!;
+          }
+        });
+      }
+      // Restore right panel scroll
+      if (rightPanelScrollRef.current && scrollState.rightPanelScroll !== null) {
+        requestAnimationFrame(() => {
+          if (rightPanelScrollRef.current) {
+            rightPanelScrollRef.current.scrollTop = scrollState.rightPanelScroll!;
+          }
+        });
+      }
+      // Restore active tab scroll
+      const tabContent = tabContentRefs.current.get(activeTab);
+      if (tabContent) {
+        const savedPosition = tabScrollPositions.current.get(activeTab) || scrollState.tabPositions.get(activeTab) || 0;
+        if (savedPosition > 0) {
+          requestAnimationFrame(() => {
+            tabContent.scrollTop = savedPosition;
+          });
+        }
+      } else if (rightPanelScrollRef.current && activeTab === "notes") {
+        // Notes tab uses right panel scroll
+        const savedPosition = tabScrollPositions.current.get(activeTab) || scrollState.tabPositions.get(activeTab) || 0;
+        if (savedPosition > 0) {
+          requestAnimationFrame(() => {
+            if (rightPanelScrollRef.current) {
+              rightPanelScrollRef.current.scrollTop = savedPosition;
+            }
+          });
+        }
+      }
+    }, 200);
   };
 
   const loadChecklists = async (strategyId: number) => {
@@ -2580,6 +2638,13 @@ export default function Strategies() {
                   <div
                     key={strategy.id}
                     onClick={() => {
+                      // Save scroll position before switching
+                      saveAllScrollPositions(
+                        tabScrollPositions.current,
+                        leftPanelScrollRef.current?.scrollTop ?? null,
+                        rightPanelScrollRef.current?.scrollTop ?? null,
+                        "strategies"
+                      );
                       clearWorkInProgress(); // Clear work in progress when selecting an existing strategy
                       setSelectedStrategy(strategy.id);
                       setActiveTab("notes");

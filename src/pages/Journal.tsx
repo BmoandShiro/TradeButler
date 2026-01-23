@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2 } from "lucide-react";
 import { format, parse } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
-import { saveAllScrollPositions } from "../utils/scrollManager";
+import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
 
 interface JournalEntry {
   id: number;
@@ -63,7 +63,11 @@ type TabType = "trade" | "what_went_well" | "what_could_be_improved" | "emotiona
 export default function Journal() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
-  const [selectedEntry, setSelectedEntry] = useState<JournalEntry | null>(null);
+  const [selectedEntry, setSelectedEntry] = useState<JournalEntry | null>(() => {
+    // Try to restore selected entry ID from localStorage
+    const savedId = localStorage.getItem('journal_selected_entry_id');
+    return savedId ? null : null; // Will be loaded by ID in useEffect
+  });
   const [selectedTrades, setSelectedTrades] = useState<JournalTrade[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -164,6 +168,7 @@ export default function Journal() {
   // Store scroll positions for each tab
   const tabScrollPositions = useRef<Map<TabType, number>>(new Map());
   const tabContentRefs = useRef<Map<TabType, HTMLDivElement | null>>(new Map());
+  const leftPanelScrollRef = useRef<HTMLDivElement>(null);
 
   // Save work-in-progress to localStorage
   const saveWorkInProgress = () => {
@@ -232,6 +237,14 @@ export default function Journal() {
     localStorage.removeItem('journal_work_in_progress');
   };
 
+  // Get storage key for current entry (entry-specific scroll positions)
+  const getScrollStorageKey = () => {
+    if (selectedEntry?.id) {
+      return `journal_entry_${selectedEntry.id}`;
+    }
+    return "journal"; // Fallback to global if no entry selected
+  };
+
   // Save scroll position when switching tabs
   const handleTabChange = (newTab: TabType) => {
     // Save current tab's scroll position
@@ -240,12 +253,13 @@ export default function Journal() {
       tabScrollPositions.current.set(activeTab, currentTabContent.scrollTop);
     }
     
-    // Save all scroll positions to localStorage before switching
+    // Save all scroll positions to localStorage before switching (entry-specific)
+    const storageKey = getScrollStorageKey();
     saveAllScrollPositions(
       tabScrollPositions.current,
-      null, // Journal doesn't have a left panel
+      leftPanelScrollRef.current?.scrollTop ?? null,
       null, // Journal doesn't have a right panel
-      "journal"
+      storageKey
     );
     
     // Restore new tab's scroll position
@@ -255,10 +269,23 @@ export default function Journal() {
     setTimeout(() => {
       const newTabContent = tabContentRefs.current.get(newTab);
       if (newTabContent) {
-        const savedPosition = tabScrollPositions.current.get(newTab) || 0;
-        newTabContent.scrollTop = savedPosition;
+        // Get saved position from in-memory map first, then from storage
+        let savedPosition = tabScrollPositions.current.get(newTab) || 0;
+        if (savedPosition === 0 && selectedEntry?.id) {
+          // Try to get from storage if not in memory
+          const storageKey = `journal_entry_${selectedEntry.id}`;
+          const scrollState = restoreAllScrollPositions(storageKey);
+          savedPosition = scrollState.tabPositions.get(newTab) || 0;
+          // Update in-memory map
+          if (savedPosition > 0) {
+            tabScrollPositions.current.set(newTab, savedPosition);
+          }
+        }
+        if (savedPosition > 0) {
+          newTabContent.scrollTop = savedPosition;
+        }
       }
-    }, 50);
+    }, 100);
   };
 
   // Save state before component unmounts
@@ -286,6 +313,18 @@ export default function Journal() {
     loadStrategies();
     loadAvailableSymbols();
     
+    // Restore selected entry if we have a saved ID
+    const savedEntryId = localStorage.getItem('journal_selected_entry_id');
+    if (savedEntryId) {
+      const entryId = parseInt(savedEntryId, 10);
+      if (!isNaN(entryId)) {
+        // Wait for entries to load, then restore
+        setTimeout(() => {
+          loadEntry(entryId);
+        }, 300);
+      }
+    }
+    
     // Restore work in progress after loading (only if we have saved state)
     const hasWorkInProgress = localStorage.getItem('journal_work_in_progress');
     if (hasWorkInProgress) {
@@ -310,8 +349,38 @@ export default function Journal() {
       if (selectedEntry.strategy_id) {
         loadChecklistResponses(selectedEntry.id);
       }
+      
+      // Restore scroll positions after entry data is loaded (entry-specific)
+      if (selectedEntry?.id) {
+        setTimeout(() => {
+          const storageKey = `journal_entry_${selectedEntry.id}`;
+          const scrollState = restoreAllScrollPositions(storageKey);
+          // Restore tab scroll positions to the ref
+          scrollState.tabPositions.forEach((pos, tab) => {
+            tabScrollPositions.current.set(tab, pos);
+          });
+          // Restore left panel scroll
+          if (leftPanelScrollRef.current && scrollState.leftPanelScroll !== null) {
+            requestAnimationFrame(() => {
+              if (leftPanelScrollRef.current) {
+                leftPanelScrollRef.current.scrollTop = scrollState.leftPanelScroll!;
+              }
+            });
+          }
+          // Restore active tab scroll
+          const tabContent = tabContentRefs.current.get(activeTab);
+          if (tabContent) {
+            const savedPosition = tabScrollPositions.current.get(activeTab) || 0;
+            if (savedPosition > 0) {
+              requestAnimationFrame(() => {
+                tabContent.scrollTop = savedPosition;
+              });
+            }
+          }
+        }, 300);
+      }
     }
-  }, [selectedEntry, isCreating, isEditing]);
+  }, [selectedEntry, isCreating, isEditing, activeTab]);
 
   const loadEntries = async () => {
     try {
@@ -414,6 +483,7 @@ export default function Journal() {
     setIsCreating(true);
     setIsEditing(false);
     setSelectedEntry(null);
+    localStorage.removeItem('journal_selected_entry_id');
     setSelectedTrades([]);
     setEntryFormData({
       date: format(new Date(), "yyyy-MM-dd"),
@@ -533,6 +603,7 @@ export default function Journal() {
       await invoke("delete_journal_entry", { id: selectedEntry.id });
       await loadEntries();
       setSelectedEntry(null);
+    localStorage.removeItem('journal_selected_entry_id');
       setSelectedTrades([]);
       setShowDeleteConfirmModal(false);
     } catch (error) {
@@ -705,15 +776,106 @@ export default function Journal() {
 
   // Restore scroll position when tab becomes active
   useEffect(() => {
+    if (!selectedEntry?.id) return; // Only restore if we have an entry selected
+    
     const tabContent = tabContentRefs.current.get(activeTab);
     if (tabContent) {
-      const savedPosition = tabScrollPositions.current.get(activeTab) || 0;
+      // First try in-memory map, then check storage
+      let savedPosition = tabScrollPositions.current.get(activeTab) || 0;
+      if (savedPosition === 0) {
+        // Try to get from storage
+        const storageKey = `journal_entry_${selectedEntry.id}`;
+        const scrollState = restoreAllScrollPositions(storageKey);
+        savedPosition = scrollState.tabPositions.get(activeTab) || 0;
+        // Update in-memory map
+        if (savedPosition > 0) {
+          tabScrollPositions.current.set(activeTab, savedPosition);
+        }
+      }
       // Use requestAnimationFrame to ensure DOM is ready
-      requestAnimationFrame(() => {
-        tabContent.scrollTop = savedPosition;
-      });
+      if (savedPosition > 0) {
+        requestAnimationFrame(() => {
+          const tabContent = tabContentRefs.current.get(activeTab);
+          if (tabContent) {
+            tabContent.scrollTop = savedPosition;
+          }
+        });
+      }
+    } else {
+      // Tab content not ready yet, retry after a delay
+      setTimeout(() => {
+        const tabContent = tabContentRefs.current.get(activeTab);
+        if (tabContent && selectedEntry?.id) {
+          const storageKey = `journal_entry_${selectedEntry.id}`;
+          const scrollState = restoreAllScrollPositions(storageKey);
+          const savedPosition = scrollState.tabPositions.get(activeTab) || tabScrollPositions.current.get(activeTab) || 0;
+          if (savedPosition > 0) {
+            requestAnimationFrame(() => {
+              if (tabContent) {
+                tabContent.scrollTop = savedPosition;
+              }
+            });
+          }
+        }
+      }, 100);
     }
-  }, [activeTab]);
+  }, [activeTab, selectedEntry?.id]);
+
+  // Restore scroll positions on mount (only if we have a selected entry)
+  useEffect(() => {
+    if (selectedEntry?.id) {
+      const storageKey = `journal_entry_${selectedEntry.id}`;
+      const scrollState = restoreAllScrollPositions(storageKey);
+      // Restore tab scroll positions
+      scrollState.tabPositions.forEach((pos, tab) => {
+        tabScrollPositions.current.set(tab, pos);
+      });
+      
+      // Restore left panel scroll after a delay to ensure DOM is ready
+      setTimeout(() => {
+        if (leftPanelScrollRef.current && scrollState.leftPanelScroll !== null) {
+          requestAnimationFrame(() => {
+            if (leftPanelScrollRef.current) {
+              leftPanelScrollRef.current.scrollTop = scrollState.leftPanelScroll!;
+            }
+          });
+        }
+        
+        // Restore active tab scroll
+        const tabContent = tabContentRefs.current.get(activeTab);
+        if (tabContent) {
+          const savedPosition = tabScrollPositions.current.get(activeTab) || 0;
+          if (savedPosition > 0) {
+            requestAnimationFrame(() => {
+              tabContent.scrollTop = savedPosition;
+            });
+          }
+        }
+      }, 100);
+    }
+  }, [selectedEntry?.id, activeTab]);
+
+  // Save left panel scroll position on scroll
+  useEffect(() => {
+    const leftPanel = leftPanelScrollRef.current;
+    if (leftPanel) {
+      const handleScroll = () => {
+        if (leftPanelScrollRef.current) {
+          const storageKey = selectedEntry?.id ? `journal_entry_${selectedEntry.id}` : "journal";
+          saveAllScrollPositions(
+            tabScrollPositions.current,
+            leftPanelScrollRef.current.scrollTop,
+            null,
+            storageKey
+          );
+        }
+      };
+      leftPanel.addEventListener('scroll', handleScroll, { passive: true });
+      return () => {
+        leftPanel.removeEventListener('scroll', handleScroll);
+      };
+    }
+  }, []);
 
   // Debounced auto-save when form data changes
   useEffect(() => {
@@ -905,11 +1067,49 @@ export default function Journal() {
     try {
       const entry = await invoke<JournalEntry>("get_journal_entry", { id });
       setSelectedEntry(entry);
+      // Save selected entry ID to localStorage
+      localStorage.setItem('journal_selected_entry_id', id.toString());
       await loadTrades(id);
       if (entry.strategy_id) {
         await loadStrategyChecklists(entry.strategy_id);
         await loadChecklistResponses(id);
       }
+      
+      // Restore scroll positions after entry is loaded (entry-specific)
+      // Use multiple attempts to ensure DOM is ready
+      const restoreScroll = (attempt = 0) => {
+        const storageKey = `journal_entry_${id}`;
+        const scrollState = restoreAllScrollPositions(storageKey);
+        // Restore tab scroll positions to the ref
+        scrollState.tabPositions.forEach((pos, tab) => {
+          tabScrollPositions.current.set(tab, pos);
+        });
+        // Restore left panel scroll
+        if (leftPanelScrollRef.current && scrollState.leftPanelScroll !== null) {
+          requestAnimationFrame(() => {
+            if (leftPanelScrollRef.current) {
+              leftPanelScrollRef.current.scrollTop = scrollState.leftPanelScroll!;
+            }
+          });
+        }
+        // Restore active tab scroll - try multiple times if tab content not ready
+        const tabContent = tabContentRefs.current.get(activeTab);
+        if (tabContent) {
+          const savedPosition = tabScrollPositions.current.get(activeTab) || 0;
+          if (savedPosition > 0) {
+            requestAnimationFrame(() => {
+              if (tabContent) {
+                tabContent.scrollTop = savedPosition;
+              }
+            });
+          }
+        } else if (attempt < 5) {
+          // Retry if tab content not ready yet
+          setTimeout(() => restoreScroll(attempt + 1), 100);
+        }
+      };
+      
+      setTimeout(() => restoreScroll(), 200);
     } catch (error) {
       console.error("Error loading entry:", error);
     }
@@ -1766,7 +1966,16 @@ export default function Journal() {
                       <div 
                         ref={(el) => { tabContentRefs.current.set("trade", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
-                        onScroll={(e) => { tabScrollPositions.current.set("trade", e.currentTarget.scrollTop); }}
+                        onScroll={(e) => { 
+                          tabScrollPositions.current.set("trade", e.currentTarget.scrollTop);
+                          const storageKey = selectedEntry?.id ? `journal_entry_${selectedEntry.id}` : "journal";
+                          saveAllScrollPositions(
+                            tabScrollPositions.current,
+                            leftPanelScrollRef.current?.scrollTop ?? null,
+                            null,
+                            storageKey
+                          );
+                        }}
                       >
                         <RichTextEditor
                           value={currentTrade.trade}
@@ -1780,7 +1989,16 @@ export default function Journal() {
                       <div 
                         ref={(el) => { tabContentRefs.current.set("what_went_well", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
-                        onScroll={(e) => { tabScrollPositions.current.set("what_went_well", e.currentTarget.scrollTop); }}
+                        onScroll={(e) => { 
+                          tabScrollPositions.current.set("what_went_well", e.currentTarget.scrollTop);
+                          const storageKey = selectedEntry?.id ? `journal_entry_${selectedEntry.id}` : "journal";
+                          saveAllScrollPositions(
+                            tabScrollPositions.current,
+                            leftPanelScrollRef.current?.scrollTop ?? null,
+                            null,
+                            storageKey
+                          );
+                        }}
                       >
                         <RichTextEditor
                           value={currentTrade.what_went_well}
@@ -1794,7 +2012,16 @@ export default function Journal() {
                       <div 
                         ref={(el) => { tabContentRefs.current.set("what_could_be_improved", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
-                        onScroll={(e) => { tabScrollPositions.current.set("what_could_be_improved", e.currentTarget.scrollTop); }}
+                        onScroll={(e) => { 
+                          tabScrollPositions.current.set("what_could_be_improved", e.currentTarget.scrollTop);
+                          const storageKey = selectedEntry?.id ? `journal_entry_${selectedEntry.id}` : "journal";
+                          saveAllScrollPositions(
+                            tabScrollPositions.current,
+                            leftPanelScrollRef.current?.scrollTop ?? null,
+                            null,
+                            storageKey
+                          );
+                        }}
                       >
                         <RichTextEditor
                           value={currentTrade.what_could_be_improved}
@@ -1808,7 +2035,16 @@ export default function Journal() {
                       <div 
                         ref={(el) => { tabContentRefs.current.set("emotional_state", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
-                        onScroll={(e) => { tabScrollPositions.current.set("emotional_state", e.currentTarget.scrollTop); }}
+                        onScroll={(e) => { 
+                          tabScrollPositions.current.set("emotional_state", e.currentTarget.scrollTop);
+                          const storageKey = selectedEntry?.id ? `journal_entry_${selectedEntry.id}` : "journal";
+                          saveAllScrollPositions(
+                            tabScrollPositions.current,
+                            leftPanelScrollRef.current?.scrollTop ?? null,
+                            null,
+                            storageKey
+                          );
+                        }}
                       >
                         <RichTextEditor
                           value={currentTrade.emotional_state}
@@ -1822,7 +2058,16 @@ export default function Journal() {
                       <div 
                         ref={(el) => { tabContentRefs.current.set("notes", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
-                        onScroll={(e) => { tabScrollPositions.current.set("notes", e.currentTarget.scrollTop); }}
+                        onScroll={(e) => { 
+                          tabScrollPositions.current.set("notes", e.currentTarget.scrollTop);
+                          const storageKey = selectedEntry?.id ? `journal_entry_${selectedEntry.id}` : "journal";
+                          saveAllScrollPositions(
+                            tabScrollPositions.current,
+                            leftPanelScrollRef.current?.scrollTop ?? null,
+                            null,
+                            storageKey
+                          );
+                        }}
                       >
                         <RichTextEditor
                           value={currentTrade.notes}
@@ -1836,7 +2081,16 @@ export default function Journal() {
                       <div 
                         ref={(el) => { tabContentRefs.current.set("checklists", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
-                        onScroll={(e) => { tabScrollPositions.current.set("checklists", e.currentTarget.scrollTop); }}
+                        onScroll={(e) => { 
+                          tabScrollPositions.current.set("checklists", e.currentTarget.scrollTop);
+                          const storageKey = selectedEntry?.id ? `journal_entry_${selectedEntry.id}` : "journal";
+                          saveAllScrollPositions(
+                            tabScrollPositions.current,
+                            leftPanelScrollRef.current?.scrollTop ?? null,
+                            null,
+                            storageKey
+                          );
+                        }}
                       >
                         {entryFormData.strategy_id && currentChecklists ? (
                           <div style={{ overflowY: "auto" }}>
@@ -1981,7 +2235,16 @@ export default function Journal() {
                       <div 
                         ref={(el) => { tabContentRefs.current.set("survey", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
-                        onScroll={(e) => { tabScrollPositions.current.set("survey", e.currentTarget.scrollTop); }}
+                        onScroll={(e) => { 
+                          tabScrollPositions.current.set("survey", e.currentTarget.scrollTop);
+                          const storageKey = selectedEntry?.id ? `journal_entry_${selectedEntry.id}` : "journal";
+                          saveAllScrollPositions(
+                            tabScrollPositions.current,
+                            leftPanelScrollRef.current?.scrollTop ?? null,
+                            null,
+                            storageKey
+                          );
+                        }}
                       >
                         {entryFormData.strategy_id && currentChecklists ? (
                           <div style={{ overflowY: "auto" }}>
@@ -2268,7 +2531,7 @@ export default function Journal() {
         >
           <h1 style={{ fontSize: "20px", fontWeight: "bold" }}>Entries</h1>
         </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: "12px" }}>
+        <div ref={leftPanelScrollRef} style={{ flex: 1, overflowY: "auto", padding: "12px" }}>
           {loading ? (
             <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "20px" }}>
               Loading...
@@ -2296,7 +2559,21 @@ export default function Journal() {
                   <div
                     key={entry.id}
                     onClick={() => {
+                      // Save scroll position before switching (for previous entry if any)
+                      if (selectedEntry?.id) {
+                        const prevStorageKey = `journal_entry_${selectedEntry.id}`;
+                        saveAllScrollPositions(
+                          tabScrollPositions.current,
+                          leftPanelScrollRef.current?.scrollTop ?? null,
+                          null,
+                          prevStorageKey
+                        );
+                      }
                       clearWorkInProgress(); // Clear work in progress when selecting an existing entry
+                      // Save selected entry ID immediately
+                      localStorage.setItem('journal_selected_entry_id', entry.id.toString());
+                      // Clear tab scroll positions to load fresh for new entry
+                      tabScrollPositions.current.clear();
                       loadEntry(entry.id);
                       setIsCreating(false);
                       setIsEditing(false);
