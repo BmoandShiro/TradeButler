@@ -117,11 +117,47 @@ function SortableStrategy({
     opacity: isDragging ? 0.5 : 1,
   };
 
-  const handleStrategyClick = (e: React.MouseEvent) => {
-    // Don't trigger selection if clicking on the drag handle
+  const mouseDownRef = React.useRef<{ x: number; y: number; time: number } | null>(null);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    // Don't track if clicking on drag handle
     if ((e.target as HTMLElement).closest('[data-drag-handle]')) {
       return;
     }
+    mouseDownRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      time: Date.now(),
+    };
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    // Don't trigger selection if currently dragging
+    if (isDragging) {
+      mouseDownRef.current = null;
+      return;
+    }
+    
+    // Don't trigger selection if clicking on the drag handle
+    if ((e.target as HTMLElement).closest('[data-drag-handle]')) {
+      mouseDownRef.current = null;
+      return;
+    }
+
+    // Check if this was a click (not a drag) by comparing mouse position
+    if (mouseDownRef.current) {
+      const deltaX = Math.abs(e.clientX - mouseDownRef.current.x);
+      const deltaY = Math.abs(e.clientY - mouseDownRef.current.y);
+      const deltaTime = Date.now() - mouseDownRef.current.time;
+      
+      // If mouse moved more than 5px or took more than 500ms, it was likely a drag
+      if (deltaX > 5 || deltaY > 5 || deltaTime > 500) {
+        mouseDownRef.current = null;
+        return;
+      }
+    }
+
+    mouseDownRef.current = null;
     
     saveAllScrollPositions(
       tabScrollPositions,
@@ -141,7 +177,8 @@ function SortableStrategy({
   return (
     <div
       ref={setNodeRef}
-      onClick={handleStrategyClick}
+      onMouseDown={handleMouseDown}
+      onMouseUp={handleMouseUp}
       style={{
         ...style,
         padding: "12px",
@@ -3087,6 +3124,28 @@ export default function Strategies() {
             idMap.set(item.id, newId);
           }
         }
+      }
+    }
+    
+    // Third pass: Persist empty custom checklist types with a placeholder item so they display when viewing
+    const defaultTypes = ["entry", "take_profit"];
+    for (const [type, items] of editingChecklist.entries()) {
+      if (defaultTypes.includes(type) || type === "survey") continue;
+      if (items.length > 0) continue;
+      
+      // Check if this type existed in the original checklist
+      const originalItems = originalChecklist.get(type) || [];
+      // Only create placeholder if this is a new type (didn't exist before)
+      if (originalItems.length === 0) {
+        await invoke<number>("save_strategy_checklist_item", {
+          id: null,
+          strategyId: strategyId,
+          itemText: EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER,
+          isChecked: false,
+          itemOrder: 0,
+          checklistType: type,
+          parentId: null,
+        });
       }
     }
     
