@@ -46,7 +46,7 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
       
-      // Create aurora bands
+      // Create aurora bands with more variation
       const bands: AuroraBand[] = [
         {
           y: canvas.height * 0.2,
@@ -58,31 +58,31 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
           opacity: 0.25,
         },
         {
-          y: canvas.height * 0.35,
+          y: canvas.height * 0.3,
           speed: 0.25,
           amplitude: 100,
           frequency: 0.0015,
           phase: Math.PI / 3,
           color: { r: 0, g: 200, b: 255 }, // Cyan
-          opacity: 0.2,
+          opacity: 0.22,
         },
         {
-          y: canvas.height * 0.5,
+          y: canvas.height * 0.45,
           speed: 0.2,
           amplitude: 120,
           frequency: 0.0012,
           phase: Math.PI / 2,
           color: { r: 138, g: 43, b: 226 }, // Purple
-          opacity: 0.18,
+          opacity: 0.2,
         },
         {
-          y: canvas.height * 0.65,
+          y: canvas.height * 0.6,
           speed: 0.35,
           amplitude: 90,
           frequency: 0.0018,
           phase: Math.PI,
           color: { r: 255, g: 20, b: 147 }, // Pink
-          opacity: 0.15,
+          opacity: 0.18,
         },
       ];
       auroraBandsRef.current = bands;
@@ -160,7 +160,8 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
       ctx.fillStyle = "#000011";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Draw stars
+      // Draw stars (ensure source-over for stars)
+      ctx.globalCompositeOperation = "source-over";
       starsRef.current.forEach((star) => {
         const twinkle = Math.sin(timeRef.current * 2 + star.x * 0.01) * 0.3 + 0.7;
         ctx.beginPath();
@@ -178,24 +179,46 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
         if (band.y < -200) band.y = canvas.height + 200;
         if (band.y > canvas.height + 200) band.y = -200;
 
-        // Create flowing wave pattern with smoother curves
+        // Create flowing wave pattern with organic variation
         const points: Array<{ x: number; y: number }> = [];
-        const segments = 400; // More segments for smoother curves
+        const segments = 500; // More segments for smoother curves
+        
+        // Add turbulence and variation to break linear patterns
+        const turbulenceScale = 0.0008;
+        const verticalVariation = 30;
         
         for (let i = 0; i <= segments; i++) {
           const x = (canvas.width / segments) * i;
-          // Smoother wave calculations with reduced frequency variations
+          
+          // Base wave with multiple frequencies for organic feel
           const wave1 = Math.sin(x * band.frequency + timeRef.current * 0.4 + band.phase) * band.amplitude;
           const wave2 = Math.sin(x * band.frequency * 1.5 + timeRef.current * 0.6 + band.phase) * (band.amplitude * 0.4);
           const wave3 = Math.sin(x * band.frequency * 0.7 + timeRef.current * 0.25 + band.phase) * (band.amplitude * 0.25);
-          const y = band.y + wave1 + wave2 + wave3;
+          
+          // Add turbulence/noise to break up linear patterns
+          const turbulence = Math.sin(x * turbulenceScale * 3 + timeRef.current * 0.2) * 
+                            Math.cos(x * turbulenceScale * 2.3 + timeRef.current * 0.3) * 
+                            verticalVariation;
+          
+          // Add smaller scale variations
+          const microVariation = Math.sin(x * band.frequency * 3.7 + timeRef.current * 0.8 + band.phase) * (band.amplitude * 0.15);
+          const macroVariation = Math.cos(x * band.frequency * 0.3 + timeRef.current * 0.15 + band.phase) * (band.amplitude * 0.2);
+          
+          // Vary amplitude along the width for more organic feel
+          const amplitudeVariation = 1 + Math.sin(x * 0.001 + timeRef.current * 0.1) * 0.3;
+          
+          const y = band.y + (wave1 + wave2 + wave3) * amplitudeVariation + turbulence + microVariation + macroVariation;
           points.push({ x, y });
         }
 
-        // Draw aurora with gradient and glow
-        for (let layer = 0; layer < 3; layer++) {
-          const layerOpacity = band.opacity * (1 - layer * 0.4);
-          const layerWidth = 180 - layer * 50;
+        // Draw aurora with gradient and blurred edges - more layers for better blending
+        // Use screen blend mode for additive color mixing when bands overlap
+        ctx.globalCompositeOperation = "screen";
+        
+        for (let layer = 0; layer < 6; layer++) {
+          const layerOpacity = band.opacity * (1 - layer * 0.18);
+          const layerWidth = 250 - layer * 30; // Wider layers for more overlap
+          const blurAmount = 20 + layer * 6; // More blur for outer layers
           
           ctx.beginPath();
           ctx.moveTo(points[0].x, points[0].y);
@@ -218,32 +241,66 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
             ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, curr.x, curr.y);
           }
 
-          // Draw top edge with same smooth wave pattern
+          // Draw top edge with organic variation (slightly different from bottom for natural look)
           for (let i = points.length - 1; i >= 0; i--) {
             const point = points[i];
-            const wave1 = Math.sin(point.x * band.frequency + timeRef.current * 0.4 + band.phase) * band.amplitude;
-            const wave2 = Math.sin(point.x * band.frequency * 1.5 + timeRef.current * 0.6 + band.phase) * (band.amplitude * 0.4);
-            const wave3 = Math.sin(point.x * band.frequency * 0.7 + timeRef.current * 0.25 + band.phase) * (band.amplitude * 0.25);
-            const topY = band.y + wave1 + wave2 + wave3 - layerWidth;
+            const x = point.x;
+            
+            // Similar wave calculations but with slight variations for organic feel
+            const wave1 = Math.sin(x * band.frequency + timeRef.current * 0.4 + band.phase) * band.amplitude;
+            const wave2 = Math.sin(x * band.frequency * 1.5 + timeRef.current * 0.6 + band.phase) * (band.amplitude * 0.4);
+            const wave3 = Math.sin(x * band.frequency * 0.7 + timeRef.current * 0.25 + band.phase) * (band.amplitude * 0.25);
+            
+            // Add turbulence matching bottom edge
+            const turbulence = Math.sin(x * turbulenceScale * 3 + timeRef.current * 0.2) * 
+                              Math.cos(x * turbulenceScale * 2.3 + timeRef.current * 0.3) * 
+                              verticalVariation;
+            
+            // Slightly different micro variations for top edge
+            const microVariation = Math.sin(x * band.frequency * 3.9 + timeRef.current * 0.85 + band.phase) * (band.amplitude * 0.15);
+            const macroVariation = Math.cos(x * band.frequency * 0.3 + timeRef.current * 0.15 + band.phase) * (band.amplitude * 0.2);
+            
+            const amplitudeVariation = 1 + Math.sin(x * 0.001 + timeRef.current * 0.1) * 0.3;
+            
+            // Add slight width variation for more organic shape
+            const widthVariation = layerWidth + Math.sin(x * 0.0005 + timeRef.current * 0.2) * 20;
+            
+            const topY = band.y + (wave1 + wave2 + wave3) * amplitudeVariation + turbulence + microVariation + macroVariation - widthVariation;
             ctx.lineTo(point.x, topY);
           }
           
           ctx.closePath();
 
-          // Create gradient for aurora with smoother fade
-          const gradient = ctx.createLinearGradient(0, band.y - layerWidth, 0, band.y + layerWidth);
+          // Create gradient for aurora with very soft, blurred fade
+          const gradient = ctx.createLinearGradient(0, band.y - layerWidth - blurAmount, 0, band.y + layerWidth + blurAmount);
           const alpha = layerOpacity;
+          // More gradual fade for blurred edges
           gradient.addColorStop(0, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, 0)`);
-          gradient.addColorStop(0.2, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.15})`);
-          gradient.addColorStop(0.4, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.4})`);
+          gradient.addColorStop(0.15, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.08})`);
+          gradient.addColorStop(0.3, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.25})`);
+          gradient.addColorStop(0.45, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.45})`);
           gradient.addColorStop(0.5, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.6})`);
-          gradient.addColorStop(0.6, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.4})`);
-          gradient.addColorStop(0.8, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.15})`);
+          gradient.addColorStop(0.55, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.45})`);
+          gradient.addColorStop(0.7, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.25})`);
+          gradient.addColorStop(0.85, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.08})`);
           gradient.addColorStop(1, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, 0)`);
+          
+          // Apply shadow blur for soft edges
+          ctx.shadowBlur = blurAmount;
+          ctx.shadowColor = `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.5})`;
+          ctx.shadowOffsetX = 0;
+          ctx.shadowOffsetY = 0;
           
           ctx.fillStyle = gradient;
           ctx.fill();
+          
+          // Reset shadow for next layer
+          ctx.shadowBlur = 0;
+          ctx.shadowColor = "transparent";
         }
+        
+        // Reset blend mode after drawing this band
+        ctx.globalCompositeOperation = "source-over";
 
         // Add subtle particle sparkles along the aurora
         for (let i = 0; i < 15; i++) {
