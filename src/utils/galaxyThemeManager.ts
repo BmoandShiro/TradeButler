@@ -16,6 +16,11 @@ export interface GalaxyThemeSettings {
     min: number;
     max: number;
   };
+  particleCollisions: boolean;
+  orbitAroundCenter: boolean;
+  orbitSpeed: number;
+  orbitRadius: number;
+  orbitGravity: number;
 }
 
 const GALAXY_THEME_KEY = "tradebutler_galaxy_theme_settings";
@@ -33,6 +38,11 @@ const defaultSettings: GalaxyThemeSettings = {
     min: 1,
     max: 3,
   },
+  particleCollisions: false,
+  orbitAroundCenter: false,
+  orbitSpeed: 0.5,
+  orbitRadius: 200,
+  orbitGravity: 0.0001,
 };
 
 /**

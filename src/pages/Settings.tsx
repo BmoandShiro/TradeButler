@@ -94,6 +94,16 @@ export default function Settings() {
     setGalaxyThemeSettings({ [key]: value });
   };
 
+  // Ensure orbitRadius exists in state (for users who had settings before this was added)
+  useEffect(() => {
+    if (galaxySettings.orbitRadius === undefined) {
+      const currentSettings = getGalaxyThemeSettings();
+      if (currentSettings.orbitRadius !== undefined) {
+        setGalaxySettings(currentSettings);
+      }
+    }
+  }, [galaxySettings.orbitRadius]);
+
   const checkVersion = async () => {
     try {
       setIsChecking(true);
@@ -918,6 +928,105 @@ export default function Settings() {
                           />
                           <span>Reverse Gravity (Pull towards mouse)</span>
                         </label>
+                      </div>
+                      <div>
+                        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={galaxySettings.particleCollisions}
+                            onChange={(e) => updateGalaxySetting("particleCollisions", e.target.checked)}
+                            style={{
+                              width: "16px",
+                              height: "16px",
+                              cursor: "pointer",
+                              accentColor: "var(--accent)",
+                            }}
+                          />
+                          <span>Particle Collisions (Bounce off each other)</span>
+                        </label>
+                      </div>
+                      <div>
+                        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer", marginBottom: "8px" }}>
+                          <input
+                            type="checkbox"
+                            checked={galaxySettings.orbitAroundCenter}
+                            onChange={(e) => updateGalaxySetting("orbitAroundCenter", e.target.checked)}
+                            style={{
+                              width: "16px",
+                              height: "16px",
+                              cursor: "pointer",
+                              accentColor: "var(--accent)",
+                            }}
+                          />
+                          <span>Orbit Around Center</span>
+                        </label>
+                        {galaxySettings.orbitAroundCenter && (
+                          <div style={{ marginLeft: "24px", marginTop: "8px", display: "flex", flexDirection: "column", gap: "12px" }}>
+                            <div>
+                              <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                Orbit Speed: {galaxySettings.orbitSpeed.toFixed(2)}
+                              </label>
+                              <input
+                                type="range"
+                                min="0.1"
+                                max="2"
+                                step="0.1"
+                                value={galaxySettings.orbitSpeed}
+                                onChange={(e) => updateGalaxySetting("orbitSpeed", parseFloat(e.target.value))}
+                                style={{
+                                  width: "100%",
+                                  accentColor: "var(--accent)",
+                                }}
+                              />
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                                <span>Slow (0.1)</span>
+                                <span>Fast (2.0)</span>
+                              </div>
+                            </div>
+                            <div>
+                              <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                Orbit Radius: {galaxySettings.orbitRadius || 200}px
+                              </label>
+                              <input
+                                type="range"
+                                min="50"
+                                max="500"
+                                step="10"
+                                value={galaxySettings.orbitRadius || 200}
+                                onChange={(e) => updateGalaxySetting("orbitRadius", parseInt(e.target.value))}
+                                style={{
+                                  width: "100%",
+                                  accentColor: "var(--accent)",
+                                }}
+                              />
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                                <span>50px</span>
+                                <span>500px</span>
+                              </div>
+                            </div>
+                            <div>
+                              <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                Orbit Gravity: {(galaxySettings.orbitGravity || 0.0001).toFixed(5)}
+                              </label>
+                              <input
+                                type="range"
+                                min="0.00001"
+                                max="0.0003"
+                                step="0.00001"
+                                value={galaxySettings.orbitGravity || 0.0001}
+                                onChange={(e) => updateGalaxySetting("orbitGravity", parseFloat(e.target.value))}
+                                style={{
+                                  width: "100%",
+                                  accentColor: "var(--accent)",
+                                }}
+                              />
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                                <span>Weak (0.00001)</span>
+                                <span>Strong (0.0003)</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>

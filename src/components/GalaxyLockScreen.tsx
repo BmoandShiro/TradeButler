@@ -184,9 +184,35 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
       const particles = particlesRef.current;
       const mouse = mouseRef.current;
 
+      // Calculate center of lock screen modal (approximate center of screen)
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+
       // Update and draw particles
       for (let i = 0; i < particles.length; i++) {
         const p = particles[i];
+
+        // Orbital motion around center
+        if (settings.orbitAroundCenter) {
+          const dxToCenter = p.x - centerX;
+          const dyToCenter = p.y - centerY;
+          const distanceToCenter = Math.sqrt(dxToCenter * dxToCenter + dyToCenter * dyToCenter);
+          
+          if (distanceToCenter > 0) {
+            // Calculate angle from center to particle
+            const angleToCenter = Math.atan2(dyToCenter, dxToCenter);
+            // Apply tangential force (perpendicular to radius) for orbital motion
+            const tangentialAngle = angleToCenter + Math.PI / 2; // 90 degrees from radius
+            const orbitalForce = settings.orbitSpeed * 0.01; // Slow orbital motion
+            p.vx += Math.cos(tangentialAngle) * orbitalForce;
+            p.vy += Math.sin(tangentialAngle) * orbitalForce;
+            
+            // Optional: slight centripetal force to maintain orbit radius
+            const centripetalForce = (distanceToCenter - settings.orbitRadius) * settings.orbitGravity; // Pull towards ideal radius
+            p.vx -= Math.cos(angleToCenter) * centripetalForce;
+            p.vy -= Math.sin(angleToCenter) * centripetalForce;
+          }
+        }
 
         // Calculate distance from mouse
         const dx = p.x - mouse.x;
@@ -201,6 +227,49 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
           const forceMultiplier = settings.reverseGravity ? -1 : 1;
           p.vx += Math.cos(angle) * force * settings.mouseForce * forceMultiplier;
           p.vy += Math.sin(angle) * force * settings.mouseForce * forceMultiplier;
+        }
+
+        // Particle collisions (bounce off each other)
+        if (settings.particleCollisions) {
+          for (let j = i + 1; j < particles.length; j++) {
+            const p2 = particles[j];
+            const dx = p.x - p2.x;
+            const dy = p.y - p2.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const minDist = p.radius + p2.radius;
+
+            if (distance < minDist && distance > 0) {
+              // Calculate collision angle
+              const angle = Math.atan2(dy, dx);
+              const sin = Math.sin(angle);
+              const cos = Math.cos(angle);
+
+              // Rotate velocities to collision frame
+              const vx1 = p.vx * cos + p.vy * sin;
+              const vy1 = p.vy * cos - p.vx * sin;
+              const vx2 = p2.vx * cos + p2.vy * sin;
+              const vy2 = p2.vy * cos - p2.vx * sin;
+
+              // Swap velocities (elastic collision with equal mass)
+              const swappedVx1 = vx2;
+              const swappedVx2 = vx1;
+
+              // Rotate back to world frame
+              p.vx = swappedVx1 * cos - vy1 * sin;
+              p.vy = vy1 * cos + swappedVx1 * sin;
+              p2.vx = swappedVx2 * cos - vy2 * sin;
+              p2.vy = vy2 * cos + swappedVx2 * sin;
+
+              // Separate particles to prevent overlap
+              const overlap = minDist - distance;
+              const separationX = (dx / distance) * overlap * 0.5;
+              const separationY = (dy / distance) * overlap * 0.5;
+              p.x += separationX;
+              p.y += separationY;
+              p2.x -= separationX;
+              p2.y -= separationY;
+            }
+          }
         }
 
         // Update position
