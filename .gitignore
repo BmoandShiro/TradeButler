@@ -45,5 +45,6 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
-app-icon.png
+# Note: app-icon.png should NOT be ignored - it's required for the app
+# If you need to ignore a specific app-icon.png, use a more specific path
 

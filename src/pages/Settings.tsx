@@ -97,11 +97,16 @@ export default function Settings() {
         });
         alert("Update downloaded and installer started. Please follow the installation wizard. Your data will be preserved.");
       } else {
-        // For portable version, download to user's Downloads folder
-        const downloadPath = await invoke<string>("download_portable_update", { 
+        // For portable version, download and auto-update
+        await invoke("download_portable_update", { 
           download_url: versionInfo.download_url 
         });
-        alert(`Update downloaded to: ${downloadPath}\n\nPlease close TradeButler and replace the old executable with the new one. Your data will be preserved.`);
+        alert(`Update downloaded successfully!\n\nThe new version will launch automatically and this window will close.\n\nThe old version will be automatically deleted after the new one starts.\n\nYour data will be preserved.`);
+        
+        // Close the app after a short delay to allow the update script to launch
+        setTimeout(() => {
+          invoke("exit_app");
+        }, 1500);
       }
       
       setShowUpdateModal(false);
@@ -824,7 +829,7 @@ export default function Settings() {
             >
               {versionInfo.is_installer 
                 ? "The installer will update your application. Your data will be preserved."
-                : "Download the new portable version. Close TradeButler and replace the executable. Your data will be preserved."}
+                : "The new version will download and launch automatically. This window will close, and the old version will be automatically deleted. Your data will be preserved."}
             </p>
             <div
               style={{
