@@ -2091,6 +2091,110 @@ pub fn delete_strategy(id: i64) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StrategyAssociatedRecords {
+    pub trade_count: i64,
+    pub journal_entry_count: i64,
+    pub checklist_item_count: i64,
+    pub sample_trades: Vec<(i64, String, String, String)>, // (id, symbol, side, timestamp)
+    pub sample_journal_entries: Vec<(i64, String, String)>, // (id, date, title)
+}
+
+#[tauri::command]
+pub fn get_strategy_associated_records(strategy_id: i64) -> Result<StrategyAssociatedRecords, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    // Count trades
+    let trade_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM trades WHERE strategy_id = ?1",
+            params![strategy_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    
+    // Count journal entries (using DISTINCT to avoid duplicates)
+    let journal_entry_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT id) FROM journal_entries WHERE strategy_id = ?1",
+            params![strategy_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    
+    // Count checklist items
+    let checklist_item_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM strategy_checklists WHERE strategy_id = ?1",
+            params![strategy_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    
+    // Get sample trades (up to 5 most recent)
+    let mut stmt = conn
+        .prepare("SELECT id, symbol, side, timestamp FROM trades WHERE strategy_id = ?1 ORDER BY timestamp DESC LIMIT 5")
+        .map_err(|e| e.to_string())?;
+    
+    let trade_iter = stmt
+        .query_map(params![strategy_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    
+    let mut sample_trades = Vec::new();
+    for trade in trade_iter {
+        sample_trades.push(trade.map_err(|e| e.to_string())?);
+    }
+    
+    // Get sample journal entries (up to 5 most recent, ensuring uniqueness by id)
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, date, title FROM journal_entries 
+             WHERE strategy_id = ?1 
+             ORDER BY date DESC, created_at DESC 
+             LIMIT 10"
+        )
+        .map_err(|e| e.to_string())?;
+    
+    let journal_iter = stmt
+        .query_map(params![strategy_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    
+    // Use a HashSet to deduplicate by id in case of any remaining duplicates
+    use std::collections::HashSet;
+    let mut seen_ids = HashSet::new();
+    let mut sample_journal_entries = Vec::new();
+    for entry in journal_iter {
+        let entry_result = entry.map_err(|e| e.to_string())?;
+        let entry_id: i64 = entry_result.0;
+        if !seen_ids.contains(&entry_id) {
+            seen_ids.insert(entry_id);
+            sample_journal_entries.push(entry_result);
+        }
+    }
+    
+    Ok(StrategyAssociatedRecords {
+        trade_count,
+        journal_entry_count,
+        checklist_item_count,
+        sample_trades,
+        sample_journal_entries,
+    })
+}
+
 #[tauri::command]
 pub fn update_trade_strategy(trade_id: i64, strategy_id: Option<i64>) -> Result<(), String> {
     let db_path = get_db_path();

@@ -1009,6 +1009,14 @@ export default function Strategies() {
   const [editingItemText, setEditingItemText] = useState<string>("");
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [strategyToDelete, setStrategyToDelete] = useState<number | null>(null);
+  const [associatedRecords, setAssociatedRecords] = useState<{
+    trade_count: number;
+    journal_entry_count: number;
+    checklist_item_count: number;
+    sample_trades: Array<[number, string, string, string]>;
+    sample_journal_entries: Array<[number, string, string]>;
+  } | null>(null);
+  const [loadingAssociatedRecords, setLoadingAssociatedRecords] = useState(false);
   const [showNameRequiredModal, setShowNameRequiredModal] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const [tempChecklists, setTempChecklists] = useState<Map<string, ChecklistItem[]>>(new Map());
@@ -2946,9 +2954,26 @@ export default function Strategies() {
     setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, restored)));
   };
 
-  const handleDeleteClick = (id: number) => {
+  const handleDeleteClick = async (id: number) => {
     setStrategyToDelete(id);
+    setLoadingAssociatedRecords(true);
     setShowDeleteConfirmModal(true);
+    
+    try {
+      const records = await invoke<{
+        trade_count: number;
+        journal_entry_count: number;
+        checklist_item_count: number;
+        sample_trades: Array<[number, string, string, string]>;
+        sample_journal_entries: Array<[number, string, string]>;
+      }>("get_strategy_associated_records", { strategyId: id });
+      setAssociatedRecords(records);
+    } catch (error) {
+      console.error("Error fetching associated records:", error);
+      setAssociatedRecords(null);
+    } finally {
+      setLoadingAssociatedRecords(false);
+    }
   };
 
   const handleDeleteConfirm = async () => {
@@ -2962,6 +2987,7 @@ export default function Strategies() {
       await loadStrategies();
       setShowDeleteConfirmModal(false);
       setStrategyToDelete(null);
+      setAssociatedRecords(null);
     } catch (error) {
       console.error("Error deleting strategy:", error);
       alert("Failed to delete strategy: " + error);
@@ -2971,6 +2997,7 @@ export default function Strategies() {
   const handleDeleteCancel = () => {
     setShowDeleteConfirmModal(false);
     setStrategyToDelete(null);
+    setAssociatedRecords(null);
   };
 
   const handleStrategyDragEnd = async (event: DragEndEvent) => {
@@ -4674,7 +4701,9 @@ export default function Strategies() {
                 borderRadius: "12px",
                 padding: "24px",
                 width: "90%",
-                maxWidth: "450px",
+                maxWidth: "550px",
+                maxHeight: "80vh",
+                overflowY: "auto",
                 boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
               }}
               onClick={(e) => e.stopPropagation()}
@@ -4693,22 +4722,148 @@ export default function Strategies() {
                 style={{
                   fontSize: "14px",
                   color: "var(--text-primary)",
-                  marginBottom: "8px",
+                  marginBottom: "16px",
                   lineHeight: "1.5",
                 }}
               >
                 Are you sure you want to delete <strong>"{strategyName}"</strong>?
               </p>
-              <p
-                style={{
-                  fontSize: "13px",
-                  color: "var(--text-secondary)",
-                  marginBottom: "20px",
-                  lineHeight: "1.5",
-                }}
-              >
-                This action cannot be undone. All trades using this strategy will be unassigned, and all checklist items and notes will be permanently deleted.
-              </p>
+              
+              {loadingAssociatedRecords ? (
+                <div style={{ marginBottom: "20px", textAlign: "center", color: "var(--text-secondary)", fontSize: "13px" }}>
+                  Loading associated records...
+                </div>
+              ) : associatedRecords && (
+                <div style={{ marginBottom: "20px" }}>
+                  <p
+                    style={{
+                      fontSize: "13px",
+                      color: "var(--text-secondary)",
+                      marginBottom: "12px",
+                      lineHeight: "1.5",
+                    }}
+                  >
+                    This strategy is associated with the following records:
+                  </p>
+                  
+                  <div style={{ 
+                    backgroundColor: "var(--bg-tertiary)", 
+                    borderRadius: "8px", 
+                    padding: "12px",
+                    marginBottom: "12px",
+                    border: "1px solid var(--border-color)"
+                  }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      {associatedRecords.trade_count > 0 && (
+                        <div>
+                          <div style={{ 
+                            display: "flex", 
+                            alignItems: "center", 
+                            gap: "8px",
+                            marginBottom: "4px"
+                          }}>
+                            <TrendingUp size={14} style={{ color: "var(--accent)" }} />
+                            <span style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-primary)" }}>
+                              {associatedRecords.trade_count} {associatedRecords.trade_count === 1 ? "Trade" : "Trades"}
+                            </span>
+                          </div>
+                          {associatedRecords.sample_trades.length > 0 && (
+                            <div style={{ marginLeft: "22px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                              {associatedRecords.sample_trades.slice(0, 3).map(([id, symbol, side, timestamp]) => (
+                                <div key={id} style={{ marginBottom: "2px" }}>
+                                  {symbol} {side} • {new Date(timestamp).toLocaleDateString()}
+                                </div>
+                              ))}
+                              {associatedRecords.trade_count > 3 && (
+                                <div style={{ fontStyle: "italic", opacity: 0.7 }}>
+                                  +{associatedRecords.trade_count - 3} more
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
+                      {associatedRecords.journal_entry_count > 0 && (
+                        <div>
+                          <div style={{ 
+                            display: "flex", 
+                            alignItems: "center", 
+                            gap: "8px",
+                            marginBottom: "4px"
+                          }}>
+                            <FileText size={14} style={{ color: "var(--accent)" }} />
+                            <span style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-primary)" }}>
+                              {associatedRecords.journal_entry_count} Journal {associatedRecords.journal_entry_count === 1 ? "Entry" : "Entries"}
+                            </span>
+                          </div>
+                          {associatedRecords.sample_journal_entries.length > 0 && (
+                            <div style={{ marginLeft: "22px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                              {associatedRecords.sample_journal_entries.slice(0, 3).map(([id, date, title]) => (
+                                <div key={id} style={{ marginBottom: "2px" }}>
+                                  {title} • {new Date(date).toLocaleDateString()}
+                                </div>
+                              ))}
+                              {associatedRecords.journal_entry_count > 3 && (
+                                <div style={{ fontStyle: "italic", opacity: 0.7 }}>
+                                  +{associatedRecords.journal_entry_count - 3} more
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
+                      {associatedRecords.checklist_item_count > 0 && (
+                        <div>
+                          <div style={{ 
+                            display: "flex", 
+                            alignItems: "center", 
+                            gap: "8px",
+                            marginBottom: "4px"
+                          }}>
+                            <ListChecks size={14} style={{ color: "var(--accent)" }} />
+                            <span style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-primary)" }}>
+                              {associatedRecords.checklist_item_count} Checklist {associatedRecords.checklist_item_count === 1 ? "Item" : "Items"}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {associatedRecords.trade_count === 0 && 
+                       associatedRecords.journal_entry_count === 0 && 
+                       associatedRecords.checklist_item_count === 0 && (
+                        <div style={{ fontSize: "12px", color: "var(--text-secondary)", fontStyle: "italic" }}>
+                          No associated records
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <p
+                    style={{
+                      fontSize: "12px",
+                      color: "var(--text-secondary)",
+                      lineHeight: "1.5",
+                    }}
+                  >
+                    <strong>Note:</strong> Trades will be unassigned, journal entries will lose their strategy association, and checklist items will be permanently deleted.
+                  </p>
+                </div>
+              )}
+              
+              {!loadingAssociatedRecords && (
+                <p
+                  style={{
+                    fontSize: "13px",
+                    color: "var(--text-secondary)",
+                    marginBottom: "20px",
+                    lineHeight: "1.5",
+                  }}
+                >
+                  This action cannot be undone.
+                </p>
+              )}
               <div
                 style={{
                   display: "flex",

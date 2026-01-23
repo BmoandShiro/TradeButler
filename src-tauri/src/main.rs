@@ -46,6 +46,7 @@ fn main() {
             commands::update_strategy,
             commands::update_strategy_order,
             commands::delete_strategy,
+            commands::get_strategy_associated_records,
             commands::update_trade_strategy,
             commands::get_top_symbols,
             commands::get_strategy_performance,
