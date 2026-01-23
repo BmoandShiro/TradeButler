@@ -1236,6 +1236,46 @@ export default function Journal() {
     return Math.round(percentage);
   };
 
+  const calculateChecklistProgress = (tradeIndex: number, checklistType: string): number => {
+    if (!entryFormData.strategy_id) return 0;
+    const checklists = strategyChecklists.get(entryFormData.strategy_id);
+    if (!checklists) return 0;
+
+    const items = checklists.get(checklistType) || [];
+    if (items.length === 0) return 0;
+
+    const tradeResponses = checklistResponses.get(tradeIndex) || new Map();
+    
+    // Count checkable items the same way they're rendered:
+    // - Regular items (no parent_id, not a group header)
+    // - Child items (has parent_id)
+    // Exclude group headers (items that have children)
+    const regularItems = items.filter(item => !item.parent_id && !items.some(child => child.parent_id === item.id));
+    const groupedItems = items.filter(item => item.parent_id !== null && items.some(p => p.id === item.parent_id));
+    
+    // Total checkable items = regular items + grouped items (children)
+    const totalCheckable = regularItems.length + groupedItems.length;
+    
+    if (totalCheckable === 0) return 0;
+
+    let checked = 0;
+    // Count checked regular items
+    for (const item of regularItems) {
+      if (tradeResponses.get(item.id)) {
+        checked++;
+      }
+    }
+    // Count checked grouped items (children)
+    for (const item of groupedItems) {
+      if (tradeResponses.get(item.id)) {
+        checked++;
+      }
+    }
+
+    const percentage = (checked / totalCheckable) * 100;
+    return Math.round(percentage);
+  };
+
   const currentTrade = tradesFormData[activeTradeIndex];
   const currentChecklists = entryFormData.strategy_id ? strategyChecklists.get(entryFormData.strategy_id) : null;
   const defaultTypes = ["entry", "take_profit"];
@@ -2761,6 +2801,49 @@ export default function Journal() {
                 }
                 return null;
               })()}
+              
+              {/* Custom Checklist Progress Bars */}
+              {customTypes.map((type) => {
+                const items = currentChecklists?.get(type) || [];
+                if (items.length === 0) return null;
+                
+                const progress = calculateChecklistProgress(activeTradeIndex, type);
+                const getProgressColor = () => {
+                  if (progress >= 80) return "var(--profit)";
+                  if (progress >= 60) return "var(--accent)";
+                  if (progress >= 40) return "var(--warning)";
+                  return "var(--danger)";
+                };
+                
+                return (
+                  <div key={type}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                      <span style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>
+                        {getChecklistTitle(type)} Progress
+                      </span>
+                      <span style={{ fontSize: "12px", color: getProgressColor(), fontWeight: "600" }}>{progress}%</span>
+                    </div>
+                    <div
+                      style={{
+                        width: "100%",
+                        height: "8px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        borderRadius: "4px",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${progress}%`,
+                          height: "100%",
+                          backgroundColor: getProgressColor(),
+                          transition: "width 0.3s",
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
 
