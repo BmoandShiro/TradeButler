@@ -100,8 +100,8 @@ export default function Layout({ children }: LayoutProps) {
       });
     };
     
-    // Check more frequently to catch changes
-    const interval = setInterval(checkGalaxySettings, 50);
+    // Check periodically to catch changes (reduced frequency to prevent performance issues)
+    const interval = setInterval(checkGalaxySettings, 500); // Changed from 50ms to 500ms
     window.addEventListener("storage", checkGalaxySettings);
     
     // Also listen for custom event that Settings can dispatch

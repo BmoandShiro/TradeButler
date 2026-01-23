@@ -1398,7 +1398,8 @@ export default function Dashboard() {
     });
     
     setEnabledMetrics(enabled);
-  }, [configKey, metricsConfigHook]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configKey]); // Only depend on configKey - metrics are read fresh from hook inside effect
   
   useEffect(() => {
     // Re-read from localStorage when configKey changes (includes color range changes)
@@ -1489,7 +1490,8 @@ export default function Dashboard() {
       setMetricCardOrder(order);
       localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(order));
     }
-  }, [configKey, metricsConfigHook]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configKey]); // Only depend on configKey - metrics are read fresh from hook inside effect
 
   // Sync metric card order when instances change
   useEffect(() => {

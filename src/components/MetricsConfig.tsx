@@ -208,14 +208,16 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
     if (onConfigChange) {
       onConfigChange();
     }
-  }, [colorRange, onConfigChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [colorRange]); // onConfigChange is intentionally excluded to prevent infinite loops
   
   // Notify parent when config changes
   useEffect(() => {
     if (onConfigChange) {
       onConfigChange();
     }
-  }, [metrics, onConfigChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metrics]); // onConfigChange is intentionally excluded to prevent infinite loops
 
   if (!isOpen) return null;
 
