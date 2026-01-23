@@ -5438,7 +5438,7 @@ pub fn exit_app() {
 }
 
 #[tauri::command]
-pub async fn download_portable_update(download_url: String) -> Result<(), String> {
+pub async fn download_portable_update(download_url: String, file_path: String) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .user_agent("TradeButler-Updater/1.0")
         .build()
@@ -5454,210 +5454,25 @@ pub async fn download_portable_update(download_url: String) -> Result<(), String
         return Err(format!("Download failed with status: {}", response.status()));
     }
     
-    // Get current executable path
-    let current_exe = std::env::current_exe()
-        .map_err(|e| format!("Failed to get current executable path: {}", e))?;
-    let exe_dir = current_exe.parent()
-        .ok_or("Failed to get executable directory")?;
-    let exe_name = current_exe.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("TradeButler.exe");
-    
-    // Download new version to same directory with temp name
-    let new_exe_name = format!("{}.new", exe_name);
-    let new_exe_path = exe_dir.join(&new_exe_name);
-    
-    // Download file
+    // Download file to user-selected location
     let bytes = response
         .bytes()
         .await
         .map_err(|e| format!("Failed to read download: {}", e))?;
     
-    fs::write(&new_exe_path, bytes)
-        .map_err(|e| format!("Failed to save new version: {}", e))?;
+    fs::write(&file_path, bytes)
+        .map_err(|e| format!("Failed to save file to {}: {}", file_path, e))?;
     
-    // Create update script that will launch new version and delete old one
-    #[cfg(windows)]
+    // On Unix systems, make the file executable
+    #[cfg(unix)]
     {
-        let old_exe_name = format!("{}.old", exe_name);
-        let old_exe_path = exe_dir.join(&old_exe_name);
-        let final_exe_path = exe_dir.join(exe_name);
-        
-        let script_path = exe_dir.join("update_tradebutler.bat");
-        let script_content = format!(
-            r#"@echo off
-REM TradeButler Auto-Update Script
-REM This script launches the new version and cleans up the old one
-
-REM Launch the new version (detached, so it doesn't wait)
-start "" "{}"
-
-REM Wait a moment for the new version to start
-timeout /t 3 /nobreak >nul
-
-REM Try to rename old executable to .old (will fail if still in use)
-ren "{}" "{}" 2>nul
-
-REM Wait a bit more
-timeout /t 2 /nobreak >nul
-
-REM Try to rename new executable to proper name
-ren "{}" "{}" 2>nul
-
-REM Wait and try to delete the old executable (may fail if still in use)
-timeout /t 5 /nobreak >nul
-del /F /Q "{}" 2>nul
-
-REM Try again after more time
-timeout /t 5 /nobreak >nul
-del /F /Q "{}" 2>nul
-
-REM Delete this script itself
-del /F /Q "%~f0" 2>nul
-"#,
-            new_exe_path.to_string_lossy(),
-            current_exe.to_string_lossy(),
-            old_exe_name,
-            new_exe_path.to_string_lossy(),
-            exe_name,
-            old_exe_path.to_string_lossy(),
-            old_exe_path.to_string_lossy()
-        );
-        
-        fs::write(&script_path, script_content)
-            .map_err(|e| format!("Failed to create update script: {}", e))?;
-        
-        // Launch the update script (detached, so it doesn't block)
-        Command::new("cmd")
-            .args(&["/C", "start", "/B", "", script_path.to_string_lossy().as_ref()])
-            .spawn()
-            .map_err(|e| format!("Failed to launch update script: {}", e))?;
-    }
-    
-    #[cfg(target_os = "macos")]
-    {
-        let old_exe_name = format!("{}.old", exe_name);
-        let old_exe_path = exe_dir.join(&old_exe_name);
-        let final_exe_path = exe_dir.join(exe_name);
-        
-        // For macOS, create a shell script
-        let script_path = exe_dir.join("update_tradebutler.sh");
-        let script_content = format!(
-            r#"#!/bin/bash
-# TradeButler Auto-Update Script
-
-# Launch the new version
-open "{}" &
-
-# Wait a moment
-sleep 3
-
-# Try to rename old executable to .old
-mv "{}" "{}" 2>/dev/null
-
-# Wait a bit more
-sleep 2
-
-# Try to rename new executable to proper name
-mv "{}" "{}" 2>/dev/null
-
-# Wait and try to delete the old executable
-sleep 5
-rm -f "{}" 2>/dev/null
-
-# Try again
-sleep 5
-rm -f "{}" 2>/dev/null
-
-# Delete this script
-rm -f "$0"
-"#,
-            new_exe_path.to_string_lossy(),
-            current_exe.to_string_lossy(),
-            old_exe_path.to_string_lossy(),
-            new_exe_path.to_string_lossy(),
-            final_exe_path.to_string_lossy(),
-            old_exe_path.to_string_lossy(),
-            old_exe_path.to_string_lossy()
-        );
-        
-        fs::write(&script_path, script_content)
-            .map_err(|e| format!("Failed to create update script: {}", e))?;
-        
-        // Make script executable
-        Command::new("chmod")
-            .args(&["+x", script_path.to_string_lossy().as_ref()])
-            .spawn()
-            .map_err(|e| format!("Failed to make script executable: {}", e))?;
-        
-        // Launch the script
-        Command::new("sh")
-            .arg(script_path.to_string_lossy().as_ref())
-            .spawn()
-            .map_err(|e| format!("Failed to launch update script: {}", e))?;
-    }
-    
-    #[cfg(target_os = "linux")]
-    {
-        let old_exe_name = format!("{}.old", exe_name);
-        let old_exe_path = exe_dir.join(&old_exe_name);
-        let final_exe_path = exe_dir.join(exe_name);
-        
-        // For Linux, create a shell script
-        let script_path = exe_dir.join("update_tradebutler.sh");
-        let script_content = format!(
-            r#"#!/bin/bash
-# TradeButler Auto-Update Script
-
-# Launch the new version
-"{}" &
-
-# Wait a moment
-sleep 3
-
-# Try to rename old executable to .old
-mv "{}" "{}" 2>/dev/null
-
-# Wait a bit more
-sleep 2
-
-# Try to rename new executable to proper name
-mv "{}" "{}" 2>/dev/null
-
-# Wait and try to delete the old executable
-sleep 5
-rm -f "{}" 2>/dev/null
-
-# Try again
-sleep 5
-rm -f "{}" 2>/dev/null
-
-# Delete this script
-rm -f "$0"
-"#,
-            new_exe_path.to_string_lossy(),
-            current_exe.to_string_lossy(),
-            old_exe_path.to_string_lossy(),
-            new_exe_path.to_string_lossy(),
-            final_exe_path.to_string_lossy(),
-            old_exe_path.to_string_lossy(),
-            old_exe_path.to_string_lossy()
-        );
-        
-        fs::write(&script_path, script_content)
-            .map_err(|e| format!("Failed to create update script: {}", e))?;
-        
-        // Make script executable
-        Command::new("chmod")
-            .args(&["+x", script_path.to_string_lossy().as_ref()])
-            .spawn()
-            .map_err(|e| format!("Failed to make script executable: {}", e))?;
-        
-        // Launch the script
-        Command::new("sh")
-            .arg(script_path.to_string_lossy().as_ref())
-            .spawn()
-            .map_err(|e| format!("Failed to launch update script: {}", e))?;
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&file_path)
+            .map_err(|e| format!("Failed to get file metadata: {}", e))?
+            .permissions();
+        perms.set_mode(0o755); // rwxr-xr-x
+        fs::set_permissions(&file_path, perms)
+            .map_err(|e| format!("Failed to set file permissions: {}", e))?;
     }
     
     Ok(())

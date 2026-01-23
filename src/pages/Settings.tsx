@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, X, Lock, Key, Eye, EyeOff } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
+import { save } from "@tauri-apps/api/dialog";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { ColorPicker } from "../components/ColorPicker";
@@ -163,16 +164,31 @@ export default function Settings() {
         });
         alert("Update downloaded and installer started. Please follow the installation wizard. Your data will be preserved.");
       } else {
-        // For portable version, download and auto-update
-        await invoke("download_portable_update", { 
-          download_url: versionInfo.download_url 
+        // For portable version, let user choose where to save it
+        const filePath = await save({
+          filters: [
+            { 
+              name: "Executable", 
+              extensions: versionInfo.download_url.includes(".exe") ? ["exe"] : 
+                         versionInfo.download_url.includes(".AppImage") ? ["AppImage"] :
+                         versionInfo.download_url.includes(".app") ? ["app"] : ["*"]
+            },
+          ],
+          defaultPath: `TradeButler-${versionInfo.latest}${versionInfo.download_url.includes(".exe") ? ".exe" : versionInfo.download_url.includes(".AppImage") ? ".AppImage" : versionInfo.download_url.includes(".app") ? ".app" : ""}`,
         });
-        alert(`Update downloaded successfully!\n\nThe new version will launch automatically and this window will close.\n\nThe old version will be automatically deleted after the new one starts.\n\nYour data will be preserved.`);
-        
-        // Close the app after a short delay to allow the update script to launch
-        setTimeout(() => {
-          invoke("exit_app");
-        }, 1500);
+
+        if (!filePath) {
+          // User cancelled
+          setIsDownloading(false);
+          return;
+        }
+
+        // Download to user-selected location
+        await invoke("download_portable_update", { 
+          download_url: versionInfo.download_url,
+          file_path: filePath
+        });
+        alert(`Update downloaded successfully!\n\nSaved to: ${filePath}\n\nYou can now run the new version from that location. Your data will be preserved.`);
       }
       
       setShowUpdateModal(false);
@@ -2345,7 +2361,7 @@ export default function Settings() {
             >
               {versionInfo.is_installer 
                 ? "The installer will update your application. Your data will be preserved."
-                : "The new version will download and launch automatically. This window will close, and the old version will be automatically deleted. Your data will be preserved."}
+                : "You will be prompted to choose where to save the new portable version. You can then run it from that location. Your data will be preserved."}
             </p>
             <div
               style={{
