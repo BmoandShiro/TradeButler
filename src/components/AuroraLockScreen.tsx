@@ -7,16 +7,14 @@ interface AuroraLockScreenProps {
   onUnlock: () => void;
 }
 
-interface Particle {
-  x: number;
+interface AuroraBand {
   y: number;
-  vx: number;
-  vy: number;
-  radius: number;
-  opacity: number;
+  speed: number;
+  amplitude: number;
+  frequency: number;
+  phase: number;
   color: { r: number; g: number; b: number };
-  life: number;
-  maxLife: number;
+  opacity: number;
 }
 
 export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
@@ -30,21 +28,12 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
   const passwordInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationFrameRef = useRef<number>();
-  const particlesRef = useRef<Particle[]>([]);
-  const mouseRef = useRef({ x: 0, y: 0 });
+  const auroraBandsRef = useRef<AuroraBand[]>([]);
+  const starsRef = useRef<Array<{ x: number; y: number; brightness: number }>>([]);
+  const timeRef = useRef(0);
   const passwordType = getPasswordType();
 
-  // Aurora color palette (purple, blue, green, pink)
-  const auroraColors = [
-    { r: 138, g: 43, b: 226 }, // Purple
-    { r: 75, g: 0, b: 130 },   // Indigo
-    { r: 0, g: 191, b: 255 },  // Deep Sky Blue
-    { r: 0, g: 255, b: 127 },  // Spring Green
-    { r: 255, g: 20, b: 147 }, // Deep Pink
-    { r: 147, g: 112, b: 219 }, // Medium Slate Blue
-  ];
-
-  // Initialize particles
+  // Initialize aurora bands and stars
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -56,151 +45,227 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
-      // Recreate particles on resize
-      const particleCount = 150;
-      const particles: Particle[] = [];
-      for (let i = 0; i < particleCount; i++) {
-        const color = auroraColors[Math.floor(Math.random() * auroraColors.length)];
-        particles.push({
+      
+      // Create aurora bands
+      const bands: AuroraBand[] = [
+        {
+          y: canvas.height * 0.2,
+          speed: 0.3,
+          amplitude: 80,
+          frequency: 0.002,
+          phase: 0,
+          color: { r: 0, g: 255, b: 150 }, // Green
+          opacity: 0.25,
+        },
+        {
+          y: canvas.height * 0.35,
+          speed: 0.25,
+          amplitude: 100,
+          frequency: 0.0015,
+          phase: Math.PI / 3,
+          color: { r: 0, g: 200, b: 255 }, // Cyan
+          opacity: 0.2,
+        },
+        {
+          y: canvas.height * 0.5,
+          speed: 0.2,
+          amplitude: 120,
+          frequency: 0.0012,
+          phase: Math.PI / 2,
+          color: { r: 138, g: 43, b: 226 }, // Purple
+          opacity: 0.18,
+        },
+        {
+          y: canvas.height * 0.65,
+          speed: 0.35,
+          amplitude: 90,
+          frequency: 0.0018,
+          phase: Math.PI,
+          color: { r: 255, g: 20, b: 147 }, // Pink
+          opacity: 0.15,
+        },
+      ];
+      auroraBandsRef.current = bands;
+
+      // Create background stars
+      const stars: Array<{ x: number; y: number; brightness: number }> = [];
+      for (let i = 0; i < 200; i++) {
+        stars.push({
           x: Math.random() * canvas.width,
           y: Math.random() * canvas.height,
-          vx: (Math.random() - 0.5) * 0.3,
-          vy: (Math.random() - 0.5) * 0.3,
-          radius: Math.random() * 3 + 1,
-          opacity: Math.random() * 0.5 + 0.3,
-          color: color,
-          life: Math.random() * 100,
-          maxLife: 100 + Math.random() * 200,
+          brightness: Math.random() * 0.8 + 0.2,
         });
       }
-      particlesRef.current = particles;
+      starsRef.current = stars;
     };
     resizeCanvas();
     window.addEventListener("resize", resizeCanvas);
 
-    // Create initial particles
-    const particleCount = 150;
-    const particles: Particle[] = [];
-    for (let i = 0; i < particleCount; i++) {
-      const color = auroraColors[Math.floor(Math.random() * auroraColors.length)];
-      particles.push({
+    // Create initial aurora bands
+    const bands: AuroraBand[] = [
+      {
+        y: canvas.height * 0.2,
+        speed: 0.3,
+        amplitude: 80,
+        frequency: 0.002,
+        phase: 0,
+        color: { r: 0, g: 255, b: 150 },
+        opacity: 0.25,
+      },
+      {
+        y: canvas.height * 0.35,
+        speed: 0.25,
+        amplitude: 100,
+        frequency: 0.0015,
+        phase: Math.PI / 3,
+        color: { r: 0, g: 200, b: 255 },
+        opacity: 0.2,
+      },
+      {
+        y: canvas.height * 0.5,
+        speed: 0.2,
+        amplitude: 120,
+        frequency: 0.0012,
+        phase: Math.PI / 2,
+        color: { r: 138, g: 43, b: 226 },
+        opacity: 0.18,
+      },
+      {
+        y: canvas.height * 0.65,
+        speed: 0.35,
+        amplitude: 90,
+        frequency: 0.0018,
+        phase: Math.PI,
+        color: { r: 255, g: 20, b: 147 },
+        opacity: 0.15,
+      },
+    ];
+    auroraBandsRef.current = bands;
+
+    // Create initial stars
+    const stars: Array<{ x: number; y: number; brightness: number }> = [];
+    for (let i = 0; i < 200; i++) {
+      stars.push({
         x: Math.random() * canvas.width,
         y: Math.random() * canvas.height,
-        vx: (Math.random() - 0.5) * 0.3,
-        vy: (Math.random() - 0.5) * 0.3,
-        radius: Math.random() * 3 + 1,
-        opacity: Math.random() * 0.5 + 0.3,
-        color: color,
-        life: Math.random() * 100,
-        maxLife: 100 + Math.random() * 200,
+        brightness: Math.random() * 0.8 + 0.2,
       });
     }
-    particlesRef.current = particles;
-
-    // Mouse tracking
-    const handleMouseMove = (e: MouseEvent) => {
-      mouseRef.current = { x: e.clientX, y: e.clientY };
-    };
-    window.addEventListener("mousemove", handleMouseMove);
+    starsRef.current = stars;
 
     // Animation loop
     const animate = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      timeRef.current += 0.016; // ~60fps
       
-      // Darker gradient background
-      const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-      gradient.addColorStop(0, "#050510");
-      gradient.addColorStop(0.5, "#0a0a1a");
-      gradient.addColorStop(1, "#0f0f1f");
-      ctx.fillStyle = gradient;
+      ctx.fillStyle = "#000011";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      const particles = particlesRef.current;
-      const mouse = mouseRef.current;
-
-      // Update and draw particles
-      for (let i = 0; i < particles.length; i++) {
-        const p = particles[i];
-
-        // Update life cycle
-        p.life += 0.5;
-        if (p.life > p.maxLife) {
-          p.life = 0;
-          // Respawn at random position
-          p.x = Math.random() * canvas.width;
-          p.y = Math.random() * canvas.height;
-          p.color = auroraColors[Math.floor(Math.random() * auroraColors.length)];
-        }
-
-        // Pulsing opacity based on life
-        const lifeRatio = p.life / p.maxLife;
-        const pulseOpacity = (Math.sin(lifeRatio * Math.PI * 2) * 0.3 + 0.7) * p.opacity;
-
-        // Gentle mouse interaction
-        const dx = p.x - mouse.x;
-        const dy = p.y - mouse.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        const influenceDistance = 150;
-
-        if (distance < influenceDistance) {
-          const force = (influenceDistance - distance) / influenceDistance;
-          const angle = Math.atan2(dy, dx);
-          p.vx += Math.cos(angle) * force * 0.02;
-          p.vy += Math.sin(angle) * force * 0.02;
-        }
-
-        // Update position
-        p.x += p.vx;
-        p.y += p.vy;
-
-        // Boundary wrapping
-        if (p.x < 0) p.x = canvas.width;
-        if (p.x > canvas.width) p.x = 0;
-        if (p.y < 0) p.y = canvas.height;
-        if (p.y > canvas.height) p.y = 0;
-
-        // Damping
-        p.vx *= 0.98;
-        p.vy *= 0.98;
-
-        // Draw particle with glow
+      // Draw stars
+      starsRef.current.forEach((star) => {
+        const twinkle = Math.sin(timeRef.current * 2 + star.x * 0.01) * 0.3 + 0.7;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-        
-        // Outer glow
-        const glowGradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.radius * 3);
-        glowGradient.addColorStop(0, `rgba(${p.color.r}, ${p.color.g}, ${p.color.b}, ${pulseOpacity})`);
-        glowGradient.addColorStop(0.5, `rgba(${p.color.r}, ${p.color.g}, ${p.color.b}, ${pulseOpacity * 0.5})`);
-        glowGradient.addColorStop(1, `rgba(${p.color.r}, ${p.color.g}, ${p.color.b}, 0)`);
-        ctx.fillStyle = glowGradient;
+        ctx.arc(star.x, star.y, 1, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 255, 255, ${star.brightness * twinkle * 0.6})`;
         ctx.fill();
-      }
+      });
 
-      // Draw connections between nearby particles (nebula effect)
-      const connectionDistance = 120;
-      for (let i = 0; i < particles.length; i++) {
-        for (let j = i + 1; j < particles.length; j++) {
-          const dx = particles[i].x - particles[j].x;
-          const dy = particles[i].y - particles[j].y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
+      const bands = auroraBandsRef.current;
 
-          if (distance < connectionDistance) {
-            const opacity = (1 - distance / connectionDistance) * 0.15;
-            const avgColor = {
-              r: Math.floor((particles[i].color.r + particles[j].color.r) / 2),
-              g: Math.floor((particles[i].color.g + particles[j].color.g) / 2),
-              b: Math.floor((particles[i].color.b + particles[j].color.b) / 2),
-            };
-            
-            ctx.beginPath();
-            ctx.moveTo(particles[i].x, particles[i].y);
-            ctx.lineTo(particles[j].x, particles[j].y);
-            ctx.strokeStyle = `rgba(${avgColor.r}, ${avgColor.g}, ${avgColor.b}, ${opacity})`;
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-          }
+      // Draw aurora bands
+      bands.forEach((band) => {
+        // Update band position with smoother movement
+        band.y += band.speed * Math.sin(timeRef.current * 0.3 + band.phase) * 0.3;
+        if (band.y < -200) band.y = canvas.height + 200;
+        if (band.y > canvas.height + 200) band.y = -200;
+
+        // Create flowing wave pattern with smoother curves
+        const points: Array<{ x: number; y: number }> = [];
+        const segments = 400; // More segments for smoother curves
+        
+        for (let i = 0; i <= segments; i++) {
+          const x = (canvas.width / segments) * i;
+          // Smoother wave calculations with reduced frequency variations
+          const wave1 = Math.sin(x * band.frequency + timeRef.current * 0.4 + band.phase) * band.amplitude;
+          const wave2 = Math.sin(x * band.frequency * 1.5 + timeRef.current * 0.6 + band.phase) * (band.amplitude * 0.4);
+          const wave3 = Math.sin(x * band.frequency * 0.7 + timeRef.current * 0.25 + band.phase) * (band.amplitude * 0.25);
+          const y = band.y + wave1 + wave2 + wave3;
+          points.push({ x, y });
         }
-      }
+
+        // Draw aurora with gradient and glow
+        for (let layer = 0; layer < 3; layer++) {
+          const layerOpacity = band.opacity * (1 - layer * 0.4);
+          const layerWidth = 180 - layer * 50;
+          
+          ctx.beginPath();
+          ctx.moveTo(points[0].x, points[0].y);
+          
+          // Create ultra-smooth curve through points using better control points
+          for (let i = 1; i < points.length; i++) {
+            const prev = points[Math.max(i - 1, 0)];
+            const curr = points[i];
+            const next = points[Math.min(i + 1, points.length - 1)];
+            
+            // Calculate smoother control points for more fluid curves
+            const dx = (next.x - prev.x) * 0.3;
+            const dy = (next.y - prev.y) * 0.3;
+            
+            const cp1x = prev.x + dx;
+            const cp1y = prev.y + dy;
+            const cp2x = curr.x - dx;
+            const cp2y = curr.y - dy;
+            
+            ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, curr.x, curr.y);
+          }
+
+          // Draw top edge with same smooth wave pattern
+          for (let i = points.length - 1; i >= 0; i--) {
+            const point = points[i];
+            const wave1 = Math.sin(point.x * band.frequency + timeRef.current * 0.4 + band.phase) * band.amplitude;
+            const wave2 = Math.sin(point.x * band.frequency * 1.5 + timeRef.current * 0.6 + band.phase) * (band.amplitude * 0.4);
+            const wave3 = Math.sin(point.x * band.frequency * 0.7 + timeRef.current * 0.25 + band.phase) * (band.amplitude * 0.25);
+            const topY = band.y + wave1 + wave2 + wave3 - layerWidth;
+            ctx.lineTo(point.x, topY);
+          }
+          
+          ctx.closePath();
+
+          // Create gradient for aurora with smoother fade
+          const gradient = ctx.createLinearGradient(0, band.y - layerWidth, 0, band.y + layerWidth);
+          const alpha = layerOpacity;
+          gradient.addColorStop(0, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, 0)`);
+          gradient.addColorStop(0.2, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.15})`);
+          gradient.addColorStop(0.4, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.4})`);
+          gradient.addColorStop(0.5, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.6})`);
+          gradient.addColorStop(0.6, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.4})`);
+          gradient.addColorStop(0.8, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.15})`);
+          gradient.addColorStop(1, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, 0)`);
+          
+          ctx.fillStyle = gradient;
+          ctx.fill();
+        }
+
+        // Add subtle particle sparkles along the aurora
+        for (let i = 0; i < 15; i++) {
+          const sparkleX = (canvas.width / 15) * i + Math.sin(timeRef.current + i) * 50;
+          const wave1 = Math.sin(sparkleX * band.frequency + timeRef.current * 0.4 + band.phase) * band.amplitude;
+          const wave2 = Math.sin(sparkleX * band.frequency * 1.5 + timeRef.current * 0.6 + band.phase) * (band.amplitude * 0.4);
+          const wave3 = Math.sin(sparkleX * band.frequency * 0.7 + timeRef.current * 0.25 + band.phase) * (band.amplitude * 0.25);
+          const sparkleY = band.y + wave1 + wave2 + wave3;
+          
+          const sparkleSize = Math.sin(timeRef.current * 3 + i) * 1.5 + 2;
+          const sparkleOpacity = (Math.sin(timeRef.current * 2 + i) * 0.3 + 0.3) * band.opacity;
+          
+          ctx.beginPath();
+          ctx.arc(sparkleX, sparkleY, sparkleSize, 0, Math.PI * 2);
+          const sparkleGradient = ctx.createRadialGradient(sparkleX, sparkleY, 0, sparkleX, sparkleY, sparkleSize * 3);
+          sparkleGradient.addColorStop(0, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${sparkleOpacity})`);
+          sparkleGradient.addColorStop(0.5, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${sparkleOpacity * 0.5})`);
+          sparkleGradient.addColorStop(1, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, 0)`);
+          ctx.fillStyle = sparkleGradient;
+          ctx.fill();
+        }
+      });
 
       animationFrameRef.current = requestAnimationFrame(animate);
     };
@@ -209,7 +274,6 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
 
     return () => {
       window.removeEventListener("resize", resizeCanvas);
-      window.removeEventListener("mousemove", handleMouseMove);
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
@@ -357,7 +421,7 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
         left: 0,
         right: 0,
         bottom: 0,
-        backgroundColor: "#050510",
+        backgroundColor: "#000011",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -384,13 +448,13 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
           width: "100%",
           maxWidth: "400px",
           padding: "40px",
-          backgroundColor: "rgba(20, 20, 40, 0.85)",
+          backgroundColor: "rgba(5, 5, 15, 0.85)",
           borderRadius: "12px",
-          border: "1px solid rgba(138, 43, 226, 0.3)",
-          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.5)",
+          border: "1px solid rgba(0, 255, 150, 0.3)",
+          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.7), 0 0 40px rgba(0, 255, 150, 0.1)",
           position: "relative",
           zIndex: 1,
-          backdropFilter: "blur(10px)",
+          backdropFilter: "blur(15px)",
         }}
       >
         <div style={{ textAlign: "center", marginBottom: "32px" }}>
@@ -399,20 +463,21 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
               width: "80px",
               height: "80px",
               margin: "0 auto 20px",
-              backgroundColor: "rgba(138, 43, 226, 0.2)",
+              backgroundColor: "rgba(0, 255, 150, 0.15)",
               borderRadius: "50%",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              border: "2px solid rgba(138, 43, 226, 0.5)",
+              border: "2px solid rgba(0, 255, 150, 0.4)",
+              boxShadow: "0 0 20px rgba(0, 255, 150, 0.3)",
             }}
           >
-            <Lock size={40} color="#8a2be2" />
+            <Lock size={40} color="#00ff96" />
           </div>
-          <h1 style={{ fontSize: "24px", fontWeight: "bold", marginBottom: "8px", color: "#ffffff" }}>
+          <h1 style={{ fontSize: "24px", fontWeight: "bold", marginBottom: "8px", color: "#ffffff", textShadow: "0 0 10px rgba(0, 255, 150, 0.5)" }}>
             TradeButler Locked
           </h1>
-          <p style={{ fontSize: "14px", color: "rgba(255, 255, 255, 0.7)" }}>
+          <p style={{ fontSize: "14px", color: "rgba(255, 255, 255, 0.8)" }}>
             Enter your {passwordType === "pin" ? "6-digit PIN" : "password"} to unlock
           </p>
         </div>
@@ -437,8 +502,8 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
                         width: "50px",
                         height: "60px",
                         position: "relative",
-                        backgroundColor: "rgba(20, 20, 40, 0.8)",
-                        border: error ? "2px solid #ff4444" : "1px solid rgba(138, 43, 226, 0.5)",
+                        backgroundColor: "rgba(5, 5, 15, 0.9)",
+                        border: error ? "2px solid #ff4444" : "1px solid rgba(0, 255, 150, 0.4)",
                         borderRadius: "8px",
                         display: "flex",
                         alignItems: "center",
@@ -446,6 +511,7 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
                         transition: "all 0.2s",
                         boxSizing: "border-box",
                         flexShrink: 0,
+                        boxShadow: error ? "0 0 10px rgba(255, 68, 68, 0.5)" : "0 0 10px rgba(0, 255, 150, 0.2)",
                       }}
                     >
                       {digit && (
@@ -454,9 +520,10 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
                             width: "12px",
                             height: "12px",
                             borderRadius: "50%",
-                            backgroundColor: "#8a2be2",
+                            backgroundColor: "#00ff96",
                             position: "absolute",
                             pointerEvents: "none",
+                            boxShadow: "0 0 8px rgba(0, 255, 150, 0.8)",
                           }}
                         />
                       )}
@@ -490,15 +557,17 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
                         onFocus={(e) => {
                           const container = e.target.parentElement;
                           if (container) {
-                            container.style.borderColor = "#8a2be2";
+                            container.style.borderColor = "#00ff96";
                             container.style.borderWidth = "2px";
+                            container.style.boxShadow = "0 0 15px rgba(0, 255, 150, 0.6)";
                           }
                         }}
                         onBlur={(e) => {
                           const container = e.target.parentElement;
                           if (container) {
-                            container.style.borderColor = error ? "#ff4444" : "rgba(138, 43, 226, 0.5)";
+                            container.style.borderColor = error ? "#ff4444" : "rgba(0, 255, 150, 0.4)";
                             container.style.borderWidth = "1px";
+                            container.style.boxShadow = error ? "0 0 10px rgba(255, 68, 68, 0.5)" : "0 0 10px rgba(0, 255, 150, 0.2)";
                           }
                         }}
                         autoComplete="off"
@@ -519,13 +588,14 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
                   style={{
                     width: "100%",
                     padding: "14px 16px",
-                    backgroundColor: "rgba(20, 20, 40, 0.8)",
-                    border: error ? "2px solid #ff4444" : "1px solid rgba(138, 43, 226, 0.5)",
+                    backgroundColor: "rgba(5, 5, 15, 0.9)",
+                    border: error ? "2px solid #ff4444" : "1px solid rgba(0, 255, 150, 0.4)",
                     borderRadius: "8px",
                     color: "#ffffff",
                     fontSize: "16px",
                     textAlign: "left",
                     outline: "none",
+                    boxShadow: error ? "0 0 10px rgba(255, 68, 68, 0.5)" : "0 0 10px rgba(0, 255, 150, 0.2)",
                   }}
                   autoComplete="off"
                 />
@@ -553,8 +623,8 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
                 style={{
                   width: "100%",
                   padding: "14px",
-                  backgroundColor: "#8a2be2",
-                  color: "white",
+                  backgroundColor: "#00ff96",
+                  color: "#000000",
                   border: "none",
                   borderRadius: "8px",
                   fontSize: "16px",
@@ -565,6 +635,14 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
                   justifyContent: "center",
                   gap: "8px",
                   marginBottom: "16px",
+                  boxShadow: "0 0 20px rgba(0, 255, 150, 0.5)",
+                  transition: "all 0.2s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.boxShadow = "0 0 30px rgba(0, 255, 150, 0.8)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.boxShadow = "0 0 20px rgba(0, 255, 150, 0.5)";
                 }}
               >
                 <Unlock size={18} />
@@ -614,9 +692,9 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
                 style={{
                   flex: 1,
                   padding: "12px",
-                  backgroundColor: "rgba(20, 20, 40, 0.8)",
+                  backgroundColor: "rgba(5, 5, 15, 0.9)",
                   color: "#ffffff",
-                  border: "1px solid rgba(138, 43, 226, 0.5)",
+                  border: "1px solid rgba(0, 255, 150, 0.4)",
                   borderRadius: "8px",
                   fontSize: "14px",
                   fontWeight: "500",
@@ -706,8 +784,8 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
                 style={{
                   width: "100%",
                   padding: "12px",
-                  backgroundColor: "rgba(20, 20, 40, 0.8)",
-                  border: error ? "2px solid #ff4444" : "1px solid rgba(138, 43, 226, 0.5)",
+                  backgroundColor: "rgba(5, 5, 15, 0.9)",
+                  border: error ? "2px solid #ff4444" : "1px solid rgba(0, 255, 150, 0.4)",
                   borderRadius: "8px",
                   color: "#ffffff",
                   fontSize: "14px",
@@ -743,9 +821,9 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
                 style={{
                   flex: 1,
                   padding: "12px",
-                  backgroundColor: "rgba(20, 20, 40, 0.8)",
+                  backgroundColor: "rgba(5, 5, 15, 0.9)",
                   color: "#ffffff",
-                  border: "1px solid rgba(138, 43, 226, 0.5)",
+                  border: "1px solid rgba(0, 255, 150, 0.4)",
                   borderRadius: "8px",
                   fontSize: "14px",
                   fontWeight: "500",
@@ -761,7 +839,7 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
                 style={{
                   flex: 1,
                   padding: "12px",
-                  backgroundColor: deleteConfirmText === "I FORGOT MY PASSWORD I WILL LOSE ALL DATA" ? "#ff4444" : "rgba(20, 20, 40, 0.8)",
+                  backgroundColor: deleteConfirmText === "I FORGOT MY PASSWORD I WILL LOSE ALL DATA" ? "#ff4444" : "rgba(5, 5, 15, 0.9)",
                   color: deleteConfirmText === "I FORGOT MY PASSWORD I WILL LOSE ALL DATA" ? "white" : "rgba(255, 255, 255, 0.5)",
                   border: "none",
                   borderRadius: "8px",
