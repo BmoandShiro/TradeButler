@@ -39,7 +39,7 @@ const DEFAULT_INPUTS: DividendInputs = {
   dividendFrequency: "Quarterly",
   dividendGrowthRate: "4",
   sharePriceGrowth: "5",
-  extraInvestment: "100",
+  extraInvestment: "1200",  // Annual total; with Monthly = $100/month
   extraInvestFrequency: "Monthly",
   lengthOfInvestment: "10",
   enableDRIP: true,
@@ -106,6 +106,29 @@ export default function DividendCalculator() {
     }
   };
 
+  /** Months (1-12) when a dividend payment occurs. Dividend is paid to shares held at that moment. */
+  const getDividendPaymentMonths = (frequency: string): number[] => {
+    switch (frequency) {
+      case "Monthly": return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+      case "Quarterly": return [3, 6, 9, 12];   // end of Q1, Q2, Q3, Q4
+      case "Semi-Annual": return [6, 12];
+      case "Annual": return [12];
+      default: return [3, 6, 9, 12];
+    }
+  };
+
+  /** Months (1-12) when an extra contribution happens. Contribution buys shares at start of month (before that month's dividend if any). */
+  const getContributionMonths = (frequency: string): number[] => {
+    switch (frequency) {
+      case "Monthly": return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+      case "Quarterly": return [3, 6, 9, 12];
+      case "Semi-Annual": return [6, 12];
+      case "Annual": return [12];
+      case "None": return [];
+      default: return [];
+    }
+  };
+
   const calculateDividends = () => {
     const initialInvestment = parseFloat(inputs.initialInvestment) || 0;
     const sharePrice = parseFloat(inputs.sharePrice) || 1;
@@ -117,64 +140,69 @@ export default function DividendCalculator() {
     const enableDRIP = inputs.enableDRIP;
 
     const dividendsPerYear = getDividendsPerYear(inputs.dividendFrequency);
-    const extraInvestmentsPerYear = getExtraInvestmentsPerYear(inputs.extraInvestFrequency);
+    const dividendPaymentMonths = getDividendPaymentMonths(inputs.dividendFrequency);
+    const contributionMonths = getContributionMonths(inputs.extraInvestFrequency);
+
+    // Extra Investment is the *annual* total; we spread it across the year by frequency.
+    // e.g. 1800 + Monthly = $150/month, 600 + Quarterly = $150/quarter
+    const numContributionsPerYear = getExtraInvestmentsPerYear(inputs.extraInvestFrequency) || 1;
+    const dollarsPerContribution = numContributionsPerYear > 0 ? extraInvestment / numContributionsPerYear : 0;
 
     const results: DividendYearResult[] = [];
     let currentShares = initialInvestment / sharePrice;
     let currentSharePrice = sharePrice;
     let currentDividendPerShare = dividendAmount;
     let totalDividendsReceived = 0;
-    let currentBalance = initialInvestment;
 
     for (let year = 1; year <= lengthOfInvestment; year++) {
-      const startBalance = currentBalance;
+      const startBalance = currentShares * currentSharePrice;
       const startShares = currentShares;
       const startSharePrice = currentSharePrice;
-      const yearDividendPerShare = currentDividendPerShare; // Store before updating
+      const yearDividendPerShare = currentDividendPerShare;
+      let yearDividendTotal = 0;
 
-      // Calculate annual dividend
-      const annualDividend = currentShares * currentDividendPerShare * dividendsPerYear;
-      totalDividendsReceived += annualDividend;
+      // Month-by-month: dividends paid only to shares held before that payment; DRIP at each payment; contributions in their own months.
+      for (let month = 1; month <= 12; month++) {
+        // 1. Dividend payment first (shares held at start of month earn this payment; contributions this month do not)
+        if (dividendPaymentMonths.includes(month)) {
+          const periodDividend = currentShares * currentDividendPerShare;
+          yearDividendTotal += periodDividend;
+          totalDividendsReceived += periodDividend;
 
-      // DRIP: Reinvest dividends to buy more shares
-      if (enableDRIP && annualDividend > 0) {
-        const sharesFromDividends = annualDividend / currentSharePrice;
-        currentShares += sharesFromDividends;
+          // DRIP: reinvest this payment immediately at current price (new shares earn subsequent payments)
+          if (enableDRIP && periodDividend > 0) {
+            const sharesFromDRIP = periodDividend / currentSharePrice;
+            currentShares += sharesFromDRIP;
+          }
+        }
+
+        // 2. Contribution: add shares this month (they will earn dividends from *next* payment onward). Amount per contribution = annual total / number of periods.
+        if (contributionMonths.includes(month) && dollarsPerContribution > 0) {
+          const sharesFromExtra = dollarsPerContribution / currentSharePrice;
+          currentShares += sharesFromExtra;
+        }
       }
 
-      // Add extra investments
-      if (extraInvestmentsPerYear > 0 && extraInvestment > 0) {
-        const annualExtraInvestment = extraInvestment * extraInvestmentsPerYear;
-        const sharesFromExtra = annualExtraInvestment / currentSharePrice;
-        currentShares += sharesFromExtra;
-        currentBalance += annualExtraInvestment;
-      }
-
-      // Update share price and dividend for next year
+      // Apply growth for next year (price and dividend per share)
       currentSharePrice = currentSharePrice * (1 + sharePriceGrowth);
       currentDividendPerShare = currentDividendPerShare * (1 + dividendGrowthRate);
 
-      // Update balance (shares * price + dividends if not DRIP)
-      if (enableDRIP) {
-        currentBalance = currentShares * currentSharePrice;
-      } else {
-        currentBalance = currentShares * currentSharePrice + totalDividendsReceived;
-      }
-
-      const endBalance = currentBalance;
       const endShares = currentShares;
+      const endBalance = currentShares * currentSharePrice;
       const dividendYield = (yearDividendPerShare * dividendsPerYear) / startSharePrice;
-      const yieldOnCost = (yearDividendPerShare * dividendsPerYear * endShares) / initialInvestment;
+      const yieldOnCost = initialInvestment > 0
+        ? (yearDividendPerShare * dividendsPerYear * endShares) / initialInvestment
+        : 0;
 
       results.push({
         year,
         startBalance,
         startShares,
         sharePrice: startSharePrice,
-        dividendPerShare: yearDividendPerShare, // Use the stored value
+        dividendPerShare: yearDividendPerShare,
         dividendYield: dividendYield * 100,
         yieldOnCost: yieldOnCost * 100,
-        annualDividend,
+        annualDividend: yearDividendTotal,
         totalDividends: totalDividendsReceived,
         endShares,
         endBalance,
@@ -924,7 +952,7 @@ export default function DividendCalculator() {
               </div>
             </div>
 
-            {/* Extra Investment */}
+            {/* Extra Investment (annual total; spread by frequency below) */}
             <div>
               <label
                 style={{
@@ -934,8 +962,9 @@ export default function DividendCalculator() {
                   color: "var(--text-primary)",
                   marginBottom: "8px",
                 }}
+                title="Total amount you add per year. Spread across the contribution frequency (e.g. 1800 + Monthly = $150/month)."
               >
-                Extra Investment
+                Extra Investment (annual)
               </label>
               <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
                 <span
