@@ -1838,7 +1838,7 @@ export default function Strategies() {
       });
       
       // Default checklist types - always include these even if empty
-      const defaultTypes = ["entry", "take_profit"];
+      const defaultTypes = ["daily_mantra", "daily_analysis", "entry", "take_profit"];
       const checklistMap = new Map<string, ChecklistItem[]>();
       const customTypesSet = new Set<string>();
       
@@ -1876,6 +1876,8 @@ export default function Strategies() {
       console.error("Error loading checklists:", error);
       // Fallback to default structure
       const checklistMap = new Map<string, ChecklistItem[]>();
+      checklistMap.set("daily_mantra", []);
+      checklistMap.set("daily_analysis", []);
       checklistMap.set("entry", []);
       checklistMap.set("take_profit", []);
       setChecklists((prev) => {
@@ -2095,9 +2097,9 @@ export default function Strategies() {
   };
 
   const deleteChecklistType = async (strategyId: number, type: string) => {
-    const defaultTypes = ["entry", "take_profit"];
+    const defaultTypes = ["daily_mantra", "daily_analysis", "entry", "take_profit"];
     if (defaultTypes.includes(type)) {
-      alert("Cannot delete default checklist types (Entry or Take Profit)");
+      alert("Cannot delete default checklist types (Daily Mantra, Daily Analysis, Entry, or Take Profit)");
       return;
     }
 
@@ -2910,7 +2912,7 @@ export default function Strategies() {
         }
 
         // Third pass: Persist empty custom checklist types with a placeholder item so they display when viewing
-        const defaultTypes = ["entry", "take_profit"];
+        const defaultTypes = ["daily_mantra", "daily_analysis", "entry", "take_profit"];
         for (const [type, items] of tempChecklists.entries()) {
           if (defaultTypes.includes(type) || type === "survey") continue;
           if (items.length > 0) continue;
@@ -3151,7 +3153,7 @@ export default function Strategies() {
     }
     
     // Third pass: Persist empty custom checklist types with a placeholder item so they display when viewing
-    const defaultTypes = ["entry", "take_profit"];
+    const defaultTypes = ["daily_mantra", "daily_analysis", "entry", "take_profit"];
     for (const [type, items] of editingChecklist.entries()) {
       if (defaultTypes.includes(type) || type === "survey") continue;
       if (items.length > 0) continue;
@@ -3196,7 +3198,7 @@ export default function Strategies() {
         
         // Update custom checklist types based on what's in editingChecklists
         const editingChecklist = editingChecklists.get(selectedStrategyData.id)!;
-        const defaultTypes = ["entry", "take_profit"];
+        const defaultTypes = ["daily_mantra", "daily_analysis", "entry", "take_profit"];
         const customTypesSet = new Set<string>();
         for (const type of editingChecklist.keys()) {
           // Exclude "survey" from being treated as a custom type - it has its own tab
@@ -4499,6 +4501,8 @@ export default function Strategies() {
                 // Helper function to get display title for checklist type
                 const getChecklistTitle = (type: string): string => {
                   const titleMap: Record<string, string> = {
+                    "daily_mantra": "Daily Mantra",
+                    "daily_analysis": "Daily Analysis",
                     "entry": "Entry Checklist",
                     "take_profit": "Take Profit Checklist",
                     "survey": "Survey",
@@ -4508,7 +4512,7 @@ export default function Strategies() {
 
                 // Get all checklist types in order: default types first, then custom
                 // Exclude "survey" type from Checklists tab - it should only appear in Survey tab
-                const defaultTypes = ["entry", "take_profit"];
+                const defaultTypes = ["daily_mantra", "daily_analysis", "entry", "take_profit"];
                 const tempCustomTypes = isCreating 
                   ? Array.from(new Set(Array.from(tempChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")))
                   : isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)

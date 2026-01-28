@@ -1149,6 +1149,8 @@ export default function Journal() {
 
   const getChecklistTitle = (type: string): string => {
     const titleMap: Record<string, string> = {
+      "daily_mantra": "Daily Mantra",
+      "daily_analysis": "Daily Analysis",
       "entry": "Entry Checklist",
       "take_profit": "Take Profit Checklist",
       "survey": "Survey",
@@ -1278,7 +1280,7 @@ export default function Journal() {
 
   const currentTrade = tradesFormData[activeTradeIndex];
   const currentChecklists = entryFormData.strategy_id ? strategyChecklists.get(entryFormData.strategy_id) : null;
-  const defaultTypes = ["entry", "take_profit"];
+  const defaultTypes = ["daily_mantra", "daily_analysis", "entry", "take_profit"];
   const customTypes = currentChecklists 
     ? Array.from(currentChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")
     : [];
@@ -2801,6 +2803,47 @@ export default function Journal() {
                 }
                 return null;
               })()}
+              
+              {/* Daily Mantra & Daily Analysis Progress Bars */}
+              {(["daily_mantra", "daily_analysis"] as const).map((type) => {
+                const items = currentChecklists?.get(type) || [];
+                if (items.length === 0) return null;
+                const progress = calculateChecklistProgress(activeTradeIndex, type);
+                const getProgressColor = () => {
+                  if (progress >= 80) return "var(--profit)";
+                  if (progress >= 60) return "var(--accent)";
+                  if (progress >= 40) return "var(--warning)";
+                  return "var(--danger)";
+                };
+                return (
+                  <div key={type}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                      <span style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>
+                        {getChecklistTitle(type)} Progress
+                      </span>
+                      <span style={{ fontSize: "12px", color: getProgressColor(), fontWeight: "600" }}>{progress}%</span>
+                    </div>
+                    <div
+                      style={{
+                        width: "100%",
+                        height: "8px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        borderRadius: "4px",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${progress}%`,
+                          height: "100%",
+                          backgroundColor: getProgressColor(),
+                          transition: "width 0.3s",
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
               
               {/* Custom Checklist Progress Bars */}
               {customTypes.map((type) => {
