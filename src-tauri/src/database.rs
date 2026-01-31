@@ -25,6 +25,8 @@ pub struct EmotionalState {
     pub intensity: i32, // 1-10 scale
     pub notes: Option<String>,
     pub trade_id: Option<i64>,
+    pub journal_entry_id: Option<i64>,
+    pub journal_trade_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -325,6 +327,24 @@ pub fn init_database(db_path: &Path) -> Result<()> {
     ).unwrap_or(0) > 0;
     if !has_column {
         conn.execute("ALTER TABLE journal_checklist_responses ADD COLUMN journal_trade_ids TEXT", [])?;
+    }
+
+    // emotional_states: link to journal entry and/or journal trade (implementation)
+    let has_je: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_id'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_je {
+        conn.execute("ALTER TABLE emotional_states ADD COLUMN journal_entry_id INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL", [])?;
+    }
+    let has_jt: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_trade_id'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_jt {
+        conn.execute("ALTER TABLE emotional_states ADD COLUMN journal_trade_id INTEGER REFERENCES journal_trades(id) ON DELETE SET NULL", [])?;
     }
 
     // Create journal_trade_actual_trades: link journal trades (in entry) to actual trades (trades table)

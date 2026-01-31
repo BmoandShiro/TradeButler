@@ -1750,29 +1750,25 @@ pub fn add_emotional_state(
     intensity: i32,
     notes: Option<String>,
     trade_id: Option<i64>,
+    journal_entry_id: Option<i64>,
+    journal_trade_id: Option<i64>,
 ) -> Result<i64, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     conn.execute(
-        "INSERT INTO emotional_states (timestamp, emotion, intensity, notes, trade_id) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![timestamp, emotion, intensity, notes, trade_id],
+        "INSERT INTO emotional_states (timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id],
     ).map_err(|e| e.to_string())?;
     
     Ok(conn.last_insert_rowid())
 }
 
-#[tauri::command]
-pub fn get_emotional_states() -> Result<Vec<EmotionalState>, String> {
-    let db_path = get_db_path();
-    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
-    
-    let mut stmt = conn
-        .prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id FROM emotional_states ORDER BY timestamp DESC")
-        .map_err(|e| e.to_string())?;
-    
-    let state_iter = stmt
-        .query_map([], |row| {
+fn get_emotional_states_query(conn: &rusqlite::Connection, has_je_jt: bool) -> Result<Vec<EmotionalState>, String> {
+    if !has_je_jt {
+        let mut stmt = conn.prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id FROM emotional_states ORDER BY timestamp DESC")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<EmotionalState> = stmt.query_map([], |row| {
             Ok(EmotionalState {
                 id: Some(row.get(0)?),
                 timestamp: row.get(1)?,
@@ -1780,16 +1776,102 @@ pub fn get_emotional_states() -> Result<Vec<EmotionalState>, String> {
                 intensity: row.get(3)?,
                 notes: row.get(4)?,
                 trade_id: row.get(5)?,
+                journal_entry_id: None,
+                journal_trade_id: None,
             })
-        })
-        .map_err(|e| e.to_string())?;
-    
-    let mut states = Vec::new();
-    for state in state_iter {
-        states.push(state.map_err(|e| e.to_string())?);
+        }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+        return Ok(rows);
     }
-    
-    Ok(states)
+    let mut stmt = conn.prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states ORDER BY timestamp DESC")
+        .map_err(|e| e.to_string())?;
+    let rows: Vec<EmotionalState> = stmt.query_map([], |row| {
+        Ok(EmotionalState {
+            id: Some(row.get(0)?),
+            timestamp: row.get(1)?,
+            emotion: row.get(2)?,
+            intensity: row.get(3)?,
+            notes: row.get(4)?,
+            trade_id: row.get(5)?,
+            journal_entry_id: row.get(6).ok(),
+            journal_trade_id: row.get(7).ok(),
+        })
+    }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+    Ok(rows)
+}
+
+#[tauri::command]
+pub fn get_emotional_states() -> Result<Vec<EmotionalState>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let has_je = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_id'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let has_jt = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_trade_id'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    get_emotional_states_query(&conn, has_je && has_jt)
+}
+
+#[tauri::command]
+pub fn get_emotional_states_for_journal(
+    journal_entry_id: i64,
+    journal_trade_id: Option<i64>,
+) -> Result<Vec<EmotionalState>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let has_je = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_id'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let has_jt = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_trade_id'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    if !has_je || !has_jt {
+        return Ok(vec![]);
+    }
+    let rows: Vec<EmotionalState> = if let Some(jt) = journal_trade_id {
+        let mut stmt = conn.prepare(
+            "SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states WHERE journal_entry_id = ?1 AND (journal_trade_id = ?2 OR journal_trade_id IS NULL) ORDER BY timestamp DESC"
+        ).map_err(|e| e.to_string())?;
+        let collected = stmt.query_map(params![journal_entry_id, jt], |row| {
+            Ok(EmotionalState {
+                id: Some(row.get(0)?),
+                timestamp: row.get(1)?,
+                emotion: row.get(2)?,
+                intensity: row.get(3)?,
+                notes: row.get(4)?,
+                trade_id: row.get(5)?,
+                journal_entry_id: row.get(6).ok(),
+                journal_trade_id: row.get(7).ok(),
+            })
+        }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+        collected
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states WHERE journal_entry_id = ?1 ORDER BY timestamp DESC"
+        ).map_err(|e| e.to_string())?;
+        let collected = stmt.query_map(params![journal_entry_id], |row| {
+            Ok(EmotionalState {
+                id: Some(row.get(0)?),
+                timestamp: row.get(1)?,
+                emotion: row.get(2)?,
+                intensity: row.get(3)?,
+                notes: row.get(4)?,
+                trade_id: row.get(5)?,
+                journal_entry_id: row.get(6).ok(),
+                journal_trade_id: row.get(7).ok(),
+            })
+        }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+        collected
+    };
+    Ok(rows)
 }
 
 #[tauri::command]
@@ -1798,14 +1880,34 @@ pub fn update_emotional_state(
     emotion: String,
     intensity: i32,
     notes: Option<String>,
+    journal_entry_id: Option<i64>,
+    journal_trade_id: Option<i64>,
 ) -> Result<(), String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
-    conn.execute(
-        "UPDATE emotional_states SET emotion = ?1, intensity = ?2, notes = ?3 WHERE id = ?4",
-        params![emotion, intensity, notes, id],
-    ).map_err(|e| e.to_string())?;
+    let has_je = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_id'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let has_jt = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_trade_id'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    
+    if has_je && has_jt {
+        conn.execute(
+            "UPDATE emotional_states SET emotion = ?1, intensity = ?2, notes = ?3, journal_entry_id = ?4, journal_trade_id = ?5 WHERE id = ?6",
+            params![emotion, intensity, notes, journal_entry_id, journal_trade_id, id],
+        ).map_err(|e| e.to_string())?;
+    } else {
+        conn.execute(
+            "UPDATE emotional_states SET emotion = ?1, intensity = ?2, notes = ?3 WHERE id = ?4",
+            params![emotion, intensity, notes, id],
+        ).map_err(|e| e.to_string())?;
+    }
     
     Ok(())
 }
@@ -4831,7 +4933,7 @@ pub fn export_data() -> Result<String, String> {
     
     // Export emotional states
     let mut stmt = conn
-        .prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id FROM emotional_states ORDER BY timestamp")
+        .prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states ORDER BY timestamp")
         .map_err(|e| e.to_string())?;
     let emotion_iter = stmt
         .query_map([], |row| {
@@ -4842,6 +4944,8 @@ pub fn export_data() -> Result<String, String> {
                 intensity: row.get(3)?,
                 notes: row.get(4)?,
                 trade_id: row.get(5)?,
+                journal_entry_id: row.get(6).ok(),
+                journal_trade_id: row.get(7).ok(),
             })
         })
         .map_err(|e| e.to_string())?;

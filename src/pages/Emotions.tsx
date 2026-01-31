@@ -12,6 +12,8 @@ interface EmotionalState {
   intensity: number;
   notes: string | null;
   trade_id: number | null;
+  journal_entry_id?: number | null;
+  journal_trade_id?: number | null;
 }
 
 interface EmotionSurvey {
@@ -509,19 +511,32 @@ export default function Emotions() {
   const [isEditingSelectedState, setIsEditingSelectedState] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [formTab, setFormTab] = useState<"basic" | SurveyTabType>("basic");
-  const [formData, setFormData] = useState(() => {
+  const [formData, setFormData] = useState<{
+    emotion: string;
+    intensity: number;
+    notes: string;
+    takeSurvey?: boolean;
+    journalEntryId?: number | null;
+    journalTradeId?: number | null;
+  }>(() => {
     const saved = localStorage.getItem('emotions_form_data');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        // Ensure takeSurvey field exists for backward compatibility
-        return { ...parsed, takeSurvey: parsed.takeSurvey || false };
+        return {
+          ...parsed,
+          takeSurvey: parsed.takeSurvey || false,
+          journalEntryId: parsed.journalEntryId ?? null,
+          journalTradeId: parsed.journalTradeId ?? null,
+        };
       } catch {
-        return { emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false };
+        return { emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null };
       }
     }
-    return { emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false };
+    return { emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null };
   });
+  const [journalEntries, setJournalEntries] = useState<{ id: number; date: string; title: string }[]>([]);
+  const [journalTradesForLink, setJournalTradesForLink] = useState<{ id: number; symbol: string | null; trade_order: number }[]>([]);
   const [surveyResponses, setSurveyResponses] = useState<Record<string, number>>({});
   
   // Ref for main scroll container
@@ -594,6 +609,35 @@ export default function Emotions() {
 
   useEffect(() => {
     if (!showForm) return;
+    (async () => {
+      try {
+        const entries = await invoke<{ id: number; date: string; title: string }[]>("get_journal_entries");
+        setJournalEntries(entries);
+      } catch {
+        setJournalEntries([]);
+      }
+    })();
+  }, [showForm]);
+
+  useEffect(() => {
+    if (formData.journalEntryId == null) {
+      setJournalTradesForLink([]);
+      return;
+    }
+    (async () => {
+      try {
+        const trades = await invoke<{ id: number; symbol: string | null; trade_order: number }[]>("get_journal_trades", {
+          journalEntryId: formData.journalEntryId,
+        });
+        setJournalTradesForLink(trades);
+      } catch {
+        setJournalTradesForLink([]);
+      }
+    })();
+  }, [formData.journalEntryId]);
+
+  useEffect(() => {
+    if (!showForm) return;
     // Initialize survey responses (optional, but always available)
     if (Object.keys(surveyResponses).length === 0) {
       const initial: Record<string, number> = {};
@@ -635,6 +679,8 @@ export default function Emotions() {
           emotion: formData.emotion,
           intensity: formData.intensity,
           notes: formData.notes || null,
+          journalEntryId: formData.journalEntryId ?? null,
+          journalTradeId: formData.journalTradeId ?? null,
         });
         
         await loadStates();
@@ -647,7 +693,7 @@ export default function Emotions() {
         setIsEditingSelectedState(false);
         setIsMaximized(false);
         setFormTab("basic");
-        setFormData({ emotion: "Neutral", intensity: 5, notes: "" });
+        setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null });
         return;
       } else {
         // Create new state
@@ -707,7 +753,7 @@ export default function Emotions() {
       setIsEditingSelectedState(false);
       setIsMaximized(false);
       setFormTab("basic");
-      setFormData({ emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false });
+      setFormData({ emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null });
       localStorage.removeItem('emotions_form_data');
       localStorage.setItem('emotions_show_form', "false");
       const initial: Record<string, number> = {};
@@ -777,7 +823,7 @@ export default function Emotions() {
             saveScrollPosition();
             setEditingState(null);
             setIsEditingSelectedState(true);
-            setFormData({ emotion: "Neutral", intensity: 5, notes: "" });
+            setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null });
             const initial: Record<string, number> = {};
             Object.values(SURVEY_QUESTIONS).flat().forEach((q) => {
               initial[q.key] = 3;
@@ -854,7 +900,13 @@ export default function Emotions() {
                       setEditingState(state);
                       setIsEditingSelectedState(false);
                       setIsMaximized(false);
-                      setFormData({ emotion: state.emotion, intensity: state.intensity, notes: state.notes || "" });
+                      setFormData({
+                        emotion: state.emotion,
+                        intensity: state.intensity,
+                        notes: state.notes || "",
+                        journalEntryId: state.journal_entry_id ?? null,
+                        journalTradeId: state.journal_trade_id ?? null,
+                      });
                       setShowForm(true);
                       setFormTab("basic");
                     }}
@@ -1178,6 +1230,80 @@ export default function Emotions() {
                     </div>
                   </div>
 
+                  <div style={{ marginTop: "20px", paddingTop: "16px", borderTop: "1px solid var(--border-color)" }}>
+                    <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", color: "var(--text-secondary)" }}>
+                      Link to Journal
+                    </label>
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "12px" }}>
+                      Optionally link this state to a journal entry and/or a specific implementation.
+                    </p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      <div>
+                        <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>Journal entry</label>
+                        <select
+                          value={formData.journalEntryId != null ? String(formData.journalEntryId) : ""}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setFormData({
+                              ...formData,
+                              journalEntryId: v ? parseInt(v, 10) : null,
+                              journalTradeId: null,
+                            });
+                          }}
+                          disabled={!!editingState && !isEditingSelectedState}
+                          style={{
+                            width: "100%",
+                            padding: "8px",
+                            backgroundColor: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "6px",
+                            color: "var(--text-primary)",
+                            fontSize: "14px",
+                          }}
+                        >
+                          <option value="">None</option>
+                          {journalEntries.map((entry) => (
+                            <option key={entry.id} value={entry.id}>
+                              {entry.date} – {entry.title || "Untitled"}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      {formData.journalEntryId != null && (
+                        <div>
+                          <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>Implementation</label>
+                          <select
+                            value={formData.journalTradeId != null ? String(formData.journalTradeId) : ""}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setFormData({
+                                ...formData,
+                                journalTradeId: v ? parseInt(v, 10) : null,
+                              });
+                            }}
+                            disabled={!!editingState && !isEditingSelectedState}
+                            style={{
+                              width: "100%",
+                              padding: "8px",
+                              backgroundColor: "var(--bg-tertiary)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "6px",
+                              color: "var(--text-primary)",
+                              fontSize: "14px",
+                            }}
+                          >
+                            <option value="">Whole entry</option>
+                            {journalTradesForLink.map((t, i) => (
+                              <option key={t.id} value={t.id}>
+                                {t.symbol || `Implementation ${i + 1}`}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
                   {!editingState && (
                     <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "8px" }}>
                       Survey tabs are optional — if you don't change any answers, nothing will be saved for the survey.
@@ -1247,7 +1373,7 @@ export default function Emotions() {
                           setIsEditingSelectedState(false);
                           setIsMaximized(false);
                           setFormTab("basic");
-                          setFormData({ emotion: "Neutral", intensity: 5, notes: "" });
+                          setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null });
                         }}
                         style={{
                           padding: "10px 20px",
@@ -1354,7 +1480,7 @@ export default function Emotions() {
                       setEditingState(null);
                       setIsEditingSelectedState(false);
                       setFormTab("basic");
-                      setFormData({ emotion: "Neutral", intensity: 5, notes: "" });
+                      setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null });
                       const initial: Record<string, number> = {};
                       Object.values(SURVEY_QUESTIONS).flat().forEach((q) => {
                         initial[q.key] = 3;

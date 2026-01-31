@@ -33,6 +33,7 @@ fn main() {
             commands::get_symbol_pnl,
             commands::add_emotional_state,
             commands::get_emotional_states,
+            commands::get_emotional_states_for_journal,
             commands::update_emotional_state,
             commands::delete_emotional_state,
             commands::add_emotion_survey,

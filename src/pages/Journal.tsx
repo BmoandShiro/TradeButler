@@ -77,6 +77,23 @@ interface JournalChecklistResponse {
 
 const ENTRY_LEVEL_CHECKLIST_TYPES = ["daily_analysis", "daily_mantra"];
 
+/** Emotional state from Emotions (linked to journal entry/implementation) */
+interface JournalEmotionalState {
+  id: number;
+  timestamp: string;
+  emotion: string;
+  intensity: number;
+  notes: string | null;
+  trade_id: number | null;
+  journal_entry_id?: number | null;
+  journal_trade_id?: number | null;
+}
+
+const JOURNAL_EMOTIONS = [
+  "Confident", "Anxious", "Frustrated", "Excited", "Calm", "Greedy", "Fearful",
+  "Optimistic", "Pessimistic", "Neutral",
+];
+
 type TabType = "trade" | "what_went_well" | "what_could_be_improved" | "emotional_state" | "notes" | "checklists" | "survey";
 
 export default function Journal() {
@@ -147,6 +164,11 @@ export default function Journal() {
   const [actualTrades, setActualTrades] = useState<ActualTrade[]>([]); // all actual trades for "Link to actual trades" modal
   const [linkActualTradesModalJournalTradeId, setLinkActualTradesModalJournalTradeId] = useState<number | null>(null);
   const [linkActualTradesSelection, setLinkActualTradesSelection] = useState<number[]>([]); // selection in "Link to actual trades" modal
+
+  // Emotional states linked to this journal entry/implementation (same as Emotions page)
+  const [journalEmotionalStates, setJournalEmotionalStates] = useState<JournalEmotionalState[]>([]);
+  const [showAddEmotionalStateForm, setShowAddEmotionalStateForm] = useState(false);
+  const [newEmotionalStateForm, setNewEmotionalStateForm] = useState({ emotion: "Neutral", intensity: 5, notes: "" });
   
   // Available symbols for dropdown
   const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
@@ -437,6 +459,35 @@ export default function Journal() {
     })();
     return () => { cancelled = true; };
   }, [linkActualTradesModalJournalTradeId]);
+
+  // Load emotional states linked to this journal entry/implementation when on Emotional State tab
+  useEffect(() => {
+    if (activeTab !== "emotional_state" || !selectedEntry?.id) {
+      setJournalEmotionalStates([]);
+      return;
+    }
+    const jtId = tradesFormData[activeTradeIndex]?.id ?? null;
+    let cancelled = false;
+    (async () => {
+      try {
+        const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
+          journalEntryId: selectedEntry.id,
+          journalTradeId: jtId ?? undefined,
+        });
+        if (!cancelled) setJournalEmotionalStates(states);
+      } catch {
+        if (!cancelled) setJournalEmotionalStates([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTab, selectedEntry?.id, activeTradeIndex, tradesFormData]);
+
+  // Auto-open Add State form when opening the Emotional State tab (when entry + implementation exist)
+  useEffect(() => {
+    if (activeTab === "emotional_state" && selectedEntry?.id && tradesFormData[activeTradeIndex]?.id != null) {
+      setShowAddEmotionalStateForm(true);
+    }
+  }, [activeTab, selectedEntry?.id, activeTradeIndex, tradesFormData]);
 
   const loadEntries = async () => {
     try {
@@ -1127,6 +1178,28 @@ export default function Journal() {
         }
       }
 
+      // If Add emotional state form is open, persist that state with the current implementation
+      if (showAddEmotionalStateForm && tradesFormData.length > 0 && activeTradeIndex >= 0 && activeTradeIndex < tradeIdsInOrder.length) {
+        const journalTradeId = tradeIdsInOrder[activeTradeIndex];
+        if (journalTradeId != null) {
+          try {
+            await invoke("add_emotional_state", {
+              timestamp: new Date().toISOString(),
+              emotion: newEmotionalStateForm.emotion,
+              intensity: newEmotionalStateForm.intensity,
+              notes: newEmotionalStateForm.notes || null,
+              tradeId: null,
+              journalEntryId: entryId,
+              journalTradeId,
+            });
+            setShowAddEmotionalStateForm(false);
+            setNewEmotionalStateForm({ emotion: "Neutral", intensity: 5, notes: "" });
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      }
+
       await loadEntries();
       
       // Reload the saved entry
@@ -1550,7 +1623,7 @@ export default function Journal() {
                     {selectedTrades.map((trade, index) => (
                       <div key={trade.id || index} style={{ marginBottom: "24px", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
                         <h4 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>
-                          Trade {index + 1} {trade.symbol && `- ${trade.symbol}`}
+                          Implementation {index + 1} {trade.symbol && `- ${trade.symbol}`}
                         </h4>
                         {trade.symbol && (
                           <div style={{ marginBottom: "8px" }}>
@@ -1867,7 +1940,7 @@ export default function Journal() {
                 >
                 {tradesFormData.map((trade, index) => {
                   const isActive = activeTradeIndex === index;
-                  const tabLabel = trade.symbol || `Trade ${index + 1}`;
+                  const tabLabel = trade.symbol || `Implementation ${index + 1}`;
                   return (
                     <div key={index} style={{ display: "flex", alignItems: "center" }}>
                       <button
@@ -1902,7 +1975,7 @@ export default function Journal() {
                             display: "flex",
                             alignItems: "center",
                           }}
-                          title="Remove trade"
+                          title="Remove Implementation"
                         >
                           <X size={14} />
                         </button>
@@ -2165,7 +2238,7 @@ export default function Journal() {
                       }}
                     >
                     {[
-                      { id: "trade" as TabType, label: "Trade" },
+                      { id: "trade" as TabType, label: "Implementation" },
                       { id: "what_went_well" as TabType, label: "What Went Well" },
                       { id: "what_could_be_improved" as TabType, label: "What Could Be Improved" },
                       { id: "emotional_state" as TabType, label: "Emotional State" },
@@ -2227,7 +2300,7 @@ export default function Journal() {
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
                           <h3 style={{ fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>
                             {[
-                              { id: "trade" as TabType, label: "Trade" },
+                              { id: "trade" as TabType, label: "Implementation" },
                               { id: "what_went_well" as TabType, label: "What Went Well" },
                               { id: "what_could_be_improved" as TabType, label: "What Could Be Improved" },
                               { id: "emotional_state" as TabType, label: "Emotional State" },
@@ -2239,7 +2312,7 @@ export default function Journal() {
                         </div>
                         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                           {[
-                            { id: "trade" as TabType, label: "Trade" },
+                            { id: "trade" as TabType, label: "Implementation" },
                             { id: "what_went_well" as TabType, label: "What Went Well" },
                             { id: "what_could_be_improved" as TabType, label: "What Could Be Improved" },
                             { id: "emotional_state" as TabType, label: "Emotional State" },
@@ -2355,12 +2428,115 @@ export default function Journal() {
                           );
                         }}
                       >
-                        <RichTextEditor
-                          value={currentTrade.emotional_state}
-                          onChange={(content: string) => updateTradeFormData(activeTradeIndex, "emotional_state", content)}
-                          placeholder="Emotional state..."
-                          readOnly={false}
-                        />
+                        {selectedEntry?.id && currentTrade?.id != null ? (
+                          <>
+                            <div style={{ marginBottom: "16px" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                                <span style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-primary)" }}>Emotional states</span>
+                                {!showAddEmotionalStateForm && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowAddEmotionalStateForm(true)}
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "6px",
+                                      padding: "8px 14px",
+                                      background: "var(--accent)",
+                                      border: "none",
+                                      borderRadius: "6px",
+                                      color: "white",
+                                      fontSize: "13px",
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    <Plus size={14} />
+                                    Add State
+                                  </button>
+                                )}
+                              </div>
+                              {journalEmotionalStates.length === 0 && !showAddEmotionalStateForm && (
+                                <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No emotional states linked. Add one with the same form as on the Emotions page.</p>
+                              )}
+                              {journalEmotionalStates.map((state) => (
+                                <div
+                                  key={state.id}
+                                  style={{
+                                    padding: "12px",
+                                    backgroundColor: "var(--bg-tertiary)",
+                                    border: "1px solid var(--border-color)",
+                                    borderRadius: "6px",
+                                    marginBottom: "8px",
+                                  }}
+                                >
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                                    <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>{state.emotion}</span>
+                                    <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                                      {format(new Date(state.timestamp), "MMM d, yyyy HH:mm")} · Intensity {state.intensity}/10
+                                    </span>
+                                  </div>
+                                  {state.notes && (
+                                    <div style={{ fontSize: "13px", color: "var(--text-secondary)" }} dangerouslySetInnerHTML={{ __html: state.notes }} />
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                            {showAddEmotionalStateForm && (
+                              <div style={{ padding: "16px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px", marginBottom: "16px" }}>
+                                <h4 style={{ margin: "0 0 12px", fontSize: "14px" }}>Add emotional state</h4>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                                  <div>
+                                    <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>Emotion</label>
+                                    <select
+                                      value={newEmotionalStateForm.emotion}
+                                      onChange={(e) => setNewEmotionalStateForm((f) => ({ ...f, emotion: e.target.value }))}
+                                      style={{ width: "100%", padding: "8px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "14px" }}
+                                    >
+                                      {JOURNAL_EMOTIONS.map((em) => (
+                                        <option key={em} value={em}>{em}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>Intensity: {newEmotionalStateForm.intensity}/10</label>
+                                    <input
+                                      type="range"
+                                      min={1}
+                                      max={10}
+                                      value={newEmotionalStateForm.intensity}
+                                      onChange={(e) => setNewEmotionalStateForm((f) => ({ ...f, intensity: parseInt(e.target.value, 10) }))}
+                                      style={{ width: "100%" }}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>Notes</label>
+                                    <RichTextEditor
+                                      value={newEmotionalStateForm.notes}
+                                      onChange={(content: string) => setNewEmotionalStateForm((f) => ({ ...f, notes: content }))}
+                                      placeholder="Notes..."
+                                      readOnly={false}
+                                    />
+                                  </div>
+                                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => { setShowAddEmotionalStateForm(false); setNewEmotionalStateForm({ emotion: "Neutral", intensity: 5, notes: "" }); }}
+                                      style={{ padding: "6px 12px", background: "transparent", border: "none", borderRadius: "6px", color: "var(--text-secondary)", cursor: "pointer", fontSize: "13px" }}
+                                    >
+                                      Close
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div>
+                            <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                              {selectedEntry ? "Save the entry first, then add emotional states linked to each implementation." : "Create or open a journal entry to add emotional states (same as the Emotions page)."}
+                            </p>
+                          </div>
+                        )}
                       </div>
                     )}
                     {activeTab === "notes" && (
@@ -2495,7 +2671,7 @@ export default function Journal() {
                                     <div style={{ maxHeight: "240px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", paddingRight: "4px" }}>
                                       {entryTradesForAssociation.map((t, i) => {
                                         const key: number = selectedEntry && (t as { id?: number }).id != null ? (t as { id: number }).id : i;
-                                        const label = (t as { symbol?: string }).symbol || `Trade ${i + 1}`;
+                                        const label = (t as { symbol?: string }).symbol || `Implementation ${i + 1}`;
                                         const currentAssoc = checklistTradeAssociations.get(tradeAssociationModalItemId);
                                         const isSelected = !!currentAssoc && currentAssoc.length > 0 && currentAssoc.includes(key);
                                         const toggleTrade = () => {
