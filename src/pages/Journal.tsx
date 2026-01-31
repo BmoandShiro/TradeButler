@@ -1773,10 +1773,10 @@ export default function Journal() {
             </div>
             <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
               {!isTabContentMaximized && (
-                <div style={{ padding: "20px", borderBottom: "1px solid var(--border-color)" }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                    <div>
-                      <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)" }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", alignItems: "flex-end" }}>
+                    <div style={{ flex: "0 0 120px", minWidth: "100px" }}>
+                      <label style={{ display: "block", marginBottom: "4px", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)" }}>
                         Date
                       </label>
                       <input
@@ -1785,8 +1785,8 @@ export default function Journal() {
                         onChange={(e) => setEntryFormData({ ...entryFormData, date: e.target.value })}
                         style={{
                           width: "100%",
-                          padding: "8px",
-                          backgroundColor: "var(--bg-secondary)",
+                          padding: "6px 8px",
+                          backgroundColor: "var(--bg-primary)",
                           border: "1px solid var(--border-color)",
                           borderRadius: "4px",
                           color: "var(--text-primary)",
@@ -1794,8 +1794,8 @@ export default function Journal() {
                         }}
                       />
                     </div>
-                    <div>
-                      <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                    <div style={{ flex: "1 1 200px", minWidth: "140px" }}>
+                      <label style={{ display: "block", marginBottom: "4px", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)" }}>
                         Title
                       </label>
                       <input
@@ -1805,7 +1805,6 @@ export default function Journal() {
                         onChange={(e) => {
                           const newData = { ...entryFormData, title: e.target.value };
                           setEntryFormData(newData);
-                          // Track history for undo
                           if (isEditing) {
                             const currentState = {
                               entry: newData,
@@ -1818,8 +1817,8 @@ export default function Journal() {
                         placeholder="Entry title..."
                         style={{
                           width: "100%",
-                          padding: "8px",
-                          backgroundColor: "var(--bg-secondary)",
+                          padding: "6px 8px",
+                          backgroundColor: "var(--bg-primary)",
                           border: "1px solid var(--border-color)",
                           borderRadius: "4px",
                           color: "var(--text-primary)",
@@ -1827,8 +1826,8 @@ export default function Journal() {
                         }}
                       />
                     </div>
-                    <div>
-                      <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                    <div style={{ flex: "0 0 180px", minWidth: "140px" }}>
+                      <label style={{ display: "block", marginBottom: "4px", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)" }}>
                         Strategy
                       </label>
                       <select
@@ -1836,8 +1835,8 @@ export default function Journal() {
                         onChange={(e) => setEntryFormData({ ...entryFormData, strategy_id: e.target.value ? parseInt(e.target.value) : null })}
                         style={{
                           width: "100%",
-                          padding: "8px",
-                          backgroundColor: "var(--bg-secondary)",
+                          padding: "6px 8px",
+                          backgroundColor: "var(--bg-primary)",
                           border: "1px solid var(--border-color)",
                           borderRadius: "4px",
                           color: "var(--text-primary)",
