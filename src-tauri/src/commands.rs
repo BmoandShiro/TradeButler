@@ -2316,12 +2316,14 @@ pub struct JournalChecklistResponse {
     pub journal_entry_id: i64,
     pub checklist_item_id: i64,
     pub is_checked: bool,
+    /// JSON array of journal_trade IDs when associated with specific trades, e.g. "[1,2,3]". Null/empty = entry-level (whole journal).
+    pub journal_trade_ids: Option<String>,
 }
 
 #[tauri::command]
 pub fn save_journal_checklist_responses(
     journal_entry_id: i64,
-    responses: Vec<(i64, bool)>,
+    responses: Vec<(i64, bool, Option<String>)>,
 ) -> Result<(), String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
@@ -2332,11 +2334,11 @@ pub fn save_journal_checklist_responses(
         params![journal_entry_id],
     ).map_err(|e| e.to_string())?;
     
-    // Insert new responses
-    for (checklist_item_id, is_checked) in responses {
+    // Insert new responses: (checklist_item_id, is_checked, journal_trade_ids_json)
+    for (checklist_item_id, is_checked, journal_trade_ids) in responses {
         conn.execute(
-            "INSERT INTO journal_checklist_responses (journal_entry_id, checklist_item_id, is_checked) VALUES (?1, ?2, ?3)",
-            params![journal_entry_id, checklist_item_id, if is_checked { 1 } else { 0 }],
+            "INSERT INTO journal_checklist_responses (journal_entry_id, checklist_item_id, is_checked, journal_trade_ids) VALUES (?1, ?2, ?3, ?4)",
+            params![journal_entry_id, checklist_item_id, if is_checked { 1 } else { 0 }, journal_trade_ids],
         ).map_err(|e| e.to_string())?;
     }
     
@@ -2348,17 +2350,34 @@ pub fn get_journal_checklist_responses(journal_entry_id: i64) -> Result<Vec<Jour
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
-    let mut stmt = conn
-        .prepare("SELECT id, journal_entry_id, checklist_item_id, is_checked FROM journal_checklist_responses WHERE journal_entry_id = ?1")
-        .map_err(|e| e.to_string())?;
+    // Support both schema with and without journal_trade_ids for backward compatibility
+    let has_trade_ids_col = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='journal_trade_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).map(|c| c > 0).unwrap_or(false);
+    
+    let mut stmt = if has_trade_ids_col {
+        conn.prepare("SELECT id, journal_entry_id, checklist_item_id, is_checked, journal_trade_ids FROM journal_checklist_responses WHERE journal_entry_id = ?1")
+            .map_err(|e| e.to_string())?
+    } else {
+        conn.prepare("SELECT id, journal_entry_id, checklist_item_id, is_checked FROM journal_checklist_responses WHERE journal_entry_id = ?1")
+            .map_err(|e| e.to_string())?
+    };
     
     let response_iter = stmt
-        .query_map(params![journal_entry_id], |row| {
+        .query_map(params![journal_entry_id], move |row| {
+            let journal_trade_ids = if has_trade_ids_col {
+                row.get(4).ok()
+            } else {
+                None
+            };
             Ok(JournalChecklistResponse {
                 id: Some(row.get(0)?),
                 journal_entry_id: row.get(1)?,
                 checklist_item_id: row.get(2)?,
                 is_checked: row.get::<_, i64>(3)? != 0,
+                journal_trade_ids,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -2478,11 +2497,52 @@ pub fn delete_journal_trade(id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn get_journal_trade_actual_trade_ids(journal_trade_id: i64) -> Result<Vec<i64>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn
+        .prepare("SELECT trade_id FROM journal_trade_actual_trades WHERE journal_trade_id = ?1 ORDER BY trade_id")
+        .map_err(|e| e.to_string())?;
+    
+    let rows = stmt
+        .query_map(params![journal_trade_id], |row| row.get::<_, i64>(0))
+        .map_err(|e| e.to_string())?;
+    
+    let mut ids = Vec::new();
+    for id in rows {
+        ids.push(id.map_err(|e| e.to_string())?);
+    }
+    Ok(ids)
+}
+
+#[tauri::command]
+pub fn save_journal_trade_actual_trades(journal_trade_id: i64, trade_ids: Vec<i64>) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    
+    conn.execute("DELETE FROM journal_trade_actual_trades WHERE journal_trade_id = ?1", params![journal_trade_id])
+        .map_err(|e| e.to_string())?;
+    
+    for trade_id in trade_ids {
+        conn.execute(
+            "INSERT INTO journal_trade_actual_trades (journal_trade_id, trade_id) VALUES (?1, ?2)",
+            params![journal_trade_id, trade_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
 pub fn clear_all_data() -> Result<(), String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     // Delete all data from all tables
+    conn.execute("DELETE FROM journal_trade_actual_trades", [])
+        .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM journal_checklist_responses", [])
         .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM journal_trades", [])
@@ -4865,23 +4925,46 @@ pub fn export_data() -> Result<String, String> {
     }
     
     // Export journal checklist responses
-    let mut stmt = conn
-        .prepare("SELECT journal_entry_id, checklist_item_id, is_checked FROM journal_checklist_responses")
-        .map_err(|e| e.to_string())?;
-    let response_iter = stmt
-        .query_map([], |row| {
-            Ok(JournalChecklistResponse {
-                id: None,
-                journal_entry_id: row.get(0)?,
-                checklist_item_id: row.get(1)?,
-                is_checked: row.get::<_, i64>(2)? != 0,
+    let has_trade_ids_col = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='journal_trade_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).map(|c| c > 0).unwrap_or(false);
+    let journal_checklist_responses: Vec<JournalChecklistResponse> = if has_trade_ids_col {
+        let mut stmt = conn.prepare("SELECT journal_entry_id, checklist_item_id, is_checked, journal_trade_ids FROM journal_checklist_responses")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<JournalChecklistResponse> = stmt
+            .query_map([], |row| {
+                Ok(JournalChecklistResponse {
+                    id: None,
+                    journal_entry_id: row.get(0)?,
+                    checklist_item_id: row.get(1)?,
+                    is_checked: row.get::<_, i64>(2)? != 0,
+                    journal_trade_ids: row.get(3).ok(),
+                })
             })
-        })
-        .map_err(|e| e.to_string())?;
-    let mut journal_checklist_responses = Vec::new();
-    for response in response_iter {
-        journal_checklist_responses.push(response.map_err(|e| e.to_string())?);
-    }
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    } else {
+        let mut stmt = conn.prepare("SELECT journal_entry_id, checklist_item_id, is_checked FROM journal_checklist_responses")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<JournalChecklistResponse> = stmt
+            .query_map([], |row| {
+                Ok(JournalChecklistResponse {
+                    id: None,
+                    journal_entry_id: row.get(0)?,
+                    checklist_item_id: row.get(1)?,
+                    is_checked: row.get::<_, i64>(2)? != 0,
+                    journal_trade_ids: None,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
     
     // Export pair notes
     let mut stmt = conn
@@ -5096,7 +5179,8 @@ pub fn import_data(json_data: String) -> Result<ImportResult, String> {
         result.journal_entries_imported += 1;
     }
     
-    // Import journal trades
+    // Import journal trades (build journal_trade_id_map for checklist response trade associations)
+    let mut journal_trade_id_map: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
     for trade in export_data.journal_trades {
         // Map journal_entry_id
         let mapped_entry_id = journal_entry_id_map.get(&trade.journal_entry_id).copied();
@@ -5116,6 +5200,15 @@ pub fn import_data(json_data: String) -> Result<ImportResult, String> {
             .unwrap_or(0);
         
         if existing > 0 {
+            if let (Some(old_id), Some(entry_id)) = (trade.id, mapped_entry_id) {
+                if let Ok(existing_id) = conn.query_row(
+                    "SELECT id FROM journal_trades WHERE journal_entry_id = ?1 AND symbol = ?2 AND trade_order = ?3",
+                    params![entry_id, trade.symbol, trade.trade_order],
+                    |row| row.get(0),
+                ) {
+                    journal_trade_id_map.insert(old_id, existing_id);
+                }
+            }
             result.journal_trades_skipped += 1;
             continue;
         }
@@ -5140,6 +5233,10 @@ pub fn import_data(json_data: String) -> Result<ImportResult, String> {
             ],
         ).map_err(|e| e.to_string())?;
         
+        let new_id = conn.last_insert_rowid();
+        if let Some(old_id) = trade.id {
+            journal_trade_id_map.insert(old_id, new_id);
+        }
         result.journal_trades_imported += 1;
     }
     
@@ -5225,10 +5322,31 @@ pub fn import_data(json_data: String) -> Result<ImportResult, String> {
         }
         
         let checked_int = if response.is_checked { 1 } else { 0 };
-        conn.execute(
-            "INSERT INTO journal_checklist_responses (journal_entry_id, checklist_item_id, is_checked) VALUES (?1, ?2, ?3)",
-            params![mapped_entry_id, mapped_checklist_id, checked_int],
-        ).map_err(|e| e.to_string())?;
+        // Map journal_trade_ids if present (for Analysis/Mantra trade associations)
+        let mapped_trade_ids: Option<String> = response.journal_trade_ids.as_ref().and_then(|ids_json| {
+            serde_json::from_str::<Vec<i64>>(ids_json).ok().map(|old_ids| {
+                let new_ids: Vec<i64> = old_ids.iter()
+                    .filter_map(|old_id| journal_trade_id_map.get(old_id).copied())
+                    .collect();
+                serde_json::to_string(&new_ids).unwrap_or_else(|_| "[]".to_string())
+            }).filter(|s| s != "[]")
+        });
+        let has_trade_ids_col = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='journal_trade_ids'",
+            [],
+            |row| row.get::<_, i64>(0),
+        ).map(|c| c > 0).unwrap_or(false);
+        if has_trade_ids_col {
+            conn.execute(
+                "INSERT INTO journal_checklist_responses (journal_entry_id, checklist_item_id, is_checked, journal_trade_ids) VALUES (?1, ?2, ?3, ?4)",
+                params![mapped_entry_id, mapped_checklist_id, checked_int, mapped_trade_ids],
+            ).map_err(|e| e.to_string())?;
+        } else {
+            conn.execute(
+                "INSERT INTO journal_checklist_responses (journal_entry_id, checklist_item_id, is_checked) VALUES (?1, ?2, ?3)",
+                params![mapped_entry_id, mapped_checklist_id, checked_int],
+            ).map_err(|e| e.to_string())?;
+        }
         
         result.checklist_responses_imported += 1;
     }

@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2 } from "lucide-react";
+import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2 } from "lucide-react";
 import { format, parse } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
@@ -33,6 +33,21 @@ interface JournalTrade {
   updated_at: string | null;
 }
 
+/** Actual trade from the Trades table (executed/real trades), not journal trades */
+interface ActualTrade {
+  id: number;
+  symbol: string;
+  side: string;
+  quantity: number;
+  price: number;
+  timestamp: string;
+  order_type: string;
+  status: string;
+  fees: number | null;
+  notes: string | null;
+  strategy_id: number | null;
+}
+
 interface Strategy {
   id: number;
   name: string;
@@ -57,7 +72,10 @@ interface JournalChecklistResponse {
   journal_entry_id: number;
   checklist_item_id: number;
   is_checked: boolean;
+  journal_trade_ids?: string | null; // JSON array of trade IDs when associated with specific trades, null = whole entry
 }
+
+const ENTRY_LEVEL_CHECKLIST_TYPES = ["daily_analysis", "daily_mantra"];
 
 type TabType = "trade" | "what_went_well" | "what_could_be_improved" | "emotional_state" | "notes" | "checklists" | "survey";
 
@@ -119,6 +137,16 @@ export default function Journal() {
   // Checklist state (per trade, but checklists come from strategy)
   const [strategyChecklists, setStrategyChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [checklistResponses, setChecklistResponses] = useState<Map<number, Map<number, boolean>>>(new Map()); // trade_index -> checklist_item_id -> is_checked
+  // Entry-level (Analysis & Mantra): associated with whole journal by default, optionally with specific trades
+  const [entryLevelChecklistResponses, setEntryLevelChecklistResponses] = useState<Map<number, boolean>>(new Map()); // item_id -> is_checked
+  const [checklistTradeAssociations, setChecklistTradeAssociations] = useState<Map<number, number[] | null>>(new Map()); // item_id -> null (whole entry) or [trade_id, ...]
+  const [tradeAssociationModalItemId, setTradeAssociationModalItemId] = useState<number | null>(null);
+
+  // Journal trade -> actual trades (link journal trades in entry to real trades from Trades table)
+  const [journalTradeActualTradeIds, setJournalTradeActualTradeIds] = useState<Map<number, number[]>>(new Map()); // journal_trade_id -> [actual trade id, ...]
+  const [actualTrades, setActualTrades] = useState<ActualTrade[]>([]); // all actual trades for "Link to actual trades" modal
+  const [linkActualTradesModalJournalTradeId, setLinkActualTradesModalJournalTradeId] = useState<number | null>(null);
+  const [linkActualTradesSelection, setLinkActualTradesSelection] = useState<number[]>([]); // selection in "Link to actual trades" modal
   
   // Available symbols for dropdown
   const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
@@ -185,6 +213,8 @@ export default function Journal() {
           tradeIndex,
           Array.from(responses.entries())
         ]),
+        entryLevelChecklistResponses: Array.from(entryLevelChecklistResponses.entries()),
+        checklistTradeAssociations: Array.from(checklistTradeAssociations.entries()).map(([k, v]) => [k, v]),
         activeTradeIndex,
         activeTab,
         isCreating,
@@ -211,6 +241,12 @@ export default function Journal() {
           restoredResponses.set(tradeIndex, new Map(responses));
         });
         setChecklistResponses(restoredResponses);
+        if (workInProgress.entryLevelChecklistResponses) {
+          setEntryLevelChecklistResponses(new Map(workInProgress.entryLevelChecklistResponses));
+        }
+        if (workInProgress.checklistTradeAssociations) {
+          setChecklistTradeAssociations(new Map(workInProgress.checklistTradeAssociations.map(([k, v]: [number, number[] | null]) => [k, v])));
+        }
         
         setActiveTradeIndex(workInProgress.activeTradeIndex);
         setActiveTab(workInProgress.activeTab);
@@ -311,7 +347,7 @@ export default function Journal() {
       clearInterval(interval);
       saveWorkInProgress(); // Save one last time
     };
-  }, [entryFormData, tradesFormData, checklistResponses, activeTradeIndex, activeTab, isCreating, isEditing, selectedEntry]);
+  }, [entryFormData, tradesFormData, checklistResponses, entryLevelChecklistResponses, checklistTradeAssociations, activeTradeIndex, activeTab, isCreating, isEditing, selectedEntry]);
 
   useEffect(() => {
     loadEntries();
@@ -352,7 +388,7 @@ export default function Journal() {
     if (selectedEntry && !isCreating && !isEditing) {
       loadTrades(selectedEntry.id);
       if (selectedEntry.strategy_id) {
-        loadChecklistResponses(selectedEntry.id);
+        loadChecklistResponses(selectedEntry.id, selectedEntry.strategy_id);
       }
       
       // Restore scroll positions after entry data is loaded (entry-specific)
@@ -387,6 +423,21 @@ export default function Journal() {
     }
   }, [selectedEntry, isCreating, isEditing, activeTab]);
 
+  // Load actual trades when "Link to actual trades" modal opens
+  useEffect(() => {
+    if (linkActualTradesModalJournalTradeId == null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const trades = await invoke<ActualTrade[]>("get_trades");
+        if (!cancelled) setActualTrades(trades);
+      } catch (e) {
+        if (!cancelled) setActualTrades([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [linkActualTradesModalJournalTradeId]);
+
   const loadEntries = async () => {
     try {
       const data = await invoke<JournalEntry[]>("get_journal_entries");
@@ -416,12 +467,14 @@ export default function Journal() {
     }
   };
 
-  const loadTrades = async (entryId: number) => {
+  const loadTrades = async (entryId: number): Promise<JournalTrade[]> => {
     try {
       const trades = await invoke<JournalTrade[]>("get_journal_trades", { journalEntryId: entryId });
       setSelectedTrades(trades);
+      return trades;
     } catch (error) {
       console.error("Error loading trades:", error);
+      return [];
     }
   };
 
@@ -448,34 +501,60 @@ export default function Journal() {
       }
 
       setStrategyChecklists(new Map([[strategyId, grouped]]));
-      // Reset checklist responses for all trades
+      // Reset checklist responses for all trades and entry-level
       const newResponses = new Map<number, Map<number, boolean>>();
       tradesFormData.forEach((_, index) => {
         newResponses.set(index, new Map());
       });
       setChecklistResponses(newResponses);
+      setEntryLevelChecklistResponses(new Map());
+      setChecklistTradeAssociations(new Map());
     } catch (error) {
       console.error("Error loading strategy checklists:", error);
     }
   };
 
-  const loadChecklistResponses = async (entryId: number) => {
+  const loadChecklistResponses = async (entryId: number, strategyId: number) => {
     try {
-      const responses = await invoke<JournalChecklistResponse[]>("get_journal_checklist_responses", {
-        journalEntryId: entryId,
-      });
+      const [responses, allChecklistItems] = await Promise.all([
+        invoke<JournalChecklistResponse[]>("get_journal_checklist_responses", { journalEntryId: entryId }),
+        invoke<ChecklistItem[]>("get_strategy_checklist", { strategyId, checklistType: null }),
+      ]);
 
-      // For now, we'll load responses at entry level (they're stored per entry, not per trade)
-      // In the future, we might want to store responses per trade
-      const responseMap = new Map<number, boolean>();
-      for (const response of responses) {
-        responseMap.set(response.checklist_item_id, response.is_checked);
+      const itemIdToType = new Map<number, string>();
+      for (const item of allChecklistItems) {
+        itemIdToType.set(item.id, item.checklist_type || "entry");
       }
-      
-      // Apply to all trades for now
+
+      const entryLevelChecked = new Map<number, boolean>();
+      const entryLevelTradeAssociations = new Map<number, number[] | null>();
+      const perTradeResponseMap = new Map<number, boolean>();
+
+      for (const response of responses) {
+        const itemType = itemIdToType.get(response.checklist_item_id);
+        if (ENTRY_LEVEL_CHECKLIST_TYPES.includes(itemType || "")) {
+          entryLevelChecked.set(response.checklist_item_id, response.is_checked);
+          if (response.journal_trade_ids) {
+            try {
+              const ids = JSON.parse(response.journal_trade_ids) as number[];
+              entryLevelTradeAssociations.set(response.checklist_item_id, ids.length > 0 ? ids : null);
+            } catch {
+              entryLevelTradeAssociations.set(response.checklist_item_id, null);
+            }
+          } else {
+            entryLevelTradeAssociations.set(response.checklist_item_id, null);
+          }
+        } else {
+          perTradeResponseMap.set(response.checklist_item_id, response.is_checked);
+        }
+      }
+
+      setEntryLevelChecklistResponses(entryLevelChecked);
+      setChecklistTradeAssociations(entryLevelTradeAssociations);
+
       const newResponses = new Map<number, Map<number, boolean>>();
       selectedTrades.forEach((_, index) => {
-        newResponses.set(index, new Map(responseMap));
+        newResponses.set(index, new Map(perTradeResponseMap));
       });
       setChecklistResponses(newResponses);
     } catch (error) {
@@ -490,6 +569,8 @@ export default function Journal() {
     setSelectedEntry(null);
     localStorage.removeItem('journal_selected_entry_id');
     setSelectedTrades([]);
+    setJournalTradeActualTradeIds(new Map());
+    setLinkActualTradesModalJournalTradeId(null);
     setEntryFormData({
       date: format(new Date(), "yyyy-MM-dd"),
       title: "",
@@ -513,6 +594,8 @@ export default function Journal() {
     setActiveTradeIndex(0);
     setActiveTab("trade");
     setChecklistResponses(new Map());
+    setEntryLevelChecklistResponses(new Map());
+    setChecklistTradeAssociations(new Map());
     tabScrollPositions.current.clear();
   };
 
@@ -525,13 +608,13 @@ export default function Journal() {
         title: selectedEntry.title,
         strategy_id: selectedEntry.strategy_id,
       });
-      await loadTrades(selectedEntry.id);
+      const loadedTrades = await loadTrades(selectedEntry.id);
       if (selectedEntry.strategy_id) {
         await loadStrategyChecklists(selectedEntry.strategy_id);
-        await loadChecklistResponses(selectedEntry.id);
+        await loadChecklistResponses(selectedEntry.id, selectedEntry.strategy_id);
       }
       
-      // Convert trades to form data
+      // Convert trades to form data (use loadedTrades, not selectedTrades - state updates are async)
       const tradesData: Array<{
         id: number | null;
         symbol: string;
@@ -546,7 +629,7 @@ export default function Journal() {
         notes: string;
         outcome: string;
         trade_order: number;
-      }> = selectedTrades.map(trade => ({
+      }> = loadedTrades.map(trade => ({
         id: trade.id,
         symbol: trade.symbol || "",
         position: trade.position || "",
@@ -583,6 +666,20 @@ export default function Journal() {
       setTradesFormData(tradesData);
       setActiveTradeIndex(0);
       setActiveTab("trade");
+
+      // Load journal trade -> actual trade associations for each journal trade
+      const assocMap = new Map<number, number[]>();
+      for (const jt of loadedTrades) {
+        if (jt.id != null) {
+          try {
+            const ids = await invoke<number[]>("get_journal_trade_actual_trade_ids", { journalTradeId: jt.id });
+            assocMap.set(jt.id, ids);
+          } catch {
+            assocMap.set(jt.id, []);
+          }
+        }
+      }
+      setJournalTradeActualTradeIds(assocMap);
       
       // Store initial state for undo
       const initialState = {
@@ -721,10 +818,12 @@ export default function Journal() {
         return;
       }
 
-      // Save all trades
+      // Save all trades and collect trade IDs for checklist associations
+      const tradeIdsInOrder: number[] = [];
       for (let i = 0; i < tradesFormData.length; i++) {
         const tradeData = tradesFormData[i];
         if (tradeData.id) {
+          tradeIdsInOrder.push(tradeData.id);
           await invoke("update_journal_trade", {
             id: tradeData.id,
             symbol: tradeData.symbol || null,
@@ -741,7 +840,7 @@ export default function Journal() {
             tradeOrder: i,
           });
         } else {
-          await invoke("create_journal_trade", {
+          const newTradeId = await invoke<number>("create_journal_trade", {
             journalEntryId: entryId,
             symbol: tradeData.symbol || null,
             position: tradeData.position || null,
@@ -756,6 +855,7 @@ export default function Journal() {
             outcome: tradeData.outcome || null,
             tradeOrder: i,
           });
+          tradeIdsInOrder.push(newTradeId);
         }
       }
 
@@ -763,12 +863,26 @@ export default function Journal() {
       if (entryFormData.strategy_id) {
         const checklists = strategyChecklists.get(entryFormData.strategy_id);
         if (checklists) {
-          const responses: [number, boolean][] = [];
+          const responses: [number, boolean, string | null][] = [];
           const firstTradeResponses = checklistResponses.get(0) || new Map();
           for (const [, items] of checklists.entries()) {
             for (const item of items) {
-              const isChecked = firstTradeResponses.get(item.id) || false;
-              responses.push([item.id, isChecked]);
+              const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(item.checklist_type || "");
+              let isChecked: boolean;
+              let journalTradeIds: string | null = null;
+              if (isEntryLevel) {
+                isChecked = entryLevelChecklistResponses.get(item.id) || false;
+                const assoc = checklistTradeAssociations.get(item.id);
+                if (assoc && assoc.length > 0) {
+                  const ids = assoc.every(n => n >= 0 && n < tradeIdsInOrder.length)
+                    ? assoc.map(idx => tradeIdsInOrder[idx]).filter(Boolean)
+                    : assoc.filter(id => tradeIdsInOrder.includes(id));
+                  if (ids.length > 0) journalTradeIds = JSON.stringify(ids);
+                }
+              } else {
+                isChecked = firstTradeResponses.get(item.id) || false;
+              }
+              responses.push([item.id, isChecked, journalTradeIds]);
             }
           }
           await invoke("save_journal_checklist_responses", {
@@ -939,10 +1053,12 @@ export default function Journal() {
         return;
       }
 
-      // Save all trades
+      // Save all trades and collect trade IDs for checklist associations
+      const tradeIdsInOrder: number[] = [];
       for (let i = 0; i < tradesFormData.length; i++) {
         const tradeData = tradesFormData[i];
         if (tradeData.id) {
+          tradeIdsInOrder.push(tradeData.id);
           await invoke("update_journal_trade", {
             id: tradeData.id,
             symbol: tradeData.symbol || null,
@@ -959,7 +1075,7 @@ export default function Journal() {
             tradeOrder: i,
           });
         } else {
-          await invoke("create_journal_trade", {
+          const newTradeId = await invoke<number>("create_journal_trade", {
             journalEntryId: entryId,
             symbol: tradeData.symbol || null,
             position: tradeData.position || null,
@@ -974,20 +1090,34 @@ export default function Journal() {
             outcome: tradeData.outcome || null,
             tradeOrder: i,
           });
+          tradeIdsInOrder.push(newTradeId);
         }
       }
 
-      // Save checklist responses (at entry level for now)
+      // Save checklist responses
       if (entryFormData.strategy_id) {
         const checklists = strategyChecklists.get(entryFormData.strategy_id);
         if (checklists) {
-          const responses: [number, boolean][] = [];
-          // Use responses from the first trade (or combine all trades' responses)
+          const responses: [number, boolean, string | null][] = [];
           const firstTradeResponses = checklistResponses.get(0) || new Map();
           for (const [, items] of checklists.entries()) {
             for (const item of items) {
-              const isChecked = firstTradeResponses.get(item.id) || false;
-              responses.push([item.id, isChecked]);
+              const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(item.checklist_type || "");
+              let isChecked: boolean;
+              let journalTradeIds: string | null = null;
+              if (isEntryLevel) {
+                isChecked = entryLevelChecklistResponses.get(item.id) || false;
+                const assoc = checklistTradeAssociations.get(item.id);
+                if (assoc && assoc.length > 0) {
+                  const ids = assoc.every(n => n >= 0 && n < tradeIdsInOrder.length)
+                    ? assoc.map(idx => tradeIdsInOrder[idx]).filter(Boolean)
+                    : assoc.filter(id => tradeIdsInOrder.includes(id));
+                  if (ids.length > 0) journalTradeIds = JSON.stringify(ids);
+                }
+              } else {
+                isChecked = firstTradeResponses.get(item.id) || false;
+              }
+              responses.push([item.id, isChecked, journalTradeIds]);
             }
           }
           await invoke("save_journal_checklist_responses", {
@@ -1021,6 +1151,8 @@ export default function Journal() {
     setIsEditing(false);
     setEditHistory([]);
     setOriginalEntryData(null);
+    setJournalTradeActualTradeIds(new Map());
+    setLinkActualTradesModalJournalTradeId(null);
     clearWorkInProgress();
     if (selectedEntry) {
       // Reload the entry to reset form
@@ -1087,7 +1219,7 @@ export default function Journal() {
       await loadTrades(id);
       if (entry.strategy_id) {
         await loadStrategyChecklists(entry.strategy_id);
-        await loadChecklistResponses(id);
+        await loadChecklistResponses(id, entry.strategy_id);
       }
       
       // Restore scroll positions after entry is loaded (entry-specific)
@@ -1145,6 +1277,19 @@ export default function Journal() {
       newMap.set(tradeIndex, tradeResponses);
       return newMap;
     });
+  };
+
+  const toggleEntryLevelChecklistItem = (itemId: number) => {
+    setEntryLevelChecklistResponses(prev => {
+      const newMap = new Map(prev);
+      newMap.set(itemId, !(prev.get(itemId) || false));
+      return newMap;
+    });
+  };
+
+  const setChecklistTradeAssociation = (itemId: number, tradeIds: number[] | null) => {
+    setChecklistTradeAssociations(prev => new Map(prev).set(itemId, tradeIds));
+    setTradeAssociationModalItemId(null);
   };
 
   const getChecklistTitle = (type: string): string => {
@@ -1246,7 +1391,19 @@ export default function Journal() {
     const items = checklists.get(checklistType) || [];
     if (items.length === 0) return 0;
 
-    const tradeResponses = checklistResponses.get(tradeIndex) || new Map();
+    const isEntryLevelType = ENTRY_LEVEL_CHECKLIST_TYPES.includes(checklistType);
+    const tradeResponses = isEntryLevelType
+      ? entryLevelChecklistResponses
+      : (checklistResponses.get(tradeIndex) || new Map());
+    const entryTradesHere = selectedEntry ? selectedTrades : tradesFormData;
+    const tradeKey = selectedEntry && entryTradesHere[tradeIndex] && (entryTradesHere[tradeIndex] as { id?: number }).id != null
+      ? (entryTradesHere[tradeIndex] as { id: number }).id
+      : (entryTradesHere.length > tradeIndex ? tradeIndex : undefined);
+    const entryLevelAppliesHere = (itemId: number) => {
+      const assoc = checklistTradeAssociations.get(itemId);
+      if (!assoc || assoc.length === 0) return true;
+      return tradeKey !== undefined && assoc.includes(tradeKey);
+    };
     
     // Count checkable items the same way they're rendered:
     // - Regular items (no parent_id, not a group header)
@@ -1260,18 +1417,16 @@ export default function Journal() {
     
     if (totalCheckable === 0) return 0;
 
+    const isCheckedHere = (itemId: number) =>
+      isEntryLevelType
+        ? (tradeResponses.get(itemId) || false) && entryLevelAppliesHere(itemId)
+        : (tradeResponses.get(itemId) || false);
     let checked = 0;
-    // Count checked regular items
     for (const item of regularItems) {
-      if (tradeResponses.get(item.id)) {
-        checked++;
-      }
+      if (isCheckedHere(item.id)) checked++;
     }
-    // Count checked grouped items (children)
     for (const item of groupedItems) {
-      if (tradeResponses.get(item.id)) {
-        checked++;
-      }
+      if (isCheckedHere(item.id)) checked++;
     }
 
     const percentage = (checked / totalCheckable) * 100;
@@ -1280,6 +1435,8 @@ export default function Journal() {
 
   const currentTrade = tradesFormData[activeTradeIndex];
   const currentChecklists = entryFormData.strategy_id ? strategyChecklists.get(entryFormData.strategy_id) : null;
+  // Trades that belong to this journal entry only (for Associate modal). When editing, use tradesFormData (set from loaded trades in handleEdit) so we always show the correct 7; when viewing, use selectedTrades.
+  const entryTradesForAssociation = selectedEntry && !isEditing ? selectedTrades : tradesFormData;
   const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
   const customTypes = currentChecklists 
     ? Array.from(currentChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")
@@ -1957,6 +2114,46 @@ export default function Journal() {
                         </select>
                       </div>
                     </div>
+                    {/* Link this journal trade to actual trades (from Trades table) - only when editing and journal trade has id */}
+                    {isEditing && currentTrade.id != null && (
+                      <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid var(--border-color)" }}>
+                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)" }}>
+                          Link to actual trades
+                        </label>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                          <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>
+                            {(journalTradeActualTradeIds.get(currentTrade.id)?.length ?? 0) > 0
+                              ? `${journalTradeActualTradeIds.get(currentTrade.id)!.length} actual trade(s) linked`
+                              : "No actual trades linked"}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLinkActualTradesSelection(journalTradeActualTradeIds.get(currentTrade.id!) ?? []);
+                              setLinkActualTradesModalJournalTradeId(currentTrade.id!);
+                            }}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "4px",
+                              padding: "6px 12px",
+                              background: "var(--bg-tertiary)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "6px",
+                              color: "var(--accent)",
+                              cursor: "pointer",
+                              fontSize: "13px",
+                            }}
+                          >
+                            <Link2 size={14} />
+                            {journalTradeActualTradeIds.get(currentTrade.id)?.length ? "Edit links" : "Link to actual trades"}
+                          </button>
+                        </div>
+                        <p style={{ margin: "4px 0 0", fontSize: "11px", color: "var(--text-secondary)" }}>
+                          Associate this journal trade with real trades from your Trades list.
+                        </p>
+                      </div>
+                    )}
                   </div>
                   )}
 
@@ -2211,6 +2408,12 @@ export default function Journal() {
                               const items = currentChecklists.get(type) || [];
                               if (items.length === 0) return null;
 
+                              const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(type);
+                              const responses = isEntryLevel ? entryLevelChecklistResponses : (checklistResponses.get(activeTradeIndex) || new Map());
+                              // Entry-level: show actual stored state so checkbox is always clickable; association is shown via "Whole entry" / "N trade(s)" label
+                              const getChecked = (id: number) => responses.get(id) || false;
+                              const onToggle = isEntryLevel ? (id: number) => toggleEntryLevelChecklistItem(id) : (id: number) => toggleChecklistItem(activeTradeIndex, id);
+
                               // Organize items: groups and regular items
                               const groups = items.filter(item => !item.parent_id && items.some(child => child.parent_id === item.id));
                               const regularItems = items.filter(item => !item.parent_id && !items.some(child => child.parent_id === item.id));
@@ -2219,116 +2422,104 @@ export default function Journal() {
                               groupedItems.forEach(item => {
                                 if (item.parent_id) {
                                   const parentId = item.parent_id;
-                                  if (!itemsByParent.has(parentId)) {
-                                    itemsByParent.set(parentId, []);
-                                  }
+                                  if (!itemsByParent.has(parentId)) itemsByParent.set(parentId, []);
                                   itemsByParent.get(parentId)!.push(item);
                                 }
                               });
-
-                              const tradeResponses = checklistResponses.get(activeTradeIndex) || new Map();
 
                               return (
                                 <div key={type} style={{ marginBottom: "24px" }}>
                                   <h4 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>
                                     {getChecklistTitle(type)}
+                                    {isEntryLevel && (
+                                      <span style={{ fontSize: "11px", fontWeight: "400", color: "var(--text-secondary)", marginLeft: "8px" }}>
+                                        (applies to whole journal by default)
+                                      </span>
+                                    )}
                                   </h4>
-                                  {/* Render groups */}
                                   {groups.map((group) => {
                                     const children = itemsByParent.get(group.id) || [];
                                     return (
                                       <div key={group.id} style={{ marginBottom: "16px" }}>
-                                        <div
-                                          style={{
-                                            padding: "12px",
-                                            backgroundColor: "var(--bg-tertiary)",
-                                            border: "1px solid var(--border-color)",
-                                            borderRadius: "6px",
-                                            marginBottom: "8px",
-                                            fontWeight: "600",
-                                            color: "var(--text-primary)",
-                                          }}
-                                        >
+                                        <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "8px", fontWeight: "600", color: "var(--text-primary)" }}>
                                           {group.item_text}
                                         </div>
                                         {children.map((child) => (
-                                          <div
-                                            key={child.id}
-                                            style={{
-                                              display: "flex",
-                                              alignItems: "center",
-                                              gap: "8px",
-                                              padding: "8px 12px",
-                                              marginLeft: "20px",
-                                              marginBottom: "4px",
-                                            }}
-                                          >
-                                            <input
-                                              type="checkbox"
-                                              checked={tradeResponses.get(child.id) || false}
-                                              onChange={() => toggleChecklistItem(activeTradeIndex, child.id)}
-                                              style={{
-                                                cursor: "pointer",
-                                                width: "16px",
-                                                height: "16px",
-                                              }}
-                                            />
-                                            <label
-                                              style={{
-                                                flex: 1,
-                                                fontSize: "14px",
-                                                color: "var(--text-primary)",
-                                                cursor: "pointer",
-                                              }}
-                                              onClick={() => toggleChecklistItem(activeTradeIndex, child.id)}
-                                            >
-                                              {child.item_text}
-                                            </label>
+                                          <div key={child.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", marginLeft: "20px", marginBottom: "4px" }}>
+                                            <input type="checkbox" checked={getChecked(child.id)} onChange={() => onToggle(child.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
+                                            <label style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)", cursor: "pointer" }} onClick={() => onToggle(child.id)}>{child.item_text}</label>
+                                            {isEntryLevel && entryTradesForAssociation.length > 1 && (
+                                              <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                                                <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                                                  {!(checklistTradeAssociations.get(child.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(child.id)!.length} trade(s)`}
+                                                </span>
+                                                <button type="button" onClick={() => setTradeAssociationModalItemId(child.id)} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", padding: "4px", display: "flex" }} title="Associate with specific trades">
+                                                  <Link2 size={14} />
+                                                </button>
+                                              </span>
+                                            )}
                                           </div>
                                         ))}
                                       </div>
                                     );
                                   })}
-                                  {/* Render regular items */}
                                   {regularItems.map((item) => (
-                                    <div
-                                      key={item.id}
-                                      style={{
-                                        display: "flex",
-                                        alignItems: "center",
-                                        gap: "8px",
-                                        padding: "8px 12px",
-                                        marginBottom: "4px",
-                                        backgroundColor: "var(--bg-tertiary)",
-                                        borderRadius: "6px",
-                                      }}
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={tradeResponses.get(item.id) || false}
-                                        onChange={() => toggleChecklistItem(activeTradeIndex, item.id)}
-                                        style={{
-                                          cursor: "pointer",
-                                          width: "16px",
-                                          height: "16px",
-                                        }}
-                                      />
-                                      <label
-                                        style={{
-                                          flex: 1,
-                                          fontSize: "14px",
-                                          color: "var(--text-primary)",
-                                          cursor: "pointer",
-                                        }}
-                                        onClick={() => toggleChecklistItem(activeTradeIndex, item.id)}
-                                      >
-                                        {item.item_text}
-                                      </label>
+                                    <div key={item.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
+                                      <input type="checkbox" checked={getChecked(item.id)} onChange={() => onToggle(item.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
+                                      <label style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)", cursor: "pointer" }} onClick={() => onToggle(item.id)}>{item.item_text}</label>
+                                      {isEntryLevel && entryTradesForAssociation.length > 1 && (
+                                        <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                                          <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                                            {!(checklistTradeAssociations.get(item.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(item.id)!.length} trade(s)`}
+                                          </span>
+                                          <button type="button" onClick={() => setTradeAssociationModalItemId(item.id)} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", padding: "4px", display: "flex" }} title="Associate with specific trades">
+                                            <Link2 size={14} />
+                                          </button>
+                                        </span>
+                                      )}
                                     </div>
                                   ))}
                                 </div>
                               );
                             })}
+                            {/* Trade association modal */}
+                            {tradeAssociationModalItemId !== null && (
+                              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setTradeAssociationModalItemId(null)}>
+                                <div style={{ background: "var(--bg-primary)", borderRadius: "8px", padding: "20px", maxWidth: "400px", width: "90%", border: "1px solid var(--border-color)" }} onClick={e => e.stopPropagation()}>
+                                  <h4 style={{ margin: "0 0 12px", fontSize: "14px" }}>Associate with trades</h4>
+                                  <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>By default this applies to the whole journal. Optionally link to specific <strong>journal trades</strong> in this entry ({entryTradesForAssociation.length}):</p>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
+                                    <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                                      <input type="checkbox" checked={!(checklistTradeAssociations.get(tradeAssociationModalItemId)?.length)} onChange={() => setChecklistTradeAssociation(tradeAssociationModalItemId, null)} />
+                                      <span>Whole entry (default)</span>
+                                    </label>
+                                    <div style={{ maxHeight: "240px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", paddingRight: "4px" }}>
+                                      {entryTradesForAssociation.map((t, i) => {
+                                        const key: number = selectedEntry && (t as { id?: number }).id != null ? (t as { id: number }).id : i;
+                                        const label = (t as { symbol?: string }).symbol || `Trade ${i + 1}`;
+                                        const currentAssoc = checklistTradeAssociations.get(tradeAssociationModalItemId);
+                                        const isSelected = !!currentAssoc && currentAssoc.length > 0 && currentAssoc.includes(key);
+                                        const toggleTrade = () => {
+                                          const prev = checklistTradeAssociations.get(tradeAssociationModalItemId) || [];
+                                          const ids = prev.length > 0 ? [...prev] : [];
+                                          const idx = ids.indexOf(key);
+                                          if (idx >= 0) ids.splice(idx, 1);
+                                          else ids.push(key);
+                                          setChecklistTradeAssociation(tradeAssociationModalItemId, ids.length > 0 ? ids : null);
+                                        };
+                                        return (
+                                          <label key={i} style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", flexShrink: 0 }}>
+                                            <input type="checkbox" checked={isSelected} onChange={toggleTrade} />
+                                            <span>{label}</span>
+                                          </label>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                  <button onClick={() => setTradeAssociationModalItemId(null)} style={{ padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer" }}>Done</button>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <div style={{ 
@@ -2916,6 +3107,96 @@ export default function Journal() {
           </div>
         </div>
       </div>
+
+      {/* Link to actual trades modal (journal trade -> real trades from Trades table) */}
+      {linkActualTradesModalJournalTradeId !== null && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1001,
+          }}
+          onClick={() => setLinkActualTradesModalJournalTradeId(null)}
+        >
+          <div
+            style={{
+              background: "var(--bg-primary)",
+              borderRadius: "8px",
+              padding: "20px",
+              maxWidth: "480px",
+              width: "90%",
+              maxHeight: "80vh",
+              display: "flex",
+              flexDirection: "column",
+              border: "1px solid var(--border-color)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h4 style={{ margin: "0 0 8px", fontSize: "16px" }}>Link to actual trades</h4>
+            <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>
+              Select real trades from your Trades list to associate with this journal trade.
+            </p>
+            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", marginBottom: "16px", paddingRight: "4px" }}>
+              {actualTrades.filter((t): t is ActualTrade & { id: number } => t.id != null).map((t) => {
+                const tid = t.id as number;
+                const isSelected = linkActualTradesSelection.includes(tid);
+                return (
+                  <label
+                    key={tid}
+                    style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", flexShrink: 0 }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => {
+                        setLinkActualTradesSelection((prev) =>
+                          prev.includes(tid) ? prev.filter((id) => id !== tid) : [...prev, tid]
+                        );
+                      }}
+                    />
+                    <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>
+                      {t.symbol} {t.side} · {t.quantity} @ ${typeof t.price === "number" ? t.price.toFixed(2) : t.price} · {t.timestamp ? format(new Date(t.timestamp), "MMM d, yyyy HH:mm") : ""}
+                    </span>
+                  </label>
+                );
+              })}
+              {actualTrades.length === 0 && (
+                <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No actual trades in your Trades list. Add trades on the Trades page first.</span>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => setLinkActualTradesModalJournalTradeId(null)}
+                style={{ padding: "8px 16px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)", cursor: "pointer" }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const jtId = linkActualTradesModalJournalTradeId;
+                  if (jtId == null) return;
+                  try {
+                    await invoke("save_journal_trade_actual_trades", { journalTradeId: jtId, tradeIds: linkActualTradesSelection });
+                    setJournalTradeActualTradeIds((prev) => new Map(prev).set(jtId, linkActualTradesSelection));
+                  } catch (e) {
+                    console.error(e);
+                  }
+                  setLinkActualTradesModalJournalTradeId(null);
+                }}
+                style={{ padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer" }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirmModal && selectedEntry && (

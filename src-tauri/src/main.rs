@@ -74,6 +74,8 @@ fn main() {
             commands::get_journal_trades,
             commands::update_journal_trade,
             commands::delete_journal_trade,
+            commands::get_journal_trade_actual_trade_ids,
+            commands::save_journal_trade_actual_trades,
             commands::save_journal_checklist_responses,
             commands::get_journal_checklist_responses,
             commands::get_all_symbols,

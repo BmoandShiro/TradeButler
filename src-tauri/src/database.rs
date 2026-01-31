@@ -317,6 +317,36 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         [],
     )?;
 
+    // Migration: Add journal_trade_ids column for Analysis/Mantra trade association (nullable = entry-level, JSON array = specific trades)
+    let has_column: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='journal_trade_ids'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_column {
+        conn.execute("ALTER TABLE journal_checklist_responses ADD COLUMN journal_trade_ids TEXT", [])?;
+    }
+
+    // Create journal_trade_actual_trades: link journal trades (in entry) to actual trades (trades table)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS journal_trade_actual_trades (
+            journal_trade_id INTEGER NOT NULL,
+            trade_id INTEGER NOT NULL,
+            PRIMARY KEY (journal_trade_id, trade_id),
+            FOREIGN KEY (journal_trade_id) REFERENCES journal_trades(id) ON DELETE CASCADE,
+            FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_trade_actual_trades_jt ON journal_trade_actual_trades(journal_trade_id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_trade_actual_trades_t ON journal_trade_actual_trades(trade_id)",
+        [],
+    )?;
+
     // Create emotion_surveys table for storing detailed emotion surveys linked to emotional states
     conn.execute(
         "CREATE TABLE IF NOT EXISTS emotion_surveys (
