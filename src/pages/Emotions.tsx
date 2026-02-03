@@ -518,22 +518,26 @@ export default function Emotions() {
     takeSurvey?: boolean;
     journalEntryId?: number | null;
     journalTradeId?: number | null;
+    journalTradeIds?: number[];
   }>(() => {
     const saved = localStorage.getItem('emotions_form_data');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
+        const je = parsed.journalEntryId ?? null;
+        const jtIds = Array.isArray(parsed.journalTradeIds) ? parsed.journalTradeIds : (parsed.journalTradeId != null ? [parsed.journalTradeId] : []);
         return {
           ...parsed,
           takeSurvey: parsed.takeSurvey || false,
-          journalEntryId: parsed.journalEntryId ?? null,
+          journalEntryId: je,
           journalTradeId: parsed.journalTradeId ?? null,
+          journalTradeIds: jtIds,
         };
       } catch {
-        return { emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null };
+        return { emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null, journalTradeIds: [] };
       }
     }
-    return { emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null };
+    return { emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null, journalTradeIds: [] };
   });
   const [journalEntries, setJournalEntries] = useState<{ id: number; date: string; title: string }[]>([]);
   const [journalTradesForLink, setJournalTradesForLink] = useState<{ id: number; symbol: string | null; trade_order: number }[]>([]);
@@ -693,7 +697,7 @@ export default function Emotions() {
         setIsEditingSelectedState(false);
         setIsMaximized(false);
         setFormTab("basic");
-        setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null });
+        setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
         return;
       } else {
         // Create new state
@@ -753,7 +757,7 @@ export default function Emotions() {
       setIsEditingSelectedState(false);
       setIsMaximized(false);
       setFormTab("basic");
-      setFormData({ emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null });
+      setFormData({ emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
       localStorage.removeItem('emotions_form_data');
       localStorage.setItem('emotions_show_form', "false");
       const initial: Record<string, number> = {};
@@ -823,7 +827,7 @@ export default function Emotions() {
             saveScrollPosition();
             setEditingState(null);
             setIsEditingSelectedState(true);
-            setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null });
+            setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
             const initial: Record<string, number> = {};
             Object.values(SURVEY_QUESTIONS).flat().forEach((q) => {
               initial[q.key] = 3;
@@ -851,8 +855,8 @@ export default function Emotions() {
         </button>
       </div>
 
-      {/* Recent Emotional States - Prominently displayed near the top */}
-      {states.length > 0 && (
+      {/* Recent Emotional States - hidden when adding/editing a state */}
+      {states.length > 0 && !showForm && (
         <div
           style={{
             backgroundColor: "var(--bg-secondary)",
@@ -906,6 +910,7 @@ export default function Emotions() {
                         notes: state.notes || "",
                         journalEntryId: state.journal_entry_id ?? null,
                         journalTradeId: state.journal_trade_id ?? null,
+                        journalTradeIds: state.journal_trade_id != null ? [state.journal_trade_id] : [],
                       });
                       setShowForm(true);
                       setFormTab("basic");
@@ -1248,6 +1253,7 @@ export default function Emotions() {
                               ...formData,
                               journalEntryId: v ? parseInt(v, 10) : null,
                               journalTradeId: null,
+                              journalTradeIds: [],
                             });
                           }}
                           disabled={!!editingState && !isEditingSelectedState}
@@ -1271,34 +1277,41 @@ export default function Emotions() {
                       </div>
                       {formData.journalEntryId != null && (
                         <div>
-                          <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>Implementation</label>
-                          <select
-                            value={formData.journalTradeId != null ? String(formData.journalTradeId) : ""}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              setFormData({
-                                ...formData,
-                                journalTradeId: v ? parseInt(v, 10) : null,
-                              });
-                            }}
-                            disabled={!!editingState && !isEditingSelectedState}
-                            style={{
-                              width: "100%",
-                              padding: "8px",
-                              backgroundColor: "var(--bg-tertiary)",
-                              border: "1px solid var(--border-color)",
-                              borderRadius: "6px",
-                              color: "var(--text-primary)",
-                              fontSize: "14px",
-                            }}
-                          >
-                            <option value="">Whole entry</option>
-                            {journalTradesForLink.map((t, i) => (
-                              <option key={t.id} value={t.id}>
-                                {t.symbol || `Implementation ${i + 1}`}
-                              </option>
-                            ))}
-                          </select>
+                          <label style={{ display: "block", marginBottom: "8px", fontSize: "12px" }}>Associate with implementations</label>
+                          <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "10px" }}>
+                            {journalTradesForLink.length === 0
+                              ? "This entry has no implementations yet. This state will apply to the whole entry."
+                              : "By default this applies to the whole entry. Optionally link to specific implementations in this entry:"}
+                          </p>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                            <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                              <input
+                                type="checkbox"
+                                checked={(formData.journalTradeIds ?? []).length === 0}
+                                onChange={() => setFormData({ ...formData, journalTradeIds: [] })}
+                                disabled={!!editingState && !isEditingSelectedState}
+                              />
+                              <span>Whole entry (all implementations)</span>
+                            </label>
+                            {journalTradesForLink.length > 0 && (
+                            <div style={{ maxHeight: "200px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", paddingLeft: "4px" }}>
+                              {journalTradesForLink.map((t, i) => {
+                                const ids = formData.journalTradeIds ?? [];
+                                const isSelected = ids.includes(t.id);
+                                const toggle = () => {
+                                  const next = isSelected ? ids.filter((id) => id !== t.id) : [...ids, t.id];
+                                  setFormData({ ...formData, journalTradeIds: next });
+                                };
+                                return (
+                                  <label key={t.id} style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", flexShrink: 0 }}>
+                                    <input type="checkbox" checked={isSelected} onChange={toggle} disabled={!!editingState && !isEditingSelectedState} />
+                                    <span>{t.symbol || `Implementation ${i + 1}`}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1373,7 +1386,7 @@ export default function Emotions() {
                           setIsEditingSelectedState(false);
                           setIsMaximized(false);
                           setFormTab("basic");
-                          setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null });
+                          setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
                         }}
                         style={{
                           padding: "10px 20px",
@@ -1480,7 +1493,7 @@ export default function Emotions() {
                       setEditingState(null);
                       setIsEditingSelectedState(false);
                       setFormTab("basic");
-                      setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null });
+                      setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
                       const initial: Record<string, number> = {};
                       Object.values(SURVEY_QUESTIONS).flat().forEach((q) => {
                         initial[q.key] = 3;

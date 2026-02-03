@@ -169,6 +169,8 @@ export default function Journal() {
   const [journalEmotionalStates, setJournalEmotionalStates] = useState<JournalEmotionalState[]>([]);
   const [showAddEmotionalStateForm, setShowAddEmotionalStateForm] = useState(false);
   const [newEmotionalStateForm, setNewEmotionalStateForm] = useState({ emotion: "Neutral", intensity: 5, notes: "" });
+  // Pending emotional states (when entry/trade not yet saved - persisted on journal save)
+  const [pendingEmotionalStates, setPendingEmotionalStates] = useState<Array<{ emotion: string; intensity: number; notes: string; tradeIndex: number }>>([]);
   
   // Available symbols for dropdown
   const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
@@ -280,9 +282,12 @@ export default function Journal() {
           tabScrollPositions.current.set(tab, pos);
         });
         
-        // If editing an existing entry, load it
+        // If editing an existing entry, load it. Pass restored count so we sync from DB if saved state was bloated.
         if (workInProgress.selectedEntryId && !workInProgress.isCreating) {
-          loadEntry(workInProgress.selectedEntryId);
+          loadEntry(workInProgress.selectedEntryId, {
+            skipTradesFormDataSync: true,
+            restoredTradesCount: workInProgress.tradesFormData?.length,
+          });
         }
         
         // Load strategy checklists if needed
@@ -482,12 +487,12 @@ export default function Journal() {
     return () => { cancelled = true; };
   }, [activeTab, selectedEntry?.id, activeTradeIndex, tradesFormData]);
 
-  // Auto-open Add State form when opening the Emotional State tab (when entry + implementation exist)
+  // Auto-open Add State form when opening the Emotional State tab (when creating/editing)
   useEffect(() => {
-    if (activeTab === "emotional_state" && selectedEntry?.id && tradesFormData[activeTradeIndex]?.id != null) {
+    if (activeTab === "emotional_state" && (isCreating || isEditing)) {
       setShowAddEmotionalStateForm(true);
     }
-  }, [activeTab, selectedEntry?.id, activeTradeIndex, tradesFormData]);
+  }, [activeTab, isCreating, isEditing]);
 
   const loadEntries = async () => {
     try {
@@ -622,6 +627,7 @@ export default function Journal() {
     setSelectedTrades([]);
     setJournalTradeActualTradeIds(new Map());
     setLinkActualTradesModalJournalTradeId(null);
+    setPendingEmotionalStates([]);
     setEntryFormData({
       date: format(new Date(), "yyyy-MM-dd"),
       title: "",
@@ -654,6 +660,7 @@ export default function Journal() {
     if (selectedEntry) {
       setIsEditing(true);
       setIsCreating(false);
+      setPendingEmotionalStates([]);
       setEntryFormData({
         date: selectedEntry.date,
         title: selectedEntry.title,
@@ -1072,6 +1079,12 @@ export default function Journal() {
       setShowTitleRequiredModal(true);
       return;
     }
+    // Prevent saving a bloated trade list (e.g. from stale work-in-progress)
+    const MAX_TRADES_PER_ENTRY = 100;
+    if (tradesFormData.length > MAX_TRADES_PER_ENTRY) {
+      alert(`This entry has ${tradesFormData.length} trades (max ${MAX_TRADES_PER_ENTRY}). Reload the entry from the list to fix, or remove extra trades before saving.`);
+      return;
+    }
 
     try {
       let entryId: number;
@@ -1178,26 +1191,33 @@ export default function Journal() {
         }
       }
 
-      // If Add emotional state form is open, persist that state with the current implementation
-      if (showAddEmotionalStateForm && tradesFormData.length > 0 && activeTradeIndex >= 0 && activeTradeIndex < tradeIdsInOrder.length) {
-        const journalTradeId = tradeIdsInOrder[activeTradeIndex];
+      // Persist emotional states: form-in-progress (if open) and all pending states
+      const toPersist: Array<{ emotion: string; intensity: number; notes: string; tradeIndex: number }> = [...pendingEmotionalStates];
+      if (showAddEmotionalStateForm && newEmotionalStateForm.emotion && activeTradeIndex >= 0 && activeTradeIndex < tradeIdsInOrder.length) {
+        toPersist.push({ ...newEmotionalStateForm, tradeIndex: activeTradeIndex });
+      }
+      for (const pending of toPersist) {
+        const journalTradeId = tradeIdsInOrder[pending.tradeIndex];
         if (journalTradeId != null) {
           try {
             await invoke("add_emotional_state", {
               timestamp: new Date().toISOString(),
-              emotion: newEmotionalStateForm.emotion,
-              intensity: newEmotionalStateForm.intensity,
-              notes: newEmotionalStateForm.notes || null,
+              emotion: pending.emotion,
+              intensity: pending.intensity,
+              notes: pending.notes || null,
               tradeId: null,
               journalEntryId: entryId,
               journalTradeId,
             });
-            setShowAddEmotionalStateForm(false);
-            setNewEmotionalStateForm({ emotion: "Neutral", intensity: 5, notes: "" });
           } catch (e) {
             console.error(e);
           }
         }
+      }
+      if (toPersist.length > 0) {
+        setShowAddEmotionalStateForm(false);
+        setNewEmotionalStateForm({ emotion: "Neutral", intensity: 5, notes: "" });
+        setPendingEmotionalStates([]);
       }
 
       await loadEntries();
@@ -1226,6 +1246,7 @@ export default function Journal() {
     setOriginalEntryData(null);
     setJournalTradeActualTradeIds(new Map());
     setLinkActualTradesModalJournalTradeId(null);
+    setPendingEmotionalStates([]);
     clearWorkInProgress();
     if (selectedEntry) {
       // Reload the entry to reset form
@@ -1283,13 +1304,60 @@ export default function Journal() {
     setChecklistResponses(restoredResponses);
   };
 
-  const loadEntry = async (id: number) => {
+  const loadEntry = async (id: number, options?: { skipTradesFormDataSync?: boolean; restoredTradesCount?: number }) => {
     try {
       const entry = await invoke<JournalEntry>("get_journal_entry", { id });
       setSelectedEntry(entry);
       // Save selected entry ID to localStorage
       localStorage.setItem('journal_selected_entry_id', id.toString());
-      await loadTrades(id);
+      const loadedTrades = await loadTrades(id);
+      // Sync trades from DB when: (1) not skipping sync, or (2) we're restoring but saved state was bloated (DB has fewer trades)
+      const shouldSyncTrades = !options?.skipTradesFormDataSync ||
+        (options?.restoredTradesCount != null && loadedTrades.length < options.restoredTradesCount);
+      if (shouldSyncTrades) {
+        const MAX_TRADES_PER_ENTRY = 100;
+        const tradesToUse = loadedTrades.length > MAX_TRADES_PER_ENTRY
+          ? loadedTrades.slice(0, MAX_TRADES_PER_ENTRY)
+          : loadedTrades;
+        if (loadedTrades.length > MAX_TRADES_PER_ENTRY) {
+          setTimeout(() => alert(`This entry had ${loadedTrades.length} trades (max ${MAX_TRADES_PER_ENTRY}). Showing first ${MAX_TRADES_PER_ENTRY}. Save to remove the extra ${loadedTrades.length - MAX_TRADES_PER_ENTRY} from the database.`), 100);
+        }
+        type TradeFormItem = { id: number | null; symbol: string; position: string; timeframe: string; entry_type: string; exit_type: string; trade: string; what_went_well: string; what_could_be_improved: string; emotional_state: string; notes: string; outcome: string; trade_order: number };
+        const tradesData: TradeFormItem[] = tradesToUse.map((trade: JournalTrade) => ({
+          id: trade.id,
+          symbol: trade.symbol || "",
+          position: trade.position || "",
+          timeframe: trade.timeframe || "",
+          entry_type: trade.entry_type || "",
+          exit_type: trade.exit_type || "",
+          trade: trade.trade || "",
+          what_went_well: trade.what_went_well || "",
+          what_could_be_improved: trade.what_could_be_improved || "",
+          emotional_state: trade.emotional_state || "",
+          notes: trade.notes || "",
+          outcome: trade.outcome || "None",
+          trade_order: trade.trade_order ?? 0,
+        }));
+        if (tradesData.length === 0) {
+          tradesData.push({
+            id: null as number | null,
+            symbol: "",
+            position: "",
+            timeframe: "",
+            entry_type: "",
+            exit_type: "",
+            trade: "",
+            what_went_well: "",
+            what_could_be_improved: "",
+            emotional_state: "",
+            notes: "",
+            outcome: "None",
+            trade_order: 0,
+          });
+        }
+        setTradesFormData(tradesData);
+        setActiveTradeIndex(0);
+      }
       if (entry.strategy_id) {
         await loadStrategyChecklists(entry.strategy_id);
         await loadChecklistResponses(id, entry.strategy_id);
@@ -1940,7 +2008,7 @@ export default function Journal() {
                 >
                 {tradesFormData.map((trade, index) => {
                   const isActive = activeTradeIndex === index;
-                  const tabLabel = trade.symbol || `Implementation ${index + 1}`;
+                  const tabLabel = trade.symbol || `Trade ${index + 1}`;
                   return (
                     <div key={index} style={{ display: "flex", alignItems: "center" }}>
                       <button
@@ -1975,7 +2043,7 @@ export default function Journal() {
                             display: "flex",
                             alignItems: "center",
                           }}
-                          title="Remove Implementation"
+                          title="Remove Trade"
                         >
                           <X size={14} />
                         </button>
@@ -1984,6 +2052,7 @@ export default function Journal() {
                   );
                 })}
                 <button
+                  type="button"
                   onClick={handleAddTrade}
                   style={{
                     padding: "12px 20px",
@@ -2428,7 +2497,7 @@ export default function Journal() {
                           );
                         }}
                       >
-                        {selectedEntry?.id && currentTrade?.id != null ? (
+                        {(isCreating || isEditing) ? (
                           <>
                             <div style={{ marginBottom: "16px" }}>
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
@@ -2455,7 +2524,7 @@ export default function Journal() {
                                   </button>
                                 )}
                               </div>
-                              {journalEmotionalStates.length === 0 && !showAddEmotionalStateForm && (
+                              {(journalEmotionalStates.length === 0 && pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex).length === 0 && !showAddEmotionalStateForm) && (
                                 <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No emotional states linked. Add one with the same form as on the Emotions page.</p>
                               )}
                               {journalEmotionalStates.map((state) => (
@@ -2474,6 +2543,39 @@ export default function Journal() {
                                     <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
                                       {format(new Date(state.timestamp), "MMM d, yyyy HH:mm")} · Intensity {state.intensity}/10
                                     </span>
+                                  </div>
+                                  {state.notes && (
+                                    <div style={{ fontSize: "13px", color: "var(--text-secondary)" }} dangerouslySetInnerHTML={{ __html: state.notes }} />
+                                  )}
+                                </div>
+                              ))}
+                              {pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex).map((state, idx) => (
+                                <div
+                                  key={`pending-${activeTradeIndex}-${idx}`}
+                                  style={{
+                                    padding: "12px",
+                                    backgroundColor: "var(--bg-tertiary)",
+                                    border: "1px solid var(--border-color)",
+                                    borderRadius: "6px",
+                                    marginBottom: "8px",
+                                  }}
+                                >
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                                    <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>{state.emotion}</span>
+                                    <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                                      (unsaved) · Intensity {state.intensity}/10
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const forThisTrade = pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex);
+                                        const kept = forThisTrade.filter((_, i) => i !== idx);
+                                        setPendingEmotionalStates((prev) => [...prev.filter((p) => p.tradeIndex !== activeTradeIndex), ...kept]);
+                                      }}
+                                      style={{ padding: "2px 6px", background: "transparent", border: "none", borderRadius: "4px", color: "var(--text-secondary)", cursor: "pointer", fontSize: "12px" }}
+                                    >
+                                      <X size={14} />
+                                    </button>
                                   </div>
                                   {state.notes && (
                                     <div style={{ fontSize: "13px", color: "var(--text-secondary)" }} dangerouslySetInnerHTML={{ __html: state.notes }} />
@@ -2517,7 +2619,38 @@ export default function Journal() {
                                       readOnly={false}
                                     />
                                   </div>
-                                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        const entryId = selectedEntry?.id;
+                                        const journalTradeId = currentTrade?.id ?? null;
+                                        if (entryId != null && journalTradeId != null) {
+                                          try {
+                                            await invoke("add_emotional_state", {
+                                              timestamp: new Date().toISOString(),
+                                              emotion: newEmotionalStateForm.emotion,
+                                              intensity: newEmotionalStateForm.intensity,
+                                              notes: newEmotionalStateForm.notes || null,
+                                              tradeId: null,
+                                              journalEntryId: entryId,
+                                              journalTradeId,
+                                            });
+                                            const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId, journalTradeId });
+                                            setJournalEmotionalStates(states);
+                                            setNewEmotionalStateForm({ emotion: "Neutral", intensity: 5, notes: "" });
+                                          } catch (e) {
+                                            console.error(e);
+                                          }
+                                        } else {
+                                          setPendingEmotionalStates((prev) => [...prev, { ...newEmotionalStateForm, tradeIndex: activeTradeIndex }]);
+                                          setNewEmotionalStateForm({ emotion: "Neutral", intensity: 5, notes: "" });
+                                        }
+                                      }}
+                                      style={{ padding: "6px 12px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "13px" }}
+                                    >
+                                      Add
+                                    </button>
                                     <button
                                       type="button"
                                       onClick={() => { setShowAddEmotionalStateForm(false); setNewEmotionalStateForm({ emotion: "Neutral", intensity: 5, notes: "" }); }}
@@ -2533,7 +2666,7 @@ export default function Journal() {
                         ) : (
                           <div>
                             <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
-                              {selectedEntry ? "Save the entry first, then add emotional states linked to each implementation." : "Create or open a journal entry to add emotional states (same as the Emotions page)."}
+                              Create or open a journal entry to add emotional states (same as the Emotions page).
                             </p>
                           </div>
                         )}
@@ -2671,7 +2804,7 @@ export default function Journal() {
                                     <div style={{ maxHeight: "240px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", paddingRight: "4px" }}>
                                       {entryTradesForAssociation.map((t, i) => {
                                         const key: number = selectedEntry && (t as { id?: number }).id != null ? (t as { id: number }).id : i;
-                                        const label = (t as { symbol?: string }).symbol || `Implementation ${i + 1}`;
+                                        const label = (t as { symbol?: string }).symbol || `Trade ${i + 1}`;
                                         const currentAssoc = checklistTradeAssociations.get(tradeAssociationModalItemId);
                                         const isSelected = !!currentAssoc && currentAssoc.length > 0 && currentAssoc.includes(key);
                                         const toggleTrade = () => {
