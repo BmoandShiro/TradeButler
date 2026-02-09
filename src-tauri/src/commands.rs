@@ -640,8 +640,6 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
             ).map_err(|e| e.to_string())?;
             
             inserted_ids.push(conn.last_insert_rowid());
-            
-            inserted_ids.push(conn.last_insert_rowid());
         }
     } else {
         // Standard format
@@ -697,6 +695,66 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
     }
     
     Ok(inserted_ids)
+}
+
+#[tauri::command]
+pub fn add_trade_manual(
+    symbol: String,
+    side: String,
+    quantity: f64,
+    price: f64,
+    timestamp: String,
+    order_type: Option<String>,
+    fees: Option<f64>,
+    notes: Option<String>,
+    strategy_id: Option<i64>,
+) -> Result<i64, String> {
+    let symbol = symbol.trim().to_uppercase();
+    if symbol.is_empty() {
+        return Err("Symbol is required".to_string());
+    }
+    let side_upper = side.trim().to_uppercase();
+    if side_upper != "BUY" && side_upper != "SELL" {
+        return Err("Side must be BUY or SELL".to_string());
+    }
+    if quantity <= 0.0 {
+        return Err("Quantity must be positive".to_string());
+    }
+    if price < 0.0 {
+        return Err("Price cannot be negative".to_string());
+    }
+    if timestamp.trim().is_empty() {
+        return Err("Timestamp is required".to_string());
+    }
+
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+
+    let order_type = order_type
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "MARKET".to_string());
+    let status = "FILLED".to_string();
+
+    conn.execute(
+        "INSERT INTO trades (symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            symbol,
+            side_upper,
+            quantity,
+            price,
+            timestamp.trim(),
+            order_type,
+            status,
+            fees,
+            notes.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            strategy_id,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(conn.last_insert_rowid())
 }
 
 #[tauri::command]

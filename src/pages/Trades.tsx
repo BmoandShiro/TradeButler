@@ -113,7 +113,13 @@ export default function Trades() {
   useEffect(() => {
     loadData();
   }, [pairingMethod, viewMode, timeframe, customStartDate, customEndDate]);
-  
+
+  useEffect(() => {
+    const onTradeAdded = () => loadData();
+    window.addEventListener("tradeButlerTradeAdded", onTradeAdded);
+    return () => window.removeEventListener("tradeButlerTradeAdded", onTradeAdded);
+  }, []);
+
   useEffect(() => {
     localStorage.setItem("tradebutler_trades_timeframe", timeframe);
   }, [timeframe]);

@@ -24,6 +24,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::import_trades_csv,
+            commands::add_trade_manual,
             commands::get_trades,
             commands::get_trades_with_pairing,
             commands::get_position_groups,

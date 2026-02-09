@@ -15,8 +15,10 @@ import {
   FileText,
   Settings,
   Lock,
-  Unlock
+  Unlock,
+  Plus
 } from "lucide-react";
+import { format } from "date-fns";
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open, save } from "@tauri-apps/api/dialog";
@@ -42,6 +44,20 @@ export default function Layout({ children }: LayoutProps) {
   const location = useLocation();
   const [isImporting, setIsImporting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [showAddTradeModal, setShowAddTradeModal] = useState(false);
+  const [addTradeForm, setAddTradeForm] = useState({
+    symbol: "",
+    side: "BUY",
+    quantity: "",
+    price: "",
+    tradeDate: format(new Date(), "yyyy-MM-dd"),
+    tradeTime: format(new Date(), "HH:mm"),
+    orderType: "MARKET",
+    fees: "",
+    notes: "",
+  });
+  const [isAddingTrade, setIsAddingTrade] = useState(false);
+  const [addTradeError, setAddTradeError] = useState<string | null>(null);
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [isAppLocked, setIsAppLocked] = useState(() => isLocked());
@@ -352,6 +368,58 @@ export default function Layout({ children }: LayoutProps) {
     }
   };
 
+  const handleAddTradeSubmit = async () => {
+    setAddTradeError(null);
+    const qty = parseFloat(addTradeForm.quantity);
+    const pr = parseFloat(addTradeForm.price);
+    const feeVal = addTradeForm.fees.trim() === "" ? null : parseFloat(addTradeForm.fees);
+    if (!addTradeForm.symbol.trim()) {
+      setAddTradeError("Symbol is required.");
+      return;
+    }
+    if (isNaN(qty) || qty <= 0) {
+      setAddTradeError("Quantity must be a positive number.");
+      return;
+    }
+    if (isNaN(pr) || pr < 0) {
+      setAddTradeError("Price must be a non-negative number.");
+      return;
+    }
+    const timestamp = `${addTradeForm.tradeDate}T${addTradeForm.tradeTime}:00Z`;
+    try {
+      setIsAddingTrade(true);
+      await invoke<number>("add_trade_manual", {
+        symbol: addTradeForm.symbol.trim(),
+        side: addTradeForm.side,
+        quantity: qty,
+        price: pr,
+        timestamp,
+        order_type: addTradeForm.orderType || null,
+        fees: feeVal,
+        notes: addTradeForm.notes.trim() || null,
+        strategy_id: null,
+      });
+      setShowAddTradeModal(false);
+      setAddTradeForm({
+        symbol: "",
+        side: "BUY",
+        quantity: "",
+        price: "",
+        tradeDate: format(new Date(), "yyyy-MM-dd"),
+        tradeTime: format(new Date(), "HH:mm"),
+        orderType: "MARKET",
+        fees: "",
+        notes: "",
+      });
+      window.dispatchEvent(new CustomEvent("tradeButlerTradeAdded"));
+      alert("Trade added successfully.");
+    } catch (err) {
+      setAddTradeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsAddingTrade(false);
+    }
+  };
+
   const handleClearAllData = () => {
     setShowClearDataModal(true);
     setDeleteConfirmText("");
@@ -613,6 +681,27 @@ export default function Layout({ children }: LayoutProps) {
             >
               <Upload size={16} />
               {isImporting ? "Importing..." : "Import"}
+            </button>
+            <button
+              onClick={() => { setAddTradeError(null); setShowAddTradeModal(true); }}
+              style={{
+                width: "100%",
+                padding: "10px",
+                backgroundColor: "var(--bg-tertiary)",
+                color: "var(--accent)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+                fontSize: "14px",
+                fontWeight: "500",
+              }}
+            >
+              <Plus size={16} />
+              Add Trade
             </button>
             <button
               onClick={handleExport}
@@ -924,6 +1013,174 @@ export default function Layout({ children }: LayoutProps) {
                 }}
               >
                 Delete All Data
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Add Trade Modal */}
+      {showAddTradeModal && createPortal(
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => !isAddingTrade && setShowAddTradeModal(false)}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "440px",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
+              Add Trade
+            </h3>
+            <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px" }}>
+              Add a single trade manually (paper trades, commons, or options). You can assign it to a strategy later from the Trades or Strategies page.
+            </p>
+            {addTradeError && (
+              <div style={{ marginBottom: "12px", padding: "8px 12px", background: "var(--loss)", color: "white", borderRadius: "6px", fontSize: "13px" }}>
+                {addTradeError}
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Symbol *</label>
+                <input
+                  type="text"
+                  placeholder="e.g. AAPL or AAPL251219C00150000"
+                  value={addTradeForm.symbol}
+                  onChange={(e) => setAddTradeForm(f => ({ ...f, symbol: e.target.value }))}
+                  style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                />
+              </div>
+              <div style={{ display: "flex", gap: "12px" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Side *</label>
+                  <select
+                    value={addTradeForm.side}
+                    onChange={(e) => setAddTradeForm(f => ({ ...f, side: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                  >
+                    <option value="BUY">BUY</option>
+                    <option value="SELL">SELL</option>
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Quantity *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="Shares or contracts"
+                    value={addTradeForm.quantity}
+                    onChange={(e) => setAddTradeForm(f => ({ ...f, quantity: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                  />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "12px" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Price *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="0.00"
+                    value={addTradeForm.price}
+                    onChange={(e) => setAddTradeForm(f => ({ ...f, price: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Fees (optional)</label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="0.00"
+                    value={addTradeForm.fees}
+                    onChange={(e) => setAddTradeForm(f => ({ ...f, fees: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                  />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "12px" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Date *</label>
+                  <input
+                    type="date"
+                    value={addTradeForm.tradeDate}
+                    onChange={(e) => setAddTradeForm(f => ({ ...f, tradeDate: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Time *</label>
+                  <input
+                    type="time"
+                    value={addTradeForm.tradeTime}
+                    onChange={(e) => setAddTradeForm(f => ({ ...f, tradeTime: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                  />
+                </div>
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Order type</label>
+                <select
+                  value={addTradeForm.orderType}
+                  onChange={(e) => setAddTradeForm(f => ({ ...f, orderType: e.target.value }))}
+                  style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                >
+                  <option value="MARKET">MARKET</option>
+                  <option value="LIMIT">LIMIT</option>
+                  <option value="DAY">DAY</option>
+                  <option value="GTC">GTC</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Notes (optional)</label>
+                <input
+                  type="text"
+                  placeholder="Optional notes"
+                  value={addTradeForm.notes}
+                  onChange={(e) => setAddTradeForm(f => ({ ...f, notes: e.target.value }))}
+                  style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                />
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end", marginTop: "20px" }}>
+              <button
+                onClick={() => !isAddingTrade && setShowAddTradeModal(false)}
+                disabled={isAddingTrade}
+                style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", padding: "10px 20px", color: "var(--text-primary)", cursor: isAddingTrade ? "not-allowed" : "pointer", fontSize: "14px", fontWeight: "500" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddTradeSubmit}
+                disabled={isAddingTrade}
+                style={{ background: "var(--accent)", border: "none", borderRadius: "6px", padding: "10px 20px", color: "white", cursor: isAddingTrade ? "not-allowed" : "pointer", fontSize: "14px", fontWeight: "500", opacity: isAddingTrade ? 0.7 : 1 }}
+              >
+                {isAddingTrade ? "Adding..." : "Add Trade"}
               </button>
             </div>
           </div>
