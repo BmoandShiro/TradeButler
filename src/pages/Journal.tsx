@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2 } from "lucide-react";
+import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight } from "lucide-react";
 import { format, parse } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
@@ -194,6 +194,9 @@ export default function Journal() {
   const [showTitleRequiredModal, setShowTitleRequiredModal] = useState(false);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [emotionalStateDeleteTarget, setEmotionalStateDeleteTarget] = useState<null | { type: "saved"; states: JournalEmotionalState[] } | { type: "pending"; tradeIndex: number; idx: number }>(null);
+  // View mode: emotional states for the selected entry (when not editing), and whether the section is expanded
+  const [viewEntryEmotionalStates, setViewEntryEmotionalStates] = useState<JournalEmotionalState[]>([]);
+  const [emotionalStatesSectionExpanded, setEmotionalStatesSectionExpanded] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   
   // Edit history for undo functionality
@@ -502,6 +505,26 @@ export default function Journal() {
     })();
     return () => { cancelled = true; };
   }, [activeTab, selectedEntry?.id, activeTradeIndex, tradesFormData]);
+
+  // Load emotional states for view mode (when viewing an entry, not editing)
+  useEffect(() => {
+    if (!selectedEntry?.id || isCreating || isEditing) {
+      setViewEntryEmotionalStates([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
+          journalEntryId: selectedEntry.id,
+        });
+        if (!cancelled) setViewEntryEmotionalStates(states);
+      } catch {
+        if (!cancelled) setViewEntryEmotionalStates([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedEntry?.id, isCreating, isEditing]);
 
   // Auto-open Add State form when opening the Emotional State tab (when creating/editing)
   useEffect(() => {
@@ -1732,6 +1755,73 @@ export default function Journal() {
                     </div>
                   </div>
                 )}
+
+                {/* Emotional state entries - collapsible, hidden by default */}
+                <div style={{ marginTop: "24px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setEmotionalStatesSectionExpanded((e) => !e)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      width: "100%",
+                      padding: 0,
+                      margin: 0,
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      color: "var(--text-primary)",
+                      fontSize: "16px",
+                      fontWeight: 600,
+                      textAlign: "left",
+                    }}
+                  >
+                    {emotionalStatesSectionExpanded ? (
+                      <ChevronDown size={20} style={{ flexShrink: 0 }} />
+                    ) : (
+                      <ChevronRight size={20} style={{ flexShrink: 0 }} />
+                    )}
+                    <span>Emotional state entries ({viewEntryEmotionalStates.length > 0 ? groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).length : 0})</span>
+                  </button>
+                  {emotionalStatesSectionExpanded && (
+                    <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                      {viewEntryEmotionalStates.length === 0 ? (
+                        <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No emotional state entries linked to this journal.</p>
+                      ) : (
+                        groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).map((group) => {
+                          const first = group[0];
+                          const notes = first.notes;
+                          return (
+                            <div
+                              key={first.timestamp}
+                              style={{
+                                padding: "12px",
+                                backgroundColor: "var(--bg-secondary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "6px",
+                              }}
+                            >
+                              <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")}
+                              </div>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center", marginBottom: notes ? "8px" : 0 }}>
+                                {group.map((s) => (
+                                  <span key={s.id} style={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>
+                                    {s.emotion} {s.intensity}/10
+                                  </span>
+                                ))}
+                              </div>
+                              {notes && (
+                                <div style={{ fontSize: "13px", color: "var(--text-secondary)" }} dangerouslySetInnerHTML={{ __html: notes }} />
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </div>
                 
                 {/* Display all trades */}
                 {selectedTrades.length > 0 && (
