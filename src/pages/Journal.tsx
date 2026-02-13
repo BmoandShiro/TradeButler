@@ -1296,14 +1296,16 @@ export default function Journal() {
 
       await loadEntries();
       
-      // Reload the saved entry
+      // Reload the saved entry, then switch to view mode in one batch so we don't re-render the form
       const savedEntry = await invoke<JournalEntry>("get_journal_entry", { id: entryId });
       setSelectedEntry(savedEntry);
-      await loadTrades(entryId);
       setIsCreating(false);
       setIsEditing(false);
       setEditHistory([]);
       setOriginalEntryData(null);
+      localStorage.setItem("journal_selected_entry_id", String(entryId));
+      // Load trades after switching mode so the next re-render (from setSelectedTrades) already has view mode
+      await loadTrades(entryId);
       
       // Clear work in progress after successful save
       clearWorkInProgress();
@@ -1762,10 +1764,14 @@ export default function Journal() {
                     <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
                       Trades ({selectedTrades.length})
                     </h3>
-                    {selectedTrades.map((trade, index) => (
+                    {selectedTrades.map((trade, index) => {
+                      const tradeName = trade.symbol
+                        ? (trade.position ? `${trade.symbol} (${trade.position})` : trade.symbol)
+                        : `Trade ${index + 1}`;
+                      return (
                       <div key={trade.id || index} style={{ marginBottom: "24px", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
                         <h4 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>
-                          Implementation {index + 1} {trade.symbol && `- ${trade.symbol}`}
+                          {tradeName}
                         </h4>
                         {trade.symbol && (
                           <div style={{ marginBottom: "8px" }}>
@@ -1908,7 +1914,8 @@ export default function Journal() {
                           </div>
                         )}
                       </div>
-                    ))}
+                    );
+                    })}
                   </div>
                 )}
 
