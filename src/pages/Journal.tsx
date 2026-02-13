@@ -1756,73 +1756,6 @@ export default function Journal() {
                   </div>
                 )}
 
-                {/* Emotional state entries - collapsible, hidden by default */}
-                <div style={{ marginTop: "24px" }}>
-                  <button
-                    type="button"
-                    onClick={() => setEmotionalStatesSectionExpanded((e) => !e)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      width: "100%",
-                      padding: 0,
-                      margin: 0,
-                      background: "none",
-                      border: "none",
-                      cursor: "pointer",
-                      color: "var(--text-primary)",
-                      fontSize: "16px",
-                      fontWeight: 600,
-                      textAlign: "left",
-                    }}
-                  >
-                    {emotionalStatesSectionExpanded ? (
-                      <ChevronDown size={20} style={{ flexShrink: 0 }} />
-                    ) : (
-                      <ChevronRight size={20} style={{ flexShrink: 0 }} />
-                    )}
-                    <span>Emotional state entries ({viewEntryEmotionalStates.length > 0 ? groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).length : 0})</span>
-                  </button>
-                  {emotionalStatesSectionExpanded && (
-                    <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "8px" }}>
-                      {viewEntryEmotionalStates.length === 0 ? (
-                        <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No emotional state entries linked to this journal.</p>
-                      ) : (
-                        groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).map((group) => {
-                          const first = group[0];
-                          const notes = first.notes;
-                          return (
-                            <div
-                              key={first.timestamp}
-                              style={{
-                                padding: "12px",
-                                backgroundColor: "var(--bg-secondary)",
-                                border: "1px solid var(--border-color)",
-                                borderRadius: "6px",
-                              }}
-                            >
-                              <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px" }}>
-                                {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")}
-                              </div>
-                              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center", marginBottom: notes ? "8px" : 0 }}>
-                                {group.map((s) => (
-                                  <span key={s.id} style={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>
-                                    {s.emotion} {s.intensity}/10
-                                  </span>
-                                ))}
-                              </div>
-                              {notes && (
-                                <div style={{ fontSize: "13px", color: "var(--text-secondary)" }} dangerouslySetInnerHTML={{ __html: notes }} />
-                              )}
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  )}
-                </div>
-                
                 {/* Display all trades */}
                 {selectedTrades.length > 0 && (
                   <div style={{ marginTop: "24px" }}>
@@ -1978,6 +1911,87 @@ export default function Journal() {
                     ))}
                   </div>
                 )}
+
+                {/* Emotional state entries - at bottom, collapsible, hidden by default */}
+                <div style={{ marginTop: "24px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setEmotionalStatesSectionExpanded((e) => !e)}
+                    title={emotionalStatesSectionExpanded ? "Click to collapse" : "Click to expand"}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      width: "100%",
+                      padding: "12px 16px",
+                      margin: 0,
+                      background: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                      cursor: "pointer",
+                      color: "var(--text-primary)",
+                      fontSize: "15px",
+                      fontWeight: 600,
+                      textAlign: "left",
+                      boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = "var(--bg-tertiary)";
+                      e.currentTarget.style.borderColor = "var(--accent)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = "var(--bg-secondary)";
+                      e.currentTarget.style.borderColor = "var(--border-color)";
+                    }}
+                  >
+                    {emotionalStatesSectionExpanded ? (
+                      <ChevronDown size={20} style={{ flexShrink: 0 }} />
+                    ) : (
+                      <ChevronRight size={20} style={{ flexShrink: 0 }} />
+                    )}
+                    <span>Emotional state entries ({viewEntryEmotionalStates.length > 0 ? groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).length : 0})</span>
+                    <span style={{ marginLeft: "auto", fontSize: "12px", fontWeight: 400, color: "var(--text-secondary)" }}>
+                      {emotionalStatesSectionExpanded ? "Click to collapse" : "Click to expand"}
+                    </span>
+                  </button>
+                  {emotionalStatesSectionExpanded && (
+                    <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                      {viewEntryEmotionalStates.length === 0 ? (
+                        <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No emotional state entries linked to this journal.</p>
+                      ) : (
+                        groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).map((group) => {
+                          const first = group[0];
+                          const notes = first.notes;
+                          return (
+                            <div
+                              key={first.timestamp}
+                              style={{
+                                padding: "12px",
+                                backgroundColor: "var(--bg-secondary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "6px",
+                              }}
+                            >
+                              <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")}
+                              </div>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center", marginBottom: notes ? "8px" : 0 }}>
+                                {group.map((s) => (
+                                  <span key={s.id} style={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>
+                                    {s.emotion} {s.intensity}/10
+                                  </span>
+                                ))}
+                              </div>
+                              {notes && (
+                                <div style={{ fontSize: "13px", color: "var(--text-secondary)" }} dangerouslySetInnerHTML={{ __html: notes }} />
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </>
