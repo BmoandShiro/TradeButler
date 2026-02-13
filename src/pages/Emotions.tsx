@@ -337,15 +337,29 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
     },
   ];
 
-  // Prepare chart data for emotional states over time
+  // Prepare chart data for emotional states over time — one data point per day (average intensity)
   const chartData = useMemo(() => {
-    return states
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-      .map((state) => ({
-        date: format(new Date(state.timestamp), "MMM dd"),
-        intensity: state.intensity,
-        emotion: state.emotion,
-      }));
+    const byDay = new Map<string, { sum: number; count: number; t: number }>();
+    for (const state of states) {
+      const d = new Date(state.timestamp);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const t = d.getTime();
+      const existing = byDay.get(key);
+      if (!existing) {
+        byDay.set(key, { sum: state.intensity, count: 1, t });
+      } else {
+        existing.sum += state.intensity;
+        existing.count += 1;
+      }
+    }
+    return Array.from(byDay.entries())
+      .map(([key, { sum, count, t }]) => ({
+        date: format(new Date(t), "MMM dd"),
+        intensity: Math.round((sum / count) * 10) / 10,
+        _sortKey: key,
+      }))
+      .sort((a, b) => (a._sortKey as string).localeCompare(b._sortKey as string))
+      .map(({ _sortKey, ...rest }) => rest);
   }, [states]);
 
   // Prepare survey trends data
@@ -429,53 +443,6 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
           })}
         </div>
       </div>
-
-      {/* Emotional Intensity Over Time Chart */}
-      {states.length > 0 && (
-        <div
-          style={{
-            backgroundColor: "var(--bg-secondary)",
-            border: "1px solid var(--border-color)",
-            borderRadius: "8px",
-            padding: "24px",
-            marginBottom: "30px",
-          }}
-        >
-          <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "20px" }}>Emotional Intensity Over Time</h2>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-              <XAxis 
-                dataKey="date" 
-                stroke="var(--text-secondary)"
-                style={{ fontSize: "12px" }}
-              />
-              <YAxis 
-                domain={[0, 10]}
-                stroke="var(--text-secondary)"
-                style={{ fontSize: "12px" }}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "var(--bg-primary)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "6px",
-                  color: "var(--text-primary)",
-                }}
-              />
-              <Legend />
-              <Line 
-                type="monotone" 
-                dataKey="intensity" 
-                stroke={getGradientColor(0.8)}
-                strokeWidth={2}
-                dot={{ fill: getGradientColor(0.8), r: 4 }}
-                name="Intensity"
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
 
       {/* Survey Trends Chart */}
       {surveys.length > 0 && (
@@ -907,6 +874,31 @@ export default function Emotions() {
     return "var(--danger)";
   };
 
+  // One data point per day for Emotional Intensity Over Time chart (in Emotional States section)
+  const chartData = useMemo(() => {
+    const byDay = new Map<string, { sum: number; count: number; t: number }>();
+    for (const state of states) {
+      const d = new Date(state.timestamp);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const t = d.getTime();
+      const existing = byDay.get(key);
+      if (!existing) {
+        byDay.set(key, { sum: state.intensity, count: 1, t });
+      } else {
+        existing.sum += state.intensity;
+        existing.count += 1;
+      }
+    }
+    return Array.from(byDay.entries())
+      .map(([key, { sum, count, t }]) => ({
+        date: format(new Date(t), "MMM dd"),
+        intensity: Math.round((sum / count) * 10) / 10,
+        _sortKey: key,
+      }))
+      .sort((a, b) => (a._sortKey as string).localeCompare(b._sortKey as string))
+      .map(({ _sortKey, ...rest }) => rest);
+  }, [states]);
+
   if (loading) {
     return (
       <div style={{ padding: "40px", textAlign: "center" }}>
@@ -920,6 +912,9 @@ export default function Emotions() {
   return (
     <div ref={mainScrollRef} style={{ padding: "30px", overflowY: "auto", height: "100%", minHeight: 0 }}>
       <h1 style={{ fontSize: "28px", fontWeight: "700", marginBottom: "28px", color: "var(--text-primary)" }}>Emotions</h1>
+
+      {/* Psychological Metrics – at top */}
+      <MetricsDisplay surveys={surveys} states={states} />
 
       {/* Emotional States – dedicated section with + Add State */}
       <section
@@ -1161,6 +1156,55 @@ export default function Emotions() {
               </div>
             );
           })()}
+
+        {/* Emotional Intensity Over Time – one point per day */}
+        {states.length > 0 && chartData.length > 0 && (
+          <div
+            style={{
+              margin: "0 24px 24px",
+              padding: "20px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+            }}
+          >
+            <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
+              Emotional Intensity Over Time
+            </h3>
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                <XAxis
+                  dataKey="date"
+                  stroke="var(--text-secondary)"
+                  style={{ fontSize: "12px" }}
+                />
+                <YAxis
+                  domain={[0, 10]}
+                  stroke="var(--text-secondary)"
+                  style={{ fontSize: "12px" }}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "var(--bg-primary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-primary)",
+                  }}
+                />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="intensity"
+                  stroke={getGradientColor(0.8)}
+                  strokeWidth={2}
+                  dot={{ fill: getGradientColor(0.8), r: 4 }}
+                  name="Intensity"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
 
         {/* Empty state when no entries and form closed */}
         {!showForm && states.length === 0 && (
@@ -1904,8 +1948,6 @@ export default function Emotions() {
         </div>
         )}
       </section>
-
-      {!showForm && <MetricsDisplay surveys={surveys} states={states} />}
 
       {/* Delete Emotional State Confirmation Modal */}
       {deleteTarget && (
