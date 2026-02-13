@@ -239,6 +239,27 @@ function getIntensityColorForEmotion(intensity: number): string {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
+// Gradient and glow for state overview cards (0–10 intensity)
+function getIntensityGradientStyles(intensity: number): { gradient: string; color: string; glow: string; border: string; borderHover: string } {
+  const color = getIntensityColorForEmotion(intensity);
+  const match = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  const r = match ? match[1] : "128";
+  const g = match ? match[2] : "128";
+  const b = match ? match[3] : "128";
+  const rgba = (a: number) => `rgba(${r}, ${g}, ${b}, ${a})`;
+  const gradient = `linear-gradient(145deg, ${rgba(0.2)} 0%, ${rgba(0.06)} 40%, transparent 70%)`;
+  const glow = `0 0 20px ${rgba(0.25)}, 0 4px 12px rgba(0,0,0,0.2)`;
+  return {
+    gradient,
+    color,
+    glow,
+    border: rgba(0.35),
+    borderHover: rgba(0.6),
+    badgeBg: `linear-gradient(145deg, ${rgba(0.28)} 0%, ${rgba(0.12)} 100%)`,
+    badgeShadow: `inset 0 1px 0 ${rgba(0.4)}, 0 2px 10px ${rgba(0.25)}`,
+  };
+}
+
 function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states: EmotionalState[] }) {
   if (surveys.length === 0 && states.length === 0) return null;
 
@@ -1011,200 +1032,136 @@ export default function Emotions() {
           </div>
         </div>
 
-        {/* Recent entries list – hidden when form is open */}
+        {/* Recent entries list – compact overview, scroll to view all (7 visible) */}
         {!showForm && states.length > 0 && (() => {
           const groups = groupStatesByTimestamp(states);
-          const displayGroups = groups.slice(0, 12);
+          const visibleCount = 7;
+          const hasMore = groups.length > visibleCount;
           return (
             <div style={{ padding: "24px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
                 <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
-                  {groups.length} {groups.length === 1 ? "entry" : "entries"} recorded
+                  {groups.length} {groups.length === 1 ? "entry" : "entries"} · scroll to see all
                 </span>
               </div>
-              <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
-                {displayGroups.map((group) => {
-                const first = group[0];
-                const timestamp = first.timestamp;
-                const dateStr = format(new Date(timestamp), "MMM dd, yyyy");
-                const timeStr = format(new Date(timestamp), "HH:mm");
-                const hasSurvey = group.some((s) => surveys.some((surv) => surv.emotional_state_id === s.id));
-                const isEditingThis = editingState?.timestamp === timestamp && showForm;
-                const maxIntensity = Math.max(...group.map((s) => s.intensity));
-                const color = getIntensityColorForEmotion(maxIntensity);
-                const notes = first.notes || "";
+              <div
+                style={{
+                  display: "flex",
+                  gap: "14px",
+                  flexWrap: "wrap",
+                  maxHeight: "320px",
+                  overflowY: "auto",
+                  overflowX: "hidden",
+                  paddingRight: "6px",
+                  marginRight: "-6px",
+                  paddingTop: "10px",
+                }}
+              >
+                {[...groups].reverse().map((group) => {
+                  const first = group[0];
+                  const timestamp = first.timestamp;
+                  const dateStr = format(new Date(timestamp), "MMM dd, yyyy");
+                  const hasSurvey = group.some((s) => surveys.some((surv) => surv.emotional_state_id === s.id));
+                  const avgIntensity = group.reduce((s, e) => s + e.intensity, 0) / group.length;
+                  const overallIntensity = Math.round(avgIntensity * 10) / 10;
+                  const { gradient, color, glow, border, borderHover, badgeBg, badgeShadow } = getIntensityGradientStyles(overallIntensity);
+                  const notes = first.notes || "";
 
-                return (
-                  <div
-                    key={timestamp}
-                    onClick={() => {
-                      if (isEditingThis) {
+                  return (
+                    <div
+                      key={timestamp}
+                      onClick={() => {
                         saveScrollPosition();
-                        setShowForm(false);
-                        setEditingState(null);
-                        setEditingStateGroup(null);
+                        setEditingState(first);
+                        setEditingStateGroup(group);
                         setIsEditingSelectedState(false);
                         setIsMaximized(false);
-                        return;
-                      }
-                      saveScrollPosition();
-                      setEditingState(first);
-                      setEditingStateGroup(group);
-                      setIsEditingSelectedState(false);
-                      setIsMaximized(false);
-                      const selectedEmotions: Record<string, number> = {};
-                      for (const s of group) selectedEmotions[s.emotion] = s.intensity;
-                      setFormData({
-                        timestamp: first.timestamp,
-                        selectedEmotions,
-                        notes: notes,
-                        journalEntryId: first.journal_entry_id ?? null,
-                        journalTradeId: first.journal_trade_id ?? null,
-                        journalTradeIds: first.journal_trade_id != null ? [first.journal_trade_id] : [],
-                      });
-                      setShowForm(true);
-                      setFormTab("basic");
-                    }}
-                    style={{
-                      padding: "18px 20px",
-                      backgroundColor: "var(--bg-tertiary)",
-                      borderRadius: "12px",
-                      textAlign: "center",
-                      border: `2px solid ${color}`,
-                      minWidth: "168px",
-                      flex: "1 1 168px",
-                      position: "relative",
-                      cursor: "pointer",
-                      transition: "all 0.2s ease",
-                      boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = "var(--bg-hover)";
-                      e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.18)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = "var(--bg-tertiary)";
-                      e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.12)";
-                    }}
-                  >
-                    {hasSurvey && (
+                        const selectedEmotions: Record<string, number> = {};
+                        for (const s of group) selectedEmotions[s.emotion] = s.intensity;
+                        setFormData({
+                          timestamp: first.timestamp,
+                          selectedEmotions,
+                          notes,
+                          journalEntryId: first.journal_entry_id ?? null,
+                          journalTradeId: first.journal_trade_id ?? null,
+                          journalTradeIds: first.journal_trade_id != null ? [first.journal_trade_id] : [],
+                        });
+                        setShowForm(true);
+                        setFormTab("basic");
+                      }}
+                      style={{
+                        padding: "16px 18px",
+                        backgroundImage: gradient,
+                        backgroundColor: "var(--bg-tertiary)",
+                        borderRadius: "14px",
+                        minWidth: "140px",
+                        flex: "1 1 140px",
+                        maxWidth: "180px",
+                        position: "relative",
+                        cursor: "pointer",
+                        transition: "transform 0.2s ease, box-shadow 0.2s ease",
+                        border: `1px solid ${border}`,
+                        boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.transform = "translateY(-2px)";
+                        e.currentTarget.style.boxShadow = glow;
+                        e.currentTarget.style.borderColor = borderHover;
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = "translateY(0)";
+                        e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15)";
+                        e.currentTarget.style.borderColor = border;
+                      }}
+                    >
+                      {hasSurvey && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: "8px",
+                            right: "8px",
+                            width: "8px",
+                            height: "8px",
+                            backgroundColor: "var(--accent)",
+                            borderRadius: "50%",
+                            border: "1px solid var(--bg-primary)",
+                            boxShadow: "0 0 6px var(--accent)",
+                          }}
+                          title="Survey completed"
+                        />
+                      )}
+                      <div style={{ fontSize: "11px", fontWeight: "600", marginBottom: "12px", color: "var(--text-secondary)", letterSpacing: "0.02em" }}>
+                        {dateStr}
+                      </div>
                       <div
                         style={{
-                          position: "absolute",
-                          top: "6px",
-                          right: "6px",
-                          width: "8px",
-                          height: "8px",
-                          backgroundColor: "var(--accent)",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: "56px",
+                          height: "56px",
                           borderRadius: "50%",
-                          border: "1px solid var(--bg-primary)",
+                          background: badgeBg,
+                          border: `2px solid ${color}`,
+                          boxShadow: badgeShadow,
                         }}
-                        title="Survey completed"
-                      />
-                    )}
-                    <div style={{ fontSize: "11px", fontWeight: "600", marginBottom: "6px", color: "var(--text-secondary)" }}>
-                      {dateStr}
+                      >
+                        <span style={{ fontSize: "16px", fontWeight: "700", color, lineHeight: 1 }}>
+                          {overallIntensity}<span style={{ fontSize: "9px", opacity: 0.85 }}>/10</span>
+                        </span>
+                      </div>
                     </div>
-                    <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "8px" }}>
-                      {timeStr}
-                    </div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", justifyContent: "center", marginBottom: "6px" }}>
-                      {group.map((s) => {
-                        const c = getIntensityColorForEmotion(s.intensity);
-                        return (
-                          <span
-                            key={s.id}
-                            style={{
-                              fontSize: "13px",
-                              fontWeight: "600",
-                              color: c,
-                              background: "var(--bg-secondary)",
-                              padding: "4px 10px",
-                              borderRadius: "999px",
-                            }}
-                          >
-                            {s.emotion} {s.intensity}/10
-                          </span>
-                        );
-                      })}
-                    </div>
-                    {notes && (
-                      <div
-                        style={{
-                          fontSize: "12px",
-                          color: "var(--text-secondary)",
-                          marginTop: "8px",
-                          maxWidth: "100%",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          lineHeight: 1.4,
-                          maxHeight: "2.8em",
-                        }}
-                        title={notes.replace(/<[^>]*>/g, "").slice(0, 200)}
-                        dangerouslySetInnerHTML={{ __html: notes }}
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            {groups.length > 12 && (
-                <div style={{ marginTop: "16px", textAlign: "center", fontSize: "13px", color: "var(--text-secondary)" }}>
-                  Showing 12 most recent of {groups.length} entries
+                  );
+                })}
+              </div>
+              {hasMore && (
+                <div style={{ marginTop: "12px", textAlign: "center", fontSize: "12px", color: "var(--text-secondary)" }}>
+                  Scroll to view all {groups.length} entries
                 </div>
               )}
-              </div>
-            );
-          })()}
-
-        {/* Emotional Intensity Over Time – one point per day */}
-        {states.length > 0 && chartData.length > 0 && (
-          <div
-            style={{
-              margin: "0 24px 24px",
-              padding: "20px",
-              backgroundColor: "var(--bg-tertiary)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "12px",
-            }}
-          >
-            <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
-              Emotional Intensity Over Time
-            </h3>
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                <XAxis
-                  dataKey="date"
-                  stroke="var(--text-secondary)"
-                  style={{ fontSize: "12px" }}
-                />
-                <YAxis
-                  domain={[0, 10]}
-                  stroke="var(--text-secondary)"
-                  style={{ fontSize: "12px" }}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "var(--bg-primary)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "6px",
-                    color: "var(--text-primary)",
-                  }}
-                />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="intensity"
-                  stroke={getGradientColor(0.8)}
-                  strokeWidth={2}
-                  dot={{ fill: getGradientColor(0.8), r: 4 }}
-                  name="Intensity"
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
+            </div>
+          );
+        })()}
 
         {/* Empty state when no entries and form closed */}
         {!showForm && states.length === 0 && (
@@ -1946,6 +1903,55 @@ export default function Emotions() {
             </div>
           </form>
         </div>
+        )}
+
+        {/* Emotional Intensity Over Time – below entry section (list or form) */}
+        {states.length > 0 && chartData.length > 0 && (
+          <div
+            style={{
+              margin: "0 24px 24px",
+              padding: "20px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+            }}
+          >
+            <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
+              Emotional Intensity Over Time
+            </h3>
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                <XAxis
+                  dataKey="date"
+                  stroke="var(--text-secondary)"
+                  style={{ fontSize: "12px" }}
+                />
+                <YAxis
+                  domain={[0, 10]}
+                  stroke="var(--text-secondary)"
+                  style={{ fontSize: "12px" }}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "var(--bg-primary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-primary)",
+                  }}
+                />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="intensity"
+                  stroke={getGradientColor(0.8)}
+                  strokeWidth={2}
+                  dot={{ fill: getGradientColor(0.8), r: 4 }}
+                  name="Intensity"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
         )}
       </section>
 
