@@ -57,6 +57,27 @@ const EMOTIONS = [
   "Neutral",
 ];
 
+const DEFAULT_INTENSITY = 5;
+
+function isEntryFormModified(selectedEmotions: Record<string, number>, notes: string): boolean {
+  const hasEmotions = Object.keys(selectedEmotions).length > 0;
+  const hasNotes = (notes || "").trim() !== "";
+  return hasEmotions || hasNotes;
+}
+
+/** Group emotional states by timestamp (same timestamp = one "entry" with shared notes). */
+function groupStatesByTimestamp(states: EmotionalState[]): EmotionalState[][] {
+  const byTs = new Map<string, EmotionalState[]>();
+  for (const s of states) {
+    const key = s.timestamp;
+    if (!byTs.has(key)) byTs.set(key, []);
+    byTs.get(key)!.push(s);
+  }
+  return Array.from(byTs.values()).sort(
+    (a, b) => new Date(b[0].timestamp).getTime() - new Date(a[0].timestamp).getTime()
+  );
+}
+
 const SURVEY_QUESTIONS = {
   before: [
     {
@@ -512,8 +533,7 @@ export default function Emotions() {
   const [isMaximized, setIsMaximized] = useState(false);
   const [formTab, setFormTab] = useState<"basic" | SurveyTabType>("basic");
   const [formData, setFormData] = useState<{
-    emotion: string;
-    intensity: number;
+    selectedEmotions: Record<string, number>;
     notes: string;
     takeSurvey?: boolean;
     journalEntryId?: number | null;
@@ -526,22 +546,27 @@ export default function Emotions() {
         const parsed = JSON.parse(saved);
         const je = parsed.journalEntryId ?? null;
         const jtIds = Array.isArray(parsed.journalTradeIds) ? parsed.journalTradeIds : (parsed.journalTradeId != null ? [parsed.journalTradeId] : []);
+        const sel = parsed.selectedEmotions && typeof parsed.selectedEmotions === "object" ? parsed.selectedEmotions : {};
         return {
-          ...parsed,
+          selectedEmotions: sel,
+          notes: parsed.notes ?? "",
           takeSurvey: parsed.takeSurvey || false,
           journalEntryId: je,
           journalTradeId: parsed.journalTradeId ?? null,
           journalTradeIds: jtIds,
         };
       } catch {
-        return { emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null, journalTradeIds: [] };
+        return { selectedEmotions: {}, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null, journalTradeIds: [] };
       }
     }
-    return { emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null, journalTradeIds: [] };
+    return { selectedEmotions: {}, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null, journalTradeIds: [] };
   });
+  // When editing, we may edit a group of states (same timestamp). This holds all states in the group.
+  const [editingStateGroup, setEditingStateGroup] = useState<EmotionalState[] | null>(null);
   const [journalEntries, setJournalEntries] = useState<{ id: number; date: string; title: string }[]>([]);
   const [journalTradesForLink, setJournalTradesForLink] = useState<{ id: number; symbol: string | null; trade_order: number }[]>([]);
   const [surveyResponses, setSurveyResponses] = useState<Record<string, number>>({});
+  const [deleteTarget, setDeleteTarget] = useState<EmotionalState | null>(null);
   
   // Ref for main scroll container
   const mainScrollRef = useRef<HTMLDivElement>(null);
@@ -674,90 +699,126 @@ export default function Emotions() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const selected = formData.selectedEmotions;
+    const emotionKeys = Object.keys(selected);
+    const notes = formData.notes || null;
+    const timestamp = editingStateGroup?.length ? editingStateGroup[0].timestamp : new Date().toISOString();
+    const journalEntryId = formData.journalEntryId ?? null;
+    const journalTradeId = formData.journalTradeId ?? null;
+
     try {
-      if (editingState) {
+      if (editingStateGroup?.length) {
         if (!isEditingSelectedState) return;
-        // Update existing state
-        await invoke("update_emotional_state", {
-          id: editingState.id,
-          emotion: formData.emotion,
-          intensity: formData.intensity,
-          notes: formData.notes || null,
-          journalEntryId: formData.journalEntryId ?? null,
-          journalTradeId: formData.journalTradeId ?? null,
-        });
-        
+        if (emotionKeys.length === 0) {
+          alert("Select at least one emotion.");
+          return;
+        }
+        // Delete all states in the group, then re-add from form
+        for (const s of editingStateGroup) {
+          await invoke("delete_emotional_state", { id: s.id });
+        }
+        for (const emotion of emotionKeys) {
+          await invoke<number>("add_emotional_state", {
+            timestamp,
+            emotion,
+            intensity: selected[emotion],
+            notes,
+            tradeId: null,
+            journalEntryId,
+            journalTradeId,
+          });
+        }
         await loadStates();
         await loadSurveys();
-        
-        // Close form after successful save
         saveScrollPosition();
         setShowForm(false);
         setEditingState(null);
+        setEditingStateGroup(null);
         setIsEditingSelectedState(false);
         setIsMaximized(false);
         setFormTab("basic");
-        setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
+        setFormData({ selectedEmotions: {}, notes: "", journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
         return;
-      } else {
-        // Create new state
+      }
+
+      // New entry: require at least one emotion
+      if (!isEntryFormModified(selected, formData.notes)) {
+        saveScrollPosition();
+        setShowForm(false);
+        setEditingState(null);
+        setEditingStateGroup(null);
+        setIsEditingSelectedState(false);
+        setIsMaximized(false);
+        setFormTab("basic");
+        setFormData({ selectedEmotions: {}, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
+        return;
+      }
+      if (emotionKeys.length === 0) {
+        alert("Select at least one emotion.");
+        return;
+      }
+
+      const now = new Date().toISOString();
+      let firstStateId: number | null = null;
+      for (const emotion of emotionKeys) {
         const stateId = await invoke<number>("add_emotional_state", {
-          timestamp: new Date().toISOString(),
-          emotion: formData.emotion,
-          intensity: formData.intensity,
-          notes: formData.notes || null,
+          timestamp: now,
+          emotion,
+          intensity: selected[emotion],
+          notes,
           tradeId: null,
+          journalEntryId,
+          journalTradeId,
         });
+        if (firstStateId === null) firstStateId = stateId;
+      }
 
-        // Survey is optional: only persist if user changed at least one answer from default (3)
-        const shouldSaveSurvey = Object.values(SURVEY_QUESTIONS)
-          .flat()
-          .some((q) => (surveyResponses?.[q.key] ?? 3) !== 3);
+      const shouldSaveSurvey = Object.values(SURVEY_QUESTIONS)
+        .flat()
+        .some((q) => (surveyResponses?.[q.key] ?? 3) !== 3);
 
-        if (shouldSaveSurvey) {
-          try {
-            await invoke("add_emotion_survey", {
-              emotional_state_id: stateId,
-              timestamp: new Date().toISOString(),
-              before_calm_clear: surveyResponses.before_calm_clear ?? 3,
-              before_urgency_pressure: surveyResponses.before_urgency_pressure ?? 3,
-              before_confidence_vs_validation: surveyResponses.before_confidence_vs_validation ?? 3,
-              before_fomo: surveyResponses.before_fomo ?? 3,
-              before_recovering_loss: surveyResponses.before_recovering_loss ?? 3,
-              before_patient_detached: surveyResponses.before_patient_detached ?? 3,
-              before_trust_process: surveyResponses.before_trust_process ?? 3,
-              before_emotional_state: surveyResponses.before_emotional_state ?? 3,
-              during_stable: surveyResponses.during_stable ?? 3,
-              during_tension_stress: surveyResponses.during_tension_stress ?? 3,
-              during_tempted_interfere: surveyResponses.during_tempted_interfere ?? 3,
-              during_need_control: surveyResponses.during_need_control ?? 3,
-              during_fear_loss: surveyResponses.during_fear_loss ?? 3,
-              during_excitement_greed: surveyResponses.during_excitement_greed ?? 3,
-              during_mentally_present: surveyResponses.during_mentally_present ?? 3,
-              after_accept_outcome: surveyResponses.after_accept_outcome ?? 3,
-              after_emotional_reaction: surveyResponses.after_emotional_reaction ?? 3,
-              after_confidence_affected: surveyResponses.after_confidence_affected ?? 3,
-              after_tempted_another_trade: surveyResponses.after_tempted_another_trade ?? 3,
-              after_proud_discipline: surveyResponses.after_proud_discipline ?? 3,
-            });
-          } catch (error) {
-            console.error("Error saving survey:", error);
-            alert("State saved but failed to save survey");
-          }
+      if (shouldSaveSurvey && firstStateId != null) {
+        try {
+          await invoke("add_emotion_survey", {
+            emotional_state_id: firstStateId,
+            timestamp: now,
+            before_calm_clear: surveyResponses.before_calm_clear ?? 3,
+            before_urgency_pressure: surveyResponses.before_urgency_pressure ?? 3,
+            before_confidence_vs_validation: surveyResponses.before_confidence_vs_validation ?? 3,
+            before_fomo: surveyResponses.before_fomo ?? 3,
+            before_recovering_loss: surveyResponses.before_recovering_loss ?? 3,
+            before_patient_detached: surveyResponses.before_patient_detached ?? 3,
+            before_trust_process: surveyResponses.before_trust_process ?? 3,
+            before_emotional_state: surveyResponses.before_emotional_state ?? 3,
+            during_stable: surveyResponses.during_stable ?? 3,
+            during_tension_stress: surveyResponses.during_tension_stress ?? 3,
+            during_tempted_interfere: surveyResponses.during_tempted_interfere ?? 3,
+            during_need_control: surveyResponses.during_need_control ?? 3,
+            during_fear_loss: surveyResponses.during_fear_loss ?? 3,
+            during_excitement_greed: surveyResponses.during_excitement_greed ?? 3,
+            during_mentally_present: surveyResponses.during_mentally_present ?? 3,
+            after_accept_outcome: surveyResponses.after_accept_outcome ?? 3,
+            after_emotional_reaction: surveyResponses.after_emotional_reaction ?? 3,
+            after_confidence_affected: surveyResponses.after_confidence_affected ?? 3,
+            after_tempted_another_trade: surveyResponses.after_tempted_another_trade ?? 3,
+            after_proud_discipline: surveyResponses.after_proud_discipline ?? 3,
+          });
+        } catch (error) {
+          console.error("Error saving survey:", error);
+          alert("Entry saved but failed to save survey");
         }
       }
 
       await loadStates();
       await loadSurveys();
-      
-      // Reset form
       saveScrollPosition();
       setShowForm(false);
       setEditingState(null);
+      setEditingStateGroup(null);
       setIsEditingSelectedState(false);
       setIsMaximized(false);
       setFormTab("basic");
-      setFormData({ emotion: "Neutral", intensity: 5, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
+      setFormData({ selectedEmotions: {}, notes: "", takeSurvey: false, journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
       localStorage.removeItem('emotions_form_data');
       localStorage.setItem('emotions_show_form', "false");
       const initial: Record<string, number> = {};
@@ -767,27 +828,36 @@ export default function Emotions() {
       setSurveyResponses(initial);
     } catch (error) {
       console.error("Error saving emotional state:", error);
-      alert(`Failed to ${editingState ? "update" : "add"} emotional state`);
+      alert(`Failed to ${editingStateGroup?.length ? "update" : "add"} emotional state`);
     }
   };
 
-  const handleDelete = async (state: EmotionalState) => {
-    if (!confirm(`Are you sure you want to delete this emotional state (${state.emotion})?`)) {
-      return;
-    }
+  const handleDeleteClick = (state: EmotionalState) => {
+    setDeleteTarget(state);
+  };
 
+  const handleDeleteCancel = () => {
+    setDeleteTarget(null);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
     try {
-      await invoke("delete_emotional_state", { id: state.id });
+      const toDelete = editingStateGroup?.length ? editingStateGroup : [deleteTarget];
+      for (const s of toDelete) {
+        await invoke("delete_emotional_state", { id: s.id });
+      }
       await loadStates();
       await loadSurveys();
-      // Close form if deleting the currently selected state
-      if (editingState?.id === state.id) {
+      if (editingStateGroup?.some((s) => s.id === deleteTarget.id) || editingState?.id === deleteTarget.id) {
         saveScrollPosition();
         setShowForm(false);
         setEditingState(null);
+        setEditingStateGroup(null);
         setIsEditingSelectedState(false);
         setIsMaximized(false);
       }
+      setDeleteTarget(null);
     } catch (error) {
       console.error("Error deleting emotional state:", error);
       alert("Failed to delete emotional state");
@@ -827,7 +897,8 @@ export default function Emotions() {
             saveScrollPosition();
             setEditingState(null);
             setIsEditingSelectedState(true);
-            setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
+            setFormData({ selectedEmotions: {}, notes: "", journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
+            setEditingStateGroup(null);
             const initial: Record<string, number> = {};
             Object.values(SURVEY_QUESTIONS).flat().forEach((q) => {
               initial[q.key] = 3;
@@ -856,61 +927,64 @@ export default function Emotions() {
       </div>
 
       {/* Recent Emotional States - hidden when adding/editing a state */}
-      {states.length > 0 && !showForm && (
-        <div
-          style={{
-            backgroundColor: "var(--bg-secondary)",
-            border: "1px solid var(--border-color)",
-            borderRadius: "8px",
-            padding: "24px",
-            marginBottom: "30px",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-            <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Recent Emotional States</h2>
-            <span style={{ fontSize: "14px", color: "var(--text-secondary)" }}>
-              {states.length} {states.length === 1 ? "state" : "states"} recorded
-            </span>
-          </div>
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            {states
-              .slice()
-              .reverse()
-              .slice(0, 12)
-              .map((state) => {
-                // Normalize intensity (1-10) to 0-1 for color gradient
-                const normalized = (state.intensity - 1) / 9;
+      {states.length > 0 && !showForm && (() => {
+        const groups = groupStatesByTimestamp(states);
+        const displayGroups = groups.slice(0, 12);
+        return (
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              padding: "24px",
+              marginBottom: "30px",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+              <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Recent Emotional States</h2>
+              <span style={{ fontSize: "14px", color: "var(--text-secondary)" }}>
+                {groups.length} {groups.length === 1 ? "entry" : "entries"} recorded
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              {displayGroups.map((group) => {
+                const first = group[0];
+                const timestamp = first.timestamp;
+                const dateStr = format(new Date(timestamp), "MMM dd, yyyy");
+                const timeStr = format(new Date(timestamp), "HH:mm");
+                const hasSurvey = group.some((s) => surveys.some((surv) => surv.emotional_state_id === s.id));
+                const isEditingThis = editingState?.timestamp === timestamp && showForm;
+                const maxIntensity = Math.max(...group.map((s) => s.intensity));
+                const normalized = (maxIntensity - 1) / 9;
                 const color = getGradientColor(normalized);
-                const dateStr = format(new Date(state.timestamp), "MMM dd, yyyy");
-                const timeStr = format(new Date(state.timestamp), "HH:mm");
-                const hasSurvey = surveys.some((s) => s.emotional_state_id === state.id);
-                
+                const notes = first.notes || "";
+
                 return (
                   <div
-                    key={state.id}
+                    key={timestamp}
                     onClick={() => {
-                      if (editingState?.id === state.id && showForm) {
-                        // Clicking the same state again - unselect it
+                      if (isEditingThis) {
                         saveScrollPosition();
                         setShowForm(false);
                         setEditingState(null);
+                        setEditingStateGroup(null);
                         setIsEditingSelectedState(false);
                         setIsMaximized(false);
                         return;
                       }
-                      // Save scroll position before opening form
                       saveScrollPosition();
-                      // Open in read-only mode first
-                      setEditingState(state);
+                      setEditingState(first);
+                      setEditingStateGroup(group);
                       setIsEditingSelectedState(false);
                       setIsMaximized(false);
+                      const selectedEmotions: Record<string, number> = {};
+                      for (const s of group) selectedEmotions[s.emotion] = s.intensity;
                       setFormData({
-                        emotion: state.emotion,
-                        intensity: state.intensity,
-                        notes: state.notes || "",
-                        journalEntryId: state.journal_entry_id ?? null,
-                        journalTradeId: state.journal_trade_id ?? null,
-                        journalTradeIds: state.journal_trade_id != null ? [state.journal_trade_id] : [],
+                        selectedEmotions,
+                        notes: notes,
+                        journalEntryId: first.journal_entry_id ?? null,
+                        journalTradeId: first.journal_trade_id ?? null,
+                        journalTradeIds: first.journal_trade_id != null ? [first.journal_trade_id] : [],
                       });
                       setShowForm(true);
                       setFormTab("basic");
@@ -921,8 +995,8 @@ export default function Emotions() {
                       borderRadius: "8px",
                       textAlign: "center",
                       border: `2px solid ${color}`,
-                      minWidth: "140px",
-                      flex: "1 1 140px",
+                      minWidth: "160px",
+                      flex: "1 1 160px",
                       position: "relative",
                       cursor: "pointer",
                       transition: "all 0.2s",
@@ -952,16 +1026,31 @@ export default function Emotions() {
                     <div style={{ fontSize: "11px", fontWeight: "600", marginBottom: "6px", color: "var(--text-secondary)" }}>
                       {dateStr}
                     </div>
-                    <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                    <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "8px" }}>
                       {timeStr}
                     </div>
-                    <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "6px", color }}>
-                      {state.emotion}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", justifyContent: "center", marginBottom: "6px" }}>
+                      {group.map((s) => {
+                        const n = (s.intensity - 1) / 9;
+                        const c = getGradientColor(n);
+                        return (
+                          <span
+                            key={s.id}
+                            style={{
+                              fontSize: "13px",
+                              fontWeight: "600",
+                              color: c,
+                              background: "var(--bg-secondary)",
+                              padding: "2px 8px",
+                              borderRadius: "6px",
+                            }}
+                          >
+                            {s.emotion} {s.intensity}/10
+                          </span>
+                        );
+                      })}
                     </div>
-                    <div style={{ fontSize: "13px", fontWeight: "600", marginBottom: "4px", color: "var(--text-primary)" }}>
-                      Intensity: {state.intensity}/10
-                    </div>
-                    {state.notes && (
+                    {notes && (
                       <div
                         style={{
                           fontSize: "11px",
@@ -972,22 +1061,23 @@ export default function Emotions() {
                           textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
                         }}
-                        title={state.notes}
+                        title={notes}
                       >
-                        {state.notes}
+                        {notes}
                       </div>
                     )}
                   </div>
                 );
               })}
-          </div>
-          {states.length > 12 && (
-            <div style={{ marginTop: "16px", textAlign: "center", fontSize: "14px", color: "var(--text-secondary)" }}>
-              Showing 12 most recent of {states.length} states
             </div>
-          )}
-        </div>
-      )}
+            {groups.length > 12 && (
+              <div style={{ marginTop: "16px", textAlign: "center", fontSize: "14px", color: "var(--text-secondary)" }}>
+                Showing 12 most recent of {groups.length} entries
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {!showForm && <MetricsDisplay surveys={surveys} states={states} />}
 
@@ -1022,7 +1112,9 @@ export default function Emotions() {
             alignItems: "center",
           }}>
             <h2 style={{ fontSize: "18px", fontWeight: "600", margin: 0 }}>
-              {editingState ? `${editingState.emotion} - ${format(new Date(editingState.timestamp), "MMM dd, yyyy HH:mm")}` : "Add New Emotional State"}
+              {editingState
+                ? `${editingStateGroup?.length ? `${editingStateGroup.length} emotions — ` : ""}${format(new Date(editingState.timestamp), "MMM dd, yyyy HH:mm")}`
+                : "Add New Emotional State"}
             </h2>
             {editingState && (
               <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
@@ -1063,7 +1155,7 @@ export default function Emotions() {
                       <Edit2 size={16} />
                     </button>
                     <button
-                      onClick={() => handleDelete(editingState)}
+                      onClick={() => handleDeleteClick(editingState)}
                       style={{
                         background: "var(--bg-secondary)",
                         border: "1px solid var(--border-color)",
@@ -1163,47 +1255,104 @@ export default function Emotions() {
             }}>
               {formTab === "basic" && (
                 <>
-                  <div style={{ marginBottom: "20px" }}>
-                    <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", color: "var(--text-secondary)" }}>
-                      Emotion
+                  <div style={{ marginBottom: "24px" }}>
+                    <label style={{ display: "block", marginBottom: "10px", fontSize: "14px", fontWeight: "600", color: "var(--text-primary)" }}>
+                      Select emotions — click to add, then set intensity
                     </label>
-                    <select
-                      value={formData.emotion}
-                      onChange={(e) => setFormData({ ...formData, emotion: e.target.value })}
-                      disabled={!!editingState && !isEditingSelectedState}
-                      style={{
-                        width: "100%",
-                        padding: "10px",
-                        backgroundColor: "var(--bg-tertiary)",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: "6px",
-                        color: "var(--text-primary)",
-                        fontSize: "14px",
-                        opacity: !!editingState && !isEditingSelectedState ? 0.7 : 1,
-                      }}
-                    >
-                      {EMOTIONS.map((emotion) => (
-                        <option key={emotion} value={emotion}>
-                          {emotion}
-                        </option>
-                      ))}
-                    </select>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                      {EMOTIONS.map((emotion) => {
+                        const intensity = formData.selectedEmotions[emotion];
+                        const isSelected = intensity !== undefined;
+                        const canEdit = !editingState || isEditingSelectedState;
+                        return (
+                          <button
+                            key={emotion}
+                            type="button"
+                            onClick={() => {
+                              if (!canEdit) return;
+                              if (isSelected) {
+                                const next = { ...formData.selectedEmotions };
+                                delete next[emotion];
+                                setFormData({ ...formData, selectedEmotions: next });
+                              } else {
+                                setFormData({
+                                  ...formData,
+                                  selectedEmotions: { ...formData.selectedEmotions, [emotion]: DEFAULT_INTENSITY },
+                                });
+                              }
+                            }}
+                            style={{
+                              padding: "10px 16px",
+                              borderRadius: "8px",
+                              border: `2px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
+                              backgroundColor: isSelected ? "var(--bg-tertiary)" : "var(--bg-tertiary)",
+                              color: "var(--text-primary)",
+                              fontSize: "14px",
+                              fontWeight: isSelected ? "600" : "500",
+                              cursor: canEdit ? "pointer" : "default",
+                              opacity: canEdit ? 1 : 0.8,
+                            }}
+                          >
+                            {emotion}
+                            {isSelected && ` ${intensity}/10`}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
-                  <div style={{ marginBottom: "20px" }}>
-                    <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", color: "var(--text-secondary)" }}>
-                      Intensity: {formData.intensity}/10
-                    </label>
-                    <input
-                      type="range"
-                      min="1"
-                      max="10"
-                      value={formData.intensity}
-                      onChange={(e) => setFormData({ ...formData, intensity: parseInt(e.target.value) })}
-                      disabled={!!editingState && !isEditingSelectedState}
-                      style={{ width: "100%", opacity: !!editingState && !isEditingSelectedState ? 0.7 : 1 }}
-                    />
-                  </div>
+                  {Object.keys(formData.selectedEmotions).length > 0 && (
+                    <div style={{ marginBottom: "24px" }}>
+                      <label style={{ display: "block", marginBottom: "10px", fontSize: "14px", color: "var(--text-secondary)" }}>
+                        Set intensity for each selected emotion
+                      </label>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                        {Object.entries(formData.selectedEmotions).map(([emotion, intensity]) => (
+                          <div key={emotion} style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+                            <span style={{ minWidth: "100px", fontSize: "14px", fontWeight: "500" }}>{emotion}</span>
+                            <input
+                              type="range"
+                              min="1"
+                              max="10"
+                              value={intensity}
+                              onChange={(e) =>
+                                setFormData({
+                                  ...formData,
+                                  selectedEmotions: { ...formData.selectedEmotions, [emotion]: parseInt(e.target.value) },
+                                })
+                              }
+                              disabled={!!editingState && !isEditingSelectedState}
+                              style={{ flex: "1", minWidth: "120px", maxWidth: "280px" }}
+                            />
+                            <span style={{ fontSize: "14px", fontWeight: "600", color: "var(--accent)", minWidth: "36px" }}>
+                              {intensity}/10
+                            </span>
+                            {(!editingState || isEditingSelectedState) && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = { ...formData.selectedEmotions };
+                                  delete next[emotion];
+                                  setFormData({ ...formData, selectedEmotions: next });
+                                }}
+                                style={{
+                                  padding: "4px 8px",
+                                  background: "var(--danger)",
+                                  color: "white",
+                                  border: "none",
+                                  borderRadius: "6px",
+                                  cursor: "pointer",
+                                  fontSize: "12px",
+                                }}
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   <div style={{ 
                     flex: 1, 
@@ -1214,7 +1363,7 @@ export default function Emotions() {
                     marginBottom: "16px",
                   }}>
                     <label style={{ display: "block", marginBottom: "12px", fontSize: "14px", fontWeight: "600", color: "var(--text-primary)" }}>
-                      Notes
+                      Notes (for this whole entry)
                     </label>
                     <div style={{ 
                       flex: 1, 
@@ -1229,7 +1378,7 @@ export default function Emotions() {
                         key={`notes-${editingState?.id || 'new'}-${isEditingSelectedState ? 'edit' : 'view'}`}
                         value={formData.notes}
                         onChange={(content: string) => setFormData({ ...formData, notes: content })}
-                        placeholder="Add detailed notes about your emotional state... Use the toolbar above to format your text, add headings, lists, and more."
+                        placeholder="Add notes about your emotional state for this entry..."
                         readOnly={editingState !== null && !isEditingSelectedState}
                       />
                     </div>
@@ -1383,10 +1532,11 @@ export default function Emotions() {
                           saveScrollPosition();
                           setShowForm(false);
                           setEditingState(null);
+                          setEditingStateGroup(null);
                           setIsEditingSelectedState(false);
                           setIsMaximized(false);
                           setFormTab("basic");
-                          setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
+                          setFormData({ selectedEmotions: {}, notes: "", journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
                         }}
                         style={{
                           padding: "10px 20px",
@@ -1421,8 +1571,7 @@ export default function Emotions() {
                         onClick={(e) => {
                           e.preventDefault();
                           saveScrollPosition();
-                          handleDelete(editingState);
-                          setShowForm(false);
+                          handleDeleteClick(editingState);
                           setEditingState(null);
                           setIsEditingSelectedState(false);
                           setIsMaximized(false);
@@ -1446,10 +1595,12 @@ export default function Emotions() {
                       <button
                         type="button"
                         onClick={() => {
-                          setFormData({
-                            emotion: editingState.emotion,
-                            intensity: editingState.intensity,
-                            notes: editingState.notes || "",
+                          setFormData((prev) => {
+                            const selectedEmotions: Record<string, number> = {};
+                            for (const s of editingStateGroup || [editingState]) {
+                              selectedEmotions[s.emotion] = s.intensity;
+                            }
+                            return { ...prev, selectedEmotions, notes: editingState?.notes || "" };
                           });
                           setIsEditingSelectedState(false);
                         }}
@@ -1491,9 +1642,10 @@ export default function Emotions() {
                       saveScrollPosition();
                       setShowForm(false);
                       setEditingState(null);
+                      setEditingStateGroup(null);
                       setIsEditingSelectedState(false);
                       setFormTab("basic");
-                      setFormData({ emotion: "Neutral", intensity: 5, notes: "", journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
+                      setFormData({ selectedEmotions: {}, notes: "", journalEntryId: null, journalTradeId: null, journalTradeIds: [] });
                       const initial: Record<string, number> = {};
                       Object.values(SURVEY_QUESTIONS).flat().forEach((q) => {
                         initial[q.key] = 3;
@@ -1547,6 +1699,111 @@ export default function Emotions() {
           <p style={{ color: "var(--text-secondary)" }}>
             No emotional states recorded. Click "Add State" to get started.
           </p>
+        </div>
+      )}
+
+      {/* Delete Emotional State Confirmation Modal */}
+      {deleteTarget && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={handleDeleteCancel}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "450px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                fontSize: "18px",
+                fontWeight: "600",
+                marginBottom: "12px",
+                color: "var(--danger)",
+              }}
+            >
+              Delete Emotional State
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-primary)",
+                marginBottom: "8px",
+                lineHeight: "1.5",
+              }}
+            >
+              Are you sure you want to delete this emotional state entry
+              {editingStateGroup?.length ? ` (${editingStateGroup.map((s) => s.emotion).join(", ")})` : ""}?
+              {!editingStateGroup?.length && deleteTarget && (
+                <> <strong>"{deleteTarget.emotion}"</strong></>
+              )}
+            </p>
+            <p
+              style={{
+                fontSize: "13px",
+                color: "var(--text-secondary)",
+                marginBottom: "20px",
+                lineHeight: "1.5",
+              }}
+            >
+              This action cannot be undone. The emotional state{editingStateGroup?.length ? "s" : ""} will be permanently deleted.
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                onClick={handleDeleteCancel}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteConfirm}
+                style={{
+                  background: "var(--danger)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

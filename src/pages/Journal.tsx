@@ -94,6 +94,21 @@ const JOURNAL_EMOTIONS = [
   "Optimistic", "Pessimistic", "Neutral",
 ];
 
+const DEFAULT_EMOTION_INTENSITY = 5;
+
+/** Group emotional states by timestamp (same timestamp = one entry with shared notes). */
+function groupEmotionalStatesByTimestamp(states: JournalEmotionalState[]): JournalEmotionalState[][] {
+  const byTs = new Map<string, JournalEmotionalState[]>();
+  for (const s of states) {
+    const key = s.timestamp;
+    if (!byTs.has(key)) byTs.set(key, []);
+    byTs.get(key)!.push(s);
+  }
+  return Array.from(byTs.values()).sort(
+    (a, b) => new Date(b[0].timestamp).getTime() - new Date(a[0].timestamp).getTime()
+  );
+}
+
 type TabType = "trade" | "what_went_well" | "what_could_be_improved" | "emotional_state" | "notes" | "checklists" | "survey";
 
 export default function Journal() {
@@ -168,9 +183,9 @@ export default function Journal() {
   // Emotional states linked to this journal entry/implementation (same as Emotions page)
   const [journalEmotionalStates, setJournalEmotionalStates] = useState<JournalEmotionalState[]>([]);
   const [showAddEmotionalStateForm, setShowAddEmotionalStateForm] = useState(false);
-  const [newEmotionalStateForm, setNewEmotionalStateForm] = useState({ emotion: "Neutral", intensity: 5, notes: "" });
-  // Pending emotional states (when entry/trade not yet saved - persisted on journal save)
-  const [pendingEmotionalStates, setPendingEmotionalStates] = useState<Array<{ emotion: string; intensity: number; notes: string; tradeIndex: number }>>([]);
+  const [newEmotionalStateForm, setNewEmotionalStateForm] = useState<{ selectedEmotions: Record<string, number>; notes: string }>({ selectedEmotions: {}, notes: "" });
+  // Pending emotional state entries (when entry/trade not yet saved - each entry can have multiple emotions + one notes)
+  const [pendingEmotionalStates, setPendingEmotionalStates] = useState<Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string }>>([]);
   
   // Available symbols for dropdown
   const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
@@ -178,6 +193,7 @@ export default function Journal() {
   // Modal state
   const [showTitleRequiredModal, setShowTitleRequiredModal] = useState(false);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
+  const [emotionalStateDeleteTarget, setEmotionalStateDeleteTarget] = useState<null | { type: "saved"; states: JournalEmotionalState[] } | { type: "pending"; tradeIndex: number; idx: number }>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   
   // Edit history for undo functionality
@@ -781,6 +797,37 @@ export default function Journal() {
     setShowDeleteConfirmModal(false);
   };
 
+  const handleEmotionalStateDeleteCancel = () => {
+    setEmotionalStateDeleteTarget(null);
+  };
+
+  const handleEmotionalStateDeleteConfirm = async () => {
+    if (!emotionalStateDeleteTarget) return;
+    if (emotionalStateDeleteTarget.type === "saved") {
+      try {
+        for (const state of emotionalStateDeleteTarget.states) {
+          await invoke("delete_emotional_state", { id: state.id });
+        }
+        const jtId = tradesFormData[activeTradeIndex]?.id ?? null;
+        if (selectedEntry?.id != null) {
+          const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
+            journalEntryId: selectedEntry.id,
+            journalTradeId: jtId ?? undefined,
+          });
+          setJournalEmotionalStates(states);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    } else {
+      const { tradeIndex, idx } = emotionalStateDeleteTarget;
+      const forThisTrade = pendingEmotionalStates.filter((p) => p.tradeIndex === tradeIndex);
+      const kept = forThisTrade.filter((_, i) => i !== idx);
+      setPendingEmotionalStates((prev) => [...prev.filter((p) => p.tradeIndex !== tradeIndex), ...kept]);
+    }
+    setEmotionalStateDeleteTarget(null);
+  };
+
   const handleAddTrade = () => {
     const newTrade = {
       id: null,
@@ -1191,32 +1238,36 @@ export default function Journal() {
         }
       }
 
-      // Persist emotional states: form-in-progress (if open) and all pending states
-      const toPersist: Array<{ emotion: string; intensity: number; notes: string; tradeIndex: number }> = [...pendingEmotionalStates];
-      if (showAddEmotionalStateForm && newEmotionalStateForm.emotion && activeTradeIndex >= 0 && activeTradeIndex < tradeIdsInOrder.length) {
-        toPersist.push({ ...newEmotionalStateForm, tradeIndex: activeTradeIndex });
+      // Persist emotional states: form-in-progress (if open) and all pending entries (each entry = multiple emotions + one notes)
+      const toPersist: Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string }> = [...pendingEmotionalStates];
+      const hasFormContent = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 || (newEmotionalStateForm.notes || "").trim() !== "";
+      if (showAddEmotionalStateForm && hasFormContent && activeTradeIndex >= 0 && activeTradeIndex < tradeIdsInOrder.length) {
+        toPersist.push({ tradeIndex: activeTradeIndex, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes });
       }
+      const now = new Date().toISOString();
       for (const pending of toPersist) {
         const journalTradeId = tradeIdsInOrder[pending.tradeIndex];
         if (journalTradeId != null) {
-          try {
-            await invoke("add_emotional_state", {
-              timestamp: new Date().toISOString(),
-              emotion: pending.emotion,
-              intensity: pending.intensity,
-              notes: pending.notes || null,
-              tradeId: null,
-              journalEntryId: entryId,
-              journalTradeId,
-            });
-          } catch (e) {
-            console.error(e);
+          for (const emotion of Object.keys(pending.selectedEmotions)) {
+            try {
+              await invoke("add_emotional_state", {
+                timestamp: now,
+                emotion,
+                intensity: pending.selectedEmotions[emotion],
+                notes: pending.notes || null,
+                tradeId: null,
+                journalEntryId: entryId,
+                journalTradeId,
+              });
+            } catch (e) {
+              console.error(e);
+            }
           }
         }
       }
       if (toPersist.length > 0) {
         setShowAddEmotionalStateForm(false);
-        setNewEmotionalStateForm({ emotion: "Neutral", intensity: 5, notes: "" });
+        setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
         setPendingEmotionalStates([]);
       }
 
@@ -2527,29 +2578,49 @@ export default function Journal() {
                               {(journalEmotionalStates.length === 0 && pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex).length === 0 && !showAddEmotionalStateForm) && (
                                 <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No emotional states linked. Add one with the same form as on the Emotions page.</p>
                               )}
-                              {journalEmotionalStates.map((state) => (
-                                <div
-                                  key={state.id}
-                                  style={{
-                                    padding: "12px",
-                                    backgroundColor: "var(--bg-tertiary)",
-                                    border: "1px solid var(--border-color)",
-                                    borderRadius: "6px",
-                                    marginBottom: "8px",
-                                  }}
-                                >
-                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                                    <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>{state.emotion}</span>
-                                    <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                                      {format(new Date(state.timestamp), "MMM d, yyyy HH:mm")} · Intensity {state.intensity}/10
-                                    </span>
+                              {groupEmotionalStatesByTimestamp(journalEmotionalStates).map((group) => {
+                                const first = group[0];
+                                const notes = first.notes;
+                                return (
+                                  <div
+                                    key={first.timestamp}
+                                    style={{
+                                      padding: "12px",
+                                      backgroundColor: "var(--bg-tertiary)",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "6px",
+                                      marginBottom: "8px",
+                                    }}
+                                  >
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", flexWrap: "wrap", gap: "8px" }}>
+                                      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
+                                        {group.map((s) => (
+                                          <span key={s.id} style={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>
+                                            {s.emotion} {s.intensity}/10
+                                          </span>
+                                        ))}
+                                      </div>
+                                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                        <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                                          {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => setEmotionalStateDeleteTarget({ type: "saved", states: group })}
+                                          style={{ padding: "2px 6px", background: "transparent", border: "none", borderRadius: "4px", color: "var(--text-secondary)", cursor: "pointer", fontSize: "12px" }}
+                                          title="Delete"
+                                        >
+                                          <Trash2 size={14} />
+                                        </button>
+                                      </div>
+                                    </div>
+                                    {notes && (
+                                      <div style={{ fontSize: "13px", color: "var(--text-secondary)" }} dangerouslySetInnerHTML={{ __html: notes }} />
+                                    )}
                                   </div>
-                                  {state.notes && (
-                                    <div style={{ fontSize: "13px", color: "var(--text-secondary)" }} dangerouslySetInnerHTML={{ __html: state.notes }} />
-                                  )}
-                                </div>
-                              ))}
-                              {pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex).map((state, idx) => (
+                                );
+                              })}
+                              {pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex).map((pending, idx) => (
                                 <div
                                   key={`pending-${activeTradeIndex}-${idx}`}
                                   style={{
@@ -2560,25 +2631,28 @@ export default function Journal() {
                                     marginBottom: "8px",
                                   }}
                                 >
-                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                                    <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>{state.emotion}</span>
-                                    <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                                      (unsaved) · Intensity {state.intensity}/10
-                                    </span>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const forThisTrade = pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex);
-                                        const kept = forThisTrade.filter((_, i) => i !== idx);
-                                        setPendingEmotionalStates((prev) => [...prev.filter((p) => p.tradeIndex !== activeTradeIndex), ...kept]);
-                                      }}
-                                      style={{ padding: "2px 6px", background: "transparent", border: "none", borderRadius: "4px", color: "var(--text-secondary)", cursor: "pointer", fontSize: "12px" }}
-                                    >
-                                      <X size={14} />
-                                    </button>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", flexWrap: "wrap", gap: "8px" }}>
+                                    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
+                                      {Object.entries(pending.selectedEmotions).map(([emotion, intensity]) => (
+                                        <span key={emotion} style={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>
+                                          {emotion} {intensity}/10
+                                        </span>
+                                      ))}
+                                    </div>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                      <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>(unsaved)</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setEmotionalStateDeleteTarget({ type: "pending", tradeIndex: activeTradeIndex, idx })}
+                                        style={{ padding: "2px 6px", background: "transparent", border: "none", borderRadius: "4px", color: "var(--text-secondary)", cursor: "pointer", fontSize: "12px" }}
+                                        title="Remove"
+                                      >
+                                        <X size={14} />
+                                      </button>
+                                    </div>
                                   </div>
-                                  {state.notes && (
-                                    <div style={{ fontSize: "13px", color: "var(--text-secondary)" }} dangerouslySetInnerHTML={{ __html: state.notes }} />
+                                  {pending.notes && (
+                                    <div style={{ fontSize: "13px", color: "var(--text-secondary)" }} dangerouslySetInnerHTML={{ __html: pending.notes }} />
                                   )}
                                 </div>
                               ))}
@@ -2586,32 +2660,87 @@ export default function Journal() {
                             {showAddEmotionalStateForm && (
                               <div style={{ padding: "16px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px", marginBottom: "16px" }}>
                                 <h4 style={{ margin: "0 0 12px", fontSize: "14px" }}>Add emotional state</h4>
+                                <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "12px" }}>Select emotions — click to add, then set intensity. One notes section for the whole entry.</p>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                                   <div>
-                                    <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>Emotion</label>
-                                    <select
-                                      value={newEmotionalStateForm.emotion}
-                                      onChange={(e) => setNewEmotionalStateForm((f) => ({ ...f, emotion: e.target.value }))}
-                                      style={{ width: "100%", padding: "8px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "14px" }}
-                                    >
-                                      {JOURNAL_EMOTIONS.map((em) => (
-                                        <option key={em} value={em}>{em}</option>
-                                      ))}
-                                    </select>
+                                    <label style={{ display: "block", marginBottom: "8px", fontSize: "12px" }}>Emotions</label>
+                                    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                                      {JOURNAL_EMOTIONS.map((emotion) => {
+                                        const intensity = newEmotionalStateForm.selectedEmotions[emotion];
+                                        const isSelected = intensity !== undefined;
+                                        return (
+                                          <button
+                                            key={emotion}
+                                            type="button"
+                                            onClick={() => {
+                                              if (isSelected) {
+                                                const next = { ...newEmotionalStateForm.selectedEmotions };
+                                                delete next[emotion];
+                                                setNewEmotionalStateForm((f) => ({ ...f, selectedEmotions: next }));
+                                              } else {
+                                                setNewEmotionalStateForm((f) => ({
+                                                  ...f,
+                                                  selectedEmotions: { ...f.selectedEmotions, [emotion]: DEFAULT_EMOTION_INTENSITY },
+                                                }));
+                                              }
+                                            }}
+                                            style={{
+                                              padding: "8px 14px",
+                                              borderRadius: "6px",
+                                              border: `2px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
+                                              backgroundColor: "var(--bg-tertiary)",
+                                              color: "var(--text-primary)",
+                                              fontSize: "13px",
+                                              fontWeight: isSelected ? "600" : "500",
+                                              cursor: "pointer",
+                                            }}
+                                          >
+                                            {emotion}
+                                            {isSelected && ` ${intensity}/10`}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
                                   </div>
+                                  {Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 && (
+                                    <div>
+                                      <label style={{ display: "block", marginBottom: "6px", fontSize: "12px" }}>Set intensity</label>
+                                      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                                        {Object.entries(newEmotionalStateForm.selectedEmotions).map(([emotion, intensity]) => (
+                                          <div key={emotion} style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                                            <span style={{ minWidth: "90px", fontSize: "13px" }}>{emotion}</span>
+                                            <input
+                                              type="range"
+                                              min={1}
+                                              max={10}
+                                              value={intensity}
+                                              onChange={(e) =>
+                                                setNewEmotionalStateForm((f) => ({
+                                                  ...f,
+                                                  selectedEmotions: { ...f.selectedEmotions, [emotion]: parseInt(e.target.value, 10) },
+                                                }))
+                                              }
+                                              style={{ flex: "1", minWidth: "100px", maxWidth: "240px" }}
+                                            />
+                                            <span style={{ fontSize: "13px", fontWeight: "600", color: "var(--accent)", minWidth: "32px" }}>{intensity}/10</span>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                const next = { ...newEmotionalStateForm.selectedEmotions };
+                                                delete next[emotion];
+                                                setNewEmotionalStateForm((f) => ({ ...f, selectedEmotions: next }));
+                                              }}
+                                              style={{ padding: "2px 8px", background: "var(--danger)", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "11px" }}
+                                            >
+                                              Remove
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                   <div>
-                                    <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>Intensity: {newEmotionalStateForm.intensity}/10</label>
-                                    <input
-                                      type="range"
-                                      min={1}
-                                      max={10}
-                                      value={newEmotionalStateForm.intensity}
-                                      onChange={(e) => setNewEmotionalStateForm((f) => ({ ...f, intensity: parseInt(e.target.value, 10) }))}
-                                      style={{ width: "100%" }}
-                                    />
-                                  </div>
-                                  <div>
-                                    <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>Notes</label>
+                                    <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>Notes (for this whole entry)</label>
                                     <RichTextEditor
                                       value={newEmotionalStateForm.notes}
                                       onChange={(content: string) => setNewEmotionalStateForm((f) => ({ ...f, notes: content }))}
@@ -2622,38 +2751,53 @@ export default function Journal() {
                                   <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
                                     <button
                                       type="button"
+                                      disabled={Object.keys(newEmotionalStateForm.selectedEmotions).length === 0}
                                       onClick={async () => {
+                                        const hasAny = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0;
+                                        if (!hasAny) return;
                                         const entryId = selectedEntry?.id;
                                         const journalTradeId = currentTrade?.id ?? null;
                                         if (entryId != null && journalTradeId != null) {
                                           try {
-                                            await invoke("add_emotional_state", {
-                                              timestamp: new Date().toISOString(),
-                                              emotion: newEmotionalStateForm.emotion,
-                                              intensity: newEmotionalStateForm.intensity,
-                                              notes: newEmotionalStateForm.notes || null,
-                                              tradeId: null,
-                                              journalEntryId: entryId,
-                                              journalTradeId,
-                                            });
+                                            const now = new Date().toISOString();
+                                            for (const emotion of Object.keys(newEmotionalStateForm.selectedEmotions)) {
+                                              await invoke("add_emotional_state", {
+                                                timestamp: now,
+                                                emotion,
+                                                intensity: newEmotionalStateForm.selectedEmotions[emotion],
+                                                notes: newEmotionalStateForm.notes || null,
+                                                tradeId: null,
+                                                journalEntryId: entryId,
+                                                journalTradeId,
+                                              });
+                                            }
                                             const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId, journalTradeId });
                                             setJournalEmotionalStates(states);
-                                            setNewEmotionalStateForm({ emotion: "Neutral", intensity: 5, notes: "" });
+                                            setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
                                           } catch (e) {
                                             console.error(e);
                                           }
                                         } else {
-                                          setPendingEmotionalStates((prev) => [...prev, { ...newEmotionalStateForm, tradeIndex: activeTradeIndex }]);
-                                          setNewEmotionalStateForm({ emotion: "Neutral", intensity: 5, notes: "" });
+                                          setPendingEmotionalStates((prev) => [...prev, { tradeIndex: activeTradeIndex, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes }]);
+                                          setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
                                         }
                                       }}
-                                      style={{ padding: "6px 12px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "13px" }}
+                                      style={{
+                                        padding: "6px 12px",
+                                        background: "var(--accent)",
+                                        border: "none",
+                                        borderRadius: "6px",
+                                        color: "white",
+                                        cursor: Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ? "not-allowed" : "pointer",
+                                        fontSize: "13px",
+                                        opacity: Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ? 0.6 : 1,
+                                      }}
                                     >
                                       Add
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => { setShowAddEmotionalStateForm(false); setNewEmotionalStateForm({ emotion: "Neutral", intensity: 5, notes: "" }); }}
+                                      onClick={() => { setShowAddEmotionalStateForm(false); setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" }); }}
                                       style={{ padding: "6px 12px", background: "transparent", border: "none", borderRadius: "6px", color: "var(--text-secondary)", cursor: "pointer", fontSize: "13px" }}
                                     >
                                       Close
@@ -3589,6 +3733,117 @@ export default function Journal() {
               </button>
               <button
                 onClick={handleDeleteConfirm}
+                style={{
+                  background: "var(--danger)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Emotional State Confirmation Modal */}
+      {emotionalStateDeleteTarget && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={handleEmotionalStateDeleteCancel}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "450px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                fontSize: "18px",
+                fontWeight: "600",
+                marginBottom: "12px",
+                color: "var(--danger)",
+              }}
+            >
+              Delete Emotional State
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-primary)",
+                marginBottom: "8px",
+                lineHeight: "1.5",
+              }}
+            >
+              Are you sure you want to delete this emotional state entry
+              {emotionalStateDeleteTarget.type === "saved"
+                ? ` (${emotionalStateDeleteTarget.states.map((s) => s.emotion).join(", ")})`
+                : (() => {
+                    const pendingList = pendingEmotionalStates.filter((p) => p.tradeIndex === emotionalStateDeleteTarget.tradeIndex);
+                    const entry = pendingList[emotionalStateDeleteTarget.idx];
+                    return entry ? ` (${Object.keys(entry.selectedEmotions).join(", ")})` : "";
+                  })()}
+              ?
+            </p>
+            <p
+              style={{
+                fontSize: "13px",
+                color: "var(--text-secondary)",
+                marginBottom: "20px",
+                lineHeight: "1.5",
+              }}
+            >
+              {emotionalStateDeleteTarget.type === "pending"
+                ? "This entry has not been saved yet. It will be removed from the list."
+                : "This action cannot be undone. The emotional state entry will be permanently deleted."}
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                onClick={handleEmotionalStateDeleteCancel}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleEmotionalStateDeleteConfirm}
                 style={{
                   background: "var(--danger)",
                   border: "none",
