@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight } from "lucide-react";
 import { format, parse } from "date-fns";
@@ -205,6 +206,8 @@ export default function Journal() {
   const [viewEntryEmotionalStates, setViewEntryEmotionalStates] = useState<JournalEmotionalState[]>([]);
   const [emotionalStatesSectionExpanded, setEmotionalStatesSectionExpanded] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const location = useLocation();
+  const navigate = useNavigate();
   
   // Edit history for undo functionality
   const [editHistory, setEditHistory] = useState<Array<{
@@ -407,15 +410,15 @@ export default function Journal() {
     loadStrategies();
     loadAvailableSymbols();
     
-    // Restore selected entry if we have a saved ID
-    const savedEntryId = localStorage.getItem('journal_selected_entry_id');
-    if (savedEntryId) {
-      const entryId = parseInt(savedEntryId, 10);
-      if (!isNaN(entryId)) {
-        // Wait for entries to load, then restore
-        setTimeout(() => {
-          loadEntry(entryId);
-        }, 300);
+    // Restore selected entry if we have a saved ID (skip when opened from Emotions via state)
+    const openFromState = (location.state as { openEntryId?: number } | null)?.openEntryId != null;
+    if (!openFromState) {
+      const savedEntryId = localStorage.getItem('journal_selected_entry_id');
+      if (savedEntryId) {
+        const entryId = parseInt(savedEntryId, 10);
+        if (!isNaN(entryId)) {
+          setTimeout(() => loadEntry(entryId), 300);
+        }
       }
     }
     
@@ -427,6 +430,15 @@ export default function Journal() {
       }, 200);
     }
   }, []);
+
+  // Open specific entry/trade when navigated from Emotions (e.g. "Open in Journal")
+  useEffect(() => {
+    const state = location.state as { openEntryId?: number; openTradeId?: number } | null;
+    if (state?.openEntryId != null) {
+      loadEntry(state.openEntryId, { openTradeId: state.openTradeId });
+      navigate(location.pathname, { replace: true }); // clear state so back button doesn't re-open
+    }
+  }, [location.state]);
 
   useEffect(() => {
     if (entryFormData.strategy_id) {
@@ -1387,13 +1399,17 @@ export default function Journal() {
     setChecklistResponses(restoredResponses);
   };
 
-  const loadEntry = async (id: number, options?: { skipTradesFormDataSync?: boolean; restoredTradesCount?: number }) => {
+  const loadEntry = async (id: number, options?: { skipTradesFormDataSync?: boolean; restoredTradesCount?: number; openTradeId?: number }) => {
     try {
       const entry = await invoke<JournalEntry>("get_journal_entry", { id });
       setSelectedEntry(entry);
       // Save selected entry ID to localStorage
       localStorage.setItem('journal_selected_entry_id', id.toString());
       const loadedTrades = await loadTrades(id);
+      if (options?.openTradeId != null && loadedTrades.length > 0) {
+        const idx = loadedTrades.findIndex((t) => t.id === options.openTradeId);
+        if (idx >= 0) setActiveTradeIndex(idx);
+      }
       // Sync trades from DB when: (1) not skipping sync, or (2) we're restoring but saved state was bloated (DB has fewer trades)
       const shouldSyncTrades = !options?.skipTradesFormDataSync ||
         (options?.restoredTradesCount != null && loadedTrades.length < options.restoredTradesCount);

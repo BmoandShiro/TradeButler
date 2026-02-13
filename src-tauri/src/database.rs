@@ -27,6 +27,10 @@ pub struct EmotionalState {
     pub trade_id: Option<i64>,
     pub journal_entry_id: Option<i64>,
     pub journal_trade_id: Option<i64>,
+    /// JSON array of journal entry IDs, e.g. "[1,2,3]"
+    pub journal_entry_ids: Option<String>,
+    /// JSON array of trade IDs, e.g. "[4,5,6]"
+    pub trade_ids: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -345,6 +349,24 @@ pub fn init_database(db_path: &Path) -> Result<()> {
     ).unwrap_or(0) > 0;
     if !has_jt {
         conn.execute("ALTER TABLE emotional_states ADD COLUMN journal_trade_id INTEGER REFERENCES journal_trades(id) ON DELETE SET NULL", [])?;
+    }
+
+    // emotional_states: multiple journal entries and multiple trades (JSON arrays)
+    let has_je_ids: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_ids'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_je_ids {
+        conn.execute("ALTER TABLE emotional_states ADD COLUMN journal_entry_ids TEXT", [])?;
+    }
+    let has_trade_ids: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='trade_ids'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_trade_ids {
+        conn.execute("ALTER TABLE emotional_states ADD COLUMN trade_ids TEXT", [])?;
     }
 
     // Create journal_trade_actual_trades: link journal trades (in entry) to actual trades (trades table)

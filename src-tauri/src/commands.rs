@@ -1752,19 +1752,34 @@ pub fn add_emotional_state(
     trade_id: Option<i64>,
     journal_entry_id: Option<i64>,
     journal_trade_id: Option<i64>,
+    journal_entry_ids: Option<String>,
+    trade_ids: Option<String>,
 ) -> Result<i64, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
-    
-    conn.execute(
-        "INSERT INTO emotional_states (timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id],
-    ).map_err(|e| e.to_string())?;
-    
+
+    let has_multi = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    if has_multi {
+        conn.execute(
+            "INSERT INTO emotional_states (timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids],
+        ).map_err(|e| e.to_string())?;
+    } else {
+        conn.execute(
+            "INSERT INTO emotional_states (timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id],
+        ).map_err(|e| e.to_string())?;
+    }
+
     Ok(conn.last_insert_rowid())
 }
 
-fn get_emotional_states_query(conn: &rusqlite::Connection, has_je_jt: bool) -> Result<Vec<EmotionalState>, String> {
+fn get_emotional_states_query(conn: &rusqlite::Connection, has_je_jt: bool, has_multi_ids: bool) -> Result<Vec<EmotionalState>, String> {
     if !has_je_jt {
         let mut stmt = conn.prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id FROM emotional_states ORDER BY timestamp DESC")
             .map_err(|e| e.to_string())?;
@@ -1778,6 +1793,27 @@ fn get_emotional_states_query(conn: &rusqlite::Connection, has_je_jt: bool) -> R
                 trade_id: row.get(5)?,
                 journal_entry_id: None,
                 journal_trade_id: None,
+                journal_entry_ids: None,
+                trade_ids: None,
+            })
+        }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+        return Ok(rows);
+    }
+    if has_multi_ids {
+        let mut stmt = conn.prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids FROM emotional_states ORDER BY timestamp DESC")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<EmotionalState> = stmt.query_map([], |row| {
+            Ok(EmotionalState {
+                id: Some(row.get(0)?),
+                timestamp: row.get(1)?,
+                emotion: row.get(2)?,
+                intensity: row.get(3)?,
+                notes: row.get(4)?,
+                trade_id: row.get(5)?,
+                journal_entry_id: row.get(6).ok(),
+                journal_trade_id: row.get(7).ok(),
+                journal_entry_ids: row.get(8).ok(),
+                trade_ids: row.get(9).ok(),
             })
         }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
         return Ok(rows);
@@ -1794,6 +1830,8 @@ fn get_emotional_states_query(conn: &rusqlite::Connection, has_je_jt: bool) -> R
             trade_id: row.get(5)?,
             journal_entry_id: row.get(6).ok(),
             journal_trade_id: row.get(7).ok(),
+            journal_entry_ids: None,
+            trade_ids: None,
         })
     }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
     Ok(rows)
@@ -1813,7 +1851,12 @@ pub fn get_emotional_states() -> Result<Vec<EmotionalState>, String> {
         [],
         |row| row.get::<_, i64>(0),
     ).unwrap_or(0) > 0;
-    get_emotional_states_query(&conn, has_je && has_jt)
+    let has_multi_ids = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    get_emotional_states_query(&conn, has_je && has_jt, has_multi_ids)
 }
 
 #[tauri::command]
@@ -1833,14 +1876,58 @@ pub fn get_emotional_states_for_journal(
         [],
         |row| row.get::<_, i64>(0),
     ).unwrap_or(0) > 0;
+    let has_multi_ids = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
     if !has_je || !has_jt {
         return Ok(vec![]);
     }
-    let rows: Vec<EmotionalState> = if let Some(jt) = journal_trade_id {
+
+    let rows: Vec<EmotionalState> = if has_multi_ids {
+        if let Some(jt) = journal_trade_id {
+            let sql = "SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids FROM emotional_states WHERE (journal_entry_id = ?1 OR id IN (SELECT e2.id FROM emotional_states e2, json_each(e2.journal_entry_ids) WHERE json_type(e2.journal_entry_ids) = 'array' AND (json_each.value = ?2 OR CAST(json_each.value AS INTEGER) = ?2))) AND (journal_trade_id = ?3 OR journal_trade_id IS NULL) ORDER BY timestamp DESC";
+            let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+            let collected: Vec<EmotionalState> = stmt.query_map(params![journal_entry_id, journal_entry_id, jt], |row| {
+                Ok(EmotionalState {
+                    id: Some(row.get(0)?),
+                    timestamp: row.get(1)?,
+                    emotion: row.get(2)?,
+                    intensity: row.get(3)?,
+                    notes: row.get(4)?,
+                    trade_id: row.get(5)?,
+                    journal_entry_id: row.get(6).ok(),
+                    journal_trade_id: row.get(7).ok(),
+                    journal_entry_ids: row.get(8).ok(),
+                    trade_ids: row.get(9).ok(),
+                })
+            }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+            collected
+        } else {
+            let sql = "SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids FROM emotional_states WHERE journal_entry_id = ?1 OR id IN (SELECT e2.id FROM emotional_states e2, json_each(e2.journal_entry_ids) WHERE json_type(e2.journal_entry_ids) = 'array' AND (json_each.value = ?2 OR CAST(json_each.value AS INTEGER) = ?2)) ORDER BY timestamp DESC";
+            let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+            let collected: Vec<EmotionalState> = stmt.query_map(params![journal_entry_id, journal_entry_id], |row| {
+                Ok(EmotionalState {
+                    id: Some(row.get(0)?),
+                    timestamp: row.get(1)?,
+                    emotion: row.get(2)?,
+                    intensity: row.get(3)?,
+                    notes: row.get(4)?,
+                    trade_id: row.get(5)?,
+                    journal_entry_id: row.get(6).ok(),
+                    journal_trade_id: row.get(7).ok(),
+                    journal_entry_ids: row.get(8).ok(),
+                    trade_ids: row.get(9).ok(),
+                })
+            }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+            collected
+        }
+    } else if let Some(jt) = journal_trade_id {
         let mut stmt = conn.prepare(
             "SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states WHERE journal_entry_id = ?1 AND (journal_trade_id = ?2 OR journal_trade_id IS NULL) ORDER BY timestamp DESC"
         ).map_err(|e| e.to_string())?;
-        let collected = stmt.query_map(params![journal_entry_id, jt], |row| {
+        let collected: Vec<EmotionalState> = stmt.query_map(params![journal_entry_id, jt], |row| {
             Ok(EmotionalState {
                 id: Some(row.get(0)?),
                 timestamp: row.get(1)?,
@@ -1850,6 +1937,8 @@ pub fn get_emotional_states_for_journal(
                 trade_id: row.get(5)?,
                 journal_entry_id: row.get(6).ok(),
                 journal_trade_id: row.get(7).ok(),
+                journal_entry_ids: None,
+                trade_ids: None,
             })
         }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
         collected
@@ -1857,7 +1946,7 @@ pub fn get_emotional_states_for_journal(
         let mut stmt = conn.prepare(
             "SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states WHERE journal_entry_id = ?1 ORDER BY timestamp DESC"
         ).map_err(|e| e.to_string())?;
-        let collected = stmt.query_map(params![journal_entry_id], |row| {
+        let collected: Vec<EmotionalState> = stmt.query_map(params![journal_entry_id], |row| {
             Ok(EmotionalState {
                 id: Some(row.get(0)?),
                 timestamp: row.get(1)?,
@@ -1867,6 +1956,8 @@ pub fn get_emotional_states_for_journal(
                 trade_id: row.get(5)?,
                 journal_entry_id: row.get(6).ok(),
                 journal_trade_id: row.get(7).ok(),
+                journal_entry_ids: None,
+                trade_ids: None,
             })
         }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
         collected
@@ -4932,11 +5023,16 @@ pub fn export_data() -> Result<String, String> {
     }
     
     // Export emotional states
-    let mut stmt = conn
-        .prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states ORDER BY timestamp")
-        .map_err(|e| e.to_string())?;
-    let emotion_iter = stmt
-        .query_map([], |row| {
+    let has_multi_export = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let emotional_states: Vec<EmotionalState> = if has_multi_export {
+        let mut stmt = conn
+            .prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids FROM emotional_states ORDER BY timestamp")
+            .map_err(|e| e.to_string())?;
+        let collected: Vec<EmotionalState> = stmt.query_map([], |row| {
             Ok(EmotionalState {
                 id: Some(row.get(0)?),
                 timestamp: row.get(1)?,
@@ -4946,13 +5042,33 @@ pub fn export_data() -> Result<String, String> {
                 trade_id: row.get(5)?,
                 journal_entry_id: row.get(6).ok(),
                 journal_trade_id: row.get(7).ok(),
+                journal_entry_ids: row.get(8).ok(),
+                trade_ids: row.get(9).ok(),
             })
         })
-        .map_err(|e| e.to_string())?;
-    let mut emotional_states = Vec::new();
-    for emotion in emotion_iter {
-        emotional_states.push(emotion.map_err(|e| e.to_string())?);
-    }
+        .map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+        collected
+    } else {
+        let mut stmt = conn
+            .prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states ORDER BY timestamp")
+            .map_err(|e| e.to_string())?;
+        let collected: Vec<EmotionalState> = stmt.query_map([], |row| {
+            Ok(EmotionalState {
+                id: Some(row.get(0)?),
+                timestamp: row.get(1)?,
+                emotion: row.get(2)?,
+                intensity: row.get(3)?,
+                notes: row.get(4)?,
+                trade_id: row.get(5)?,
+                journal_entry_id: row.get(6).ok(),
+                journal_trade_id: row.get(7).ok(),
+                journal_entry_ids: None,
+                trade_ids: None,
+            })
+        })
+        .map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+        collected
+    };
     
     // Export journal entries
     let mut stmt = conn
