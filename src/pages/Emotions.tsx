@@ -57,7 +57,14 @@ const EMOTIONS = [
   "Neutral",
 ];
 
-const DEFAULT_INTENSITY = 5;
+const DEFAULT_INTENSITY = 0;
+
+const INTENSITY_SCALE_LABEL = "0 = not present → 10 = extremely strong. Rate how strongly you feel each emotion; there’s no single “neutral” — values are used for trends and insights over time.";
+
+const INTENSITY_LABELS: Record<number, string> = {
+  0: "None", 1: "Barely", 2: "Slight", 3: "Mild", 4: "Moderate", 5: "Noticeable",
+  6: "Strong", 7: "Very strong", 8: "Intense", 9: "Severe", 10: "Extreme",
+};
 
 function isEntryFormModified(selectedEmotions: Record<string, number>, notes: string): boolean {
   const hasEmotions = Object.keys(selectedEmotions).length > 0;
@@ -955,7 +962,7 @@ export default function Emotions() {
                 const hasSurvey = group.some((s) => surveys.some((surv) => surv.emotional_state_id === s.id));
                 const isEditingThis = editingState?.timestamp === timestamp && showForm;
                 const maxIntensity = Math.max(...group.map((s) => s.intensity));
-                const normalized = (maxIntensity - 1) / 9;
+                const normalized = maxIntensity / 10;
                 const color = getGradientColor(normalized);
                 const notes = first.notes || "";
 
@@ -1031,7 +1038,7 @@ export default function Emotions() {
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", justifyContent: "center", marginBottom: "6px" }}>
                       {group.map((s) => {
-                        const n = (s.intensity - 1) / 9;
+                        const n = s.intensity / 10;
                         const c = getGradientColor(n);
                         return (
                           <span
@@ -1255,11 +1262,29 @@ export default function Emotions() {
             }}>
               {formTab === "basic" && (
                 <>
-                  <div style={{ marginBottom: "24px" }}>
-                    <label style={{ display: "block", marginBottom: "10px", fontSize: "14px", fontWeight: "600", color: "var(--text-primary)" }}>
-                      Select emotions — click to add, then set intensity
-                    </label>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                  {/* Scale explanation — always visible so users understand 1–10 */}
+                  <div
+                    style={{
+                      marginBottom: "24px",
+                      padding: "14px 18px",
+                      backgroundColor: "var(--bg-tertiary)",
+                      borderRadius: "10px",
+                      border: "1px solid var(--border-color)",
+                    }}
+                  >
+                    <p style={{ margin: 0, fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                      {INTENSITY_SCALE_LABEL}
+                    </p>
+                  </div>
+
+                  <div style={{ marginBottom: "28px" }}>
+                    <h3 style={{ margin: "0 0 4px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                      Emotions
+                    </h3>
+                    <p style={{ margin: "0 0 14px", fontSize: "13px", color: "var(--text-secondary)" }}>
+                      Tap to add or remove; then set strength below.
+                    </p>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
                       {EMOTIONS.map((emotion) => {
                         const intensity = formData.selectedEmotions[emotion];
                         const isSelected = intensity !== undefined;
@@ -1282,19 +1307,23 @@ export default function Emotions() {
                               }
                             }}
                             style={{
-                              padding: "10px 16px",
-                              borderRadius: "8px",
-                              border: `2px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
-                              backgroundColor: isSelected ? "var(--bg-tertiary)" : "var(--bg-tertiary)",
+                              padding: "10px 18px",
+                              borderRadius: "999px",
+                              border: `1px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
+                              backgroundColor: isSelected ? "var(--bg-hover)" : "var(--bg-tertiary)",
                               color: "var(--text-primary)",
-                              fontSize: "14px",
+                              fontSize: "13px",
                               fontWeight: isSelected ? "600" : "500",
                               cursor: canEdit ? "pointer" : "default",
                               opacity: canEdit ? 1 : 0.8,
+                              boxShadow: isSelected ? "0 0 0 1px var(--accent)" : "none",
+                              transition: "border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease",
                             }}
                           >
                             {emotion}
-                            {isSelected && ` ${intensity}/10`}
+                            {isSelected && (
+                              <span style={{ marginLeft: "6px", opacity: 0.9, fontWeight: "500" }}>{intensity}/10</span>
+                            )}
                           </button>
                         );
                       })}
@@ -1302,17 +1331,41 @@ export default function Emotions() {
                   </div>
 
                   {Object.keys(formData.selectedEmotions).length > 0 && (
-                    <div style={{ marginBottom: "24px" }}>
-                      <label style={{ display: "block", marginBottom: "10px", fontSize: "14px", color: "var(--text-secondary)" }}>
-                        Set intensity for each selected emotion
-                      </label>
-                      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                    <div
+                      style={{
+                        marginBottom: "28px",
+                        padding: "20px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        borderRadius: "12px",
+                        border: "1px solid var(--border-color)",
+                      }}
+                    >
+                      <h3 style={{ margin: "0 0 4px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                        Set intensity
+                      </h3>
+                      <div style={{ marginBottom: "16px", display: "flex", alignItems: "center", gap: "10px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                        <span>0</span>
+                        <div style={{ flex: 1, height: "2px", background: "var(--border-color)", borderRadius: 1 }} />
+                        <span>10</span>
+                        <span style={{ marginLeft: "4px" }}>← strength of feeling</span>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                         {Object.entries(formData.selectedEmotions).map(([emotion, intensity]) => (
-                          <div key={emotion} style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-                            <span style={{ minWidth: "100px", fontSize: "14px", fontWeight: "500" }}>{emotion}</span>
+                          <div
+                            key={emotion}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "16px",
+                              flexWrap: "wrap",
+                              padding: "12px 0",
+                              borderBottom: "1px solid var(--border-color)",
+                            }}
+                          >
+                            <span style={{ minWidth: "100px", fontSize: "14px", fontWeight: "500", color: "var(--text-primary)" }}>{emotion}</span>
                             <input
                               type="range"
-                              min="1"
+                              min="0"
                               max="10"
                               value={intensity}
                               onChange={(e) =>
@@ -1322,10 +1375,19 @@ export default function Emotions() {
                                 })
                               }
                               disabled={!!editingState && !isEditingSelectedState}
-                              style={{ flex: "1", minWidth: "120px", maxWidth: "280px" }}
+                              style={{
+                                flex: "1",
+                                minWidth: "140px",
+                                maxWidth: "300px",
+                                height: "6px",
+                                accentColor: "var(--accent)",
+                              }}
                             />
-                            <span style={{ fontSize: "14px", fontWeight: "600", color: "var(--accent)", minWidth: "36px" }}>
+                            <span style={{ fontSize: "14px", fontWeight: "600", color: "var(--accent)", minWidth: "32px", textAlign: "right" }}>
                               {intensity}/10
+                            </span>
+                            <span style={{ fontSize: "12px", color: "var(--text-secondary)", minWidth: "72px" }}>
+                              {INTENSITY_LABELS[intensity]}
                             </span>
                             {(!editingState || isEditingSelectedState) && (
                               <button
@@ -1336,13 +1398,14 @@ export default function Emotions() {
                                   setFormData({ ...formData, selectedEmotions: next });
                                 }}
                                 style={{
-                                  padding: "4px 8px",
-                                  background: "var(--danger)",
-                                  color: "white",
-                                  border: "none",
-                                  borderRadius: "6px",
+                                  padding: "6px 12px",
+                                  background: "transparent",
+                                  color: "var(--text-secondary)",
+                                  border: "1px solid var(--border-color)",
+                                  borderRadius: "8px",
                                   cursor: "pointer",
                                   fontSize: "12px",
+                                  fontWeight: "500",
                                 }}
                               >
                                 Remove
@@ -1362,9 +1425,9 @@ export default function Emotions() {
                     minHeight: editingState ? "500px" : "400px",
                     marginBottom: "16px",
                   }}>
-                    <label style={{ display: "block", marginBottom: "12px", fontSize: "14px", fontWeight: "600", color: "var(--text-primary)" }}>
+                    <h3 style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
                       Notes (for this whole entry)
-                    </label>
+                    </h3>
                     <div style={{ 
                       flex: 1, 
                       display: "flex", 

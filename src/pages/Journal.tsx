@@ -94,7 +94,14 @@ const JOURNAL_EMOTIONS = [
   "Optimistic", "Pessimistic", "Neutral",
 ];
 
-const DEFAULT_EMOTION_INTENSITY = 5;
+const DEFAULT_EMOTION_INTENSITY = 0;
+
+const INTENSITY_SCALE_LABEL = "0 = not present → 10 = extremely strong. Rate how strongly you feel each emotion; values are used for trends and insights over time.";
+
+const INTENSITY_LABELS: Record<number, string> = {
+  0: "None", 1: "Barely", 2: "Slight", 3: "Mild", 4: "Moderate", 5: "Noticeable",
+  6: "Strong", 7: "Very strong", 8: "Intense", 9: "Severe", 10: "Extreme",
+};
 
 /** Group emotional states by timestamp (same timestamp = one entry with shared notes). */
 function groupEmotionalStatesByTimestamp(states: JournalEmotionalState[]): JournalEmotionalState[][] {
@@ -2769,12 +2776,15 @@ export default function Journal() {
                               ))}
                             </div>
                             {showAddEmotionalStateForm && (
-                              <div style={{ padding: "16px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px", marginBottom: "16px" }}>
-                                <h4 style={{ margin: "0 0 12px", fontSize: "14px" }}>Add emotional state</h4>
-                                <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "12px" }}>Select emotions — click to add, then set intensity. One notes section for the whole entry.</p>
-                                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                              <div style={{ padding: "20px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "12px", marginBottom: "16px" }}>
+                                <h4 style={{ margin: "0 0 16px", fontSize: "14px", fontWeight: "600" }}>Add emotional state</h4>
+                                <div style={{ marginBottom: "20px", padding: "12px 14px", backgroundColor: "var(--bg-tertiary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
+                                  <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.5 }}>{INTENSITY_SCALE_LABEL}</p>
+                                </div>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                                   <div>
-                                    <label style={{ display: "block", marginBottom: "8px", fontSize: "12px" }}>Emotions</label>
+                                    <h3 style={{ margin: "0 0 4px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Emotions</h3>
+                                    <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>Tap to add or remove; then set strength below.</p>
                                     <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
                                       {JOURNAL_EMOTIONS.map((emotion) => {
                                         const intensity = newEmotionalStateForm.selectedEmotions[emotion];
@@ -2797,32 +2807,39 @@ export default function Journal() {
                                             }}
                                             style={{
                                               padding: "8px 14px",
-                                              borderRadius: "6px",
-                                              border: `2px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
-                                              backgroundColor: "var(--bg-tertiary)",
+                                              borderRadius: "999px",
+                                              border: `1px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
+                                              backgroundColor: isSelected ? "var(--bg-hover)" : "var(--bg-tertiary)",
                                               color: "var(--text-primary)",
-                                              fontSize: "13px",
+                                              fontSize: "12px",
                                               fontWeight: isSelected ? "600" : "500",
                                               cursor: "pointer",
+                                              boxShadow: isSelected ? "0 0 0 1px var(--accent)" : "none",
                                             }}
                                           >
                                             {emotion}
-                                            {isSelected && ` ${intensity}/10`}
+                                            {isSelected && <span style={{ marginLeft: "4px", opacity: 0.9 }}>{intensity}/10</span>}
                                           </button>
                                         );
                                       })}
                                     </div>
                                   </div>
                                   {Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 && (
-                                    <div>
-                                      <label style={{ display: "block", marginBottom: "6px", fontSize: "12px" }}>Set intensity</label>
-                                      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                                    <div style={{ padding: "16px", backgroundColor: "var(--bg-tertiary)", borderRadius: "12px", border: "1px solid var(--border-color)" }}>
+                                      <h3 style={{ margin: "0 0 4px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Set intensity</h3>
+                                      <div style={{ marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-secondary)" }}>
+                                        <span>0</span>
+                                        <div style={{ flex: 1, height: "2px", background: "var(--border-color)", borderRadius: 1 }} />
+                                        <span>10</span>
+                                        <span style={{ marginLeft: "4px" }}>← strength</span>
+                                      </div>
+                                      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                                         {Object.entries(newEmotionalStateForm.selectedEmotions).map(([emotion, intensity]) => (
-                                          <div key={emotion} style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-                                            <span style={{ minWidth: "90px", fontSize: "13px" }}>{emotion}</span>
+                                          <div key={emotion} style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap", padding: "8px 0", borderBottom: "1px solid var(--border-color)" }}>
+                                            <span style={{ minWidth: "88px", fontSize: "13px", fontWeight: "500" }}>{emotion}</span>
                                             <input
                                               type="range"
-                                              min={1}
+                                              min={0}
                                               max={10}
                                               value={intensity}
                                               onChange={(e) =>
@@ -2831,9 +2848,10 @@ export default function Journal() {
                                                   selectedEmotions: { ...f.selectedEmotions, [emotion]: parseInt(e.target.value, 10) },
                                                 }))
                                               }
-                                              style={{ flex: "1", minWidth: "100px", maxWidth: "240px" }}
+                                              style={{ flex: "1", minWidth: "100px", maxWidth: "220px", height: "6px", accentColor: "var(--accent)" }}
                                             />
-                                            <span style={{ fontSize: "13px", fontWeight: "600", color: "var(--accent)", minWidth: "32px" }}>{intensity}/10</span>
+                                            <span style={{ fontSize: "13px", fontWeight: "600", color: "var(--accent)", minWidth: "28px" }}>{intensity}/10</span>
+                                            <span style={{ fontSize: "12px", color: "var(--text-secondary)", minWidth: "64px" }}>{INTENSITY_LABELS[intensity]}</span>
                                             <button
                                               type="button"
                                               onClick={() => {
@@ -2841,7 +2859,7 @@ export default function Journal() {
                                                 delete next[emotion];
                                                 setNewEmotionalStateForm((f) => ({ ...f, selectedEmotions: next }));
                                               }}
-                                              style={{ padding: "2px 8px", background: "var(--danger)", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "11px" }}
+                                              style={{ padding: "4px 10px", background: "transparent", color: "var(--text-secondary)", border: "1px solid var(--border-color)", borderRadius: "6px", cursor: "pointer", fontSize: "11px" }}
                                             >
                                               Remove
                                             </button>
@@ -2851,7 +2869,7 @@ export default function Journal() {
                                     </div>
                                   )}
                                   <div>
-                                    <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>Notes (for this whole entry)</label>
+                                    <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Notes (for this whole entry)</h3>
                                     <RichTextEditor
                                       value={newEmotionalStateForm.notes}
                                       onChange={(content: string) => setNewEmotionalStateForm((f) => ({ ...f, notes: content }))}
