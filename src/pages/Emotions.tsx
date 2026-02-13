@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
 import { Plus, X, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Heart, ClipboardList, Maximize2, Minimize2, Edit2, Trash2, ArrowLeft, RotateCcw } from "lucide-react";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { LineChart, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import RichTextEditor from "../components/RichTextEditor";
 
 interface EmotionalState {
@@ -56,6 +56,20 @@ const EMOTIONS = [
   "Pessimistic",
   "Neutral",
 ];
+
+/** Noun form for chart tabs and titles (e.g. "Confident" → "Confidence") */
+const EMOTION_DISPLAY_NAMES: Record<string, string> = {
+  Confident: "Confidence",
+  Anxious: "Anxiety",
+  Frustrated: "Frustration",
+  Excited: "Excitement",
+  Calm: "Calm",
+  Greedy: "Greed",
+  Fearful: "Fear",
+  Optimistic: "Optimism",
+  Pessimistic: "Pessimism",
+  Neutral: "Neutral",
+};
 
 const DEFAULT_INTENSITY = 0;
 
@@ -585,7 +599,8 @@ export default function Emotions() {
   const [journalTradesForLink, setJournalTradesForLink] = useState<{ id: number; symbol: string | null; trade_order: number }[]>([]);
   const [surveyResponses, setSurveyResponses] = useState<Record<string, number>>({});
   const [deleteTarget, setDeleteTarget] = useState<EmotionalState | null>(null);
-  
+  const [emotionChartTab, setEmotionChartTab] = useState<string>("Overall");
+
   // Ref for main scroll container
   const mainScrollRef = useRef<HTMLDivElement>(null);
 
@@ -920,6 +935,36 @@ export default function Emotions() {
       .map(({ _sortKey, ...rest }) => rest);
   }, [states]);
 
+  // Per-emotion chart data: one data point per day per emotion
+  const chartDataByEmotion = useMemo(() => {
+    const out: Record<string, { date: string; intensity: number }[]> = {};
+    for (const emotion of EMOTIONS) {
+      const byDay = new Map<string, { sum: number; count: number; t: number }>();
+      for (const state of states) {
+        if (state.emotion !== emotion) continue;
+        const d = new Date(state.timestamp);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const t = d.getTime();
+        const existing = byDay.get(key);
+        if (!existing) {
+          byDay.set(key, { sum: state.intensity, count: 1, t });
+        } else {
+          existing.sum += state.intensity;
+          existing.count += 1;
+        }
+      }
+      out[emotion] = Array.from(byDay.entries())
+        .map(([key, { sum, count, t }]) => ({
+          date: format(new Date(t), "MMM dd"),
+          intensity: Math.round((sum / count) * 10) / 10,
+          _sortKey: key,
+        }))
+        .sort((a, b) => (a._sortKey as string).localeCompare(b._sortKey as string))
+        .map(({ _sortKey, ...rest }) => rest);
+    }
+    return out;
+  }, [states]);
+
   if (loading) {
     return (
       <div style={{ padding: "40px", textAlign: "center" }}>
@@ -1033,7 +1078,7 @@ export default function Emotions() {
         </div>
 
         {/* Recent entries list – compact overview, scroll to view all (7 visible) */}
-        {!showForm && states.length > 0 && (() => {
+        {states.length > 0 && (() => {
           const groups = groupStatesByTimestamp(states);
           const visibleCount = 7;
           const hasMore = groups.length > visibleCount;
@@ -1066,11 +1111,22 @@ export default function Emotions() {
                   const overallIntensity = Math.round(avgIntensity * 10) / 10;
                   const { gradient, color, glow, border, borderHover, badgeBg, badgeShadow } = getIntensityGradientStyles(overallIntensity);
                   const notes = first.notes || "";
+                  const isSelected = showForm && editingState?.timestamp === timestamp;
 
                   return (
                     <div
                       key={timestamp}
                       onClick={() => {
+                        if (isSelected) {
+                          saveScrollPosition();
+                          setShowForm(false);
+                          setEditingState(null);
+                          setEditingStateGroup(null);
+                          setIsEditingSelectedState(false);
+                          setIsMaximized(false);
+                          setFormTab("basic");
+                          return;
+                        }
                         saveScrollPosition();
                         setEditingState(first);
                         setEditingStateGroup(group);
@@ -1092,26 +1148,26 @@ export default function Emotions() {
                       style={{
                         padding: "16px 18px",
                         backgroundImage: gradient,
-                        backgroundColor: "var(--bg-tertiary)",
+                        backgroundColor: isSelected ? "var(--bg-hover)" : "var(--bg-tertiary)",
                         borderRadius: "14px",
                         minWidth: "140px",
                         flex: "1 1 140px",
                         maxWidth: "180px",
                         position: "relative",
                         cursor: "pointer",
-                        transition: "transform 0.2s ease, box-shadow 0.2s ease",
-                        border: `1px solid ${border}`,
-                        boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                        transition: "transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease",
+                        border: isSelected ? "2px solid var(--accent)" : `1px solid ${border}`,
+                        boxShadow: isSelected ? "0 0 0 1px var(--accent), 0 4px 16px rgba(0,0,0,0.2)" : "0 4px 12px rgba(0,0,0,0.15)",
                       }}
                       onMouseEnter={(e) => {
                         e.currentTarget.style.transform = "translateY(-2px)";
-                        e.currentTarget.style.boxShadow = glow;
-                        e.currentTarget.style.borderColor = borderHover;
+                        e.currentTarget.style.boxShadow = isSelected ? "0 0 0 2px var(--accent), 0 6px 20px rgba(0,0,0,0.25)" : glow;
+                        e.currentTarget.style.borderColor = isSelected ? "var(--accent)" : borderHover;
                       }}
                       onMouseLeave={(e) => {
                         e.currentTarget.style.transform = "translateY(0)";
-                        e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15)";
-                        e.currentTarget.style.borderColor = border;
+                        e.currentTarget.style.boxShadow = isSelected ? "0 0 0 1px var(--accent), 0 4px 16px rgba(0,0,0,0.2)" : "0 4px 12px rgba(0,0,0,0.15)";
+                        e.currentTarget.style.borderColor = isSelected ? "var(--accent)" : border;
                       }}
                     >
                       {hasSurvey && (
@@ -1905,54 +1961,176 @@ export default function Emotions() {
         </div>
         )}
 
-        {/* Emotional Intensity Over Time – below entry section (list or form) */}
-        {states.length > 0 && chartData.length > 0 && (
-          <div
-            style={{
-              margin: "0 24px 24px",
-              padding: "20px",
-              backgroundColor: "var(--bg-tertiary)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "12px",
-            }}
-          >
-            <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
-              Emotional Intensity Over Time
-            </h3>
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                <XAxis
-                  dataKey="date"
-                  stroke="var(--text-secondary)"
-                  style={{ fontSize: "12px" }}
-                />
-                <YAxis
-                  domain={[0, 10]}
-                  stroke="var(--text-secondary)"
-                  style={{ fontSize: "12px" }}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "var(--bg-primary)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "6px",
-                    color: "var(--text-primary)",
-                  }}
-                />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="intensity"
-                  stroke={getGradientColor(0.8)}
-                  strokeWidth={2}
-                  dot={{ fill: getGradientColor(0.8), r: 4 }}
-                  name="Intensity"
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
+        {/* Emotional Intensity Over Time – tabbed by Overall / per emotion */}
+        {!showForm && states.length > 0 && (() => {
+          const IntensityDot = (props: { cx?: number; cy?: number; payload?: { intensity?: number } }) => {
+            const { cx, cy, payload } = props;
+            if (cx == null || cy == null || payload?.intensity == null) return null;
+            const color = getIntensityColorForEmotion(payload.intensity);
+            return (
+              <g>
+                <circle cx={cx} cy={cy} r={6} fill={color} fillOpacity={0.35} stroke="none" />
+                <circle cx={cx} cy={cy} r={5} fill={color} stroke="var(--bg-primary)" strokeWidth={2} />
+              </g>
+            );
+          };
+          const ActiveIntensityDot = (props: { cx?: number; cy?: number; payload?: { intensity?: number } }) => {
+            const { cx, cy, payload } = props;
+            if (cx == null || cy == null) return null;
+            const color = getIntensityColorForEmotion(payload?.intensity ?? 0);
+            return (
+              <g>
+                <circle cx={cx} cy={cy} r={8} fill={color} fillOpacity={0.3} stroke="none" />
+                <circle cx={cx} cy={cy} r={6} fill={color} stroke="var(--bg-primary)" strokeWidth={2.5} />
+              </g>
+            );
+          };
+          const tabOptions = ["Overall", ...EMOTIONS];
+          const currentData = emotionChartTab === "Overall" ? chartData : (chartDataByEmotion[emotionChartTab] ?? []);
+          const hasData = currentData.length > 0;
+          const segments = Math.max(0, currentData.length - 1);
+          const segmentData: Record<string, number | string | null>[] = currentData.map((row) => {
+            const out: Record<string, number | string | null> = { date: row.date, intensity: row.intensity };
+            for (let j = 0; j < segments; j++) out[`seg${j}`] = null;
+            return out;
+          });
+          for (let j = 0; j < segments; j++) {
+            segmentData[j][`seg${j}`] = currentData[j].intensity;
+            segmentData[j + 1][`seg${j}`] = currentData[j + 1].intensity;
+          }
+          const chartTitle = emotionChartTab === "Overall" ? "Emotional Intensity Over Time" : `${EMOTION_DISPLAY_NAMES[emotionChartTab] ?? emotionChartTab} Over Time`;
+          return (
+            <div
+              style={{
+                margin: "0 24px 24px",
+                padding: "0 0 24px",
+                backgroundImage: "linear-gradient(145deg, rgba(34, 197, 94, 0.06) 0%, transparent 40%, transparent 60%, rgba(255, 80, 80, 0.06) 100%)",
+                backgroundColor: "var(--bg-tertiary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "14px",
+                boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "6px",
+                  padding: "16px 24px 0",
+                  borderBottom: "1px solid var(--border-color)",
+                  marginBottom: "20px",
+                }}
+              >
+                {tabOptions.map((tab) => {
+                  const isActive = emotionChartTab === tab;
+                  const tabLabel = tab === "Overall" ? tab : (EMOTION_DISPLAY_NAMES[tab] ?? tab);
+                  return (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setEmotionChartTab(tab)}
+                      style={{
+                        padding: "8px 14px",
+                        borderRadius: "8px",
+                        border: `1px solid ${isActive ? "var(--accent)" : "var(--border-color)"}`,
+                        background: isActive ? "var(--accent)" : "transparent",
+                        color: isActive ? "white" : "var(--text-secondary)",
+                        fontSize: "13px",
+                        fontWeight: isActive ? 600 : 500,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {tabLabel}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ padding: "0 24px" }}>
+                <h3 style={{ fontSize: "15px", fontWeight: "600", marginBottom: "20px", color: "var(--text-primary)", letterSpacing: "0.02em" }}>
+                  {chartTitle}
+                </h3>
+                {hasData ? (
+                  <ResponsiveContainer width="100%" height={280}>
+                    <ComposedChart data={segmentData} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="2 2" stroke="var(--border-color)" strokeOpacity={0.5} vertical={false} />
+                      <XAxis
+                        dataKey="date"
+                        axisLine={{ stroke: "var(--border-color)", strokeOpacity: 0.6 }}
+                        tickLine={false}
+                        tick={{ fill: "var(--text-secondary)", fontSize: 11, fontWeight: 500 }}
+                        dy={4}
+                      />
+                      <YAxis
+                        domain={[0, 10]}
+                        width={28}
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fill: "var(--text-secondary)", fontSize: 11, fontWeight: 500 }}
+                        dx={-4}
+                      />
+                      <Tooltip
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload?.length) return null;
+                          const intensityEntry = payload.find((p) => p.dataKey === "intensity");
+                          const value = intensityEntry?.value as number | undefined;
+                          if (value == null) return null;
+                          return (
+                            <div
+                              style={{
+                                backgroundColor: "var(--bg-secondary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "10px",
+                                color: "var(--text-primary)",
+                                boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+                                padding: "12px 16px",
+                              }}
+                            >
+                              <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                              <div style={{ color: getIntensityColorForEmotion(value), fontWeight: 700 }}>
+                                {value} / 10
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
+                      {Array.from({ length: segments }, (_, i) => {
+                        const color = getIntensityColorForEmotion((currentData[i].intensity + currentData[i + 1].intensity) / 2);
+                        return (
+                          <Line
+                            key={i}
+                            type="monotone"
+                            dataKey={`seg${i}`}
+                            stroke={color}
+                            strokeWidth={2.5}
+                            dot={false}
+                            activeDot={false}
+                            connectNulls
+                            legendType="none"
+                            isAnimationActive={false}
+                          />
+                        );
+                      })}
+                      <Line
+                        type="monotone"
+                        dataKey="intensity"
+                        stroke="transparent"
+                        strokeWidth={0}
+                        dot={<IntensityDot />}
+                        activeDot={<ActiveIntensityDot />}
+                        legendType="none"
+                        isAnimationActive={false}
+                      />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div style={{ padding: "48px 24px", textAlign: "center", color: "var(--text-secondary)", fontSize: "14px" }}>
+                    No data yet for {emotionChartTab === "Overall" ? "overall intensity" : (EMOTION_DISPLAY_NAMES[emotionChartTab] ?? emotionChartTab).toLowerCase()}. Log entries with this emotion to see the trend.
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </section>
 
       {/* Delete Emotional State Confirmation Modal */}
