@@ -6,6 +6,7 @@ import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import { ColorPicker } from "../components/ColorPicker";
+import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
 import {
   DndContext,
@@ -1355,6 +1356,7 @@ export default function Strategies() {
   const [addTradeError, setAddTradeError] = useState<string | null>(null);
   /** Strategy to assign the new trade to: captured when user opens Add Trade from Strategies tab (so it auto-assigns to the currently selected strategy). */
   const addTradeStrategyIdRef = useRef<number | null>(null);
+  const [selectedPairForChart, setSelectedPairForChart] = useState<PairedTrade | null>(null);
   const [editHistory, setEditHistory] = useState<Array<{ name: string; description: string; color: string; notes: string }>>([]);
   const [editingChecklists, setEditingChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [originalChecklists, setOriginalChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
@@ -4543,7 +4545,17 @@ export default function Strategies() {
                           {pairs.map((pair, idx) => (
                             <tr
                               key={`${pair.entry_trade_id}-${pair.exit_trade_id}-${idx}`}
-                              style={{ borderBottom: "1px solid var(--border-color)" }}
+                              style={{
+                                borderBottom: "1px solid var(--border-color)",
+                                cursor: "pointer",
+                              }}
+                              onClick={() => setSelectedPairForChart(pair)}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.backgroundColor = "var(--bg-tertiary)";
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.backgroundColor = "transparent";
+                              }}
                             >
                               <td style={{ padding: "12px", fontSize: "14px" }}>{pair.symbol}</td>
                               <td style={{ padding: "12px", fontSize: "14px" }}>
@@ -5841,6 +5853,16 @@ export default function Strategies() {
             </div>
           </div>
         </div>
+      )}
+      {selectedPairForChart && (
+        <TradeChart
+          symbol={selectedPairForChart.symbol}
+          entryTimestamp={selectedPairForChart.entry_timestamp}
+          exitTimestamp={selectedPairForChart.exit_timestamp}
+          entryPrice={selectedPairForChart.entry_price}
+          exitPrice={selectedPairForChart.exit_price}
+          onClose={() => setSelectedPairForChart(null)}
+        />
       )}
     </div>
   );
