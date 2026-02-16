@@ -1353,6 +1353,8 @@ export default function Strategies() {
   });
   const [isAddingTrade, setIsAddingTrade] = useState(false);
   const [addTradeError, setAddTradeError] = useState<string | null>(null);
+  /** Strategy to assign the new trade to: captured when user opens Add Trade from Strategies tab (so it auto-assigns to the currently selected strategy). */
+  const addTradeStrategyIdRef = useRef<number | null>(null);
   const [editHistory, setEditHistory] = useState<Array<{ name: string; description: string; color: string; notes: string }>>([]);
   const [editingChecklists, setEditingChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [originalChecklists, setOriginalChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
@@ -2874,7 +2876,8 @@ export default function Strategies() {
     }
     // ISO 8601: YYYY-MM-DDTHH:mm:ssZ
     const timestamp = `${addTradeForm.tradeDate}T${addTradeForm.tradeTime}:00Z`;
-    const strategyId = isCreating ? null : (selectedStrategy ?? null);
+    // Auto-assign to the strategy the user had selected when they clicked Add Trade (captured in ref when modal opened)
+    const strategyId = isCreating ? null : (addTradeStrategyIdRef.current ?? null);
     try {
       setIsAddingTrade(true);
       const newId = await invoke<number>("add_trade_manual", {
@@ -2920,25 +2923,28 @@ export default function Strategies() {
         } finally {
           setLoadingPairs(prev => { const s = new Set(prev); s.delete(-1); return s; });
         }
-      } else if (selectedStrategy) {
-        await invoke("update_trade_strategy", { tradeId: newId, strategyId: selectedStrategy });
-        setActiveTab("trades");
-        setLoadingPairs(new Set([selectedStrategy]));
-        try {
-          const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-          const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
-            strategyId: selectedStrategy,
-            pairingMethod,
-            startDate: null,
-            endDate: null,
-          });
-          setStrategyPairs(new Map(strategyPairs.set(selectedStrategy, pairs)));
-          const stats = calculateStrategyStats(pairs);
-          setStrategyStats(new Map(strategyStats.set(selectedStrategy, stats)));
-        } catch (e) {
-          console.error("Error loading pairs after add trade:", e);
-        } finally {
-          setLoadingPairs(prev => { const s = new Set(prev); s.delete(selectedStrategy); return s; });
+      } else {
+        const assignedStrategyId = addTradeStrategyIdRef.current;
+        if (assignedStrategyId != null) {
+          await invoke("update_trade_strategy", { tradeId: newId, strategyId: assignedStrategyId });
+          setActiveTab("trades");
+          setLoadingPairs(new Set([assignedStrategyId]));
+          try {
+            const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+            const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
+              strategyId: assignedStrategyId,
+              pairingMethod,
+              startDate: null,
+              endDate: null,
+            });
+            setStrategyPairs(new Map(strategyPairs.set(assignedStrategyId, pairs)));
+            const stats = calculateStrategyStats(pairs);
+            setStrategyStats(new Map(strategyStats.set(assignedStrategyId, stats)));
+          } catch (e) {
+            console.error("Error loading pairs after add trade:", e);
+          } finally {
+            setLoadingPairs(prev => { const s = new Set(prev); s.delete(assignedStrategyId); return s; });
+          }
         }
       }
     } catch (err) {
@@ -4245,7 +4251,11 @@ export default function Strategies() {
                           {isImportingCSV ? "Importing..." : "Import CSV"}
                         </button>
                         <button
-                          onClick={() => { setAddTradeError(null); setShowAddTradeModal(true); }}
+                          onClick={() => {
+                          setAddTradeError(null);
+                          addTradeStrategyIdRef.current = selectedStrategy;
+                          setShowAddTradeModal(true);
+                        }}
                           style={{
                             background: "var(--bg-tertiary)",
                             border: "1px solid var(--border-color)",
@@ -5691,9 +5701,18 @@ export default function Strategies() {
             <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
               Add Trade
             </h3>
-            <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px" }}>
+            <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "8px" }}>
               Add a single trade manually (works for paper trades, commons, or options).
             </p>
+            {!isCreating && addTradeStrategyIdRef.current != null && (() => {
+              const assignToStrategy = strategies.find((s) => s.id === addTradeStrategyIdRef.current);
+              return assignToStrategy ? (
+                <p style={{ fontSize: "13px", color: "var(--accent)", marginBottom: "16px", fontWeight: "500" }}>
+                  This trade will be assigned to <strong>{assignToStrategy.name}</strong>.
+                </p>
+              ) : null;
+            })()}
+            {(isCreating || addTradeStrategyIdRef.current == null) && <div style={{ marginBottom: "16px" }} />}
             {addTradeError && (
               <div style={{ marginBottom: "12px", padding: "8px 12px", background: "var(--loss)", color: "white", borderRadius: "6px", fontSize: "13px" }}>
                 {addTradeError}
