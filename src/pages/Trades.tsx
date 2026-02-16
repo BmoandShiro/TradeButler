@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
-import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, BarChart3, Lock, Unlock, Search, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, BarChart3, Lock, Unlock, Search, ArrowUpDown, ArrowUp, ArrowDown, Trash2 } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { TradeChart } from "../components/TradeChart";
 
@@ -51,6 +51,7 @@ interface Strategy {
 const PAIRING_STORAGE_KEY = "tradebutler_pairing_method";
 const VIEW_MODE_STORAGE_KEY = "tradebutler_view_mode";
 const STRATEGY_LOCK_STORAGE_KEY = "tradebutler_strategy_lock";
+const DELETE_LOCK_STORAGE_KEY = "tradebutler_delete_lock";
 
 interface PositionGroup {
   entry_trade: Trade;
@@ -87,6 +88,10 @@ export default function Trades() {
   const [selectedPositionTrades, setSelectedPositionTrades] = useState<Trade[] | undefined>(undefined);
   const [strategyLocked, setStrategyLocked] = useState<boolean>(() => {
     const saved = localStorage.getItem(STRATEGY_LOCK_STORAGE_KEY);
+    return saved === "true";
+  });
+  const [deleteLocked, setDeleteLocked] = useState<boolean>(() => {
+    const saved = localStorage.getItem(DELETE_LOCK_STORAGE_KEY);
     return saved === "true";
   });
   const [positionGroupNotes, setPositionGroupNotes] = useState<Map<string, string>>(new Map());
@@ -233,6 +238,19 @@ export default function Trades() {
     } catch (error) {
       console.error("Error updating trade strategy:", error);
       alert("Failed to update strategy: " + error);
+    }
+  };
+
+  const handleDeleteTrade = async (tradeId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (deleteLocked) return;
+    if (!window.confirm("Delete this trade? This cannot be undone.")) return;
+    try {
+      await invoke("delete_trade", { id: tradeId });
+      await loadData();
+    } catch (error) {
+      console.error("Error deleting trade:", error);
+      alert("Failed to delete trade: " + (error instanceof Error ? error.message : String(error)));
     }
   };
 
@@ -657,6 +675,32 @@ export default function Trades() {
                         </button>
                       </div>
                     </th>
+                    <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", width: "56px" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                        <span>Delete</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newLocked = !deleteLocked;
+                            setDeleteLocked(newLocked);
+                            localStorage.setItem(DELETE_LOCK_STORAGE_KEY, String(newLocked));
+                          }}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            padding: "2px",
+                            cursor: "pointer",
+                            color: deleteLocked ? "#fbbf24" : "var(--text-secondary)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                          title={deleteLocked ? "Unlock to allow deleting trades" : "Lock to prevent deleting trades"}
+                        >
+                          {deleteLocked ? <Lock size={14} /> : <Unlock size={14} />}
+                        </button>
+                      </div>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -761,10 +805,13 @@ export default function Trades() {
                               ))}
                             </select>
                           </td>
+                          <td style={{ padding: "12px 16px", textAlign: "center" }}>
+                            {/* Delete per trade is in expanded row */}
+                          </td>
                         </tr>
                         {isExpanded && (
                           <tr key={`${group.entry_trade.id}-details`}>
-                            <td colSpan={10} style={{ padding: "0", backgroundColor: "var(--bg-tertiary)" }}>
+                            <td colSpan={11} style={{ padding: "0", backgroundColor: "var(--bg-tertiary)" }}>
                               <div style={{ padding: "20px" }}>
                                 <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px" }}>
                                   Position Trades ({group.position_trades.length})
@@ -790,6 +837,9 @@ export default function Trades() {
                                         </th>
                                         <th style={{ padding: "8px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
                                           Position Size
+                                        </th>
+                                        <th style={{ padding: "8px 12px", textAlign: "center", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", width: "48px" }}>
+                                          Delete
                                         </th>
                                       </tr>
                                     </thead>
@@ -863,6 +913,28 @@ export default function Trades() {
                                               fontWeight: isClosed ? "normal" : "600"
                                             }}>
                                               {isClosed ? "0.0000" : (positionSize > 0 ? "+" : "") + positionSize.toFixed(4)}
+                                            </td>
+                                            <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                                              <button
+                                                onClick={(ev) => handleDeleteTrade(trade.id, ev)}
+                                                disabled={deleteLocked}
+                                                title={deleteLocked ? "Unlock delete to remove this trade" : "Delete this trade"}
+                                                style={{
+                                                  background: deleteLocked ? "var(--bg-secondary)" : "transparent",
+                                                  border: "none",
+                                                  padding: "6px",
+                                                  cursor: deleteLocked ? "not-allowed" : "pointer",
+                                                  color: deleteLocked ? "var(--text-secondary)" : "var(--loss)",
+                                                  display: "flex",
+                                                  alignItems: "center",
+                                                  justifyContent: "center",
+                                                  margin: "0 auto",
+                                                  borderRadius: "4px",
+                                                  opacity: deleteLocked ? 0.6 : 1,
+                                                }}
+                                              >
+                                                <Trash2 size={16} />
+                                              </button>
                                             </td>
                                           </tr>
                                         );
@@ -1064,6 +1136,32 @@ export default function Trades() {
                       </button>
                     </div>
                   </th>
+                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", width: "56px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                      <span>Delete</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const newLocked = !deleteLocked;
+                          setDeleteLocked(newLocked);
+                          localStorage.setItem(DELETE_LOCK_STORAGE_KEY, String(newLocked));
+                        }}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          padding: "2px",
+                          cursor: "pointer",
+                          color: deleteLocked ? "var(--accent)" : "var(--text-secondary)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                        title={deleteLocked ? "Unlock to allow deleting trades" : "Lock to prevent deleting trades"}
+                      >
+                        {deleteLocked ? <Lock size={14} /> : <Unlock size={14} />}
+                      </button>
+                    </div>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -1189,10 +1287,32 @@ export default function Trades() {
                             ))}
                           </select>
                         </td>
+                        <td style={{ padding: "12px 16px", textAlign: "center" }}>
+                          <button
+                            onClick={(e) => handleDeleteTrade(trade.id, e)}
+                            disabled={deleteLocked}
+                            title={deleteLocked ? "Unlock delete to remove this trade" : "Delete this trade"}
+                            style={{
+                              background: deleteLocked ? "var(--bg-secondary)" : "transparent",
+                              border: "none",
+                              padding: "6px",
+                              cursor: deleteLocked ? "not-allowed" : "pointer",
+                              color: deleteLocked ? "var(--text-secondary)" : "var(--loss)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              margin: "0 auto",
+                              borderRadius: "4px",
+                              opacity: deleteLocked ? 0.6 : 1,
+                            }}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </td>
                       </tr>
                       {isExpanded && hasPairs && relevantPairs.length > 0 && (
                         <tr key={`${trade.id}-details`}>
-                          <td colSpan={11} style={{ padding: "0", backgroundColor: "var(--bg-tertiary)" }}>
+                          <td colSpan={12} style={{ padding: "0", backgroundColor: "var(--bg-tertiary)" }}>
                             <div style={{ padding: "20px" }}>
                               <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px" }}>
                                 {trade.side === "BUY" ? "Exit Pairs" : "Entry Pairs"} ({relevantPairs.length})
