@@ -2429,6 +2429,62 @@ pub fn get_journal_checklist_responses(journal_entry_id: i64) -> Result<Vec<Jour
     Ok(responses)
 }
 
+#[tauri::command]
+pub fn get_journal_entry_pairs(journal_entry_id: i64) -> Result<Vec<PairedTrade>, String> {
+    let linked = get_journal_entry_pair_ids(journal_entry_id)?;
+    if linked.is_empty() {
+        return Ok(Vec::new());
+    }
+    let all_pairs = get_paired_trades(None).map_err(|e| e.to_string())?;
+    let linked_set: std::collections::HashSet<(i64, i64)> = linked.into_iter().collect();
+    let pairs: Vec<PairedTrade> = all_pairs
+        .into_iter()
+        .filter(|p| linked_set.contains(&(p.entry_trade_id, p.exit_trade_id)))
+        .collect();
+    Ok(pairs)
+}
+
+fn get_journal_entry_pair_ids(journal_entry_id: i64) -> Result<Vec<(i64, i64)>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT entry_trade_id, exit_trade_id FROM journal_entry_pairs WHERE journal_entry_id = ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![journal_entry_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct JournalEntryPairLink {
+    pub entry_trade_id: i64,
+    pub exit_trade_id: i64,
+}
+
+#[tauri::command]
+pub fn set_journal_entry_pairs(
+    journal_entry_id: i64,
+    pairs: Vec<JournalEntryPairLink>,
+) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM journal_entry_pairs WHERE journal_entry_id = ?1", params![journal_entry_id])
+        .map_err(|e| e.to_string())?;
+    for link in pairs {
+        conn.execute(
+            "INSERT INTO journal_entry_pairs (journal_entry_id, entry_trade_id, exit_trade_id) VALUES (?1, ?2, ?3)",
+            params![journal_entry_id, link.entry_trade_id, link.exit_trade_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 // Journal Trade Commands
 #[tauri::command]
 pub fn create_journal_trade(
