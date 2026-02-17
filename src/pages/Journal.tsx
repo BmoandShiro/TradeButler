@@ -1580,6 +1580,60 @@ export default function Journal() {
                     ))}
                   </div>
                 )}
+
+                {/* Linked trade pairs with charts */}
+                {linkedPairs.length > 0 && (
+                  <div style={{ marginTop: "24px" }}>
+                    <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
+                      Linked trade pairs ({linkedPairs.length})
+                    </h3>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+                      {linkedPairs.map((pair) => (
+                        <div
+                          key={`${pair.entry_trade_id}_${pair.exit_trade_id}`}
+                          style={{
+                            padding: "16px",
+                            backgroundColor: "var(--bg-secondary)",
+                            borderRadius: "8px",
+                            border: "1px solid var(--border-color)",
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
+                            <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>{pair.symbol}</span>
+                            <span style={{ color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)", fontSize: "14px" }}>
+                              P&L: ${pair.net_profit_loss >= 0 ? "" : "-"}${Math.abs(pair.net_profit_loss).toFixed(2)}
+                            </span>
+                          </div>
+                          <TradeChart
+                            symbol={pair.symbol}
+                            entryTimestamp={pair.entry_timestamp}
+                            exitTimestamp={pair.exit_timestamp}
+                            entryPrice={pair.entry_price}
+                            exitPrice={pair.exit_price}
+                            inline
+                            compactHeight={200}
+                          />
+                          <div style={{ marginTop: "8px" }}>
+                            <button
+                              onClick={() => setSelectedPairForChart(pair)}
+                              style={{
+                                fontSize: "12px",
+                                padding: "6px 12px",
+                                background: "var(--bg-tertiary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "4px",
+                                color: "var(--text-primary)",
+                                cursor: "pointer",
+                              }}
+                            >
+                              View full chart
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </>
