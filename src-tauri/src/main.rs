@@ -71,6 +71,7 @@ fn main() {
             commands::get_journal_entry,
             commands::update_journal_entry,
             commands::add_journal_entry_to_emotional_states,
+            commands::link_emotional_states_to_journal,
             commands::remove_journal_entry_from_emotional_states,
             commands::delete_journal_entry,
             commands::create_journal_trade,

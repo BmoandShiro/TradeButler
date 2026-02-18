@@ -2599,6 +2599,50 @@ pub fn add_journal_entry_to_emotional_states(
     Ok(())
 }
 
+/// Set journal entry and optional trade link on emotional state(s). All rows sharing the same timestamp are updated.
+#[tauri::command]
+pub fn link_emotional_states_to_journal(
+    emotional_state_ids: Vec<i64>,
+    journal_entry_id: i64,
+    journal_trade_id: Option<i64>,
+) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+
+    let has_je = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_id'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let has_jt = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_trade_id'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    if !has_je || !has_jt {
+        return Ok(());
+    }
+
+    use std::collections::HashSet;
+    let mut timestamps_done: HashSet<String> = HashSet::new();
+    for state_id in emotional_state_ids {
+        let timestamp: String = conn.query_row(
+            "SELECT timestamp FROM emotional_states WHERE id = ?1",
+            params![state_id],
+            |row| row.get(0),
+        ).map_err(|e| e.to_string())?;
+        if timestamps_done.contains(&timestamp) {
+            continue;
+        }
+        timestamps_done.insert(timestamp.clone());
+        conn.execute(
+            "UPDATE emotional_states SET journal_entry_id = ?1, journal_trade_id = ?2 WHERE timestamp = ?3",
+            params![journal_entry_id, journal_trade_id, timestamp],
+        ).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Remove a journal entry from the journal_entry_ids of the given emotional state(s).
 #[tauri::command]
 pub fn remove_journal_entry_from_emotional_states(

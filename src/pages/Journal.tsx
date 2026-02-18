@@ -150,6 +150,8 @@ export default function Journal() {
     linked_trade_ids: [] as number[],
     /** One state id per emotional state group to link this journal to (used when creating or editing). */
     linked_emotional_state_ids: [] as number[],
+    /** When linking existing states: scope per state id (for save / edit sync). */
+    linked_emotional_state_link_scopes: {} as Record<number, { scope: "entry" | "trades"; tradeIndex: number | null }>,
   });
 
   // Trade-level form state (array of trades)
@@ -201,7 +203,9 @@ export default function Journal() {
   const [journalEmotionalStates, setJournalEmotionalStates] = useState<JournalEmotionalState[]>([]);
   const [showAddEmotionalStateForm, setShowAddEmotionalStateForm] = useState(false);
   const [newEmotionalStateForm, setNewEmotionalStateForm] = useState<{ selectedEmotions: Record<string, number>; notes: string }>({ selectedEmotions: {}, notes: "" });
-  // Pending emotional state entries (when entry/trade not yet saved - each entry can have multiple emotions + one notes)
+  const [newEmotionalStateLinkScope, setNewEmotionalStateLinkScope] = useState<"entry" | "trades">("entry");
+  const [newEmotionalStateTradeIndices, setNewEmotionalStateTradeIndices] = useState<number[]>([]);
+  // Pending emotional state entries (tradeIndex -1 = entire journal, >= 0 = that trade only; one state per scope)
   const [pendingEmotionalStates, setPendingEmotionalStates] = useState<Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string }>>([]);
   
   // Available symbols for dropdown
@@ -219,6 +223,8 @@ export default function Journal() {
   const [realTradesForLink, setRealTradesForLink] = useState<{ id: number; symbol: string; side: string; timestamp: string; quantity: number; pnl?: number }[]>([]);
   const [journalLinksStateDropdownOpen, setJournalLinksStateDropdownOpen] = useState(false);
   const [journalLinksTradeDropdownOpen, setJournalLinksTradeDropdownOpen] = useState(false);
+  const [linkExistingEmotionalStateScope, setLinkExistingEmotionalStateScope] = useState<"entry" | "trades">("entry");
+  const [linkExistingEmotionalStateTradeIndex, setLinkExistingEmotionalStateTradeIndex] = useState<number | null>(null);
   const journalLinksStateDropdownRef = useRef<HTMLDivElement>(null);
   const journalLinksTradeDropdownRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -535,12 +541,25 @@ export default function Journal() {
         });
         if (!cancelled) {
           setJournalEmotionalStates(states);
-          setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: groupEmotionalStatesByTimestamp(states).map((g) => g[0].id) }));
+          const groups = groupEmotionalStatesByTimestamp(states);
+          const ids = groups.map((g) => g[0].id);
+          const scopes: Record<number, { scope: "entry" | "trades"; tradeIndex: number | null }> = {};
+          for (const g of groups) {
+            const first = g[0];
+            const jtId = first.journal_trade_id ?? null;
+            if (jtId == null) {
+              scopes[first.id] = { scope: "entry", tradeIndex: null };
+            } else {
+              const idx = tradesFormData.findIndex((t) => t.id === jtId);
+              scopes[first.id] = { scope: "trades", tradeIndex: idx >= 0 ? idx : null };
+            }
+          }
+          setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: ids, linked_emotional_state_link_scopes: scopes }));
         }
       } catch {
         if (!cancelled) {
           setJournalEmotionalStates([]);
-          setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: [] }));
+          setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: [], linked_emotional_state_link_scopes: {} }));
         }
       }
     })();
@@ -775,6 +794,7 @@ export default function Journal() {
       strategy_id: null,
       linked_trade_ids: [],
       linked_emotional_state_ids: [],
+      linked_emotional_state_link_scopes: {},
     });
     setTradesFormData([{
       id: null,
@@ -819,6 +839,7 @@ export default function Journal() {
         strategy_id: selectedEntry.strategy_id,
         linked_trade_ids: linkedTradeIds,
         linked_emotional_state_ids: [], // synced when Links/Emotional State tab loads journalEmotionalStates
+        linked_emotional_state_link_scopes: {},
       });
       const loadedTrades = await loadTrades(selectedEntry.id);
       if (selectedEntry.strategy_id) {
@@ -1037,6 +1058,7 @@ export default function Journal() {
 
     try {
       let entryId: number;
+      let toAdd: number[] = [];
 
       if (isCreating) {
         entryId = await invoke<number>("create_journal_entry", {
@@ -1052,11 +1074,7 @@ export default function Journal() {
           strategyId: entryFormData.strategy_id,
           linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null,
         });
-        // Link to emotional state entries (chosen while creating)
-        const pendingStateIds = entryFormData.linked_emotional_state_ids ?? [];
-        if (pendingStateIds.length > 0) {
-          await invoke("add_journal_entry_to_emotional_states", { journalEntryId: entryId, emotionalStateIds: pendingStateIds });
-        }
+        // Link to emotional state entries (chosen while creating) — scope applied after trades below
         // After first auto-save, switch from creating to editing
         setIsCreating(false);
         setIsEditing(true);
@@ -1075,7 +1093,7 @@ export default function Journal() {
         const formStateIds = entryFormData.linked_emotional_state_ids ?? [];
         const currentGroupIds = groupEmotionalStatesByTimestamp(journalEmotionalStates).map((g) => g[0].id);
         const toRemove = currentGroupIds.filter((id) => !formStateIds.includes(id));
-        const toAdd = formStateIds.filter((id) => !currentGroupIds.includes(id));
+        toAdd = formStateIds.filter((id) => !currentGroupIds.includes(id));
         if (toRemove.length > 0) await invoke("remove_journal_entry_from_emotional_states", { journalEntryId: entryId, emotionalStateIds: toRemove });
         if (toAdd.length > 0) await invoke("add_journal_entry_to_emotional_states", { journalEntryId: entryId, emotionalStateIds: toAdd });
       } else {
@@ -1152,6 +1170,23 @@ export default function Journal() {
           await invoke("save_journal_checklist_responses", {
             journalEntryId: entryId,
             responses: responses,
+          });
+        }
+      }
+
+      // Link emotional states with scope (after trades so we have trade IDs)
+      const stateIdsToLinkAfterTrades = isCreating ? (entryFormData.linked_emotional_state_ids ?? []) : toAdd;
+      if (stateIdsToLinkAfterTrades.length > 0) {
+        if (isCreating) {
+          await invoke("add_journal_entry_to_emotional_states", { journalEntryId: entryId, emotionalStateIds: stateIdsToLinkAfterTrades });
+        }
+        for (const stateId of stateIdsToLinkAfterTrades) {
+          const scope = entryFormData.linked_emotional_state_link_scopes?.[stateId];
+          const jtId = scope?.scope === "trades" && scope.tradeIndex != null ? (tradeIdsInOrder[scope.tradeIndex] ?? null) : null;
+          await invoke("link_emotional_states_to_journal", {
+            emotionalStateIds: [stateId],
+            journalEntryId: entryId,
+            journalTradeId: jtId ?? undefined,
           });
         }
       }
@@ -1294,6 +1329,7 @@ export default function Journal() {
 
     try {
       let entryId: number;
+      let toAdd: number[] = [];
 
       if (isCreating) {
         entryId = await invoke<number>("create_journal_entry", {
@@ -1309,11 +1345,6 @@ export default function Journal() {
           strategyId: entryFormData.strategy_id,
           linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null,
         });
-        // Link to emotional state entries (chosen while creating)
-        const pendingStateIds = entryFormData.linked_emotional_state_ids ?? [];
-        if (pendingStateIds.length > 0) {
-          await invoke("add_journal_entry_to_emotional_states", { journalEntryId: entryId, emotionalStateIds: pendingStateIds });
-        }
       } else if (selectedEntry) {
         entryId = selectedEntry.id;
         await invoke("update_journal_entry", {
@@ -1327,7 +1358,7 @@ export default function Journal() {
         const formStateIds = entryFormData.linked_emotional_state_ids ?? [];
         const currentGroupIds = groupEmotionalStatesByTimestamp(journalEmotionalStates).map((g) => g[0].id);
         const toRemove = currentGroupIds.filter((id) => !formStateIds.includes(id));
-        const toAdd = formStateIds.filter((id) => !currentGroupIds.includes(id));
+        toAdd = formStateIds.filter((id) => !currentGroupIds.includes(id));
         if (toRemove.length > 0) await invoke("remove_journal_entry_from_emotional_states", { journalEntryId: entryId, emotionalStateIds: toRemove });
         if (toAdd.length > 0) await invoke("add_journal_entry_to_emotional_states", { journalEntryId: entryId, emotionalStateIds: toAdd });
         
@@ -1418,18 +1449,30 @@ export default function Journal() {
         }
       }
 
-      // Persist emotional states: form-in-progress (if open) and all pending entries (each entry = multiple emotions + one notes)
+      // Persist emotional states: pending list + any form-in-progress (one state per trade or one for entire entry)
       const toPersist: Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string }> = [...pendingEmotionalStates];
       const hasFormContent = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 || (newEmotionalStateForm.notes || "").trim() !== "";
-      if (showAddEmotionalStateForm && hasFormContent && activeTradeIndex >= 0 && activeTradeIndex < tradeIdsInOrder.length) {
-        toPersist.push({ tradeIndex: activeTradeIndex, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes });
+      if (showAddEmotionalStateForm && hasFormContent) {
+        if (newEmotionalStateLinkScope === "entry") {
+          toPersist.push({ tradeIndex: -1, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes });
+        } else {
+          for (const i of newEmotionalStateTradeIndices) {
+            toPersist.push({ tradeIndex: i, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes });
+          }
+        }
       }
+      const allStatesForEntry = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId });
+      const deleteGroup = async (group: JournalEmotionalState[]) => {
+        for (const s of group) await invoke("delete_emotional_state", { id: s.id });
+      };
       const now = new Date().toISOString();
       for (const pending of toPersist) {
-        const journalTradeId = tradeIdsInOrder[pending.tradeIndex];
-        if (journalTradeId != null) {
-          for (const emotion of Object.keys(pending.selectedEmotions)) {
-            try {
+        try {
+          if (pending.tradeIndex === -1) {
+            const entryLevel = allStatesForEntry.filter((s) => s.journal_trade_id == null);
+            const groups = groupEmotionalStatesByTimestamp(entryLevel);
+            for (const g of groups) await deleteGroup(g);
+            for (const emotion of Object.keys(pending.selectedEmotions)) {
               await invoke("add_emotional_state", {
                 timestamp: now,
                 emotion,
@@ -1437,34 +1480,48 @@ export default function Journal() {
                 notes: pending.notes || null,
                 tradeId: null,
                 journalEntryId: entryId,
-                journalTradeId,
+                journalTradeId: null,
               });
-            } catch (e) {
-              console.error(e);
+            }
+          } else {
+            const journalTradeId = tradeIdsInOrder[pending.tradeIndex];
+            if (journalTradeId != null) {
+              const forTrade = allStatesForEntry.filter((s) => s.journal_trade_id === journalTradeId);
+              const groups = groupEmotionalStatesByTimestamp(forTrade);
+              for (const g of groups) await deleteGroup(g);
+              for (const emotion of Object.keys(pending.selectedEmotions)) {
+                await invoke("add_emotional_state", {
+                  timestamp: now,
+                  emotion,
+                  intensity: pending.selectedEmotions[emotion],
+                  notes: pending.notes || null,
+                  tradeId: null,
+                  journalEntryId: entryId,
+                  journalTradeId,
+                });
+              }
             }
           }
+        } catch (e) {
+          console.error(e);
         }
       }
       if (toPersist.length > 0) {
         setShowAddEmotionalStateForm(false);
         setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
+        setNewEmotionalStateLinkScope("entry");
+        setNewEmotionalStateTradeIndices([]);
         setPendingEmotionalStates([]);
       }
 
       await loadEntries();
-      
-      // Reload the saved entry, then switch to view mode in one batch so we don't re-render the form
-      const savedEntry = await invoke<JournalEntry>("get_journal_entry", { id: entryId });
-      setSelectedEntry(savedEntry);
+
+      // Reload the saved entry from the server so we have a single source of truth, then switch to read-only
+      await loadEntry(entryId);
       setIsCreating(false);
       setIsEditing(false);
       setEditHistory([]);
       setOriginalEntryData(null);
-      localStorage.setItem("journal_selected_entry_id", String(entryId));
-      // Load trades after switching mode so the next re-render (from setSelectedTrades) already has view mode
-      await loadTrades(entryId);
-      
-      // Clear work in progress after successful save
       clearWorkInProgress();
     } catch (error) {
       console.error("Error saving entry:", error);
@@ -1492,6 +1549,7 @@ export default function Journal() {
         strategy_id: null,
         linked_trade_ids: [],
         linked_emotional_state_ids: [],
+        linked_emotional_state_link_scopes: {},
       });
       setTradesFormData([{
         id: null,
@@ -1527,6 +1585,7 @@ export default function Journal() {
       strategy_id: previousState.entry.strategy_id,
       linked_trade_ids: entryFormData.linked_trade_ids ?? [],
       linked_emotional_state_ids: entryFormData.linked_emotional_state_ids ?? [],
+      linked_emotional_state_link_scopes: entryFormData.linked_emotional_state_link_scopes ?? {},
     });
     
     // Deep copy trades
@@ -2850,6 +2909,30 @@ export default function Journal() {
                             <div style={{ marginBottom: "20px", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
                               <h4 style={{ margin: "0 0 10px", fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Emotions</h4>
                               <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal to emotional state entries. Links are saved when you save the journal entry.</p>
+                              <div style={{ marginBottom: "16px" }}>
+                                <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
+                                <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry.</p>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                    <input type="radio" name="linkExistingScope" checked={linkExistingEmotionalStateScope === "entry"} onChange={() => { setLinkExistingEmotionalStateScope("entry"); setLinkExistingEmotionalStateTradeIndex(null); }} />
+                                    Entire journal entry
+                                  </label>
+                                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                    <input type="radio" name="linkExistingScope" checked={linkExistingEmotionalStateScope === "trades"} onChange={() => setLinkExistingEmotionalStateScope("trades")} />
+                                    Specific trade(s)
+                                  </label>
+                                  {linkExistingEmotionalStateScope === "trades" && (
+                                    <div style={{ marginLeft: "24px", display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
+                                      {tradesFormData.map((t, i) => (
+                                        <label key={i} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
+                                          <input type="radio" name="linkExistingTrade" checked={linkExistingEmotionalStateTradeIndex === i} onChange={() => setLinkExistingEmotionalStateTradeIndex(i)} />
+                                          {t.symbol ? `${t.symbol}${t.position ? ` (${t.position})` : ""}` : `Trade ${i + 1}`}
+                                        </label>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
                               <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "600" }}>Link to emotional states</label>
                               {(entryFormData.linked_emotional_state_ids?.length ?? 0) > 0 && (
                                 <ul style={{ listStyle: "none", padding: 0, margin: "0 0 10px" }}>
@@ -2864,7 +2947,7 @@ export default function Journal() {
                                         </span>
                                         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                                           <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--accent)", padding: "2px 6px", backgroundColor: "var(--bg-hover)", borderRadius: "4px" }}>Will link on save</span>
-                                          <button type="button" onClick={() => setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: (prev.linked_emotional_state_ids ?? []).filter((id) => id !== stateId) }))} style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}>Remove</button>
+                                          <button type="button" onClick={() => setEntryFormData((prev) => { const next = (prev.linked_emotional_state_ids ?? []).filter((id) => id !== stateId); const scopes = { ...(prev.linked_emotional_state_link_scopes ?? {}) }; delete scopes[stateId]; return { ...prev, linked_emotional_state_ids: next, linked_emotional_state_link_scopes: scopes }; })} style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}>Remove</button>
                                         </div>
                                       </li>
                                     ) : null;
@@ -2880,12 +2963,13 @@ export default function Journal() {
                                   const linkedIds = new Set(entryFormData.linked_emotional_state_ids ?? []);
                                   const allGroups = groupEmotionalStatesByTimestamp(allEmotionalStates);
                                   const addableGroups = allGroups.filter((g) => !linkedIds.has(g[0].id));
+                                  const scope = { scope: linkExistingEmotionalStateScope, tradeIndex: linkExistingEmotionalStateScope === "trades" ? linkExistingEmotionalStateTradeIndex : null };
                                   return (
                                     <div style={{ position: "absolute", zIndex: 50, marginTop: "4px", maxHeight: "220px", overflowY: "auto", minWidth: "320px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", padding: "6px" }}>
                                       {addableGroups.length === 0 ? <div style={{ padding: "12px", fontSize: "13px", color: "var(--text-secondary)" }}>All emotional state entries are selected, or none exist.</div> : addableGroups.map((group) => {
                                         const first = group[0];
                                         return (
-                                          <button key={first.timestamp} type="button" onClick={() => { setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: [...(prev.linked_emotional_state_ids ?? []), first.id] })); setJournalLinksStateDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "10px 12px", textAlign: "left", fontSize: "13px", color: "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer" }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
+                                          <button key={first.timestamp} type="button" onClick={() => { setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: [...(prev.linked_emotional_state_ids ?? []), first.id], linked_emotional_state_link_scopes: { ...(prev.linked_emotional_state_link_scopes ?? {}), [first.id]: scope } })); setJournalLinksStateDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "10px 12px", textAlign: "left", fontSize: "13px", color: "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer" }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
                                             {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                           </button>
                                         );
@@ -2943,6 +3027,30 @@ export default function Journal() {
                             <div style={{ marginBottom: "20px", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
                               <h4 style={{ margin: "0 0 10px", fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Emotions</h4>
                               <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal entry to emotional state entries.</p>
+                              <div style={{ marginBottom: "16px" }}>
+                                <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
+                                <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry.</p>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                    <input type="radio" name="linkExistingScopeLinksTab" checked={linkExistingEmotionalStateScope === "entry"} onChange={() => { setLinkExistingEmotionalStateScope("entry"); setLinkExistingEmotionalStateTradeIndex(null); }} />
+                                    Entire journal entry
+                                  </label>
+                                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                    <input type="radio" name="linkExistingScopeLinksTab" checked={linkExistingEmotionalStateScope === "trades"} onChange={() => setLinkExistingEmotionalStateScope("trades")} />
+                                    Specific trade(s)
+                                  </label>
+                                  {linkExistingEmotionalStateScope === "trades" && (
+                                    <div style={{ marginLeft: "24px", display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
+                                      {tradesFormData.map((t, i) => (
+                                        <label key={i} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
+                                          <input type="radio" name="linkExistingTradeLinksTab" checked={linkExistingEmotionalStateTradeIndex === i} onChange={() => setLinkExistingEmotionalStateTradeIndex(i)} />
+                                          {t.symbol ? `${t.symbol}${t.position ? ` (${t.position})` : ""}` : `Trade ${i + 1}`}
+                                        </label>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
                               <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "600" }}>Link to emotional states</label>
                               {groupEmotionalStatesByTimestamp(journalEmotionalStates).length > 0 && (
                                 <ul style={{ listStyle: "none", padding: 0, margin: "0 0 10px" }}>
@@ -2955,7 +3063,26 @@ export default function Journal() {
                                         </span>
                                         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                           <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--accent)", padding: "2px 6px", backgroundColor: "var(--bg-hover)", borderRadius: "4px" }}>Linked</span>
-                                          <button type="button" onClick={async () => { try { await invoke("remove_journal_entry_from_emotional_states", { journalEntryId: selectedEntry!.id, emotionalStateIds: group.map((s) => s.id) }); const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id }); setJournalEmotionalStates(states); setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: groupEmotionalStatesByTimestamp(states).map((g) => g[0].id) })); } catch (e) { console.error(e); } }} style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}>Unlink</button>
+                                          <button
+                                            type="button"
+                                            onClick={async () => {
+                                              try {
+                                                await invoke("remove_journal_entry_from_emotional_states", { journalEntryId: selectedEntry!.id, emotionalStateIds: group.map((s) => s.id) });
+                                                const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id });
+                                                setJournalEmotionalStates(states);
+                                                const groups = groupEmotionalStatesByTimestamp(states);
+                                                const ids = groups.map((g) => g[0].id);
+                                                const scopes: Record<number, { scope: "entry" | "trades"; tradeIndex: number | null }> = {};
+                                                for (const g of groups) {
+                                                  const f = g[0];
+                                                  if (f.journal_trade_id == null) scopes[f.id] = { scope: "entry", tradeIndex: null };
+                                                  else { const idx = tradesFormData.findIndex((t) => t.id === f.journal_trade_id); scopes[f.id] = { scope: "trades", tradeIndex: idx >= 0 ? idx : null }; }
+                                                }
+                                                setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: ids, linked_emotional_state_link_scopes: scopes }));
+                                              } catch (e) { console.error(e); }
+                                            }}
+                                            style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}
+                                          >Unlink</button>
                                           <button type="button" onClick={() => navigate("/emotions", { state: { openTimestamp: first.timestamp } })} style={{ padding: "4px 8px", fontSize: "11px", color: "var(--accent)", background: "transparent", border: "1px solid var(--accent)", borderRadius: "4px", cursor: "pointer" }}>Open in Emotions</button>
                                         </div>
                                       </li>
@@ -2977,7 +3104,33 @@ export default function Journal() {
                                       {addableGroups.length === 0 ? <div style={{ padding: "12px", fontSize: "13px", color: "var(--text-secondary)" }}>All emotional state entries are already linked, or none exist.</div> : addableGroups.map((group) => {
                                         const first = group[0];
                                         return (
-                                          <button key={first.timestamp} type="button" onClick={async () => { try { await invoke("add_journal_entry_to_emotional_states", { journalEntryId: selectedEntry!.id, emotionalStateIds: group.map((s) => s.id) }); const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id }); setJournalEmotionalStates(states); setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: groupEmotionalStatesByTimestamp(states).map((g) => g[0].id) })); setJournalLinksStateDropdownOpen(false); } catch (e) { console.error(e); } }} style={{ display: "block", width: "100%", padding: "10px 12px", textAlign: "left", fontSize: "13px", color: "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer" }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
+                                          <button
+                                            key={first.timestamp}
+                                            type="button"
+                                            onClick={async () => {
+                                              try {
+                                                const ids = group.map((s) => s.id);
+                                                await invoke("add_journal_entry_to_emotional_states", { journalEntryId: selectedEntry!.id, emotionalStateIds: ids });
+                                                const jtId = linkExistingEmotionalStateScope === "entry" ? null : (linkExistingEmotionalStateTradeIndex != null ? tradesFormData[linkExistingEmotionalStateTradeIndex]?.id ?? null : null);
+                                                await invoke("link_emotional_states_to_journal", { emotionalStateIds: ids, journalEntryId: selectedEntry!.id, journalTradeId: jtId ?? undefined });
+                                                const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id });
+                                                setJournalEmotionalStates(states);
+                                                const grps = groupEmotionalStatesByTimestamp(states);
+                                                const linkIds = grps.map((g) => g[0].id);
+                                                const scopes: Record<number, { scope: "entry" | "trades"; tradeIndex: number | null }> = {};
+                                                for (const grp of grps) {
+                                                  const f = grp[0];
+                                                  const idx = tradesFormData.findIndex((t) => t.id === f.journal_trade_id);
+                                                  scopes[f.id] = f.journal_trade_id == null ? { scope: "entry", tradeIndex: null } : { scope: "trades", tradeIndex: idx >= 0 ? idx : null };
+                                                }
+                                                setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: linkIds, linked_emotional_state_link_scopes: scopes }));
+                                                setJournalLinksStateDropdownOpen(false);
+                                              } catch (e) { console.error(e); }
+                                            }}
+                                            style={{ display: "block", width: "100%", padding: "10px 12px", textAlign: "left", fontSize: "13px", color: "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer" }}
+                                            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }}
+                                            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+                                          >
                                             {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                           </button>
                                         );
@@ -3056,6 +3209,30 @@ export default function Journal() {
                               {selectedEntry?.id ? (
                                 <>
                                   <p style={{ margin: "0 0 16px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal entry to emotional state entries. Already linked items are shown below. You can also manage links from the <strong>Links</strong> tab.</p>
+                                  <div style={{ marginBottom: "16px" }}>
+                                    <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
+                                    <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry.</p>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                      <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                        <input type="radio" name="linkExistingScopeEdit" checked={linkExistingEmotionalStateScope === "entry"} onChange={() => { setLinkExistingEmotionalStateScope("entry"); setLinkExistingEmotionalStateTradeIndex(null); }} />
+                                        Entire journal entry
+                                      </label>
+                                      <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                        <input type="radio" name="linkExistingScopeEdit" checked={linkExistingEmotionalStateScope === "trades"} onChange={() => setLinkExistingEmotionalStateScope("trades")} />
+                                        Specific trade(s)
+                                      </label>
+                                      {linkExistingEmotionalStateScope === "trades" && (
+                                        <div style={{ marginLeft: "24px", display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
+                                          {tradesFormData.map((t, i) => (
+                                            <label key={i} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
+                                              <input type="radio" name="linkExistingTradeEdit" checked={linkExistingEmotionalStateTradeIndex === i} onChange={() => setLinkExistingEmotionalStateTradeIndex(i)} />
+                                              {t.symbol ? `${t.symbol}${t.position ? ` (${t.position})` : ""}` : `Trade ${i + 1}`}
+                                            </label>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
                                   <div style={{ marginBottom: "0" }}>
                                 <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "600" }}>Link to emotional states</label>
                                 {groupEmotionalStatesByTimestamp(journalEmotionalStates).length > 0 && (
@@ -3076,7 +3253,19 @@ export default function Journal() {
                                                   await invoke("remove_journal_entry_from_emotional_states", { journalEntryId: selectedEntry!.id, emotionalStateIds: group.map((s) => s.id) });
                                                   const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id });
                                                   setJournalEmotionalStates(states);
-                                                  setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: groupEmotionalStatesByTimestamp(states).map((g) => g[0].id) }));
+                                                  const groups = groupEmotionalStatesByTimestamp(states);
+                                                  const ids = groups.map((g) => g[0].id);
+                                                  const scopes: Record<number, { scope: "entry" | "trades"; tradeIndex: number | null }> = {};
+                                                  for (const g of groups) {
+                                                    const first = g[0];
+                                                    if (first.journal_trade_id == null) {
+                                                      scopes[first.id] = { scope: "entry", tradeIndex: null };
+                                                    } else {
+                                                      const idx = tradesFormData.findIndex((t) => t.id === first.journal_trade_id);
+                                                      scopes[first.id] = { scope: "trades", tradeIndex: idx >= 0 ? idx : null };
+                                                    }
+                                                  }
+                                                  setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: ids, linked_emotional_state_link_scopes: scopes }));
                                                 } catch (e) {
                                                   console.error(e);
                                                 }
@@ -3124,10 +3313,21 @@ export default function Journal() {
                                                 type="button"
                                                 onClick={async () => {
                                                   try {
-                                                    await invoke("add_journal_entry_to_emotional_states", { journalEntryId: selectedEntry!.id, emotionalStateIds: group.map((s) => s.id) });
+                                                    const ids = group.map((s) => s.id);
+                                                    await invoke("add_journal_entry_to_emotional_states", { journalEntryId: selectedEntry!.id, emotionalStateIds: ids });
+                                                    const jtId = linkExistingEmotionalStateScope === "entry" ? null : (linkExistingEmotionalStateTradeIndex != null ? tradesFormData[linkExistingEmotionalStateTradeIndex]?.id ?? null : null);
+                                                    await invoke("link_emotional_states_to_journal", { emotionalStateIds: ids, journalEntryId: selectedEntry!.id, journalTradeId: jtId ?? undefined });
                                                     const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id });
                                                     setJournalEmotionalStates(states);
-                                                    setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: groupEmotionalStatesByTimestamp(states).map((g) => g[0].id) }));
+                                                    const groups = groupEmotionalStatesByTimestamp(states);
+                                                    const linkIds = groups.map((g) => g[0].id);
+                                                    const scopes: Record<number, { scope: "entry" | "trades"; tradeIndex: number | null }> = {};
+                                                    for (const grp of groups) {
+                                                      const f = grp[0];
+                                                      const idx = tradesFormData.findIndex((t) => t.id === f.journal_trade_id);
+                                                      scopes[f.id] = f.journal_trade_id == null ? { scope: "entry", tradeIndex: null } : { scope: "trades", tradeIndex: idx >= 0 ? idx : null };
+                                                    }
+                                                    setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: linkIds, linked_emotional_state_link_scopes: scopes }));
                                                     setJournalLinksStateDropdownOpen(false);
                                                   } catch (e) {
                                                     console.error(e);
@@ -3152,7 +3352,30 @@ export default function Journal() {
                               ) : (
                                 <>
                                   <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>You can link this journal to emotional state entries below. Links are saved when you save the journal entry.</p>
-                                  {/* Link to emotional states - available while creating */}
+                                  <div style={{ marginBottom: "16px" }}>
+                                    <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
+                                    <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry.</p>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                      <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                        <input type="radio" name="linkExistingScopeCreate" checked={linkExistingEmotionalStateScope === "entry"} onChange={() => { setLinkExistingEmotionalStateScope("entry"); setLinkExistingEmotionalStateTradeIndex(null); }} />
+                                        Entire journal entry
+                                      </label>
+                                      <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                        <input type="radio" name="linkExistingScopeCreate" checked={linkExistingEmotionalStateScope === "trades"} onChange={() => setLinkExistingEmotionalStateScope("trades")} />
+                                        Specific trade(s)
+                                      </label>
+                                      {linkExistingEmotionalStateScope === "trades" && (
+                                        <div style={{ marginLeft: "24px", display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
+                                          {tradesFormData.map((t, i) => (
+                                            <label key={i} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
+                                              <input type="radio" name="linkExistingTradeCreate" checked={linkExistingEmotionalStateTradeIndex === i} onChange={() => setLinkExistingEmotionalStateTradeIndex(i)} />
+                                              {t.symbol ? `${t.symbol}${t.position ? ` (${t.position})` : ""}` : `Trade ${i + 1}`}
+                                            </label>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
                                   <div style={{ marginBottom: "16px" }}>
                                     <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "600" }}>Link to emotional states</label>
                                     {(entryFormData.linked_emotional_state_ids?.length ?? 0) > 0 && (
@@ -3168,7 +3391,7 @@ export default function Journal() {
                                               </span>
                                               <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                                                 <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--accent)", padding: "2px 6px", backgroundColor: "var(--bg-hover)", borderRadius: "4px" }}>Will link on save</span>
-                                                <button type="button" onClick={() => setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: (prev.linked_emotional_state_ids ?? []).filter((id) => id !== stateId) }))} style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}>Remove</button>
+                                                <button type="button" onClick={() => setEntryFormData((prev) => { const next = (prev.linked_emotional_state_ids ?? []).filter((id) => id !== stateId); const scopes = { ...(prev.linked_emotional_state_link_scopes ?? {}) }; delete scopes[stateId]; return { ...prev, linked_emotional_state_ids: next, linked_emotional_state_link_scopes: scopes }; })} style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}>Remove</button>
                                               </div>
                                             </li>
                                           ) : null;
@@ -3184,12 +3407,13 @@ export default function Journal() {
                                         const linkedIds = new Set(entryFormData.linked_emotional_state_ids ?? []);
                                         const allGroups = groupEmotionalStatesByTimestamp(allEmotionalStates);
                                         const addableGroups = allGroups.filter((g) => !linkedIds.has(g[0].id));
+                                        const scope = { scope: linkExistingEmotionalStateScope, tradeIndex: linkExistingEmotionalStateScope === "trades" ? linkExistingEmotionalStateTradeIndex : null };
                                         return (
                                           <div style={{ position: "absolute", zIndex: 50, marginTop: "4px", maxHeight: "220px", overflowY: "auto", minWidth: "320px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", padding: "6px" }}>
                                             {addableGroups.length === 0 ? <div style={{ padding: "12px", fontSize: "13px", color: "var(--text-secondary)" }}>All emotional state entries are selected, or none exist.</div> : addableGroups.map((group) => {
                                               const first = group[0];
                                               return (
-                                                <button key={first.timestamp} type="button" onClick={() => { setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: [...(prev.linked_emotional_state_ids ?? []), first.id] })); setJournalLinksStateDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "10px 12px", textAlign: "left", fontSize: "13px", color: "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer" }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
+                                                <button key={first.timestamp} type="button" onClick={() => { setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: [...(prev.linked_emotional_state_ids ?? []), first.id], linked_emotional_state_link_scopes: { ...(prev.linked_emotional_state_link_scopes ?? {}), [first.id]: scope } })); setJournalLinksStateDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "10px 12px", textAlign: "left", fontSize: "13px", color: "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer" }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
                                                   {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                                 </button>
                                               );
@@ -3209,7 +3433,7 @@ export default function Journal() {
                                 {!showAddEmotionalStateForm && (
                                   <button
                                     type="button"
-                                    onClick={() => setShowAddEmotionalStateForm(true)}
+                                    onClick={() => { setShowAddEmotionalStateForm(true); setNewEmotionalStateLinkScope("entry"); setNewEmotionalStateTradeIndices([]); }}
                                     style={{
                                       display: "inline-flex",
                                       alignItems: "center",
@@ -3228,7 +3452,7 @@ export default function Journal() {
                                   </button>
                                 )}
                               </div>
-                              {(journalEmotionalStates.length === 0 && pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex).length === 0 && !showAddEmotionalStateForm) && (
+                              {(journalEmotionalStates.length === 0 && pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex || p.tradeIndex === -1).length === 0 && !showAddEmotionalStateForm) && (
                                 <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No emotional states linked. Add one with the same form as on the Emotions page.</p>
                               )}
                               {/* When editing an existing entry, linked states are shown in "Link to emotional states" above; only show them here when creating (no selectedEntry.id) */}
@@ -3274,7 +3498,7 @@ export default function Journal() {
                                   </div>
                                 );
                               })}
-                              {pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex).map((pending, idx) => (
+                              {pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex || p.tradeIndex === -1).map((pending, idx) => (
                                 <div
                                   key={`pending-${activeTradeIndex}-${idx}`}
                                   style={{
@@ -3294,10 +3518,30 @@ export default function Journal() {
                                       ))}
                                     </div>
                                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                                      <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>(unsaved)</span>
+                                      <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                                        {pending.tradeIndex === -1 ? "Entire entry (unsaved)" : `Trade ${pending.tradeIndex + 1} (unsaved)`}
+                                      </span>
                                       <button
                                         type="button"
-                                        onClick={() => setEmotionalStateDeleteTarget({ type: "pending", tradeIndex: activeTradeIndex, idx })}
+                                        onClick={() => {
+                                          setPendingEmotionalStates((prev) => prev.filter((p) => p !== pending));
+                                          setNewEmotionalStateForm({ selectedEmotions: { ...pending.selectedEmotions }, notes: pending.notes });
+                                          setNewEmotionalStateLinkScope(pending.tradeIndex === -1 ? "entry" : "trades");
+                                          setNewEmotionalStateTradeIndices(pending.tradeIndex === -1 ? [] : [pending.tradeIndex]);
+                                          setShowAddEmotionalStateForm(true);
+                                        }}
+                                        style={{ padding: "2px 6px", background: "transparent", border: "none", borderRadius: "4px", color: "var(--accent)", cursor: "pointer", fontSize: "12px" }}
+                                        title="Edit"
+                                      >
+                                        <Edit2 size={14} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                        const sameScope = pendingEmotionalStates.filter((p) => p.tradeIndex === pending.tradeIndex);
+                                        const scopeIdx = sameScope.indexOf(pending);
+                                        setEmotionalStateDeleteTarget({ type: "pending", tradeIndex: pending.tradeIndex, idx: scopeIdx });
+                                      }}
                                         style={{ padding: "2px 6px", background: "transparent", border: "none", borderRadius: "4px", color: "var(--text-secondary)", cursor: "pointer", fontSize: "12px" }}
                                         title="Remove"
                                       >
@@ -3311,11 +3555,167 @@ export default function Journal() {
                                 </div>
                               ))}
                             </div>
-                            {((journalEmotionalStates.length === 0 && pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex).length === 0) || showAddEmotionalStateForm) && (
+                            {((journalEmotionalStates.length === 0 && pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex || p.tradeIndex === -1).length === 0) || showAddEmotionalStateForm) && (
                               <div style={{ padding: "20px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "12px", marginBottom: "16px" }}>
                                 <h4 style={{ margin: "0 0 16px", fontSize: "14px", fontWeight: "600" }}>Add emotional state</h4>
                                 <div style={{ marginBottom: "20px", padding: "12px 14px", backgroundColor: "var(--bg-tertiary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
                                   <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.5 }}>{INTENSITY_SCALE_LABEL}</p>
+                                </div>
+                                <div style={{ marginBottom: "16px" }}>
+                                  <h3 style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
+                                  <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry.</p>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                                    <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                      <input
+                                        type="radio"
+                                        name="emotionalStateLinkScope"
+                                        checked={newEmotionalStateLinkScope === "entry"}
+                                        onChange={() => { setNewEmotionalStateLinkScope("entry"); setNewEmotionalStateTradeIndices([]); }}
+                                      />
+                                      Entire journal entry
+                                    </label>
+                                    <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                      <input
+                                        type="radio"
+                                        name="emotionalStateLinkScope"
+                                        checked={newEmotionalStateLinkScope === "trades"}
+                                        onChange={() => setNewEmotionalStateLinkScope("trades")}
+                                      />
+                                      Specific trade(s)
+                                    </label>
+                                    {newEmotionalStateLinkScope === "trades" && (
+                                      <div style={{ marginLeft: "24px", display: "flex", flexWrap: "wrap", gap: "10px", marginTop: "6px" }}>
+                                        {tradesFormData.map((t, i) => {
+                                          const label = t.symbol ? `${t.symbol}${t.position ? ` (${t.position})` : ""}` : `Trade ${i + 1}`;
+                                          const checked = newEmotionalStateTradeIndices.includes(i);
+                                          return (
+                                            <label key={i} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
+                                              <input
+                                                type="checkbox"
+                                                checked={checked}
+                                                onChange={() => {
+                                                  setNewEmotionalStateTradeIndices((prev) =>
+                                                    prev.includes(i) ? prev.filter((j) => j !== i) : [...prev, i]
+                                                  );
+                                                }}
+                                              />
+                                              {label || `Trade ${i + 1}`}
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                                <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                                  Add this emotional state to the journal entry using the button below. Save the journal entry when done to persist everything.
+                                </p>
+                                <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", alignItems: "center", marginBottom: "20px" }}>
+                                  <button
+                                    type="button"
+                                    disabled={
+                                      Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ||
+                                      (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0)
+                                    }
+                                    onClick={async () => {
+                                      const hasAny = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0;
+                                      if (!hasAny) return;
+                                      if (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0) return;
+                                      const entryId = selectedEntry?.id;
+                                      const savedEntry = entryId != null;
+                                      if (savedEntry) {
+                                        try {
+                                          const now = new Date().toISOString();
+                                          const allStates = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId! });
+                                          const deleteGroup = async (group: JournalEmotionalState[]) => {
+                                            for (const s of group) {
+                                              await invoke("delete_emotional_state", { id: s.id });
+                                            }
+                                          };
+                                          if (newEmotionalStateLinkScope === "entry") {
+                                            const entryLevel = allStates.filter((s) => s.journal_trade_id == null);
+                                            const groups = groupEmotionalStatesByTimestamp(entryLevel);
+                                            for (const g of groups) await deleteGroup(g);
+                                            for (const emotion of Object.keys(newEmotionalStateForm.selectedEmotions)) {
+                                              await invoke("add_emotional_state", {
+                                                timestamp: now,
+                                                emotion,
+                                                intensity: newEmotionalStateForm.selectedEmotions[emotion],
+                                                notes: newEmotionalStateForm.notes || null,
+                                                tradeId: null,
+                                                journalEntryId: entryId,
+                                                journalTradeId: null,
+                                              });
+                                            }
+                                          } else {
+                                            for (const tradeIdx of newEmotionalStateTradeIndices) {
+                                              const trade = tradesFormData[tradeIdx];
+                                              const jtId = trade?.id ?? null;
+                                              if (jtId == null) continue;
+                                              const forTrade = allStates.filter((s) => s.journal_trade_id === jtId);
+                                              const groups = groupEmotionalStatesByTimestamp(forTrade);
+                                              for (const g of groups) await deleteGroup(g);
+                                              for (const emotion of Object.keys(newEmotionalStateForm.selectedEmotions)) {
+                                                await invoke("add_emotional_state", {
+                                                  timestamp: now,
+                                                  emotion,
+                                                  intensity: newEmotionalStateForm.selectedEmotions[emotion],
+                                                  notes: newEmotionalStateForm.notes || null,
+                                                  tradeId: null,
+                                                  journalEntryId: entryId,
+                                                  journalTradeId: jtId,
+                                                });
+                                              }
+                                            }
+                                          }
+                                          const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId! });
+                                          setJournalEmotionalStates(states);
+                                          setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
+                                          setNewEmotionalStateLinkScope("entry");
+                                          setNewEmotionalStateTradeIndices([]);
+                                          setShowAddEmotionalStateForm(false);
+                                        } catch (e) {
+                                          console.error(e);
+                                        }
+                                      } else {
+                                        if (newEmotionalStateLinkScope === "entry") {
+                                          setPendingEmotionalStates((prev) => prev.filter((p) => p.tradeIndex !== -1).concat([{ tradeIndex: -1, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes }]));
+                                        } else {
+                                          let next = pendingEmotionalStates.filter((p) => p.tradeIndex === -1 || !newEmotionalStateTradeIndices.includes(p.tradeIndex));
+                                          for (const i of newEmotionalStateTradeIndices) {
+                                            next = next.filter((p) => p.tradeIndex !== i);
+                                            next.push({ tradeIndex: i, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes });
+                                          }
+                                          setPendingEmotionalStates(next);
+                                        }
+                                        setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
+                                        setNewEmotionalStateLinkScope("entry");
+                                        setNewEmotionalStateTradeIndices([]);
+                                        setShowAddEmotionalStateForm(false);
+                                      }
+                                    }}
+                                    style={{
+                                      padding: "8px 16px",
+                                      background: "var(--accent)",
+                                      border: "none",
+                                      borderRadius: "6px",
+                                      color: "white",
+                                      cursor: Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ? "not-allowed" : "pointer",
+                                      fontSize: "13px",
+                                      fontWeight: "600",
+                                      opacity: Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ? 0.6 : 1,
+                                    }}
+                                    title="Add this emotional state to the journal entry"
+                                  >
+                                    Add emotional state to entry
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => { setShowAddEmotionalStateForm(false); setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" }); setNewEmotionalStateLinkScope("entry"); setNewEmotionalStateTradeIndices([]); }}
+                                    style={{ padding: "6px 12px", background: "transparent", border: "none", borderRadius: "6px", color: "var(--text-secondary)", cursor: "pointer", fontSize: "13px" }}
+                                  >
+                                    Close
+                                  </button>
                                 </div>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                                   <div>
@@ -3412,61 +3812,6 @@ export default function Journal() {
                                       placeholder="Notes..."
                                       readOnly={false}
                                     />
-                                  </div>
-                                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-                                    <button
-                                      type="button"
-                                      disabled={Object.keys(newEmotionalStateForm.selectedEmotions).length === 0}
-                                      onClick={async () => {
-                                        const hasAny = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0;
-                                        if (!hasAny) return;
-                                        const entryId = selectedEntry?.id;
-                                        const journalTradeId = currentTrade?.id ?? null;
-                                        if (entryId != null && journalTradeId != null) {
-                                          try {
-                                            const now = new Date().toISOString();
-                                            for (const emotion of Object.keys(newEmotionalStateForm.selectedEmotions)) {
-                                              await invoke("add_emotional_state", {
-                                                timestamp: now,
-                                                emotion,
-                                                intensity: newEmotionalStateForm.selectedEmotions[emotion],
-                                                notes: newEmotionalStateForm.notes || null,
-                                                tradeId: null,
-                                                journalEntryId: entryId,
-                                                journalTradeId,
-                                              });
-                                            }
-                                            const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId, journalTradeId });
-                                            setJournalEmotionalStates(states);
-                                            setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
-                                          } catch (e) {
-                                            console.error(e);
-                                          }
-                                        } else {
-                                          setPendingEmotionalStates((prev) => [...prev, { tradeIndex: activeTradeIndex, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes }]);
-                                          setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
-                                        }
-                                      }}
-                                      style={{
-                                        padding: "6px 12px",
-                                        background: "var(--accent)",
-                                        border: "none",
-                                        borderRadius: "6px",
-                                        color: "white",
-                                        cursor: Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ? "not-allowed" : "pointer",
-                                        fontSize: "13px",
-                                        opacity: Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ? 0.6 : 1,
-                                      }}
-                                    >
-                                      Add
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => { setShowAddEmotionalStateForm(false); setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" }); }}
-                                      style={{ padding: "6px 12px", background: "transparent", border: "none", borderRadius: "6px", color: "var(--text-secondary)", cursor: "pointer", fontSize: "13px" }}
-                                    >
-                                      Close
-                                    </button>
                                   </div>
                                 </div>
                               </div>
