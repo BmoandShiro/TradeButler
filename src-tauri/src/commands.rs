@@ -2423,13 +2423,18 @@ pub fn create_journal_entry(
 pub fn get_journal_entries() -> Result<Vec<JournalEntry>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
-    
-    let mut stmt = conn
-        .prepare("SELECT id, date, title, strategy_id, created_at, updated_at FROM journal_entries ORDER BY date DESC, created_at DESC")
-        .map_err(|e| e.to_string())?;
-    
-    let entry_iter = stmt
-        .query_map([], |row| {
+
+    let has_linked = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_entries') WHERE name='linked_trade_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    let entries: Vec<JournalEntry> = if has_linked {
+        let mut stmt = conn
+            .prepare("SELECT id, date, title, strategy_id, created_at, updated_at, linked_trade_ids FROM journal_entries ORDER BY date DESC, created_at DESC")
+            .map_err(|e| e.to_string())?;
+        let collected: Vec<JournalEntry> = stmt.query_map([], |row| {
             Ok(JournalEntry {
                 id: Some(row.get(0)?),
                 date: row.get(1)?,
@@ -2437,15 +2442,28 @@ pub fn get_journal_entries() -> Result<Vec<JournalEntry>, String> {
                 strategy_id: row.get(3)?,
                 created_at: row.get(4)?,
                 updated_at: row.get(5)?,
+                linked_trade_ids: row.get(6).ok(),
             })
-        })
-        .map_err(|e| e.to_string())?;
-    
-    let mut entries = Vec::new();
-    for entry in entry_iter {
-        entries.push(entry.map_err(|e| e.to_string())?);
-    }
-    
+        }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+        collected
+    } else {
+        let mut stmt = conn
+            .prepare("SELECT id, date, title, strategy_id, created_at, updated_at FROM journal_entries ORDER BY date DESC, created_at DESC")
+            .map_err(|e| e.to_string())?;
+        let collected: Vec<JournalEntry> = stmt.query_map([], |row| {
+            Ok(JournalEntry {
+                id: Some(row.get(0)?),
+                date: row.get(1)?,
+                title: row.get(2)?,
+                strategy_id: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+                linked_trade_ids: None,
+            })
+        }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+        collected
+    };
+
     Ok(entries)
 }
 
@@ -2453,13 +2471,18 @@ pub fn get_journal_entries() -> Result<Vec<JournalEntry>, String> {
 pub fn get_journal_entry(id: i64) -> Result<JournalEntry, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
-    
-    let mut stmt = conn
-        .prepare("SELECT id, date, title, strategy_id, created_at, updated_at FROM journal_entries WHERE id = ?1")
-        .map_err(|e| e.to_string())?;
-    
-    let entry = stmt
-        .query_row(params![id], |row| {
+
+    let has_linked = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_entries') WHERE name='linked_trade_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    let entry = if has_linked {
+        let mut stmt = conn
+            .prepare("SELECT id, date, title, strategy_id, created_at, updated_at, linked_trade_ids FROM journal_entries WHERE id = ?1")
+            .map_err(|e| e.to_string())?;
+        stmt.query_row(params![id], |row| {
             Ok(JournalEntry {
                 id: Some(row.get(0)?),
                 date: row.get(1)?,
@@ -2467,10 +2490,26 @@ pub fn get_journal_entry(id: i64) -> Result<JournalEntry, String> {
                 strategy_id: row.get(3)?,
                 created_at: row.get(4)?,
                 updated_at: row.get(5)?,
+                linked_trade_ids: row.get(6).ok(),
             })
-        })
-        .map_err(|e| e.to_string())?;
-    
+        }).map_err(|e| e.to_string())?
+    } else {
+        let mut stmt = conn
+            .prepare("SELECT id, date, title, strategy_id, created_at, updated_at FROM journal_entries WHERE id = ?1")
+            .map_err(|e| e.to_string())?;
+        stmt.query_row(params![id], |row| {
+            Ok(JournalEntry {
+                id: Some(row.get(0)?),
+                date: row.get(1)?,
+                title: row.get(2)?,
+                strategy_id: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+                linked_trade_ids: None,
+            })
+        }).map_err(|e| e.to_string())?
+    };
+
     Ok(entry)
 }
 
@@ -2480,15 +2519,137 @@ pub fn update_journal_entry(
     date: String,
     title: String,
     strategy_id: Option<i64>,
+    linked_trade_ids: Option<String>,
 ) -> Result<(), String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
-    
-    conn.execute(
-        "UPDATE journal_entries SET date = ?1, title = ?2, strategy_id = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
-        params![date, title, strategy_id, id],
-    ).map_err(|e| e.to_string())?;
-    
+
+    let has_linked = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_entries') WHERE name='linked_trade_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    if has_linked {
+        conn.execute(
+            "UPDATE journal_entries SET date = ?1, title = ?2, strategy_id = ?3, linked_trade_ids = ?4, updated_at = CURRENT_TIMESTAMP WHERE id = ?5",
+            params![date, title, strategy_id, linked_trade_ids, id],
+        ).map_err(|e| e.to_string())?;
+    } else {
+        conn.execute(
+            "UPDATE journal_entries SET date = ?1, title = ?2, strategy_id = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
+            params![date, title, strategy_id, id],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// Add a journal entry to the journal_entry_ids of the given emotional state(s).
+/// For each state id, all rows sharing the same timestamp are updated so the group stays in sync.
+#[tauri::command]
+pub fn add_journal_entry_to_emotional_states(
+    journal_entry_id: i64,
+    emotional_state_ids: Vec<i64>,
+) -> Result<(), String> {
+    use std::collections::HashSet;
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+
+    let has_multi = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    if !has_multi {
+        return Ok(());
+    }
+
+    let mut timestamps_done: HashSet<String> = HashSet::new();
+    for state_id in emotional_state_ids {
+        let (timestamp, current_json): (String, Option<String>) = conn.query_row(
+            "SELECT timestamp, journal_entry_ids FROM emotional_states WHERE id = ?1",
+            params![state_id],
+            |row| Ok((row.get(0)?, row.get(1).ok())),
+        ).map_err(|e| e.to_string())?;
+
+        if timestamps_done.contains(&timestamp) {
+            continue;
+        }
+        timestamps_done.insert(timestamp.clone());
+
+        let mut ids: Vec<i64> = if let Some(ref s) = current_json {
+            serde_json::from_str(s).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        if !ids.contains(&journal_entry_id) {
+            ids.push(journal_entry_id);
+            ids.sort_unstable();
+        }
+        let new_json = serde_json::to_string(&ids).map_err(|e| e.to_string())?;
+
+        conn.execute(
+            "UPDATE emotional_states SET journal_entry_ids = ?1 WHERE timestamp = ?2",
+            params![new_json, timestamp],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// Remove a journal entry from the journal_entry_ids of the given emotional state(s).
+#[tauri::command]
+pub fn remove_journal_entry_from_emotional_states(
+    journal_entry_id: i64,
+    emotional_state_ids: Vec<i64>,
+) -> Result<(), String> {
+    use std::collections::HashSet;
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+
+    let has_multi = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    if !has_multi {
+        return Ok(());
+    }
+
+    let mut timestamps_done: HashSet<String> = HashSet::new();
+    for state_id in emotional_state_ids {
+        let (timestamp, current_json): (String, Option<String>) = conn.query_row(
+            "SELECT timestamp, journal_entry_ids FROM emotional_states WHERE id = ?1",
+            params![state_id],
+            |row| Ok((row.get(0)?, row.get(1).ok())),
+        ).map_err(|e| e.to_string())?;
+
+        if timestamps_done.contains(&timestamp) {
+            continue;
+        }
+        timestamps_done.insert(timestamp.clone());
+
+        let mut ids: Vec<i64> = if let Some(ref s) = current_json {
+            serde_json::from_str(s).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        ids.retain(|&x| x != journal_entry_id);
+        let new_json = if ids.is_empty() {
+            None as Option<String>
+        } else {
+            Some(serde_json::to_string(&ids).map_err(|e| e.to_string())?)
+        };
+
+        conn.execute(
+            "UPDATE emotional_states SET journal_entry_ids = ?1 WHERE timestamp = ?2",
+            params![new_json, timestamp],
+        ).map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }
 
@@ -5083,6 +5244,7 @@ pub fn export_data() -> Result<String, String> {
                 strategy_id: row.get(3)?,
                 created_at: row.get(4)?,
                 updated_at: row.get(5)?,
+                linked_trade_ids: None,
             })
         })
         .map_err(|e| e.to_string())?;

@@ -82,6 +82,8 @@ pub struct JournalEntry {
     pub strategy_id: Option<i64>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    /// JSON array of trade IDs (real trades) linked from Journal page, e.g. "[1,2,3]"
+    pub linked_trade_ids: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -322,6 +324,16 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_journal_checklist_responses_entry ON journal_checklist_responses(journal_entry_id)",
         [],
     )?;
+
+    // journal_entries: link to real trades from Journal page (JSON array of trade IDs)
+    let has_linked_trade_ids: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_entries') WHERE name='linked_trade_ids'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_linked_trade_ids {
+        conn.execute("ALTER TABLE journal_entries ADD COLUMN linked_trade_ids TEXT", [])?;
+    }
 
     // Migration: Add journal_trade_ids column for Analysis/Mantra trade association (nullable = entry-level, JSON array = specific trades)
     let has_column: bool = conn.query_row(

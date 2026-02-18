@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
 import { Plus, X, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Heart, ClipboardList, Maximize2, Minimize2, Edit2, Trash2, ArrowLeft, RotateCcw, ExternalLink, ChevronDown } from "lucide-react";
@@ -612,9 +612,22 @@ export default function Emotions() {
   const [deleteTarget, setDeleteTarget] = useState<EmotionalState | null>(null);
   const [emotionChartTab, setEmotionChartTab] = useState<string>("Overall");
   const navigate = useNavigate();
+  const location = useLocation();
+  type FormDataSnapshot = {
+    timestamp: string;
+    selectedEmotions: Record<string, number>;
+    notes: string;
+    journalEntryIds: number[];
+    journalTradeId?: number | null;
+    journalTradeIds?: number[];
+    tradeIds: number[];
+  };
+  const [emotionalStateEditHistory, setEmotionalStateEditHistory] = useState<FormDataSnapshot[]>([]);
+  const skipHistoryPushRef = useRef(false);
 
   // Ref for main scroll container
   const mainScrollRef = useRef<HTMLDivElement>(null);
+  const intensitySectionRef = useRef<HTMLDivElement>(null);
 
   // Save scroll position
   const saveScrollPosition = () => {
@@ -680,6 +693,73 @@ export default function Emotions() {
     loadStates();
     loadSurveys();
   }, []);
+
+  // When navigating from Journal via "Open in Emotions", open that entry in read-only mode
+  useEffect(() => {
+    const openTimestamp = (location.state as { openTimestamp?: string } | null)?.openTimestamp;
+    if (!openTimestamp || states.length === 0) return;
+    const groups = groupStatesByTimestamp(states);
+    const group = groups.find((g) => g[0].timestamp === openTimestamp);
+    if (!group?.length) return;
+    const first = group[0];
+    const selectedEmotions: Record<string, number> = {};
+    for (const s of group) selectedEmotions[s.emotion] = s.intensity;
+    let jeIds: number[] = [];
+    if (first.journal_entry_ids) {
+      try {
+        const parsed = JSON.parse(first.journal_entry_ids) as number[];
+        if (Array.isArray(parsed)) jeIds = parsed;
+      } catch {
+        if (first.journal_entry_id != null) jeIds = [first.journal_entry_id];
+      }
+    } else if (first.journal_entry_id != null) {
+      jeIds = [first.journal_entry_id];
+    }
+    let tIds: number[] = [];
+    if (first.trade_ids) {
+      try {
+        const parsed = JSON.parse(first.trade_ids) as number[];
+        if (Array.isArray(parsed)) tIds = parsed;
+      } catch {
+        if (first.trade_id != null) tIds = [first.trade_id];
+      }
+    } else if (first.trade_id != null) {
+      tIds = [first.trade_id];
+    }
+    setEditingState(first);
+    setEditingStateGroup(group);
+    setIsEditingSelectedState(false);
+    setFormData({
+      timestamp: first.timestamp,
+      selectedEmotions,
+      notes: first.notes || "",
+      journalEntryIds: jeIds,
+      journalTradeId: first.journal_trade_id ?? null,
+      journalTradeIds: first.journal_trade_id != null ? [first.journal_trade_id] : [],
+      tradeIds: tIds,
+    });
+    setShowForm(true);
+    setFormTab("basic");
+    navigate(location.pathname, { replace: true, state: {} });
+  }, [location.state, location.pathname, states, navigate]);
+
+  // Push form changes to edit history when editing (for multi-step Undo); skip when restoring from Undo
+  useEffect(() => {
+    if (!isEditingSelectedState || !editingState || skipHistoryPushRef.current) {
+      if (skipHistoryPushRef.current) skipHistoryPushRef.current = false;
+      return;
+    }
+    const snapshot: FormDataSnapshot = {
+      timestamp: formData.timestamp,
+      selectedEmotions: { ...formData.selectedEmotions },
+      notes: formData.notes,
+      journalEntryIds: [...(formData.journalEntryIds ?? [])],
+      journalTradeId: formData.journalTradeId ?? null,
+      journalTradeIds: formData.journalTradeIds ? [...formData.journalTradeIds] : [],
+      tradeIds: [...(formData.tradeIds ?? [])],
+    };
+    setEmotionalStateEditHistory((prev) => [...prev, snapshot].slice(-10));
+  }, [formData.timestamp, formData.notes, formData.selectedEmotions, formData.journalEntryIds, formData.journalTradeId, formData.journalTradeIds, formData.tradeIds, isEditingSelectedState, editingState]);
 
   useEffect(() => {
     if (!showForm) return;
@@ -829,6 +909,7 @@ export default function Emotions() {
         setEditingState(null);
         setEditingStateGroup(null);
         setIsEditingSelectedState(false);
+        setEmotionalStateEditHistory([]);
         setIsMaximized(false);
         setFormTab("basic");
         setFormData({ timestamp: new Date().toISOString(), selectedEmotions: {}, notes: "", journalEntryIds: [], journalTradeIds: [], tradeIds: [] });
@@ -1186,6 +1267,7 @@ export default function Emotions() {
                           setEditingState(null);
                           setEditingStateGroup(null);
                           setIsEditingSelectedState(false);
+                          setEmotionalStateEditHistory([]);
                           setIsMaximized(false);
                           setFormTab("basic");
                           return;
@@ -1367,7 +1449,10 @@ export default function Emotions() {
                 {!isEditingSelectedState ? (
                   <>
                     <button
-                      onClick={() => setIsEditingSelectedState(true)}
+                      onClick={() => {
+                        setIsEditingSelectedState(true);
+                        setEmotionalStateEditHistory([]);
+                      }}
                       style={{
                         background: "var(--bg-secondary)",
                         border: "1px solid var(--border-color)",
@@ -1403,6 +1488,47 @@ export default function Emotions() {
                   </>
                 ) : (
                   <>
+                    {emotionalStateEditHistory.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newHistory = emotionalStateEditHistory.slice(0, -1);
+                          const prev = newHistory[newHistory.length - 1];
+                          setEmotionalStateEditHistory(newHistory);
+                          if (prev) {
+                            skipHistoryPushRef.current = true;
+                            setFormData((f) => ({
+                              ...f,
+                              timestamp: prev.timestamp,
+                              selectedEmotions: { ...prev.selectedEmotions },
+                              notes: prev.notes,
+                              journalEntryIds: [...(prev.journalEntryIds ?? [])],
+                              journalTradeId: prev.journalTradeId ?? null,
+                              journalTradeIds: prev.journalTradeIds ? [...prev.journalTradeIds] : [],
+                              tradeIds: [...(prev.tradeIds ?? [])],
+                            }));
+                          }
+                        }}
+                        style={{
+                          background: "var(--bg-secondary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "6px",
+                          padding: "8px 12px",
+                          color: "var(--text-primary)",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px",
+                          justifyContent: "center",
+                          fontWeight: "500",
+                          fontSize: "13px",
+                        }}
+                        title="Undo"
+                      >
+                        <RotateCcw size={16} />
+                        Undo
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -1412,13 +1538,40 @@ export default function Emotions() {
                         for (const s of editingStateGroup || [editingState!]) {
                           selectedEmotions[s.emotion] = s.intensity;
                         }
+                        let jeIds: number[] = [];
+                        if (first.journal_entry_ids) {
+                          try {
+                            const parsed = JSON.parse(first.journal_entry_ids) as number[];
+                            if (Array.isArray(parsed)) jeIds = parsed;
+                          } catch {
+                            if (first.journal_entry_id != null) jeIds = [first.journal_entry_id];
+                          }
+                        } else if (first.journal_entry_id != null) {
+                          jeIds = [first.journal_entry_id];
+                        }
+                        let tIds: number[] = [];
+                        if (first.trade_ids) {
+                          try {
+                            const parsed = JSON.parse(first.trade_ids) as number[];
+                            if (Array.isArray(parsed)) tIds = parsed;
+                          } catch {
+                            if (first.trade_id != null) tIds = [first.trade_id];
+                          }
+                        } else if (first.trade_id != null) {
+                          tIds = [first.trade_id];
+                        }
                         setFormData((prev) => ({
                           ...prev,
                           timestamp: first.timestamp,
                           selectedEmotions,
                           notes: first.notes || "",
+                          journalEntryIds: jeIds,
+                          journalTradeId: first.journal_trade_id ?? null,
+                          journalTradeIds: first.journal_trade_id != null ? [first.journal_trade_id] : [],
+                          tradeIds: tIds,
                         }));
                         setIsEditingSelectedState(false);
+                        setEmotionalStateEditHistory([]);
                       }}
                       style={{
                         background: "var(--bg-secondary)",
@@ -1434,10 +1587,9 @@ export default function Emotions() {
                         fontWeight: "500",
                         fontSize: "13px",
                       }}
-                      title="Undo changes and return to view"
+                      title="Cancel"
                     >
-                      <RotateCcw size={16} />
-                      Undo
+                      Cancel
                     </button>
                     <button
                       type="submit"
@@ -1600,6 +1752,9 @@ export default function Emotions() {
                                   ...formData,
                                   selectedEmotions: { ...formData.selectedEmotions, [emotion]: DEFAULT_INTENSITY },
                                 });
+                                requestAnimationFrame(() => {
+                                  intensitySectionRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                                });
                               }
                             }}
                             style={{
@@ -1628,6 +1783,7 @@ export default function Emotions() {
 
                   {Object.keys(formData.selectedEmotions).length > 0 && (
                     <div
+                      ref={intensitySectionRef}
                       style={{
                         marginBottom: "28px",
                         padding: "20px",
@@ -2020,6 +2176,7 @@ export default function Emotions() {
                           setEditingState(null);
                           setEditingStateGroup(null);
                           setIsEditingSelectedState(false);
+                          setEmotionalStateEditHistory([]);
                           setIsMaximized(false);
                           setFormTab("basic");
                           setFormData({ timestamp: new Date().toISOString(), selectedEmotions: {}, notes: "", journalEntryIds: [], journalTradeIds: [], tradeIds: [] });
@@ -2038,7 +2195,10 @@ export default function Emotions() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => setIsEditingSelectedState(true)}
+                        onClick={() => {
+                          setIsEditingSelectedState(true);
+                          setEmotionalStateEditHistory([]);
+                        }}
                         style={{
                           padding: "10px 20px",
                           backgroundColor: "var(--accent)",
@@ -2059,7 +2219,9 @@ export default function Emotions() {
                           saveScrollPosition();
                           handleDeleteClick(editingState);
                           setEditingState(null);
+                          setEditingStateGroup(null);
                           setIsEditingSelectedState(false);
+                          setEmotionalStateEditHistory([]);
                           setIsMaximized(false);
                         }}
                         style={{
@@ -2078,6 +2240,40 @@ export default function Emotions() {
                     </>
                   ) : (
                     <>
+                      {emotionalStateEditHistory.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newHistory = emotionalStateEditHistory.slice(0, -1);
+                            const prev = newHistory[newHistory.length - 1];
+                            setEmotionalStateEditHistory(newHistory);
+                            if (prev) {
+                              skipHistoryPushRef.current = true;
+                              setFormData((f) => ({
+                                ...f,
+                                timestamp: prev.timestamp,
+                                selectedEmotions: { ...prev.selectedEmotions },
+                                notes: prev.notes,
+                                journalEntryIds: [...(prev.journalEntryIds ?? [])],
+                                journalTradeId: prev.journalTradeId ?? null,
+                                journalTradeIds: prev.journalTradeIds ? [...prev.journalTradeIds] : [],
+                                tradeIds: [...(prev.tradeIds ?? [])],
+                              }));
+                            }
+                          }}
+                          style={{
+                            padding: "10px 20px",
+                            backgroundColor: "var(--bg-secondary)",
+                            color: "var(--text-primary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "6px",
+                            cursor: "pointer",
+                            fontSize: "14px",
+                          }}
+                        >
+                          Undo
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => {
@@ -2087,13 +2283,40 @@ export default function Emotions() {
                           for (const s of editingStateGroup || [editingState!]) {
                             selectedEmotions[s.emotion] = s.intensity;
                           }
+                          let jeIds: number[] = [];
+                          if (first.journal_entry_ids) {
+                            try {
+                              const parsed = JSON.parse(first.journal_entry_ids) as number[];
+                              if (Array.isArray(parsed)) jeIds = parsed;
+                            } catch {
+                              if (first.journal_entry_id != null) jeIds = [first.journal_entry_id];
+                            }
+                          } else if (first.journal_entry_id != null) {
+                            jeIds = [first.journal_entry_id];
+                          }
+                          let tIds: number[] = [];
+                          if (first.trade_ids) {
+                            try {
+                              const parsed = JSON.parse(first.trade_ids) as number[];
+                              if (Array.isArray(parsed)) tIds = parsed;
+                            } catch {
+                              if (first.trade_id != null) tIds = [first.trade_id];
+                            }
+                          } else if (first.trade_id != null) {
+                            tIds = [first.trade_id];
+                          }
                           setFormData((prev) => ({
                             ...prev,
                             timestamp: first.timestamp,
                             selectedEmotions,
                             notes: first.notes || "",
+                            journalEntryIds: jeIds,
+                            journalTradeId: first.journal_trade_id ?? null,
+                            journalTradeIds: first.journal_trade_id != null ? [first.journal_trade_id] : [],
+                            tradeIds: tIds,
                           }));
                           setIsEditingSelectedState(false);
+                          setEmotionalStateEditHistory([]);
                         }}
                         style={{
                           padding: "10px 20px",
@@ -2105,7 +2328,7 @@ export default function Emotions() {
                           fontSize: "14px",
                         }}
                       >
-                        Undo
+                        Cancel
                       </button>
                       <button
                         type="submit"
