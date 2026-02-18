@@ -611,6 +611,9 @@ export default function Emotions() {
   const [surveyResponses, setSurveyResponses] = useState<Record<string, number>>({});
   const [deleteTarget, setDeleteTarget] = useState<EmotionalState | null>(null);
   const [emotionChartTab, setEmotionChartTab] = useState<string>("Overall");
+  const [showAllEmotionalStates, setShowAllEmotionalStates] = useState(false);
+  const [emotionalStatesPage, setEmotionalStatesPage] = useState(1);
+  const EMOTIONAL_STATES_PAGE_SIZE = 24;
   const navigate = useNavigate();
   const location = useLocation();
   type FormDataSnapshot = {
@@ -1221,32 +1224,107 @@ export default function Emotions() {
           </div>
         </div>
 
-        {/* Recent entries list – compact overview, scroll to view all (7 visible) */}
+        {/* Recent entries list – one row (oldest→newest left→right); "View all" with pagination */}
         {states.length > 0 && (() => {
           const groups = groupStatesByTimestamp(states);
-          const visibleCount = 7;
-          const hasMore = groups.length > visibleCount;
+          const oneRowCount = 8;
+          const previewGroups = groups.slice(0, oneRowCount);
+          const hasMore = groups.length > oneRowCount;
+          const previewDisplay = [...previewGroups].reverse();
+          const totalPages = Math.max(1, Math.ceil(groups.length / EMOTIONAL_STATES_PAGE_SIZE));
+          const paginatedGroups = showAllEmotionalStates
+            ? groups.slice((emotionalStatesPage - 1) * EMOTIONAL_STATES_PAGE_SIZE, emotionalStatesPage * EMOTIONAL_STATES_PAGE_SIZE)
+            : [];
+          const displayGroups = showAllEmotionalStates ? paginatedGroups : previewDisplay;
           return (
             <div style={{ padding: "24px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "12px" }}>
                 <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
-                  {groups.length} {groups.length === 1 ? "entry" : "entries"} · scroll to see all
+                  {groups.length} {groups.length === 1 ? "entry" : "entries"}
+                  {!showAllEmotionalStates && hasMore && ` · showing ${previewGroups.length} most recent (newest on right)`}
+                  {showAllEmotionalStates && ` · page ${emotionalStatesPage} of ${totalPages}`}
                 </span>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  {showAllEmotionalStates && totalPages > 1 && (
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <button
+                        type="button"
+                        onClick={() => setEmotionalStatesPage((p) => Math.max(1, p - 1))}
+                        disabled={emotionalStatesPage <= 1}
+                        style={{
+                          padding: "6px 12px",
+                          fontSize: "12px",
+                          fontWeight: "600",
+                          color: emotionalStatesPage <= 1 ? "var(--text-secondary)" : "var(--accent)",
+                          background: "transparent",
+                          border: `1px solid ${emotionalStatesPage <= 1 ? "var(--border-color)" : "var(--accent)"}`,
+                          borderRadius: "6px",
+                          cursor: emotionalStatesPage <= 1 ? "default" : "pointer",
+                          opacity: emotionalStatesPage <= 1 ? 0.6 : 1,
+                        }}
+                      >
+                        Previous
+                      </button>
+                      <span style={{ fontSize: "12px", color: "var(--text-secondary)", minWidth: "70px", textAlign: "center" }}>
+                        {emotionalStatesPage} / {totalPages}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setEmotionalStatesPage((p) => Math.min(totalPages, p + 1))}
+                        disabled={emotionalStatesPage >= totalPages}
+                        style={{
+                          padding: "6px 12px",
+                          fontSize: "12px",
+                          fontWeight: "600",
+                          color: emotionalStatesPage >= totalPages ? "var(--text-secondary)" : "var(--accent)",
+                          background: "transparent",
+                          border: `1px solid ${emotionalStatesPage >= totalPages ? "var(--border-color)" : "var(--accent)"}`,
+                          borderRadius: "6px",
+                          cursor: emotionalStatesPage >= totalPages ? "default" : "pointer",
+                          opacity: emotionalStatesPage >= totalPages ? 0.6 : 1,
+                        }}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
+                  {hasMore && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAllEmotionalStates(!showAllEmotionalStates);
+                        if (!showAllEmotionalStates) setEmotionalStatesPage(1);
+                      }}
+                      style={{
+                        padding: "8px 14px",
+                        fontSize: "12px",
+                        fontWeight: "600",
+                        color: "var(--accent)",
+                        background: "transparent",
+                        border: "1px solid var(--accent)",
+                        borderRadius: "8px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {showAllEmotionalStates ? "Show less" : `View all ${groups.length} entries`}
+                    </button>
+                  )}
+                </div>
               </div>
               <div
                 style={{
                   display: "flex",
                   gap: "14px",
-                  flexWrap: "wrap",
-                  maxHeight: "320px",
-                  overflowY: "auto",
-                  overflowX: "hidden",
+                  flexWrap: showAllEmotionalStates ? "wrap" : "nowrap",
+                  maxHeight: showAllEmotionalStates ? "320px" : "none",
+                  overflowY: showAllEmotionalStates ? "auto" : "hidden",
+                  overflowX: showAllEmotionalStates ? "hidden" : "auto",
                   paddingRight: "6px",
                   marginRight: "-6px",
                   paddingTop: "10px",
                 }}
               >
-                {[...groups].reverse().map((group) => {
+                {displayGroups.map((group) => {
                   const first = group[0];
                   const timestamp = first.timestamp;
                   const dateStr = format(new Date(timestamp), "MMM dd, yyyy");
@@ -1319,8 +1397,8 @@ export default function Emotions() {
                         backgroundColor: isSelected ? "var(--bg-hover)" : "var(--bg-tertiary)",
                         borderRadius: "14px",
                         minWidth: "140px",
-                        flex: "1 1 140px",
-                        maxWidth: "180px",
+                        flex: showAllEmotionalStates ? "1 1 140px" : "0 0 140px",
+                        maxWidth: showAllEmotionalStates ? "180px" : "180px",
                         position: "relative",
                         cursor: "pointer",
                         transition: "transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease",
@@ -1378,11 +1456,6 @@ export default function Emotions() {
                   );
                 })}
               </div>
-              {hasMore && (
-                <div style={{ marginTop: "12px", textAlign: "center", fontSize: "12px", color: "var(--text-secondary)" }}>
-                  Scroll to view all {groups.length} entries
-                </div>
-              )}
             </div>
           );
         })()}

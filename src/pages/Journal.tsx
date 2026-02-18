@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight } from "lucide-react";
@@ -124,6 +124,9 @@ type TabType = "trade" | "what_went_well" | "what_could_be_improved" | "links" |
 
 export default function Journal() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
+  const [journalEntriesPage, setJournalEntriesPage] = useState(1);
+  const [journalEntriesSort, setJournalEntriesSort] = useState<"newest" | "oldest">("newest");
+  const JOURNAL_ENTRIES_PAGE_SIZE = 25;
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [selectedEntry, setSelectedEntry] = useState<JournalEntry | null>(() => {
     // Try to restore selected entry ID from localStorage
@@ -621,6 +624,27 @@ export default function Journal() {
       setLoading(false);
     }
   };
+
+  const sortedJournalEntries = useMemo(() => {
+    const copy = [...entries];
+    copy.sort((a, b) => {
+      const dA = parse(a.date, "yyyy-MM-dd", new Date()).getTime();
+      const dB = parse(b.date, "yyyy-MM-dd", new Date()).getTime();
+      return journalEntriesSort === "newest" ? dB - dA : dA - dB;
+    });
+    return copy;
+  }, [entries, journalEntriesSort]);
+
+  const journalEntriesTotalPages = Math.max(1, Math.ceil(sortedJournalEntries.length / JOURNAL_ENTRIES_PAGE_SIZE));
+  const effectiveJournalPage = Math.min(journalEntriesPage, journalEntriesTotalPages);
+  const paginatedJournalEntries = useMemo(
+    () =>
+      sortedJournalEntries.slice(
+        (effectiveJournalPage - 1) * JOURNAL_ENTRIES_PAGE_SIZE,
+        effectiveJournalPage * JOURNAL_ENTRIES_PAGE_SIZE
+      ),
+    [sortedJournalEntries, effectiveJournalPage]
+  );
 
   const loadStrategies = async () => {
     try {
@@ -3922,11 +3946,82 @@ export default function Journal() {
       >
         <div
           style={{
-            padding: "20px",
+            padding: "16px 20px",
             borderBottom: "1px solid var(--border-color)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "12px",
           }}
         >
           <h1 style={{ fontSize: "20px", fontWeight: "bold" }}>Entries</h1>
+          {!loading && entries.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" }}>
+                <select
+                  value={journalEntriesSort}
+                  onChange={(e) => {
+                    setJournalEntriesSort(e.target.value as "newest" | "oldest");
+                    setJournalEntriesPage(1);
+                  }}
+                  style={{
+                    padding: "6px 10px",
+                    fontSize: "12px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <option value="newest">Newest first</option>
+                  <option value="oldest">Oldest first</option>
+                </select>
+                {journalEntriesTotalPages > 1 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                    <button
+                      type="button"
+                      onClick={() => setJournalEntriesPage((p) => Math.max(1, p - 1))}
+                      disabled={effectiveJournalPage <= 1}
+                      style={{
+                        padding: "4px 10px",
+                        fontSize: "12px",
+                        fontWeight: "600",
+                        color: journalEntriesPage <= 1 ? "var(--text-secondary)" : "var(--accent)",
+                        background: "transparent",
+                        border: `1px solid ${journalEntriesPage <= 1 ? "var(--border-color)" : "var(--accent)"}`,
+                        borderRadius: "6px",
+                        cursor: journalEntriesPage <= 1 ? "default" : "pointer",
+                        opacity: journalEntriesPage <= 1 ? 0.6 : 1,
+                      }}
+                    >
+                      Prev
+                    </button>
+                    <span style={{ minWidth: "52px", textAlign: "center" }}>
+                      {effectiveJournalPage} / {journalEntriesTotalPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setJournalEntriesPage((p) => Math.min(journalEntriesTotalPages, p + 1))}
+                      disabled={effectiveJournalPage >= journalEntriesTotalPages}
+                      style={{
+                        padding: "4px 10px",
+                        fontSize: "12px",
+                        fontWeight: "600",
+                        color: effectiveJournalPage >= journalEntriesTotalPages ? "var(--text-secondary)" : "var(--accent)",
+                        background: "transparent",
+                        border: `1px solid ${effectiveJournalPage >= journalEntriesTotalPages ? "var(--border-color)" : "var(--accent)"}`,
+                        borderRadius: "6px",
+                        cursor: effectiveJournalPage >= journalEntriesTotalPages ? "default" : "pointer",
+                        opacity: effectiveJournalPage >= journalEntriesTotalPages ? 0.6 : 1,
+                      }}
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
         <div ref={leftPanelScrollRef} style={{ flex: 1, overflowY: "auto", padding: "12px" }}>
           {loading ? (
@@ -3950,7 +4045,7 @@ export default function Journal() {
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              {entries.map((entry) => {
+              {paginatedJournalEntries.map((entry) => {
                 const isSelected = selectedEntry?.id === entry.id;
                 return (
                   <div
