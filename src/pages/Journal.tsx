@@ -2911,7 +2911,7 @@ export default function Journal() {
                               <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal to emotional state entries. Links are saved when you save the journal entry.</p>
                               <div style={{ marginBottom: "16px" }}>
                                 <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
-                                <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry.</p>
+                                <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry. This applies to the <strong>next</strong> state you link—change the selection before each link to associate different states with different trades.</p>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                                   <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
                                     <input type="radio" name="linkExistingScope" checked={linkExistingEmotionalStateScope === "entry"} onChange={() => { setLinkExistingEmotionalStateScope("entry"); setLinkExistingEmotionalStateTradeIndex(null); }} />
@@ -3029,7 +3029,7 @@ export default function Journal() {
                               <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal entry to emotional state entries.</p>
                               <div style={{ marginBottom: "16px" }}>
                                 <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
-                                <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry.</p>
+                                <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry. This applies to the <strong>next</strong> state you link—change the selection before each link to associate different states with different trades.</p>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                                   <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
                                     <input type="radio" name="linkExistingScopeLinksTab" checked={linkExistingEmotionalStateScope === "entry"} onChange={() => { setLinkExistingEmotionalStateScope("entry"); setLinkExistingEmotionalStateTradeIndex(null); }} />
@@ -3056,13 +3056,14 @@ export default function Journal() {
                                 <ul style={{ listStyle: "none", padding: 0, margin: "0 0 10px" }}>
                                   {groupEmotionalStatesByTimestamp(journalEmotionalStates).map((group) => {
                                     const first = group[0];
+                                    const scopeLabelLinks = first.journal_trade_id == null ? "Entire journal entry" : (() => { const idx = tradesFormData.findIndex((t) => t.id === first.journal_trade_id); return idx >= 0 ? `Trade ${idx + 1}` : "Trade"; })();
                                     return (
                                       <li key={first.timestamp} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
                                         <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>
                                           {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                         </span>
                                         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                                          <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--accent)", padding: "2px 6px", backgroundColor: "var(--bg-hover)", borderRadius: "4px" }}>Linked</span>
+                                          <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--accent)", padding: "2px 6px", backgroundColor: "var(--bg-hover)", borderRadius: "4px" }} title={scopeLabelLinks}>Linked · {scopeLabelLinks}</span>
                                           <button
                                             type="button"
                                             onClick={async () => {
@@ -3203,49 +3204,80 @@ export default function Journal() {
                       >
                         {(isCreating || isEditing) ? (
                           <>
+                            {/* Single "Link to" scope for both linking existing states and adding new ones */}
+                            <div style={{ marginBottom: "20px", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
+                              <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
+                              <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry. The choice below applies to the <strong>next</strong> state you link or add—change it before each action to link different states to different trades (e.g. one state for Trade 1, another for Trade 2).</p>
+                              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                                <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                  <input
+                                    type="radio"
+                                    name="emotionalStateTabLinkScope"
+                                    checked={newEmotionalStateLinkScope === "entry"}
+                                    onChange={() => {
+                                      setNewEmotionalStateLinkScope("entry");
+                                      setNewEmotionalStateTradeIndices([]);
+                                      setLinkExistingEmotionalStateScope("entry");
+                                      setLinkExistingEmotionalStateTradeIndex(null);
+                                    }}
+                                  />
+                                  Entire journal entry
+                                </label>
+                                <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                  <input
+                                    type="radio"
+                                    name="emotionalStateTabLinkScope"
+                                    checked={newEmotionalStateLinkScope === "trades"}
+                                    onChange={() => { setNewEmotionalStateLinkScope("trades"); setLinkExistingEmotionalStateScope("trades"); }}
+                                  />
+                                  Specific trade(s)
+                                </label>
+                                {newEmotionalStateLinkScope === "trades" && (
+                                  <div style={{ marginLeft: "24px", display: "flex", flexWrap: "wrap", gap: "10px", marginTop: "6px" }}>
+                                    {tradesFormData.map((t, i) => {
+                                      const label = t.symbol ? `${t.symbol}${t.position ? ` (${t.position})` : ""}` : `Trade ${i + 1}`;
+                                      const checked = newEmotionalStateTradeIndices.includes(i);
+                                      return (
+                                        <label key={i} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
+                                          <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={() => {
+                                              const next = checked ? newEmotionalStateTradeIndices.filter((j) => j !== i) : [...newEmotionalStateTradeIndices, i];
+                                              setNewEmotionalStateTradeIndices(next);
+                                              setLinkExistingEmotionalStateTradeIndex(next[0] ?? null);
+                                            }}
+                                          />
+                                          {label || `Trade ${i + 1}`}
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
                             {/* Link to emotional states only (trades are linked from the Links tab) */}
                             <div style={{ marginBottom: "20px", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
                               <h4 style={{ margin: "0 0 14px", fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Link to emotional states</h4>
                               {selectedEntry?.id ? (
                                 <>
                                   <p style={{ margin: "0 0 16px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal entry to emotional state entries. Already linked items are shown below. You can also manage links from the <strong>Links</strong> tab.</p>
-                                  <div style={{ marginBottom: "16px" }}>
-                                    <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
-                                    <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry.</p>
-                                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                                      <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
-                                        <input type="radio" name="linkExistingScopeEdit" checked={linkExistingEmotionalStateScope === "entry"} onChange={() => { setLinkExistingEmotionalStateScope("entry"); setLinkExistingEmotionalStateTradeIndex(null); }} />
-                                        Entire journal entry
-                                      </label>
-                                      <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
-                                        <input type="radio" name="linkExistingScopeEdit" checked={linkExistingEmotionalStateScope === "trades"} onChange={() => setLinkExistingEmotionalStateScope("trades")} />
-                                        Specific trade(s)
-                                      </label>
-                                      {linkExistingEmotionalStateScope === "trades" && (
-                                        <div style={{ marginLeft: "24px", display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
-                                          {tradesFormData.map((t, i) => (
-                                            <label key={i} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
-                                              <input type="radio" name="linkExistingTradeEdit" checked={linkExistingEmotionalStateTradeIndex === i} onChange={() => setLinkExistingEmotionalStateTradeIndex(i)} />
-                                              {t.symbol ? `${t.symbol}${t.position ? ` (${t.position})` : ""}` : `Trade ${i + 1}`}
-                                            </label>
-                                          ))}
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
                                   <div style={{ marginBottom: "0" }}>
-                                <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "600" }}>Link to emotional states</label>
+                                <label style={{ display: "block", marginBottom: "4px", fontSize: "12px", fontWeight: "600" }}>Link to emotional states</label>
+                                <p style={{ margin: "0 0 8px", fontSize: "11px", color: "var(--text-secondary)" }}>Each row shows whether the state is linked to the entire journal entry or to a specific trade.</p>
                                 {groupEmotionalStatesByTimestamp(journalEmotionalStates).length > 0 && (
                                   <ul style={{ listStyle: "none", padding: 0, margin: "0 0 10px" }}>
                                     {groupEmotionalStatesByTimestamp(journalEmotionalStates).map((group) => {
                                       const first = group[0];
+                                      const scopeLabel = first.journal_trade_id == null ? "Entire journal entry" : (() => { const idx = tradesFormData.findIndex((t) => t.id === first.journal_trade_id); return idx >= 0 ? `Trade ${idx + 1}` : "Trade"; })();
                                       return (
                                         <li key={first.timestamp} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
                                           <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>
                                             {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                           </span>
                                           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                                            <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--accent)", padding: "2px 6px", backgroundColor: "var(--bg-hover)", borderRadius: "4px" }}>Linked</span>
+                                            <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--accent)", padding: "2px 6px", backgroundColor: "var(--bg-hover)", borderRadius: "4px" }} title={scopeLabel}>Linked · {scopeLabel}</span>
                                             <button
                                               type="button"
                                               onClick={async () => {
@@ -3353,30 +3385,6 @@ export default function Journal() {
                                 <>
                                   <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>You can link this journal to emotional state entries below. Links are saved when you save the journal entry.</p>
                                   <div style={{ marginBottom: "16px" }}>
-                                    <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
-                                    <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry.</p>
-                                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                                      <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
-                                        <input type="radio" name="linkExistingScopeCreate" checked={linkExistingEmotionalStateScope === "entry"} onChange={() => { setLinkExistingEmotionalStateScope("entry"); setLinkExistingEmotionalStateTradeIndex(null); }} />
-                                        Entire journal entry
-                                      </label>
-                                      <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
-                                        <input type="radio" name="linkExistingScopeCreate" checked={linkExistingEmotionalStateScope === "trades"} onChange={() => setLinkExistingEmotionalStateScope("trades")} />
-                                        Specific trade(s)
-                                      </label>
-                                      {linkExistingEmotionalStateScope === "trades" && (
-                                        <div style={{ marginLeft: "24px", display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
-                                          {tradesFormData.map((t, i) => (
-                                            <label key={i} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
-                                              <input type="radio" name="linkExistingTradeCreate" checked={linkExistingEmotionalStateTradeIndex === i} onChange={() => setLinkExistingEmotionalStateTradeIndex(i)} />
-                                              {t.symbol ? `${t.symbol}${t.position ? ` (${t.position})` : ""}` : `Trade ${i + 1}`}
-                                            </label>
-                                          ))}
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div style={{ marginBottom: "16px" }}>
                                     <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "600" }}>Link to emotional states</label>
                                     {(entryFormData.linked_emotional_state_ids?.length ?? 0) > 0 && (
                                       <ul style={{ listStyle: "none", padding: 0, margin: "0 0 10px" }}>
@@ -3384,13 +3392,15 @@ export default function Journal() {
                                           const allGroups = groupEmotionalStatesByTimestamp(allEmotionalStates);
                                           const group = allGroups.find((g) => g.some((s) => s.id === stateId));
                                           const first = group?.[0];
+                                          const scopeForPending = entryFormData.linked_emotional_state_link_scopes?.[stateId];
+                                          const scopeLabelPending = scopeForPending?.scope === "entry" ? "Entire journal entry" : (scopeForPending?.tradeIndex != null ? `Trade ${scopeForPending.tradeIndex + 1}` : "—");
                                           return first ? (
                                             <li key={first.timestamp} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
                                               <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>
                                                 {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group!.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                               </span>
                                               <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                                                <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--accent)", padding: "2px 6px", backgroundColor: "var(--bg-hover)", borderRadius: "4px" }}>Will link on save</span>
+                                                <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--accent)", padding: "2px 6px", backgroundColor: "var(--bg-hover)", borderRadius: "4px" }}>Will link on save · {scopeLabelPending}</span>
                                                 <button type="button" onClick={() => setEntryFormData((prev) => { const next = (prev.linked_emotional_state_ids ?? []).filter((id) => id !== stateId); const scopes = { ...(prev.linked_emotional_state_link_scopes ?? {}) }; delete scopes[stateId]; return { ...prev, linked_emotional_state_ids: next, linked_emotional_state_link_scopes: scopes }; })} style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}>Remove</button>
                                               </div>
                                             </li>
@@ -3433,7 +3443,7 @@ export default function Journal() {
                                 {!showAddEmotionalStateForm && (
                                   <button
                                     type="button"
-                                    onClick={() => { setShowAddEmotionalStateForm(true); setNewEmotionalStateLinkScope("entry"); setNewEmotionalStateTradeIndices([]); }}
+                                    onClick={() => setShowAddEmotionalStateForm(true)}
                                     style={{
                                       display: "inline-flex",
                                       alignItems: "center",
@@ -3519,7 +3529,7 @@ export default function Journal() {
                                     </div>
                                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                       <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                                        {pending.tradeIndex === -1 ? "Entire entry (unsaved)" : `Trade ${pending.tradeIndex + 1} (unsaved)`}
+                                        {pending.tradeIndex === -1 ? "Entire journal entry (unsaved)" : `Trade ${pending.tradeIndex + 1} (unsaved)`}
                                       </span>
                                       <button
                                         type="button"
@@ -3560,52 +3570,6 @@ export default function Journal() {
                                 <h4 style={{ margin: "0 0 16px", fontSize: "14px", fontWeight: "600" }}>Add emotional state</h4>
                                 <div style={{ marginBottom: "20px", padding: "12px 14px", backgroundColor: "var(--bg-tertiary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
                                   <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.5 }}>{INTENSITY_SCALE_LABEL}</p>
-                                </div>
-                                <div style={{ marginBottom: "16px" }}>
-                                  <h3 style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
-                                  <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry.</p>
-                                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                                    <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
-                                      <input
-                                        type="radio"
-                                        name="emotionalStateLinkScope"
-                                        checked={newEmotionalStateLinkScope === "entry"}
-                                        onChange={() => { setNewEmotionalStateLinkScope("entry"); setNewEmotionalStateTradeIndices([]); }}
-                                      />
-                                      Entire journal entry
-                                    </label>
-                                    <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
-                                      <input
-                                        type="radio"
-                                        name="emotionalStateLinkScope"
-                                        checked={newEmotionalStateLinkScope === "trades"}
-                                        onChange={() => setNewEmotionalStateLinkScope("trades")}
-                                      />
-                                      Specific trade(s)
-                                    </label>
-                                    {newEmotionalStateLinkScope === "trades" && (
-                                      <div style={{ marginLeft: "24px", display: "flex", flexWrap: "wrap", gap: "10px", marginTop: "6px" }}>
-                                        {tradesFormData.map((t, i) => {
-                                          const label = t.symbol ? `${t.symbol}${t.position ? ` (${t.position})` : ""}` : `Trade ${i + 1}`;
-                                          const checked = newEmotionalStateTradeIndices.includes(i);
-                                          return (
-                                            <label key={i} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
-                                              <input
-                                                type="checkbox"
-                                                checked={checked}
-                                                onChange={() => {
-                                                  setNewEmotionalStateTradeIndices((prev) =>
-                                                    prev.includes(i) ? prev.filter((j) => j !== i) : [...prev, i]
-                                                  );
-                                                }}
-                                              />
-                                              {label || `Trade ${i + 1}`}
-                                            </label>
-                                          );
-                                        })}
-                                      </div>
-                                    )}
-                                  </div>
                                 </div>
                                 <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>
                                   Add this emotional state to the journal entry using the button below. Save the journal entry when done to persist everything.
