@@ -640,8 +640,6 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
             ).map_err(|e| e.to_string())?;
             
             inserted_ids.push(conn.last_insert_rowid());
-            
-            inserted_ids.push(conn.last_insert_rowid());
         }
     } else {
         // Standard format
@@ -697,6 +695,66 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
     }
     
     Ok(inserted_ids)
+}
+
+#[tauri::command]
+pub fn add_trade_manual(
+    symbol: String,
+    side: String,
+    quantity: f64,
+    price: f64,
+    timestamp: String,
+    order_type: Option<String>,
+    fees: Option<f64>,
+    notes: Option<String>,
+    strategy_id: Option<i64>,
+) -> Result<i64, String> {
+    let symbol = symbol.trim().to_uppercase();
+    if symbol.is_empty() {
+        return Err("Symbol is required".to_string());
+    }
+    let side_upper = side.trim().to_uppercase();
+    if side_upper != "BUY" && side_upper != "SELL" {
+        return Err("Side must be BUY or SELL".to_string());
+    }
+    if quantity <= 0.0 {
+        return Err("Quantity must be positive".to_string());
+    }
+    if price < 0.0 {
+        return Err("Price cannot be negative".to_string());
+    }
+    if timestamp.trim().is_empty() {
+        return Err("Timestamp is required".to_string());
+    }
+
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+
+    let order_type = order_type
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "MARKET".to_string());
+    let status = "FILLED".to_string();
+
+    conn.execute(
+        "INSERT INTO trades (symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            symbol,
+            side_upper,
+            quantity,
+            price,
+            timestamp.trim(),
+            order_type,
+            status,
+            fees,
+            notes.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            strategy_id,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(conn.last_insert_rowid())
 }
 
 #[tauri::command]
@@ -2786,6 +2844,62 @@ pub fn get_journal_checklist_responses(journal_entry_id: i64) -> Result<Vec<Jour
     }
     
     Ok(responses)
+}
+
+#[tauri::command]
+pub fn get_journal_entry_pairs(journal_entry_id: i64) -> Result<Vec<PairedTrade>, String> {
+    let linked = get_journal_entry_pair_ids(journal_entry_id)?;
+    if linked.is_empty() {
+        return Ok(Vec::new());
+    }
+    let all_pairs = get_paired_trades(None).map_err(|e| e.to_string())?;
+    let linked_set: std::collections::HashSet<(i64, i64)> = linked.into_iter().collect();
+    let pairs: Vec<PairedTrade> = all_pairs
+        .into_iter()
+        .filter(|p| linked_set.contains(&(p.entry_trade_id, p.exit_trade_id)))
+        .collect();
+    Ok(pairs)
+}
+
+fn get_journal_entry_pair_ids(journal_entry_id: i64) -> Result<Vec<(i64, i64)>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT entry_trade_id, exit_trade_id FROM journal_entry_pairs WHERE journal_entry_id = ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![journal_entry_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct JournalEntryPairLink {
+    pub entry_trade_id: i64,
+    pub exit_trade_id: i64,
+}
+
+#[tauri::command]
+pub fn set_journal_entry_pairs(
+    journal_entry_id: i64,
+    pairs: Vec<JournalEntryPairLink>,
+) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM journal_entry_pairs WHERE journal_entry_id = ?1", params![journal_entry_id])
+        .map_err(|e| e.to_string())?;
+    for link in pairs {
+        conn.execute(
+            "INSERT INTO journal_entry_pairs (journal_entry_id, entry_trade_id, exit_trade_id) VALUES (?1, ?2, ?3)",
+            params![journal_entry_id, link.entry_trade_id, link.exit_trade_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 // Journal Trade Commands

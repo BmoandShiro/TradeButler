@@ -389,6 +389,14 @@ pub fn init_database(db_path: &Path) -> Result<()> {
             PRIMARY KEY (journal_trade_id, trade_id),
             FOREIGN KEY (journal_trade_id) REFERENCES journal_trades(id) ON DELETE CASCADE,
             FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE CASCADE
+    // Create journal_entry_pairs table for linking trade pairs to journal entries
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS journal_entry_pairs (
+            journal_entry_id INTEGER NOT NULL,
+            entry_trade_id INTEGER NOT NULL,
+            exit_trade_id INTEGER NOT NULL,
+            PRIMARY KEY (journal_entry_id, entry_trade_id, exit_trade_id),
+            FOREIGN KEY (journal_entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE
         )",
         [],
     )?;
@@ -398,6 +406,7 @@ pub fn init_database(db_path: &Path) -> Result<()> {
     )?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_journal_trade_actual_trades_t ON journal_trade_actual_trades(trade_id)",
+        "CREATE INDEX IF NOT EXISTS idx_journal_entry_pairs_entry ON journal_entry_pairs(journal_entry_id)",
         [],
     )?;
 

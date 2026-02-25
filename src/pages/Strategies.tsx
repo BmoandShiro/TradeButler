@@ -6,6 +6,7 @@ import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import { ColorPicker } from "../components/ColorPicker";
+import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
 import {
   DndContext,
@@ -1339,6 +1340,23 @@ export default function Strategies() {
     duplicates: number;
     errors: number;
   } | null>(null);
+  const [showAddTradeModal, setShowAddTradeModal] = useState(false);
+  const [addTradeForm, setAddTradeForm] = useState({
+    symbol: "",
+    side: "BUY",
+    quantity: "",
+    price: "",
+    tradeDate: format(new Date(), "yyyy-MM-dd"),
+    tradeTime: format(new Date(), "HH:mm"),
+    orderType: "MARKET",
+    fees: "",
+    notes: "",
+  });
+  const [isAddingTrade, setIsAddingTrade] = useState(false);
+  const [addTradeError, setAddTradeError] = useState<string | null>(null);
+  /** Strategy to assign the new trade to: captured when user opens Add Trade from Strategies tab (so it auto-assigns to the currently selected strategy). */
+  const addTradeStrategyIdRef = useRef<number | null>(null);
+  const [selectedPairForChart, setSelectedPairForChart] = useState<PairedTrade | null>(null);
   const [editHistory, setEditHistory] = useState<Array<{ name: string; description: string; color: string; notes: string }>>([]);
   const [editingChecklists, setEditingChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [originalChecklists, setOriginalChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
@@ -2843,6 +2861,103 @@ export default function Strategies() {
     }
   };
 
+  const handleAddTradeSubmit = async () => {
+    setAddTradeError(null);
+    const qty = parseFloat(addTradeForm.quantity);
+    const pr = parseFloat(addTradeForm.price);
+    const feeVal = addTradeForm.fees.trim() === "" ? null : parseFloat(addTradeForm.fees);
+    if (!addTradeForm.symbol.trim()) {
+      setAddTradeError("Symbol is required.");
+      return;
+    }
+    if (isNaN(qty) || qty <= 0) {
+      setAddTradeError("Quantity must be a positive number.");
+      return;
+    }
+    if (isNaN(pr) || pr < 0) {
+      setAddTradeError("Price must be a non-negative number.");
+      return;
+    }
+    // ISO 8601: YYYY-MM-DDTHH:mm:ssZ
+    const timestamp = `${addTradeForm.tradeDate}T${addTradeForm.tradeTime}:00Z`;
+    // Auto-assign to the strategy the user had selected when they clicked Add Trade (captured in ref when modal opened)
+    const strategyId = isCreating ? null : (addTradeStrategyIdRef.current ?? null);
+    try {
+      setIsAddingTrade(true);
+      const newId = await invoke<number>("add_trade_manual", {
+        symbol: addTradeForm.symbol.trim(),
+        side: addTradeForm.side,
+        quantity: qty,
+        price: pr,
+        timestamp,
+        order_type: addTradeForm.orderType || null,
+        fees: feeVal,
+        notes: addTradeForm.notes.trim() || null,
+        strategy_id: strategyId,
+      });
+      setShowAddTradeModal(false);
+      setAddTradeForm({
+        symbol: "",
+        side: "BUY",
+        quantity: "",
+        price: "",
+        tradeDate: format(new Date(), "yyyy-MM-dd"),
+        tradeTime: format(new Date(), "HH:mm"),
+        orderType: "MARKET",
+        fees: "",
+        notes: "",
+      });
+      if (isCreating) {
+        const newPendingIds = [...pendingTradeIds, newId];
+        setPendingTradeIds(newPendingIds);
+        setActiveTab("trades");
+        setLoadingPairs(new Set([-1]));
+        try {
+          const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+          const allPairs = await invoke<PairedTrade[]>("get_paired_trades", { pairingMethod: pairingMethod || null });
+          const importedSet = new Set(newPendingIds);
+          const filteredPairs = allPairs.filter(pair =>
+            importedSet.has(pair.entry_trade_id) && importedSet.has(pair.exit_trade_id)
+          );
+          setStrategyPairs(new Map(strategyPairs.set(-1, filteredPairs)));
+          const stats = calculateStrategyStats(filteredPairs);
+          setStrategyStats(new Map(strategyStats.set(-1, stats)));
+        } catch (e) {
+          console.error("Error loading pairs after add trade:", e);
+        } finally {
+          setLoadingPairs(prev => { const s = new Set(prev); s.delete(-1); return s; });
+        }
+      } else {
+        const assignedStrategyId = addTradeStrategyIdRef.current;
+        if (assignedStrategyId != null) {
+          await invoke("update_trade_strategy", { tradeId: newId, strategyId: assignedStrategyId });
+          setActiveTab("trades");
+          setLoadingPairs(new Set([assignedStrategyId]));
+          try {
+            const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+            const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
+              strategyId: assignedStrategyId,
+              pairingMethod,
+              startDate: null,
+              endDate: null,
+            });
+            setStrategyPairs(new Map(strategyPairs.set(assignedStrategyId, pairs)));
+            const stats = calculateStrategyStats(pairs);
+            setStrategyStats(new Map(strategyStats.set(assignedStrategyId, stats)));
+          } catch (e) {
+            console.error("Error loading pairs after add trade:", e);
+          } finally {
+            setLoadingPairs(prev => { const s = new Set(prev); s.delete(assignedStrategyId); return s; });
+          }
+        }
+      }
+    } catch (err) {
+      setAddTradeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsAddingTrade(false);
+    }
+  };
+
   const handleSaveNew = async () => {
     if (!editingFormData.name.trim()) {
       setShowNameRequiredModal(true);
@@ -4117,27 +4232,52 @@ export default function Strategies() {
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
                     <h3 style={{ fontSize: "18px", fontWeight: "600" }}>Trades</h3>
                     {(isCreating || selectedStrategy) && (
-                      <button
-                        onClick={isCreating ? handleImportCSVForStrategy : handleImportCSVForExistingStrategy}
-                        disabled={isImportingCSV}
-                        style={{
-                          background: "var(--accent)",
-                          border: "none",
-                          borderRadius: "6px",
-                          padding: "8px 12px",
-                          color: "white",
-                          cursor: isImportingCSV ? "not-allowed" : "pointer",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "6px",
-                          fontSize: "13px",
-                          fontWeight: "500",
-                          opacity: isImportingCSV ? 0.6 : 1,
+                      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                        <button
+                          onClick={isCreating ? handleImportCSVForStrategy : handleImportCSVForExistingStrategy}
+                          disabled={isImportingCSV}
+                          style={{
+                            background: "var(--accent)",
+                            border: "none",
+                            borderRadius: "6px",
+                            padding: "8px 12px",
+                            color: "white",
+                            cursor: isImportingCSV ? "not-allowed" : "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            fontSize: "13px",
+                            fontWeight: "500",
+                            opacity: isImportingCSV ? 0.6 : 1,
+                          }}
+                        >
+                          <Upload size={16} />
+                          {isImportingCSV ? "Importing..." : "Import CSV"}
+                        </button>
+                        <button
+                          onClick={() => {
+                          setAddTradeError(null);
+                          addTradeStrategyIdRef.current = selectedStrategy;
+                          setShowAddTradeModal(true);
                         }}
-                      >
-                        <Upload size={16} />
-                        {isImportingCSV ? "Importing..." : "Import CSV"}
-                      </button>
+                          style={{
+                            background: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "6px",
+                            padding: "8px 12px",
+                            color: "var(--text-primary)",
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            fontSize: "13px",
+                            fontWeight: "500",
+                          }}
+                        >
+                          <Plus size={16} />
+                          Add Trade
+                        </button>
+                      </div>
                     )}
                   </div>
                   {/* Import Results Banner - for both creating and existing strategies */}
@@ -4407,7 +4547,17 @@ export default function Strategies() {
                           {pairs.map((pair, idx) => (
                             <tr
                               key={`${pair.entry_trade_id}-${pair.exit_trade_id}-${idx}`}
-                              style={{ borderBottom: "1px solid var(--border-color)" }}
+                              style={{
+                                borderBottom: "1px solid var(--border-color)",
+                                cursor: "pointer",
+                              }}
+                              onClick={() => setSelectedPairForChart(pair)}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.backgroundColor = "var(--bg-tertiary)";
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.backgroundColor = "transparent";
+                              }}
                             >
                               <td style={{ padding: "12px", fontSize: "14px" }}>{pair.symbol}</td>
                               <td style={{ padding: "12px", fontSize: "14px" }}>
@@ -5531,6 +5681,192 @@ export default function Strategies() {
               </div>
             </div>
         </div>
+      )}
+
+      {/* Add Trade Modal */}
+      {showAddTradeModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => !isAddingTrade && setShowAddTradeModal(false)}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "440px",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
+              Add Trade
+            </h3>
+            <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "8px" }}>
+              Add a single trade manually (works for paper trades, commons, or options).
+            </p>
+            {!isCreating && addTradeStrategyIdRef.current != null && (() => {
+              const assignToStrategy = strategies.find((s) => s.id === addTradeStrategyIdRef.current);
+              return assignToStrategy ? (
+                <p style={{ fontSize: "13px", color: "var(--accent)", marginBottom: "16px", fontWeight: "500" }}>
+                  This trade will be assigned to <strong>{assignToStrategy.name}</strong>.
+                </p>
+              ) : null;
+            })()}
+            {(isCreating || addTradeStrategyIdRef.current == null) && <div style={{ marginBottom: "16px" }} />}
+            {addTradeError && (
+              <div style={{ marginBottom: "12px", padding: "8px 12px", background: "var(--loss)", color: "white", borderRadius: "6px", fontSize: "13px" }}>
+                {addTradeError}
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Symbol *</label>
+                <input
+                  type="text"
+                  placeholder="e.g. AAPL or AAPL251219C00150000"
+                  value={addTradeForm.symbol}
+                  onChange={(e) => setAddTradeForm(f => ({ ...f, symbol: e.target.value }))}
+                  style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                />
+              </div>
+              <div style={{ display: "flex", gap: "12px" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Side *</label>
+                  <select
+                    value={addTradeForm.side}
+                    onChange={(e) => setAddTradeForm(f => ({ ...f, side: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                  >
+                    <option value="BUY">BUY</option>
+                    <option value="SELL">SELL</option>
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Quantity *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="Shares or contracts"
+                    value={addTradeForm.quantity}
+                    onChange={(e) => setAddTradeForm(f => ({ ...f, quantity: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                  />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "12px" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Price *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="0.00"
+                    value={addTradeForm.price}
+                    onChange={(e) => setAddTradeForm(f => ({ ...f, price: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Fees (optional)</label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="0.00"
+                    value={addTradeForm.fees}
+                    onChange={(e) => setAddTradeForm(f => ({ ...f, fees: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                  />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "12px" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Date *</label>
+                  <input
+                    type="date"
+                    value={addTradeForm.tradeDate}
+                    onChange={(e) => setAddTradeForm(f => ({ ...f, tradeDate: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Time *</label>
+                  <input
+                    type="time"
+                    value={addTradeForm.tradeTime}
+                    onChange={(e) => setAddTradeForm(f => ({ ...f, tradeTime: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                  />
+                </div>
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Order type</label>
+                <select
+                  value={addTradeForm.orderType}
+                  onChange={(e) => setAddTradeForm(f => ({ ...f, orderType: e.target.value }))}
+                  style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                >
+                  <option value="MARKET">MARKET</option>
+                  <option value="LIMIT">LIMIT</option>
+                  <option value="DAY">DAY</option>
+                  <option value="GTC">GTC</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)", marginBottom: "4px" }}>Notes (optional)</label>
+                <input
+                  type="text"
+                  placeholder="Optional notes"
+                  value={addTradeForm.notes}
+                  onChange={(e) => setAddTradeForm(f => ({ ...f, notes: e.target.value }))}
+                  style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                />
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end", marginTop: "20px" }}>
+              <button
+                onClick={() => !isAddingTrade && setShowAddTradeModal(false)}
+                disabled={isAddingTrade}
+                style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", padding: "10px 20px", color: "var(--text-primary)", cursor: isAddingTrade ? "not-allowed" : "pointer", fontSize: "14px", fontWeight: "500" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddTradeSubmit}
+                disabled={isAddingTrade}
+                style={{ background: "var(--accent)", border: "none", borderRadius: "6px", padding: "10px 20px", color: "white", cursor: isAddingTrade ? "not-allowed" : "pointer", fontSize: "14px", fontWeight: "500", opacity: isAddingTrade ? 0.7 : 1 }}
+              >
+                {isAddingTrade ? "Adding..." : "Add Trade"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {selectedPairForChart && (
+        <TradeChart
+          symbol={selectedPairForChart.symbol}
+          entryTimestamp={selectedPairForChart.entry_timestamp}
+          exitTimestamp={selectedPairForChart.exit_timestamp}
+          entryPrice={selectedPairForChart.entry_price}
+          exitPrice={selectedPairForChart.exit_price}
+          onClose={() => setSelectedPairForChart(null)}
+        />
       )}
     </div>
   );
