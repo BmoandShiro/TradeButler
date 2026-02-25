@@ -25,6 +25,12 @@ pub struct EmotionalState {
     pub intensity: i32, // 1-10 scale
     pub notes: Option<String>,
     pub trade_id: Option<i64>,
+    pub journal_entry_id: Option<i64>,
+    pub journal_trade_id: Option<i64>,
+    /// JSON array of journal entry IDs, e.g. "[1,2,3]"
+    pub journal_entry_ids: Option<String>,
+    /// JSON array of trade IDs, e.g. "[4,5,6]"
+    pub trade_ids: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -76,6 +82,8 @@ pub struct JournalEntry {
     pub strategy_id: Option<i64>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    /// JSON array of trade IDs (real trades) linked from Journal page, e.g. "[1,2,3]"
+    pub linked_trade_ids: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -317,6 +325,70 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         [],
     )?;
 
+    // journal_entries: link to real trades from Journal page (JSON array of trade IDs)
+    let has_linked_trade_ids: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_entries') WHERE name='linked_trade_ids'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_linked_trade_ids {
+        conn.execute("ALTER TABLE journal_entries ADD COLUMN linked_trade_ids TEXT", [])?;
+    }
+
+    // Migration: Add journal_trade_ids column for Analysis/Mantra trade association (nullable = entry-level, JSON array = specific trades)
+    let has_column: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='journal_trade_ids'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_column {
+        conn.execute("ALTER TABLE journal_checklist_responses ADD COLUMN journal_trade_ids TEXT", [])?;
+    }
+
+    // emotional_states: link to journal entry and/or journal trade (implementation)
+    let has_je: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_id'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_je {
+        conn.execute("ALTER TABLE emotional_states ADD COLUMN journal_entry_id INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL", [])?;
+    }
+    let has_jt: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_trade_id'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_jt {
+        conn.execute("ALTER TABLE emotional_states ADD COLUMN journal_trade_id INTEGER REFERENCES journal_trades(id) ON DELETE SET NULL", [])?;
+    }
+
+    // emotional_states: multiple journal entries and multiple trades (JSON arrays)
+    let has_je_ids: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_ids'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_je_ids {
+        conn.execute("ALTER TABLE emotional_states ADD COLUMN journal_entry_ids TEXT", [])?;
+    }
+    let has_trade_ids: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='trade_ids'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_trade_ids {
+        conn.execute("ALTER TABLE emotional_states ADD COLUMN trade_ids TEXT", [])?;
+    }
+
+    // Create journal_trade_actual_trades: link journal trades (in entry) to actual trades (trades table)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS journal_trade_actual_trades (
+            journal_trade_id INTEGER NOT NULL,
+            trade_id INTEGER NOT NULL,
+            PRIMARY KEY (journal_trade_id, trade_id),
+            FOREIGN KEY (journal_trade_id) REFERENCES journal_trades(id) ON DELETE CASCADE,
+            FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE CASCADE
     // Create journal_entry_pairs table for linking trade pairs to journal entries
     conn.execute(
         "CREATE TABLE IF NOT EXISTS journal_entry_pairs (
@@ -329,6 +401,11 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         [],
     )?;
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_trade_actual_trades_jt ON journal_trade_actual_trades(journal_trade_id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_trade_actual_trades_t ON journal_trade_actual_trades(trade_id)",
         "CREATE INDEX IF NOT EXISTS idx_journal_entry_pairs_entry ON journal_entry_pairs(journal_entry_id)",
         [],
     )?;
