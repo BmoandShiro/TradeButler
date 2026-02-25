@@ -317,6 +317,22 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         [],
     )?;
 
+    // Create journal_entry_pairs table for linking trade pairs to journal entries
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS journal_entry_pairs (
+            journal_entry_id INTEGER NOT NULL,
+            entry_trade_id INTEGER NOT NULL,
+            exit_trade_id INTEGER NOT NULL,
+            PRIMARY KEY (journal_entry_id, entry_trade_id, exit_trade_id),
+            FOREIGN KEY (journal_entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_entry_pairs_entry ON journal_entry_pairs(journal_entry_id)",
+        [],
+    )?;
+
     // Create emotion_surveys table for storing detailed emotion surveys linked to emotional states
     conn.execute(
         "CREATE TABLE IF NOT EXISTS emotion_surveys (

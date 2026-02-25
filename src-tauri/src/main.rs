@@ -24,6 +24,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::import_trades_csv,
+            commands::add_trade_manual,
             commands::get_trades,
             commands::get_trades_with_pairing,
             commands::get_position_groups,
@@ -76,6 +77,8 @@ fn main() {
             commands::delete_journal_trade,
             commands::save_journal_checklist_responses,
             commands::get_journal_checklist_responses,
+            commands::get_journal_entry_pairs,
+            commands::set_journal_entry_pairs,
             commands::get_all_symbols,
             commands::clear_all_data,
             commands::export_data,

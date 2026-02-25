@@ -24,8 +24,12 @@ interface TradeChartProps {
   exitTimestamp: string;
   entryPrice: number;
   exitPrice: number;
-  onClose: () => void;
+  onClose?: () => void;
   positionTrades?: Trade[]; // Optional: all trades that make up this position
+  /** When true, render as inline compact chart (e.g. in journal entry view) without modal overlay */
+  inline?: boolean;
+  /** Height of chart container when inline (default 200) */
+  compactHeight?: number;
 }
 
 
@@ -52,7 +56,7 @@ const defaultSettings: ChartSettings = {
   sellMarkerColor: "#ef5350",
 };
 
-export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, exitPrice, onClose, positionTrades }: TradeChartProps) {
+export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, exitPrice, onClose, positionTrades, inline = false, compactHeight = 200 }: TradeChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -1002,7 +1006,7 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
         }}
         onClick={(e) => {
           if (e.target === e.currentTarget) {
-            onClose();
+            onClose?.();
           }
         }}
       >
@@ -1054,43 +1058,27 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
     );
   }
 
-  return (
-    <div
-      style={{
-        position: "fixed",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: "rgba(0, 0, 0, 0.8)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 10000,
-        padding: "20px",
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {
-          onClose();
-        }
-      }}
-    >
+  const innerContent = (
       <div
         style={{
           backgroundColor: "var(--bg-secondary)",
           border: "1px solid var(--border-color)",
           borderRadius: "8px",
-          padding: "20px",
-          width: "90%",
-          maxWidth: "1200px",
-          maxHeight: "90vh",
+          padding: inline ? "12px" : "20px",
+          width: inline ? "100%" : "90%",
+          maxWidth: inline ? "100%" : "1200px",
+          maxHeight: inline ? "none" : "90vh",
           overflow: "auto",
           display: "flex",
           flexDirection: "column",
-          gap: "16px",
+          gap: inline ? "8px" : "16px",
         }}
-        onClick={(e) => e.stopPropagation()}
+        onClick={(e) => !inline && e.stopPropagation()}
       >
+        {inline && (
+          <div style={{ fontSize: "14px", fontWeight: "600", margin: 0 }}>{symbol}</div>
+        )}
+        {!inline && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h2 style={{ fontSize: "24px", fontWeight: "600", margin: 0 }}>
             {symbol} - Trade Chart
@@ -1119,7 +1107,7 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
               <Settings size={16} />
             </button>
             <button
-              onClick={onClose}
+              onClick={() => onClose?.()}
               style={{
                 background: "transparent",
                 border: "1px solid var(--border-color)",
@@ -1134,8 +1122,9 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
             </button>
           </div>
         </div>
+        )}
         
-        {showSettings && (
+        {!inline && showSettings && (
           <div
             style={{
               backgroundColor: "var(--bg-tertiary)",
@@ -1429,6 +1418,7 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
           </div>
         )}
 
+        {!inline && (
         <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
           <label style={{ fontSize: "14px", color: "var(--text-secondary)" }}>
             Timeframe:
@@ -1456,8 +1446,9 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
           </select>
 
         </div>
+        )}
 
-        <div style={{ display: "flex", gap: "16px", fontSize: "14px", color: "var(--text-secondary)" }}>
+        <div style={{ display: "flex", gap: "16px", fontSize: inline ? "12px" : "14px", color: "var(--text-secondary)", flexWrap: "wrap" }}>
           <div>
             <strong>Entry:</strong> {format(new Date(entryTimestamp), "MMM dd, yyyy HH:mm")} @ ${entryPrice.toFixed(2)}
           </div>
@@ -1496,14 +1487,42 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
           ref={chartContainerRef}
           style={{
             width: "100%",
-            height: "500px",
-            minHeight: "500px",
-            minWidth: "800px",
+            height: inline ? compactHeight : 500,
+            minHeight: inline ? compactHeight : 500,
+            minWidth: inline ? 280 : 800,
             position: "relative",
             display: "block",
           }}
         />
       </div>
+    );
+
+  if (inline) {
+    return innerContent;
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: "rgba(0, 0, 0, 0.8)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 10000,
+        padding: "20px",
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && onClose) {
+          onClose();
+        }
+      }}
+    >
+      {innerContent}
     </div>
   );
 }

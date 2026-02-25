@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2 } from "lucide-react";
+import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, BarChart3, Search } from "lucide-react";
 import { format, parse } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
+import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
 
 interface JournalEntry {
@@ -59,6 +60,23 @@ interface JournalChecklistResponse {
   is_checked: boolean;
 }
 
+interface PairedTrade {
+  symbol: string;
+  entry_trade_id: number;
+  exit_trade_id: number;
+  quantity: number;
+  entry_price: number;
+  exit_price: number;
+  entry_timestamp: string;
+  exit_timestamp: string;
+  gross_profit_loss: number;
+  entry_fees: number;
+  exit_fees: number;
+  net_profit_loss: number;
+  strategy_id: number | null;
+  notes?: string | null;
+}
+
 type TabType = "trade" | "what_went_well" | "what_could_be_improved" | "emotional_state" | "notes" | "checklists" | "survey";
 
 export default function Journal() {
@@ -77,6 +95,15 @@ export default function Journal() {
   const [loading, setLoading] = useState(true);
   const [isMaximized, setIsMaximized] = useState(false);
   const [isTabContentMaximized, setIsTabContentMaximized] = useState(false);
+  const [linkedPairs, setLinkedPairs] = useState<PairedTrade[]>([]);
+  const [showLinkPairsModal, setShowLinkPairsModal] = useState(false);
+  const [selectedPairForChart, setSelectedPairForChart] = useState<PairedTrade | null>(null);
+  const [allPairsForPicker, setAllPairsForPicker] = useState<PairedTrade[]>([]);
+  const [linkPickerSelected, setLinkPickerSelected] = useState<Set<string>>(new Set());
+  const [linkPairsSearchQuery, setLinkPairsSearchQuery] = useState("");
+  const [linkPairsSortBy, setLinkPairsSortBy] = useState<"date" | "symbol" | "pnl">("date");
+  const [linkPairsSortDirection, setLinkPairsSortDirection] = useState<"asc" | "desc">("desc");
+  const [savingLinkPairs, setSavingLinkPairs] = useState(false);
   
   // Entry-level form state
   const [entryFormData, setEntryFormData] = useState({
@@ -351,6 +378,7 @@ export default function Journal() {
   useEffect(() => {
     if (selectedEntry && !isCreating && !isEditing) {
       loadTrades(selectedEntry.id);
+      loadLinkedPairs(selectedEntry.id);
       if (selectedEntry.strategy_id) {
         loadChecklistResponses(selectedEntry.id);
       }
@@ -422,6 +450,16 @@ export default function Journal() {
       setSelectedTrades(trades);
     } catch (error) {
       console.error("Error loading trades:", error);
+    }
+  };
+
+  const loadLinkedPairs = async (entryId: number) => {
+    try {
+      const pairs = await invoke<PairedTrade[]>("get_journal_entry_pairs", { journalEntryId: entryId });
+      setLinkedPairs(pairs);
+    } catch (error) {
+      console.error("Error loading linked pairs:", error);
+      setLinkedPairs([]);
     }
   };
 
@@ -513,6 +551,7 @@ export default function Journal() {
     setActiveTradeIndex(0);
     setActiveTab("trade");
     setChecklistResponses(new Map());
+    setLinkedPairs([]);
     tabScrollPositions.current.clear();
   };
 
@@ -526,6 +565,7 @@ export default function Journal() {
         strategy_id: selectedEntry.strategy_id,
       });
       await loadTrades(selectedEntry.id);
+      await loadLinkedPairs(selectedEntry.id);
       if (selectedEntry.strategy_id) {
         await loadStrategyChecklists(selectedEntry.strategy_id);
         await loadChecklistResponses(selectedEntry.id);
@@ -780,6 +820,7 @@ export default function Journal() {
 
       // Reload trades to get updated IDs
       await loadTrades(entryId);
+      await loadLinkedPairs(entryId);
     } catch (error) {
       // Silently fail for auto-save
       console.error("Auto-save error:", error);
@@ -1003,6 +1044,7 @@ export default function Journal() {
       const savedEntry = await invoke<JournalEntry>("get_journal_entry", { id: entryId });
       setSelectedEntry(savedEntry);
       await loadTrades(entryId);
+      await loadLinkedPairs(entryId);
       setIsCreating(false);
       setIsEditing(false);
       setEditHistory([]);
@@ -1085,6 +1127,7 @@ export default function Journal() {
       // Save selected entry ID to localStorage
       localStorage.setItem('journal_selected_entry_id', id.toString());
       await loadTrades(id);
+      await loadLinkedPairs(id);
       if (entry.strategy_id) {
         await loadStrategyChecklists(entry.strategy_id);
         await loadChecklistResponses(id);
@@ -1537,6 +1580,60 @@ export default function Journal() {
                     ))}
                   </div>
                 )}
+
+                {/* Linked trade pairs with charts */}
+                {linkedPairs.length > 0 && (
+                  <div style={{ marginTop: "24px" }}>
+                    <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
+                      Linked trade pairs ({linkedPairs.length})
+                    </h3>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+                      {linkedPairs.map((pair) => (
+                        <div
+                          key={`${pair.entry_trade_id}_${pair.exit_trade_id}`}
+                          style={{
+                            padding: "16px",
+                            backgroundColor: "var(--bg-secondary)",
+                            borderRadius: "8px",
+                            border: "1px solid var(--border-color)",
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
+                            <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>{pair.symbol}</span>
+                            <span style={{ color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)", fontSize: "14px" }}>
+                              P&L: ${pair.net_profit_loss >= 0 ? "" : "-"}${Math.abs(pair.net_profit_loss).toFixed(2)}
+                            </span>
+                          </div>
+                          <TradeChart
+                            symbol={pair.symbol}
+                            entryTimestamp={pair.entry_timestamp}
+                            exitTimestamp={pair.exit_timestamp}
+                            entryPrice={pair.entry_price}
+                            exitPrice={pair.exit_price}
+                            inline
+                            compactHeight={200}
+                          />
+                          <div style={{ marginTop: "8px" }}>
+                            <button
+                              onClick={() => setSelectedPairForChart(pair)}
+                              style={{
+                                fontSize: "12px",
+                                padding: "6px 12px",
+                                background: "var(--bg-tertiary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "4px",
+                                color: "var(--text-primary)",
+                                cursor: "pointer",
+                              }}
+                            >
+                              View full chart
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </>
@@ -1956,6 +2053,137 @@ export default function Journal() {
                       </div>
                     </div>
                   </div>
+                  )}
+
+                  {/* Link trade pairs - above the text area tabs */}
+                  {selectedEntry?.id && !isTabContentMaximized && (
+                    <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: linkedPairs.length > 0 ? "10px" : 0 }}>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setShowLinkPairsModal(true);
+                            setLinkPairsSearchQuery("");
+                            setLinkPairsSortBy("date");
+                            setLinkPairsSortDirection("desc");
+                            const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+                            const all = await invoke<PairedTrade[]>("get_paired_trades", { pairingMethod: pairingMethod || null });
+                            setAllPairsForPicker(all);
+                            const current = linkedPairs.map(p => `${p.entry_trade_id}_${p.exit_trade_id}`);
+                            setLinkPickerSelected(new Set(current));
+                          }}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            padding: "8px 14px",
+                            backgroundColor: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "6px",
+                            color: "var(--text-primary)",
+                            fontSize: "13px",
+                            fontWeight: "500",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <Link2 size={16} />
+                          Link trade pairs
+                        </button>
+                        {linkedPairs.length > 0 && (
+                          <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                            {linkedPairs.length} pair{linkedPairs.length !== 1 ? "s" : ""} linked
+                          </span>
+                        )}
+                      </div>
+                      {linkedPairs.length > 0 && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                          {linkedPairs.map((pair) => (
+                            <div
+                              key={`${pair.entry_trade_id}-${pair.exit_trade_id}`}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "0",
+                                backgroundColor: "var(--bg-primary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "6px",
+                                overflow: "hidden",
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => setSelectedPairForChart(pair)}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "6px",
+                                  padding: "6px 12px",
+                                  background: "none",
+                                  border: "none",
+                                  color: "var(--text-primary)",
+                                  fontSize: "13px",
+                                  cursor: "pointer",
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.backgroundColor = "var(--bg-tertiary)";
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.backgroundColor = "transparent";
+                                }}
+                              >
+                                <BarChart3 size={14} />
+                                {pair.symbol} {format(new Date(pair.entry_timestamp), "MMM d")} → {format(new Date(pair.exit_timestamp), "MMM d")}
+                                <span style={{ color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)", fontWeight: "600" }}>
+                                  {pair.net_profit_loss >= 0 ? "+" : ""}{pair.net_profit_loss.toFixed(2)}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (!selectedEntry?.id) return;
+                                  const remaining = linkedPairs.filter(
+                                    (p) => !(p.entry_trade_id === pair.entry_trade_id && p.exit_trade_id === pair.exit_trade_id)
+                                  );
+                                  try {
+                                    await invoke("set_journal_entry_pairs", {
+                                      journalEntryId: selectedEntry.id,
+                                      pairs: remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })),
+                                    });
+                                    setLinkedPairs(remaining);
+                                  } catch (err) {
+                                    console.error("Failed to unlink pair:", err);
+                                    alert("Failed to unlink pair.");
+                                  }
+                                }}
+                                title="Unlink from journal entry"
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  padding: "6px 8px",
+                                  background: "none",
+                                  border: "none",
+                                  borderLeft: "1px solid var(--border-color)",
+                                  color: "var(--text-secondary)",
+                                  cursor: "pointer",
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.backgroundColor = "var(--loss)";
+                                  e.currentTarget.style.color = "white";
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.backgroundColor = "transparent";
+                                  e.currentTarget.style.color = "var(--text-secondary)";
+                                }}
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   {!isTabContentMaximized && (
@@ -3054,6 +3282,248 @@ export default function Journal() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Link trade pairs modal */}
+      {showLinkPairsModal && selectedEntry?.id && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => !savingLinkPairs && setShowLinkPairsModal(false)}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "560px",
+              maxHeight: "80vh",
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "8px", color: "var(--text-primary)" }}>
+              Link trade pairs to this journal entry
+            </h3>
+            <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px" }}>
+              Select the pairs from your Trades tab to link. Linked pairs appear above the text area and are clickable to view the chart.
+            </p>
+            <div style={{ position: "relative", marginBottom: "12px", flexShrink: 0 }}>
+              <Search
+                size={18}
+                style={{
+                  position: "absolute",
+                  left: "12px",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  color: "var(--text-secondary)",
+                }}
+              />
+              <input
+                type="text"
+                placeholder="Search by symbol or date..."
+                value={linkPairsSearchQuery}
+                onChange={(e) => setLinkPairsSearchQuery(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px 10px 40px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  outline: "none",
+                }}
+              />
+            </div>
+            <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "12px", flexShrink: 0 }}>
+              <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Sort by:</span>
+              <select
+                value={linkPairsSortBy}
+                onChange={(e) => setLinkPairsSortBy(e.target.value as "date" | "symbol" | "pnl")}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "13px",
+                  outline: "none",
+                }}
+              >
+                <option value="date">Date (exit)</option>
+                <option value="symbol">Symbol</option>
+                <option value="pnl">P&L</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => setLinkPairsSortDirection((d) => (d === "asc" ? "desc" : "asc"))}
+                title={linkPairsSortDirection === "desc" ? "Newest first (click for oldest first)" : "Oldest first (click for newest first)"}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "13px",
+                  cursor: "pointer",
+                }}
+              >
+                {linkPairsSortBy === "date" && (linkPairsSortDirection === "desc" ? "Newest first" : "Oldest first")}
+                {linkPairsSortBy === "symbol" && (linkPairsSortDirection === "desc" ? "Z → A" : "A → Z")}
+                {linkPairsSortBy === "pnl" && (linkPairsSortDirection === "desc" ? "High → Low" : "Low → High")}
+              </button>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", marginBottom: "16px", border: "1px solid var(--border-color)", borderRadius: "8px", backgroundColor: "var(--bg-primary)" }}>
+              {allPairsForPicker.length === 0 ? (
+                <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No trade pairs found. Add trades on the Trades tab first.</div>
+              ) : (() => {
+                const searchLower = linkPairsSearchQuery.toLowerCase().trim();
+                let filtered = searchLower
+                  ? allPairsForPicker.filter((pair) => {
+                      const entryStr = format(new Date(pair.entry_timestamp), "MMM d, yyyy HH:mm");
+                      const exitStr = format(new Date(pair.exit_timestamp), "MMM d, yyyy HH:mm");
+                      const pnlStr = pair.net_profit_loss.toFixed(2);
+                      return (
+                        pair.symbol.toLowerCase().includes(searchLower) ||
+                        entryStr.toLowerCase().includes(searchLower) ||
+                        exitStr.toLowerCase().includes(searchLower) ||
+                        pnlStr.includes(linkPairsSearchQuery.trim())
+                      );
+                    })
+                  : [...allPairsForPicker];
+                if (filtered.length === 0) {
+                  return <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No pairs match your search.</div>;
+                }
+                const sorted = [...filtered].sort((a, b) => {
+                  let comparison = 0;
+                  if (linkPairsSortBy === "date") {
+                    comparison = new Date(a.exit_timestamp).getTime() - new Date(b.exit_timestamp).getTime();
+                  } else if (linkPairsSortBy === "symbol") {
+                    comparison = a.symbol.localeCompare(b.symbol);
+                  } else {
+                    comparison = a.net_profit_loss - b.net_profit_loss;
+                  }
+                  return linkPairsSortDirection === "asc" ? comparison : -comparison;
+                });
+                return (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", width: "40px" }} />
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)" }}>Symbol</th>
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)" }}>Entry</th>
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)" }}>Exit</th>
+                      <th style={{ padding: "10px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)" }}>P&L</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.map((pair) => {
+                      const key = `${pair.entry_trade_id}_${pair.exit_trade_id}`;
+                      const isSelected = linkPickerSelected.has(key);
+                      return (
+                        <tr
+                          key={key}
+                          style={{
+                            borderBottom: "1px solid var(--border-color)",
+                            cursor: "pointer",
+                            backgroundColor: isSelected ? "var(--bg-tertiary)" : "transparent",
+                          }}
+                          onClick={() => {
+                            setLinkPickerSelected((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(key)) next.delete(key);
+                              else next.add(key);
+                              return next;
+                            });
+                          }}
+                        >
+                          <td style={{ padding: "10px 12px" }}>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => {}}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ cursor: "pointer" }}
+                            />
+                          </td>
+                          <td style={{ padding: "10px 12px", fontSize: "14px" }}>{pair.symbol}</td>
+                          <td style={{ padding: "10px 12px", fontSize: "13px", color: "var(--text-secondary)" }}>{format(new Date(pair.entry_timestamp), "MMM d, yyyy HH:mm")}</td>
+                          <td style={{ padding: "10px 12px", fontSize: "13px", color: "var(--text-secondary)" }}>{format(new Date(pair.exit_timestamp), "MMM d, yyyy HH:mm")}</td>
+                          <td style={{ padding: "10px 12px", fontSize: "14px", textAlign: "right", fontWeight: "600", color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)" }}>
+                            {pair.net_profit_loss >= 0 ? "+" : ""}{pair.net_profit_loss.toFixed(2)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                );
+              })()}
+            </div>
+            <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => !savingLinkPairs && setShowLinkPairsModal(false)}
+                style={{ padding: "10px 20px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)", cursor: savingLinkPairs ? "not-allowed" : "pointer", fontSize: "14px" }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={savingLinkPairs}
+                onClick={async () => {
+                  if (!selectedEntry?.id) return;
+                  setSavingLinkPairs(true);
+                  try {
+                    const pairs = Array.from(linkPickerSelected).map((key) => {
+                      const [e, x] = key.split("_").map(Number);
+                      return { entry_trade_id: e, exit_trade_id: x };
+                    });
+                    await invoke("set_journal_entry_pairs", { journalEntryId: selectedEntry.id, pairs });
+                    const updated = await invoke<PairedTrade[]>("get_journal_entry_pairs", { journalEntryId: selectedEntry.id });
+                    setLinkedPairs(updated);
+                    setShowLinkPairsModal(false);
+                  } catch (e) {
+                    console.error("Failed to save linked pairs:", e);
+                    alert("Failed to save linked pairs.");
+                  } finally {
+                    setSavingLinkPairs(false);
+                  }
+                }}
+                style={{ padding: "10px 20px", backgroundColor: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: savingLinkPairs ? "not-allowed" : "pointer", fontSize: "14px", fontWeight: "500" }}
+              >
+                {savingLinkPairs ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedPairForChart && (
+        <TradeChart
+          symbol={selectedPairForChart.symbol}
+          entryTimestamp={selectedPairForChart.entry_timestamp}
+          exitTimestamp={selectedPairForChart.exit_timestamp}
+          entryPrice={selectedPairForChart.entry_price}
+          exitPrice={selectedPairForChart.exit_price}
+          onClose={() => setSelectedPairForChart(null)}
+        />
       )}
     </div>
   );
