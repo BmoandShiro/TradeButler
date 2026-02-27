@@ -1,9 +1,16 @@
 import { useEffect, useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
 import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, BarChart3, Lock, Unlock, Search, ArrowUpDown, ArrowUp, ArrowDown, Trash2 } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { TradeChart } from "../components/TradeChart";
+
+interface JournalEntrySummary {
+  id: number;
+  date: string;
+  title: string;
+}
 
 interface Trade {
   id: number;
@@ -107,6 +114,27 @@ export default function Trades() {
     const saved = localStorage.getItem('trades_sort_direction');
     return (saved as "asc" | "desc") || "desc";
   });
+  const [openJournalPairKey, setOpenJournalPairKey] = useState<string | null>(null);
+  const [journalEntriesByPairKey, setJournalEntriesByPairKey] = useState<Record<string, JournalEntrySummary[]>>({});
+  const [journalPairPage, setJournalPairPage] = useState<number>(0);
+  const navigate = useNavigate();
+
+  const JOURNAL_ENTRIES_PER_PAGE = 10;
+
+  async function loadJournalEntriesForPair(entryTradeId: number, exitTradeId: number) {
+    const key = `${entryTradeId}_${exitTradeId}`;
+    if (journalEntriesByPairKey[key] !== undefined) return;
+    try {
+      const list = await invoke<JournalEntrySummary[]>("get_journal_entries_for_pair", {
+        entryTradeId,
+        exitTradeId,
+      });
+      setJournalEntriesByPairKey((prev) => ({ ...prev, [key]: list }));
+    } catch (e) {
+      console.error("Failed to load journal entries for pair:", e);
+      setJournalEntriesByPairKey((prev) => ({ ...prev, [key]: [] }));
+    }
+  }
 
   // Save state to localStorage
   useEffect(() => {
@@ -1050,6 +1078,160 @@ export default function Trades() {
                                         }}
                                       />
                                     </div>
+                                    <div style={{ marginTop: "12px", position: "relative" }}>
+                                      <button
+                                        type="button"
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          const entryTrade = group.entry_trade;
+                                          const lastTrade = group.position_trades[group.position_trades.length - 1];
+                                          const key = `${entryTrade.id}_${lastTrade.id}`;
+                                          if (openJournalPairKey === key) {
+                                            setOpenJournalPairKey(null);
+                                            setJournalPairPage(0);
+                                            return;
+                                          }
+                                          await loadJournalEntriesForPair(entryTrade.id, lastTrade.id);
+                                          setOpenJournalPairKey(key);
+                                          setJournalPairPage(0);
+                                        }}
+                                        style={{
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          gap: "6px",
+                                          padding: "6px 12px",
+                                          backgroundColor: openJournalPairKey === `${group.entry_trade.id}_${group.position_trades[group.position_trades.length - 1].id}` ? "var(--accent)" : "transparent",
+                                          border: "1px solid var(--accent)",
+                                          borderRadius: "4px",
+                                          color: openJournalPairKey === `${group.entry_trade.id}_${group.position_trades[group.position_trades.length - 1].id}` ? "white" : "var(--accent)",
+                                          fontSize: "12px",
+                                          fontWeight: "500",
+                                          cursor: "pointer",
+                                        }}
+                                      >
+                                        <ChevronDown
+                                          size={14}
+                                          style={{
+                                            transform: openJournalPairKey === `${group.entry_trade.id}_${group.position_trades[group.position_trades.length - 1].id}` ? "rotate(0deg)" : "rotate(-90deg)",
+                                            transition: "transform 0.2s",
+                                          }}
+                                        />
+                                        Journal entries
+                                        {journalEntriesByPairKey[`${group.entry_trade.id}_${group.position_trades[group.position_trades.length - 1].id}`] !== undefined &&
+                                          ` (${journalEntriesByPairKey[`${group.entry_trade.id}_${group.position_trades[group.position_trades.length - 1].id}`].length})`}
+                                      </button>
+                                      {openJournalPairKey === `${group.entry_trade.id}_${group.position_trades[group.position_trades.length - 1].id}` && (
+                                        <div
+                                          style={{
+                                            position: "absolute",
+                                            left: 0,
+                                            top: "100%",
+                                            marginTop: "4px",
+                                            zIndex: 20,
+                                            minWidth: "220px",
+                                            maxWidth: "320px",
+                                            maxHeight: "240px",
+                                            overflowY: "auto",
+                                            backgroundColor: "var(--bg-secondary)",
+                                            border: "1px solid var(--border-color)",
+                                            borderRadius: "8px",
+                                            boxShadow: "0 8px 20px rgba(0, 0, 0, 0.4)",
+                                            padding: "8px",
+                                          }}
+                                          onClick={(e) => e.stopPropagation()}
+                                        >
+                                          {journalEntriesByPairKey[`${group.entry_trade.id}_${group.position_trades[group.position_trades.length - 1].id}`] === undefined ? (
+                                            <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Loading...</div>
+                                          ) : (() => {
+                                            const pairKey = `${group.entry_trade.id}_${group.position_trades[group.position_trades.length - 1].id}`;
+                                            const entries = journalEntriesByPairKey[pairKey];
+                                            const totalPages = Math.max(1, Math.ceil(entries.length / JOURNAL_ENTRIES_PER_PAGE));
+                                            const page = Math.min(journalPairPage, totalPages - 1);
+                                            const start = page * JOURNAL_ENTRIES_PER_PAGE;
+                                            const pageEntries = entries.slice(start, start + JOURNAL_ENTRIES_PER_PAGE);
+                                            return (
+                                              <>
+                                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px", fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)" }}>
+                                                  <span>Linked journal entries</span>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => { setOpenJournalPairKey(null); setJournalPairPage(0); }}
+                                                    style={{ border: "none", background: "transparent", color: "var(--text-secondary)", fontSize: "10px", cursor: "pointer" }}
+                                                  >
+                                                    Close
+                                                  </button>
+                                                </div>
+                                                {pageEntries.length === 0 ? (
+                                                  <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>No journal entries linked</div>
+                                                ) : (
+                                                  <>
+                                                    <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "4px" }}>
+                                                      {pageEntries.map((entry) => (
+                                                        <li key={entry.id}>
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => navigate("/journal", { state: { openEntryId: entry.id } })}
+                                                            style={{
+                                                              border: "none",
+                                                              background: "transparent",
+                                                              padding: 0,
+                                                              textAlign: "left",
+                                                              fontSize: "11px",
+                                                              color: "var(--accent)",
+                                                              cursor: "pointer",
+                                                              whiteSpace: "nowrap",
+                                                              overflow: "hidden",
+                                                              textOverflow: "ellipsis",
+                                                              width: "100%",
+                                                            }}
+                                                            title={entry.title}
+                                                          >
+                                                            {entry.title || "Untitled entry"}
+                                                          </button>
+                                                        </li>
+                                                      ))}
+                                                    </ul>
+                                                    {totalPages > 1 && (
+                                                      <div style={{ marginTop: "8px", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "10px", color: "var(--text-secondary)" }}>
+                                                        <button
+                                                          type="button"
+                                                          onClick={() => setJournalPairPage((p) => (p > 0 ? p - 1 : p))}
+                                                          disabled={page === 0}
+                                                          style={{
+                                                            border: "none",
+                                                            background: "transparent",
+                                                            color: page === 0 ? "var(--text-muted)" : "var(--accent)",
+                                                            cursor: page === 0 ? "default" : "pointer",
+                                                            padding: 0,
+                                                          }}
+                                                        >
+                                                          ‹ Prev
+                                                        </button>
+                                                        <span>Page {page + 1} of {totalPages}</span>
+                                                        <button
+                                                          type="button"
+                                                          onClick={() => setJournalPairPage((p) => (p < totalPages - 1 ? p + 1 : p))}
+                                                          disabled={page >= totalPages - 1}
+                                                          style={{
+                                                            border: "none",
+                                                            background: "transparent",
+                                                            color: page >= totalPages - 1 ? "var(--text-muted)" : "var(--accent)",
+                                                            cursor: page >= totalPages - 1 ? "default" : "pointer",
+                                                            padding: 0,
+                                                          }}
+                                                        >
+                                                          Next ›
+                                                        </button>
+                                                      </div>
+                                                    )}
+                                                  </>
+                                                )}
+                                              </>
+                                            );
+                                          })()}
+                                        </div>
+                                      )}
+                                    </div>
                                   </div>
                                 )}
                               </div>
@@ -1502,6 +1684,157 @@ export default function Trades() {
                                             outline: "none",
                                           }}
                                         />
+                                      </div>
+                                      <div style={{ marginTop: "12px", position: "relative" }}>
+                                        <button
+                                          type="button"
+                                          onClick={async (e) => {
+                                            e.stopPropagation();
+                                            const key = `${pair.entry_trade_id}_${pair.exit_trade_id}`;
+                                            if (openJournalPairKey === key) {
+                                              setOpenJournalPairKey(null);
+                                              setJournalPairPage(0);
+                                              return;
+                                            }
+                                            await loadJournalEntriesForPair(pair.entry_trade_id, pair.exit_trade_id);
+                                            setOpenJournalPairKey(key);
+                                            setJournalPairPage(0);
+                                          }}
+                                          style={{
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            gap: "6px",
+                                            padding: "6px 12px",
+                                            backgroundColor: openJournalPairKey === `${pair.entry_trade_id}_${pair.exit_trade_id}` ? "var(--accent)" : "transparent",
+                                            border: "1px solid var(--accent)",
+                                            borderRadius: "4px",
+                                            color: openJournalPairKey === `${pair.entry_trade_id}_${pair.exit_trade_id}` ? "white" : "var(--accent)",
+                                            fontSize: "12px",
+                                            fontWeight: "500",
+                                            cursor: "pointer",
+                                          }}
+                                        >
+                                          <ChevronDown
+                                            size={14}
+                                            style={{
+                                              transform: openJournalPairKey === `${pair.entry_trade_id}_${pair.exit_trade_id}` ? "rotate(0deg)" : "rotate(-90deg)",
+                                              transition: "transform 0.2s",
+                                            }}
+                                          />
+                                          Journal entries
+                                          {journalEntriesByPairKey[`${pair.entry_trade_id}_${pair.exit_trade_id}`] !== undefined &&
+                                            ` (${journalEntriesByPairKey[`${pair.entry_trade_id}_${pair.exit_trade_id}`].length})`}
+                                        </button>
+                                        {openJournalPairKey === `${pair.entry_trade_id}_${pair.exit_trade_id}` && (
+                                          <div
+                                            style={{
+                                              position: "absolute",
+                                              left: 0,
+                                              top: "100%",
+                                              marginTop: "4px",
+                                              zIndex: 20,
+                                              minWidth: "220px",
+                                              maxWidth: "320px",
+                                              maxHeight: "240px",
+                                              overflowY: "auto",
+                                              backgroundColor: "var(--bg-secondary)",
+                                              border: "1px solid var(--border-color)",
+                                              borderRadius: "8px",
+                                              boxShadow: "0 8px 20px rgba(0, 0, 0, 0.4)",
+                                              padding: "8px",
+                                            }}
+                                            onClick={(e) => e.stopPropagation()}
+                                          >
+                                            {journalEntriesByPairKey[`${pair.entry_trade_id}_${pair.exit_trade_id}`] === undefined ? (
+                                              <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Loading...</div>
+                                            ) : (() => {
+                                              const entries = journalEntriesByPairKey[`${pair.entry_trade_id}_${pair.exit_trade_id}`];
+                                              const totalPages = Math.max(1, Math.ceil(entries.length / JOURNAL_ENTRIES_PER_PAGE));
+                                              const page = Math.min(journalPairPage, totalPages - 1);
+                                              const start = page * JOURNAL_ENTRIES_PER_PAGE;
+                                              const pageEntries = entries.slice(start, start + JOURNAL_ENTRIES_PER_PAGE);
+                                              return (
+                                                <>
+                                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px", fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)" }}>
+                                                    <span>Linked journal entries</span>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => { setOpenJournalPairKey(null); setJournalPairPage(0); }}
+                                                      style={{ border: "none", background: "transparent", color: "var(--text-secondary)", fontSize: "10px", cursor: "pointer" }}
+                                                    >
+                                                      Close
+                                                    </button>
+                                                  </div>
+                                                  {pageEntries.length === 0 ? (
+                                                    <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>No journal entries linked</div>
+                                                  ) : (
+                                                    <>
+                                                      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "4px" }}>
+                                                        {pageEntries.map((entry) => (
+                                                          <li key={entry.id}>
+                                                            <button
+                                                              type="button"
+                                                              onClick={() => navigate("/journal", { state: { openEntryId: entry.id } })}
+                                                              style={{
+                                                                border: "none",
+                                                                background: "transparent",
+                                                                padding: 0,
+                                                                textAlign: "left",
+                                                                fontSize: "11px",
+                                                                color: "var(--accent)",
+                                                                cursor: "pointer",
+                                                                whiteSpace: "nowrap",
+                                                                overflow: "hidden",
+                                                                textOverflow: "ellipsis",
+                                                                width: "100%",
+                                                              }}
+                                                              title={entry.title}
+                                                            >
+                                                              {entry.title || "Untitled entry"}
+                                                            </button>
+                                                          </li>
+                                                        ))}
+                                                      </ul>
+                                                      {totalPages > 1 && (
+                                                        <div style={{ marginTop: "8px", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "10px", color: "var(--text-secondary)" }}>
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => setJournalPairPage((p) => (p > 0 ? p - 1 : p))}
+                                                            disabled={page === 0}
+                                                            style={{
+                                                              border: "none",
+                                                              background: "transparent",
+                                                              color: page === 0 ? "var(--text-muted)" : "var(--accent)",
+                                                              cursor: page === 0 ? "default" : "pointer",
+                                                              padding: 0,
+                                                            }}
+                                                          >
+                                                            ‹ Prev
+                                                          </button>
+                                                          <span>Page {page + 1} of {totalPages}</span>
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => setJournalPairPage((p) => (p < totalPages - 1 ? p + 1 : p))}
+                                                            disabled={page >= totalPages - 1}
+                                                            style={{
+                                                              border: "none",
+                                                              background: "transparent",
+                                                              color: page >= totalPages - 1 ? "var(--text-muted)" : "var(--accent)",
+                                                              cursor: page >= totalPages - 1 ? "default" : "pointer",
+                                                              padding: 0,
+                                                            }}
+                                                          >
+                                                            Next ›
+                                                          </button>
+                                                        </div>
+                                                      )}
+                                                    </>
+                                                  )}
+                                                </>
+                                              );
+                                            })()}
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                   </div>

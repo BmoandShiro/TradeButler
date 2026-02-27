@@ -2902,6 +2902,41 @@ pub fn set_journal_entry_pairs(
     Ok(())
 }
 
+#[derive(Debug, Serialize)]
+pub struct JournalEntrySummary {
+    pub id: i64,
+    pub date: String,
+    pub title: String,
+}
+
+#[tauri::command]
+pub fn get_journal_entries_for_pair(entry_trade_id: i64, exit_trade_id: i64) -> Result<Vec<JournalEntrySummary>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT je.id, je.date, je.title FROM journal_entries je
+             INNER JOIN journal_entry_pairs jep ON je.id = jep.journal_entry_id
+             WHERE jep.entry_trade_id = ?1 AND jep.exit_trade_id = ?2
+             ORDER BY je.date DESC, je.id DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![entry_trade_id, exit_trade_id], |row| {
+            Ok(JournalEntrySummary {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                title: row.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
 // Journal Trade Commands
 #[tauri::command]
 pub fn create_journal_trade(
