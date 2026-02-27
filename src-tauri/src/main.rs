@@ -77,6 +77,7 @@ fn main() {
             commands::delete_journal_entry,
             commands::create_journal_trade,
             commands::get_journal_trades,
+            commands::get_all_journal_trades,
             commands::update_journal_trade,
             commands::delete_journal_trade,
             commands::get_journal_trade_actual_trade_ids,

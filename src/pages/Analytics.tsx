@@ -62,10 +62,41 @@ interface EquityCurveData {
   best_surge_value: number;
 }
 
+interface JournalEntry {
+  id: number;
+  date: string;
+  title: string;
+  strategy_id: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+  linked_trade_ids?: string | null;
+}
+
+interface JournalTrade {
+  id: number;
+  journal_entry_id: number;
+  symbol: string | null;
+  position: string | null;
+  timeframe: string | null;
+  entry_type: string | null;
+  exit_type: string | null;
+  trade: string | null;
+  what_went_well: string | null;
+  what_could_be_improved: string | null;
+  emotional_state: string | null;
+  notes: string | null;
+  outcome: string | null;
+  trade_order: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 export default function Analytics() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [symbolPnL, setSymbolPnL] = useState<SymbolPnL[]>([]);
   const [equityCurve, setEquityCurve] = useState<EquityCurveData | null>(null);
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
+  const [journalTrades, setJournalTrades] = useState<JournalTrade[]>([]);
   const [loading, setLoading] = useState(true);
   const [timeframe, setTimeframe] = useState<Timeframe>(() => {
     const saved = localStorage.getItem("tradebutler_analytics_timeframe");
@@ -148,14 +179,18 @@ export default function Analytics() {
       const startDate = dateRange.start ? dateRange.start.toISOString() : null;
       const endDate = dateRange.end ? dateRange.end.toISOString() : null;
       
-      const [tradesData, pnlData, equityData] = await Promise.all([
+      const [tradesData, pnlData, equityData, journalEntriesData, journalTradesData] = await Promise.all([
         invoke<Trade[]>("get_trades"),
         invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate }),
         invoke<EquityCurveData>("get_equity_curve", { pairingMethod, startDate, endDate }),
+        invoke<JournalEntry[]>("get_journal_entries"),
+        invoke<JournalTrade[]>("get_all_journal_trades"),
       ]);
       setTrades(tradesData);
       setSymbolPnL(pnlData);
       setEquityCurve(equityData);
+      setJournalEntries(journalEntriesData);
+      setJournalTrades(journalTradesData);
     } catch (error) {
       console.error("Error loading data:", error);
     } finally {
@@ -315,6 +350,65 @@ export default function Analytics() {
     return { symbolData, sideData: [{ name: "BUY", value: sideCounts.BUY }, { name: "SELL", value: sideCounts.SELL }] };
   };
 
+  const processJournalData = () => {
+    if (journalEntries.length === 0 && journalTrades.length === 0) {
+      return {
+        entriesByMonth: [] as { month: string; count: number }[],
+        positionsData: [] as { position: string; count: number }[],
+        outcomeData: [] as { outcome: string; count: number }[],
+      };
+    }
+
+    const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
+    const start = dateRange.start;
+    const end = dateRange.end;
+
+    const entriesInRange = journalEntries.filter((entry) => {
+      if (!entry.date) return false;
+      const d = new Date(entry.date + "T00:00:00");
+      if (isNaN(d.getTime())) return false;
+      if (start && d < start) return false;
+      if (end && d > end) return false;
+      return true;
+    });
+
+    const entryIdsInRange = new Set(entriesInRange.map((e) => e.id));
+
+    const tradesInRange = journalTrades.filter((t) => entryIdsInRange.has(t.journal_entry_id));
+
+    const entriesByMonthMap = new Map<string, number>();
+    entriesInRange.forEach((entry) => {
+      const d = new Date(entry.date + "T00:00:00");
+      if (isNaN(d.getTime())) return;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      entriesByMonthMap.set(key, (entriesByMonthMap.get(key) || 0) + 1);
+    });
+
+    const entriesByMonth = Array.from(entriesByMonthMap.entries())
+      .map(([month, count]) => ({ month, count }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+
+    const positionsMap = new Map<string, number>();
+    tradesInRange.forEach((t) => {
+      const pos = (t.position || "Unspecified").trim();
+      positionsMap.set(pos, (positionsMap.get(pos) || 0) + 1);
+    });
+    const positionsData = Array.from(positionsMap.entries())
+      .map(([position, count]) => ({ position, count }))
+      .sort((a, b) => b.count - a.count);
+
+    const outcomeMap = new Map<string, number>();
+    tradesInRange.forEach((t) => {
+      const outcome = (t.outcome || "Unspecified").trim();
+      outcomeMap.set(outcome, (outcomeMap.get(outcome) || 0) + 1);
+    });
+    const outcomeData = Array.from(outcomeMap.entries())
+      .map(([outcome, count]) => ({ outcome, count }))
+      .sort((a, b) => b.count - a.count);
+
+    return { entriesByMonth, positionsData, outcomeData };
+  };
+
   if (loading) {
     return (
       <div style={{ padding: "40px", textAlign: "center" }}>
@@ -324,6 +418,7 @@ export default function Analytics() {
   }
 
   const { symbolData, sideData } = processChartData();
+  const { entriesByMonth, positionsData, outcomeData } = processJournalData();
 
   return (
     <div style={{ padding: "30px" }}>
@@ -739,6 +834,110 @@ export default function Analytics() {
                 <Bar dataKey="value" fill="var(--accent)" />
               </BarChart>
             </ResponsiveContainer>
+          </div>
+
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              padding: "20px",
+            }}
+          >
+            <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "16px" }}>
+              Journal findings
+            </h2>
+            {journalEntries.length === 0 ? (
+              <p style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
+                No journal entries found. Create journal entries to see journaling trends alongside your trading analytics.
+              </p>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "24px" }}>
+                <div>
+                  <h3 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "8px" }}>
+                    Entries over time
+                  </h3>
+                  {entriesByMonth.length === 0 ? (
+                    <p style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
+                      No entries in the selected timeframe.
+                    </p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={260}>
+                      <BarChart data={entriesByMonth}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                        <XAxis dataKey="month" stroke="var(--text-secondary)" />
+                        <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            color: "var(--text-primary)",
+                          }}
+                          formatter={(value: any) => [value, "Entries"]}
+                        />
+                        <Bar dataKey="count" fill="var(--accent)" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+
+                <div>
+                  <h3 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "8px" }}>
+                    Trade types in journals
+                  </h3>
+                  {positionsData.length === 0 ? (
+                    <p style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
+                      No implementation trades recorded in your journals for this timeframe.
+                    </p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={260}>
+                      <BarChart data={positionsData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                        <XAxis dataKey="position" stroke="var(--text-secondary)" />
+                        <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            color: "var(--text-primary)",
+                          }}
+                          formatter={(value: any) => [value, "Trades"]}
+                        />
+                        <Bar dataKey="count" fill="var(--accent)" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+
+                <div>
+                  <h3 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "8px" }}>
+                    Outcomes in journals
+                  </h3>
+                  {outcomeData.length === 0 ? (
+                    <p style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
+                      No outcomes recorded in your journals for this timeframe.
+                    </p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={260}>
+                      <BarChart data={outcomeData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                        <XAxis dataKey="outcome" stroke="var(--text-secondary)" />
+                        <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            color: "var(--text-primary)",
+                          }}
+                          formatter={(value: any) => [value, "Trades"]}
+                        />
+                        <Bar dataKey="count" fill="var(--accent)" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

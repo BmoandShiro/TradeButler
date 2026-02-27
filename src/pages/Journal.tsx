@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, BarChart3, Search } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { format, parse } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import { TradeChart } from "../components/TradeChart";
@@ -152,6 +153,7 @@ export default function Journal() {
     return savedId ? null : null; // Will be loaded by ID in useEffect
   });
   const [selectedTrades, setSelectedTrades] = useState<JournalTrade[]>([]);
+  const [allJournalTrades, setAllJournalTrades] = useState<JournalTrade[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [activeTradeIndex, setActiveTradeIndex] = useState(0);
@@ -237,6 +239,23 @@ export default function Journal() {
   
   // Available symbols for dropdown
   const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
+  const [journalFilters, setJournalFilters] = useState<{
+    symbol: string;
+    position: string;
+    timeframe: string;
+    entry_type: string;
+    exit_type: string;
+    outcome: string;
+    text: string;
+  }>({
+    symbol: "",
+    position: "",
+    timeframe: "",
+    entry_type: "",
+    exit_type: "",
+    outcome: "",
+    text: "",
+  });
   
   // Modal state
   const [showTitleRequiredModal, setShowTitleRequiredModal] = useState(false);
@@ -458,6 +477,7 @@ export default function Journal() {
     loadEntries();
     loadStrategies();
     loadAvailableSymbols();
+    loadAllJournalTrades();
     
     // Restore selected entry if we have a saved ID (skip when opened from Emotions via state)
     const openFromState = (location.state as { openEntryId?: number } | null)?.openEntryId != null;
@@ -513,7 +533,7 @@ export default function Journal() {
           const scrollState = restoreAllScrollPositions(storageKey);
           // Restore tab scroll positions to the ref
           scrollState.tabPositions.forEach((pos, tab) => {
-            tabScrollPositions.current.set(tab, pos);
+            tabScrollPositions.current.set(tab as TabType, pos);
           });
           // Restore left panel scroll
           if (leftPanelScrollRef.current && scrollState.leftPanelScroll !== null) {
@@ -669,6 +689,15 @@ export default function Journal() {
       console.error("Error loading journal entries:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadAllJournalTrades = async () => {
+    try {
+      const trades = await invoke<JournalTrade[]>("get_all_journal_trades");
+      setAllJournalTrades(trades);
+    } catch (error) {
+      console.error("Error loading all journal trades:", error);
     }
   };
 
@@ -1295,7 +1324,7 @@ export default function Journal() {
       const scrollState = restoreAllScrollPositions(storageKey);
       // Restore tab scroll positions
       scrollState.tabPositions.forEach((pos, tab) => {
-        tabScrollPositions.current.set(tab, pos);
+        tabScrollPositions.current.set(tab as TabType, pos);
       });
       
       // Restore left panel scroll after a delay to ensure DOM is ready
@@ -1736,7 +1765,7 @@ export default function Journal() {
         const scrollState = restoreAllScrollPositions(storageKey);
         // Restore tab scroll positions to the ref
         scrollState.tabPositions.forEach((pos, tab) => {
-          tabScrollPositions.current.set(tab, pos);
+          tabScrollPositions.current.set(tab as TabType, pos);
         });
         // Restore left panel scroll
         if (leftPanelScrollRef.current && scrollState.leftPanelScroll !== null) {
@@ -1949,6 +1978,157 @@ export default function Journal() {
     ? Array.from(currentChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")
     : [];
   const allTypes = [...defaultTypes, ...customTypes.filter(t => !defaultTypes.includes(t))];
+
+  const journalTradesByEntry = useMemo(() => {
+    const map = new Map<number, JournalTrade[]>();
+    allJournalTrades.forEach((t) => {
+      if (!t.journal_entry_id) return;
+      const list = map.get(t.journal_entry_id) || [];
+      list.push(t);
+      map.set(t.journal_entry_id, list);
+    });
+    return map;
+  }, [allJournalTrades]);
+
+  const journalFilterOptions = useMemo(() => {
+    const symbols = new Set<string>();
+    const positions = new Set<string>();
+    const timeframes = new Set<string>();
+    const entryTypes = new Set<string>();
+    const exitTypes = new Set<string>();
+    const outcomes = new Set<string>();
+
+    allJournalTrades.forEach((t) => {
+      if (t.symbol) symbols.add(t.symbol);
+      if (t.position) positions.add(t.position);
+      if (t.timeframe) timeframes.add(t.timeframe);
+      if (t.entry_type) entryTypes.add(t.entry_type);
+      if (t.exit_type) exitTypes.add(t.exit_type);
+      if (t.outcome) outcomes.add(t.outcome);
+    });
+
+    const toSortedArray = (set: Set<string>) =>
+      Array.from(set.values())
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0)
+        .sort((a, b) => a.localeCompare(b));
+
+    return {
+      symbols: toSortedArray(symbols),
+      positions: toSortedArray(positions),
+      timeframes: toSortedArray(timeframes),
+      entryTypes: toSortedArray(entryTypes),
+      exitTypes: toSortedArray(exitTypes),
+      outcomes: toSortedArray(outcomes),
+    };
+  }, [allJournalTrades]);
+
+  const filteredEntries = useMemo(() => {
+    const {
+      symbol,
+      position,
+      timeframe,
+      entry_type,
+      exit_type,
+      outcome,
+      text,
+    } = journalFilters;
+
+    const hasFilters =
+      !!symbol ||
+      !!position ||
+      !!timeframe ||
+      !!entry_type ||
+      !!exit_type ||
+      !!outcome ||
+      !!text.trim();
+
+    if (!hasFilters) {
+      return entries;
+    }
+
+    const q = text.trim().toLowerCase();
+
+    return entries.filter((entry) => {
+      const trades = journalTradesByEntry.get(entry.id) || [];
+
+      if (symbol) {
+        const matches = trades.some((t) => (t.symbol || "").toLowerCase() === symbol.toLowerCase());
+        if (!matches) return false;
+      }
+
+      if (position) {
+        const matches = trades.some(
+          (t) => (t.position || "").toLowerCase() === position.toLowerCase()
+        );
+        if (!matches) return false;
+      }
+
+      if (timeframe) {
+        const matches = trades.some(
+          (t) => (t.timeframe || "").toLowerCase() === timeframe.toLowerCase()
+        );
+        if (!matches) return false;
+      }
+
+      if (entry_type) {
+        const matches = trades.some(
+          (t) => (t.entry_type || "").toLowerCase() === entry_type.toLowerCase()
+        );
+        if (!matches) return false;
+      }
+
+      if (exit_type) {
+        const matches = trades.some(
+          (t) => (t.exit_type || "").toLowerCase() === exit_type.toLowerCase()
+        );
+        if (!matches) return false;
+      }
+
+      if (outcome) {
+        const matches = trades.some(
+          (t) => (t.outcome || "").toLowerCase() === outcome.toLowerCase()
+        );
+        if (!matches) return false;
+      }
+
+      if (q) {
+        const titleMatch = (entry.title || "").toLowerCase().includes(q);
+        const tradeTextMatch = trades.some((t) => {
+          const fields = [
+            t.trade,
+            t.what_went_well,
+            t.what_could_be_improved,
+            t.emotional_state,
+            t.notes,
+          ];
+          return fields.some((f) => (f || "").toLowerCase().includes(q));
+        });
+        if (!titleMatch && !tradeTextMatch) return false;
+      }
+
+      return true;
+    });
+  }, [entries, journalTradesByEntry, journalFilters]);
+
+  const entriesByMonth = useMemo(() => {
+    const counts = new Map<string, number>();
+    filteredEntries.forEach((entry) => {
+      if (!entry.date) return;
+      const parsedDate = parse(entry.date, "yyyy-MM-dd", new Date());
+      if (isNaN(parsedDate.getTime())) return;
+      const key = format(parsedDate, "yyyy-MM");
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .map(([month, count]) => ({ month, count }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+  }, [filteredEntries]);
+
+  const recentEntries = useMemo(
+    () => filteredEntries.slice(0, 10),
+    [filteredEntries]
+  );
 
   return (
     <div style={{ display: "flex", height: "100%", overflow: "hidden", flex: 1 }}>
@@ -4462,15 +4642,361 @@ export default function Journal() {
           <div
             style={{
               flex: 1,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "var(--text-secondary)",
+              overflowY: "auto",
+              padding: "24px",
             }}
           >
-            <div style={{ textAlign: "center" }}>
-              <FileText size={48} style={{ margin: "0 auto 16px", opacity: 0.3 }} />
-              <p style={{ fontSize: "16px" }}>Select an entry to view details</p>
+            <div
+              style={{
+                backgroundColor: "var(--bg-secondary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "8px",
+                padding: "20px",
+                marginBottom: "24px",
+              }}
+            >
+              <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "12px" }}>
+                Journal overview
+              </h2>
+              <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px" }}>
+                Review your past journal entries at a glance. Select any entry on the right to dive into full details.
+              </p>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "10px",
+                  marginBottom: "16px",
+                }}
+              >
+                <input
+                  type="text"
+                  placeholder="Search title, notes, and implementation text..."
+                  value={journalFilters.text}
+                  onChange={(e) =>
+                    setJournalFilters((prev) => ({
+                      ...prev,
+                      text: e.target.value,
+                    }))
+                  }
+                  style={{
+                    flex: "1 1 220px",
+                    minWidth: "180px",
+                    padding: "8px 10px",
+                    backgroundColor: "var(--bg-primary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-primary)",
+                    fontSize: "13px",
+                  }}
+                />
+                <select
+                  value={journalFilters.symbol}
+                  onChange={(e) =>
+                    setJournalFilters((prev) => ({
+                      ...prev,
+                      symbol: e.target.value,
+                    }))
+                  }
+                  style={{
+                    flex: "0 0 160px",
+                    minWidth: "140px",
+                    padding: "8px 10px",
+                    backgroundColor: "var(--bg-primary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-primary)",
+                    fontSize: "13px",
+                  }}
+                >
+                  <option value="">All symbols</option>
+                  {journalFilterOptions.symbols.map((sym) => (
+                    <option key={sym} value={sym}>
+                      {sym}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={journalFilters.position}
+                  onChange={(e) =>
+                    setJournalFilters((prev) => ({
+                      ...prev,
+                      position: e.target.value,
+                    }))
+                  }
+                  style={{
+                    flex: "0 0 150px",
+                    minWidth: "130px",
+                    padding: "8px 10px",
+                    backgroundColor: "var(--bg-primary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-primary)",
+                    fontSize: "13px",
+                  }}
+                >
+                  <option value="">All positions</option>
+                  {journalFilterOptions.positions.map((pos) => (
+                    <option key={pos} value={pos}>
+                      {pos}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={journalFilters.timeframe}
+                  onChange={(e) =>
+                    setJournalFilters((prev) => ({
+                      ...prev,
+                      timeframe: e.target.value,
+                    }))
+                  }
+                  style={{
+                    flex: "0 0 170px",
+                    minWidth: "140px",
+                    padding: "8px 10px",
+                    backgroundColor: "var(--bg-primary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-primary)",
+                    fontSize: "13px",
+                  }}
+                >
+                  <option value="">All timeframes</option>
+                  {journalFilterOptions.timeframes.map((tf) => (
+                    <option key={tf} value={tf}>
+                      {tf}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={journalFilters.entry_type}
+                  onChange={(e) =>
+                    setJournalFilters((prev) => ({
+                      ...prev,
+                      entry_type: e.target.value,
+                    }))
+                  }
+                  style={{
+                    flex: "0 0 150px",
+                    minWidth: "130px",
+                    padding: "8px 10px",
+                    backgroundColor: "var(--bg-primary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-primary)",
+                    fontSize: "13px",
+                  }}
+                >
+                  <option value="">All entry types</option>
+                  {journalFilterOptions.entryTypes.map((et) => (
+                    <option key={et} value={et}>
+                      {et}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={journalFilters.exit_type}
+                  onChange={(e) =>
+                    setJournalFilters((prev) => ({
+                      ...prev,
+                      exit_type: e.target.value,
+                    }))
+                  }
+                  style={{
+                    flex: "0 0 150px",
+                    minWidth: "130px",
+                    padding: "8px 10px",
+                    backgroundColor: "var(--bg-primary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-primary)",
+                    fontSize: "13px",
+                  }}
+                >
+                  <option value="">All exit types</option>
+                  {journalFilterOptions.exitTypes.map((xt) => (
+                    <option key={xt} value={xt}>
+                      {xt}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={journalFilters.outcome}
+                  onChange={(e) =>
+                    setJournalFilters((prev) => ({
+                      ...prev,
+                      outcome: e.target.value,
+                    }))
+                  }
+                  style={{
+                    flex: "0 0 150px",
+                    minWidth: "130px",
+                    padding: "8px 10px",
+                    backgroundColor: "var(--bg-primary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-primary)",
+                    fontSize: "13px",
+                  }}
+                >
+                  <option value="">All outcomes</option>
+                  {journalFilterOptions.outcomes.map((oc) => (
+                    <option key={oc} value={oc}>
+                      {oc}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setJournalFilters({
+                      symbol: "",
+                      position: "",
+                      timeframe: "",
+                      entry_type: "",
+                      exit_type: "",
+                      outcome: "",
+                      text: "",
+                    })
+                  }
+                  style={{
+                    flex: "0 0 auto",
+                    padding: "8px 12px",
+                    backgroundColor: "transparent",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-secondary)",
+                    fontSize: "12px",
+                    cursor: "pointer",
+                  }}
+                >
+                  Clear filters
+                </button>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+                  gap: "12px",
+                  marginBottom: "20px",
+                }}
+              >
+                <div style={{ padding: "12px", borderRadius: "6px", backgroundColor: "var(--bg-tertiary)" }}>
+                  <div style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                    Total entries
+                  </div>
+                  <div style={{ fontSize: "20px", fontWeight: "600" }}>{filteredEntries.length}</div>
+                </div>
+                <div style={{ padding: "12px", borderRadius: "6px", backgroundColor: "var(--bg-tertiary)" }}>
+                  <div style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                    This month
+                  </div>
+                  <div style={{ fontSize: "20px", fontWeight: "600" }}>
+                    {filteredEntries.filter((entry) => {
+                      const d = parse(entry.date, "yyyy-MM-dd", new Date());
+                      if (isNaN(d.getTime())) return false;
+                      const now = new Date();
+                      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+                    }).length}
+                  </div>
+                </div>
+                <div style={{ padding: "12px", borderRadius: "6px", backgroundColor: "var(--bg-tertiary)" }}>
+                  <div style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                    Last entry
+                  </div>
+                  <div style={{ fontSize: "14px", fontWeight: "500" }}>
+                    {filteredEntries[0]
+                      ? format(parse(filteredEntries[0].date, "yyyy-MM-dd", new Date()), "MMM d, yyyy")
+                      : "—"}
+                  </div>
+                </div>
+              </div>
+              <div style={{ height: 260 }}>
+                {entriesByMonth.length === 0 ? (
+                  <div
+                    style={{
+                      height: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "var(--text-secondary)",
+                      fontSize: "13px",
+                    }}
+                  >
+                    Add a journal entry to start seeing trends over time.
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={entriesByMonth}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                      <XAxis
+                        dataKey="month"
+                        stroke="var(--text-secondary)"
+                        tick={{ fontSize: 12, fill: "var(--text-secondary)" }}
+                      />
+                      <YAxis
+                        stroke="var(--text-secondary)"
+                        tick={{ fontSize: 12, fill: "var(--text-secondary)" }}
+                        allowDecimals={false}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "var(--bg-tertiary)",
+                          border: "1px solid var(--border-color)",
+                          color: "var(--text-primary)",
+                        }}
+                      />
+                      <Bar dataKey="count" fill="var(--accent)" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </div>
+
+            <div
+              style={{
+                backgroundColor: "var(--bg-secondary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "8px",
+                padding: "20px",
+              }}
+            >
+              <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px" }}>
+                Recent journal entries
+              </h3>
+              {recentEntries.length === 0 ? (
+                <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                  No journal entries yet. Use the button above to create your first entry.
+                </p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                  {recentEntries.map((entry) => (
+                    <div
+                      key={entry.id}
+                      style={{
+                        padding: "10px 12px",
+                        borderRadius: "6px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        border: "1px solid var(--border-color)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "2px",
+                      }}
+                    >
+                      <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-primary)" }}>
+                        {format(parse(entry.date, "yyyy-MM-dd", new Date()), "MMM d, yyyy")} –{" "}
+                        {entry.title}
+                      </div>
+                      {entry.strategy_id && (
+                        <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                          Strategy:{" "}
+                          {strategies.find((s) => s.id === entry.strategy_id)?.name || "Unknown"}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -4594,6 +5120,23 @@ export default function Journal() {
                   <div
                     key={entry.id}
                     onClick={() => {
+                      // Toggle selection: clicking an already selected entry (when not editing) will unselect it
+                      if (selectedEntry?.id === entry.id && !isCreating && !isEditing) {
+                        const prevStorageKey = `journal_entry_${selectedEntry.id}`;
+                        saveAllScrollPositions(
+                          tabScrollPositions.current,
+                          leftPanelScrollRef.current?.scrollTop ?? null,
+                          null,
+                          prevStorageKey
+                        );
+                        clearWorkInProgress();
+                        localStorage.removeItem('journal_selected_entry_id');
+                        setSelectedEntry(null);
+                        setSelectedTrades([]);
+                        tabScrollPositions.current.clear();
+                        return;
+                      }
+
                       // Save scroll position before switching (for previous entry if any)
                       if (selectedEntry?.id) {
                         const prevStorageKey = `journal_entry_${selectedEntry.id}`;

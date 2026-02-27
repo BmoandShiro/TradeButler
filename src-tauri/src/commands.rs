@@ -2971,6 +2971,46 @@ pub fn get_journal_trades(journal_entry_id: i64) -> Result<Vec<JournalTrade>, St
 }
 
 #[tauri::command]
+pub fn get_all_journal_trades() -> Result<Vec<JournalTrade>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare("SELECT id, journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, created_at, updated_at FROM journal_trades ORDER BY journal_entry_id ASC, trade_order ASC")
+        .map_err(|e| e.to_string())?;
+
+    let trade_iter = stmt
+        .query_map([], |row| {
+            Ok(JournalTrade {
+                id: Some(row.get(0)?),
+                journal_entry_id: row.get(1)?,
+                symbol: row.get(2)?,
+                position: row.get(3)?,
+                timeframe: row.get(4)?,
+                entry_type: row.get(5)?,
+                exit_type: row.get(6)?,
+                trade: row.get(7)?,
+                what_went_well: row.get(8)?,
+                what_could_be_improved: row.get(9)?,
+                emotional_state: row.get(10)?,
+                notes: row.get(11)?,
+                outcome: row.get(12)?,
+                trade_order: row.get(13)?,
+                created_at: row.get(14)?,
+                updated_at: row.get(15)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut trades = Vec::new();
+    for trade in trade_iter {
+        trades.push(trade.map_err(|e| e.to_string())?);
+    }
+
+    Ok(trades)
+}
+
+#[tauri::command]
 pub fn update_journal_trade(
     id: i64,
     symbol: Option<String>,
