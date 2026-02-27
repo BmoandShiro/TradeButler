@@ -5751,10 +5751,19 @@ export default function Strategies() {
                   <select
                     value={addTradeForm.side}
                     onChange={(e) => setAddTradeForm(f => ({ ...f, side: e.target.value }))}
-                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
+                    style={{
+                      width: "100%",
+                      padding: "8px 10px",
+                      borderRadius: "6px",
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-primary)",
+                      color: addTradeForm.side === "BUY" ? "var(--profit)" : "var(--loss)",
+                      fontSize: "14px",
+                      fontWeight: "600",
+                    }}
                   >
-                    <option value="BUY">BUY</option>
-                    <option value="SELL">SELL</option>
+                    <option value="BUY" style={{ color: "var(--profit)" }}>BUY</option>
+                    <option value="SELL" style={{ color: "var(--loss)" }}>SELL</option>
                   </select>
                 </div>
                 <div style={{ flex: 1 }}>

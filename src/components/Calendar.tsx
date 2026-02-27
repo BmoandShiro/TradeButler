@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
+import { useNavigate } from "react-router-dom";
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isToday } from "date-fns";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
@@ -9,25 +10,48 @@ interface DailyPnL {
   trade_count: number;
 }
 
+interface CalendarJournalEntry {
+  id: number;
+  date: string;
+  title: string;
+}
+
 export default function Calendar() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [dailyPnL, setDailyPnL] = useState<Record<string, DailyPnL>>({});
   const [loading, setLoading] = useState(true);
+  const [journalEntriesByDate, setJournalEntriesByDate] = useState<Record<string, CalendarJournalEntry[]>>({});
+  const [openJournalDate, setOpenJournalDate] = useState<string | null>(null);
+  const [openJournalPage, setOpenJournalPage] = useState<number>(0);
+  const navigate = useNavigate();
 
   useEffect(() => {
-    loadDailyPnL();
+    loadCalendarData();
   }, [currentDate]);
 
-  const loadDailyPnL = async () => {
+  const loadCalendarData = async () => {
     try {
-      const data = await invoke<DailyPnL[]>("get_daily_pnl");
+      const [pnlData, journalData] = await Promise.all([
+        invoke<DailyPnL[]>("get_daily_pnl"),
+        invoke<CalendarJournalEntry[]>("get_journal_entries"),
+      ]);
+
       const pnlMap: Record<string, DailyPnL> = {};
-      data.forEach((day) => {
+      pnlData.forEach((day) => {
         pnlMap[day.date] = day;
       });
       setDailyPnL(pnlMap);
+
+      const journalMap: Record<string, CalendarJournalEntry[]> = {};
+      journalData.forEach((entry) => {
+        if (!journalMap[entry.date]) {
+          journalMap[entry.date] = [];
+        }
+        journalMap[entry.date].push(entry);
+      });
+      setJournalEntriesByDate(journalMap);
     } catch (error) {
-      console.error("Error loading daily P&L:", error);
+      console.error("Error loading calendar data:", error);
     } finally {
       setLoading(false);
     }
@@ -53,6 +77,13 @@ export default function Calendar() {
     const dateStr = format(date, "yyyy-MM-dd");
     return dailyPnL[dateStr] || null;
   };
+
+  const getDayJournalEntries = (date: Date): CalendarJournalEntry[] => {
+    const dateStr = format(date, "yyyy-MM-dd");
+    return journalEntriesByDate[dateStr] || [];
+  };
+
+  const getDateKey = (date: Date): string => format(date, "yyyy-MM-dd");
 
   const getDayColor = (pnl: number | null): string => {
     if (pnl === null) return "transparent";
@@ -209,8 +240,11 @@ export default function Calendar() {
 
         {daysInMonth.map((day) => {
           const dayPnL = getDayPnL(day);
+          const journalEntries = getDayJournalEntries(day);
           const isCurrentDay = isToday(day);
           const pnlColor = getDayColor(dayPnL?.profit_loss ?? null);
+          const dateKey = getDateKey(day);
+          const isDropdownOpen = openJournalDate === dateKey;
 
           return (
             <div
@@ -221,7 +255,7 @@ export default function Calendar() {
                 borderRadius: "6px",
                 padding: "8px",
                 backgroundColor: pnlColor !== "transparent" ? `${pnlColor}15` : "transparent",
-                cursor: dayPnL ? "pointer" : "default",
+                cursor: dayPnL || journalEntries.length > 0 ? "pointer" : "default",
                 position: "relative",
                 display: "flex",
                 flexDirection: "column",
@@ -255,6 +289,182 @@ export default function Calendar() {
                   {dayPnL.profit_loss >= 0 ? "+" : ""}
                   ${Math.abs(dayPnL.profit_loss).toFixed(0)}
                 </span>
+              )}
+              {journalEntries.length > 0 && (
+                <>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpenJournalPage(0);
+                      setOpenJournalDate((prev) => (prev === dateKey ? null : dateKey));
+                    }}
+                    style={{
+                      marginTop: "6px",
+                      padding: "3px 6px",
+                      fontSize: "10px",
+                      borderRadius: "6px",
+                      border: "1px solid var(--accent)",
+                      backgroundColor: isDropdownOpen ? "var(--accent)" : "transparent",
+                      color: isDropdownOpen ? "var(--bg-secondary)" : "var(--accent)",
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                      maxWidth: "100%",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title={`View ${journalEntries.length} journal entr${journalEntries.length === 1 ? "y" : "ies"}`}
+                  >
+                    Journal entries ({journalEntries.length})
+                  </button>
+                  {isDropdownOpen && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "100%",
+                        left: 0,
+                        marginTop: "4px",
+                        zIndex: 10,
+                        minWidth: "180px",
+                        maxWidth: "220px",
+                        maxHeight: "180px",
+                        overflowY: "auto",
+                        backgroundColor: "var(--bg-secondary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "8px",
+                        boxShadow: "0 8px 20px rgba(0, 0, 0, 0.4)",
+                        padding: "8px",
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          marginBottom: "6px",
+                          fontSize: "11px",
+                          fontWeight: 600,
+                          color: "var(--text-secondary)",
+                        }}
+                      >
+                        <span>{format(day, "MMM d, yyyy")}</span>
+                        <button
+                          onClick={() => {
+                            setOpenJournalPage(0);
+                            setOpenJournalDate(null);
+                          }}
+                          style={{
+                            border: "none",
+                            background: "transparent",
+                            color: "var(--text-secondary)",
+                            fontSize: "10px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Close
+                        </button>
+                      </div>
+                      <ul
+                        style={{
+                          listStyle: "none",
+                          padding: 0,
+                          margin: 0,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "4px",
+                        }}
+                      >
+                        {(() => {
+                          const entriesPerPage = 10;
+                          const totalPages = Math.ceil(journalEntries.length / entriesPerPage) || 1;
+                          const currentPage = Math.min(openJournalPage, totalPages - 1);
+                          const startIndex = currentPage * entriesPerPage;
+                          const pageEntries = journalEntries.slice(startIndex, startIndex + entriesPerPage);
+
+                          return (
+                            <>
+                              {pageEntries.map((entry) => (
+                                <li key={entry.id}>
+                                  <button
+                                    onClick={() => navigate("/journal", { state: { openEntryId: entry.id } })}
+                                    style={{
+                                      border: "none",
+                                      background: "transparent",
+                                      padding: 0,
+                                      textAlign: "left",
+                                      fontSize: "11px",
+                                      color: "var(--accent)",
+                                      cursor: "pointer",
+                                      whiteSpace: "nowrap",
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                      width: "100%",
+                                    }}
+                                    title={entry.title}
+                                  >
+                                    {entry.title || "Untitled entry"}
+                                  </button>
+                                </li>
+                              ))}
+                              {totalPages > 1 && (
+                                <li
+                                  style={{
+                                    marginTop: "6px",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    fontSize: "10px",
+                                    color: "var(--text-secondary)",
+                                  }}
+                                >
+                                  <button
+                                    onClick={() =>
+                                      setOpenJournalPage((prev) => (prev > 0 ? prev - 1 : prev))
+                                    }
+                                    disabled={currentPage === 0}
+                                    style={{
+                                      border: "none",
+                                      background: "transparent",
+                                      color: currentPage === 0 ? "var(--text-muted)" : "var(--accent)",
+                                      cursor: currentPage === 0 ? "default" : "pointer",
+                                      padding: 0,
+                                    }}
+                                  >
+                                    ‹ Prev
+                                  </button>
+                                  <span>
+                                    Page {currentPage + 1} of {totalPages}
+                                  </span>
+                                  <button
+                                    onClick={() =>
+                                      setOpenJournalPage((prev) =>
+                                        prev < totalPages - 1 ? prev + 1 : prev
+                                      )
+                                    }
+                                    disabled={currentPage >= totalPages - 1}
+                                    style={{
+                                      border: "none",
+                                      background: "transparent",
+                                      color:
+                                        currentPage >= totalPages - 1
+                                          ? "var(--text-muted)"
+                                          : "var(--accent)",
+                                      cursor:
+                                        currentPage >= totalPages - 1 ? "default" : "pointer",
+                                      padding: 0,
+                                    }}
+                                  >
+                                    Next ›
+                                  </button>
+                                </li>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </ul>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           );

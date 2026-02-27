@@ -85,6 +85,7 @@ fn main() {
             commands::get_journal_checklist_responses,
             commands::get_journal_entry_pairs,
             commands::set_journal_entry_pairs,
+            commands::get_journal_entries_for_pair,
             commands::get_all_symbols,
             commands::clear_all_data,
             commands::export_data,

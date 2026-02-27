@@ -5395,7 +5395,14 @@ export default function Journal() {
                             <input
                               type="checkbox"
                               checked={isSelected}
-                              onChange={() => {}}
+                              onChange={() => {
+                                setLinkPickerSelected((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(key)) next.delete(key);
+                                  else next.add(key);
+                                  return next;
+                                });
+                              }}
                               onClick={(e) => e.stopPropagation()}
                               style={{ cursor: "pointer" }}
                             />
