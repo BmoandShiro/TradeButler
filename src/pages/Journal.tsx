@@ -2125,9 +2125,43 @@ export default function Journal() {
       .sort((a, b) => a.month.localeCompare(b.month));
   }, [filteredEntries]);
 
+  const [overviewChartTab, setOverviewChartTab] = useState<
+    "entries_over_time" | "symbol" | "position" | "timeframe" | "entry_type" | "exit_type" | "outcome"
+  >("entries_over_time");
+
+  const filteredTradesForCharts = useMemo(() => {
+    const ids = new Set(filteredEntries.map((e) => e.id));
+    return allJournalTrades.filter((t) => ids.has(t.journal_entry_id));
+  }, [filteredEntries, allJournalTrades]);
+
+  const journalChartData = useMemo(() => {
+    const aggregate = (key: "symbol" | "position" | "timeframe" | "entry_type" | "exit_type" | "outcome") => {
+      const counts = new Map<string, number>();
+      filteredTradesForCharts.forEach((t) => {
+        const raw = (t as any)[key] as string | null | undefined;
+        const value = (raw || "Unspecified").trim();
+        counts.set(value, (counts.get(value) || 0) + 1);
+      });
+      return Array.from(counts.entries())
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count);
+    };
+
+    return {
+      symbol: aggregate("symbol"),
+      position: aggregate("position"),
+      timeframe: aggregate("timeframe"),
+      entry_type: aggregate("entry_type"),
+      exit_type: aggregate("exit_type"),
+      outcome: aggregate("outcome"),
+    };
+  }, [filteredTradesForCharts]);
+
+  const [showAllRecent, setShowAllRecent] = useState(false);
+
   const recentEntries = useMemo(
-    () => filteredEntries.slice(0, 10),
-    [filteredEntries]
+    () => (showAllRecent ? filteredEntries : filteredEntries.slice(0, 10)),
+    [filteredEntries, showAllRecent]
   );
 
   return (
@@ -3122,7 +3156,7 @@ export default function Journal() {
                         backgroundColor: "var(--bg-secondary)",
                       }}
                     >
-                    {[
+                  {[
                       { id: "trade" as TabType, label: "Implementation" },
                       { id: "what_went_well" as TabType, label: "What Went Well" },
                       { id: "what_could_be_improved" as TabType, label: "What Could Be Improved" },
@@ -4656,7 +4690,7 @@ export default function Journal() {
               }}
             >
               <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "12px" }}>
-                Journal overview
+                Journal Overview
               </h2>
               <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px" }}>
                 Review your past journal entries at a glance. Select any entry on the right to dive into full details.
@@ -4671,7 +4705,7 @@ export default function Journal() {
               >
                 <input
                   type="text"
-                  placeholder="Search title, notes, and implementation text..."
+                  placeholder="Search Title, Notes, and Implementation Text..."
                   value={journalFilters.text}
                   onChange={(e) =>
                     setJournalFilters((prev) => ({
@@ -4709,7 +4743,7 @@ export default function Journal() {
                     fontSize: "13px",
                   }}
                 >
-                  <option value="">All symbols</option>
+                  <option value="">All Symbols</option>
                   {journalFilterOptions.symbols.map((sym) => (
                     <option key={sym} value={sym}>
                       {sym}
@@ -4735,7 +4769,7 @@ export default function Journal() {
                     fontSize: "13px",
                   }}
                 >
-                  <option value="">All positions</option>
+                  <option value="">All Positions</option>
                   {journalFilterOptions.positions.map((pos) => (
                     <option key={pos} value={pos}>
                       {pos}
@@ -4761,7 +4795,7 @@ export default function Journal() {
                     fontSize: "13px",
                   }}
                 >
-                  <option value="">All timeframes</option>
+                  <option value="">All Timeframes</option>
                   {journalFilterOptions.timeframes.map((tf) => (
                     <option key={tf} value={tf}>
                       {tf}
@@ -4787,7 +4821,7 @@ export default function Journal() {
                     fontSize: "13px",
                   }}
                 >
-                  <option value="">All entry types</option>
+                  <option value="">All Entry Types</option>
                   {journalFilterOptions.entryTypes.map((et) => (
                     <option key={et} value={et}>
                       {et}
@@ -4813,7 +4847,7 @@ export default function Journal() {
                     fontSize: "13px",
                   }}
                 >
-                  <option value="">All exit types</option>
+                  <option value="">All Exit Types</option>
                   {journalFilterOptions.exitTypes.map((xt) => (
                     <option key={xt} value={xt}>
                       {xt}
@@ -4839,7 +4873,7 @@ export default function Journal() {
                     fontSize: "13px",
                   }}
                 >
-                  <option value="">All outcomes</option>
+                  <option value="">All Outcomes</option>
                   {journalFilterOptions.outcomes.map((oc) => (
                     <option key={oc} value={oc}>
                       {oc}
@@ -4912,44 +4946,181 @@ export default function Journal() {
                 </div>
               </div>
               <div style={{ height: 260 }}>
-                {entriesByMonth.length === 0 ? (
-                  <div
+                <div
+                  style={{
+                    marginBottom: "12px",
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "8px",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <span
                     style={{
-                      height: "100%",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
+                      fontSize: "12px",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.06em",
                       color: "var(--text-secondary)",
-                      fontSize: "13px",
                     }}
                   >
-                    Add a journal entry to start seeing trends over time.
-                  </div>
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={entriesByMonth}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                      <XAxis
-                        dataKey="month"
-                        stroke="var(--text-secondary)"
-                        tick={{ fontSize: 12, fill: "var(--text-secondary)" }}
-                      />
-                      <YAxis
-                        stroke="var(--text-secondary)"
-                        tick={{ fontSize: 12, fill: "var(--text-secondary)" }}
-                        allowDecimals={false}
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "var(--bg-tertiary)",
-                          border: "1px solid var(--border-color)",
-                          color: "var(--text-primary)",
+                    Journal Distributions
+                  </span>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: "4px",
+                      padding: "4px",
+                      borderRadius: "999px",
+                      background:
+                        "linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))",
+                      border: "1px solid rgba(255,255,255,0.06)",
+                    }}
+                  >
+                    {[
+                    { id: "entries_over_time" as const, label: "Entries Over Time" },
+                    { id: "symbol" as const, label: "Symbols" },
+                    { id: "position" as const, label: "Positions" },
+                    { id: "timeframe" as const, label: "Timeframes" },
+                    { id: "entry_type" as const, label: "Entry Types" },
+                    { id: "exit_type" as const, label: "Exit Types" },
+                    { id: "outcome" as const, label: "Outcomes" },
+                  ].map((tab) => {
+                    const isActive = overviewChartTab === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setOverviewChartTab(tab.id)}
+                        style={{
+                          padding: "6px 12px",
+                          fontSize: "12px",
+                          borderRadius: "999px",
+                          border: "none",
+                          backgroundColor: isActive ? "var(--accent)" : "transparent",
+                          color: isActive ? "#ffffff" : "var(--text-secondary)",
+                          cursor: "pointer",
+                          boxShadow: isActive ? "0 0 0 1px rgba(255,255,255,0.08)" : "none",
+                          transition: "background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease",
+                          whiteSpace: "nowrap",
                         }}
-                      />
-                      <Bar dataKey="count" fill="var(--accent)" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                )}
+                        onMouseEnter={(e) => {
+                          if (!isActive) {
+                            (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.02)");
+                            e.currentTarget.style.color = "var(--text-primary)";
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!isActive) {
+                            e.currentTarget.style.backgroundColor = "transparent";
+                            e.currentTarget.style.color = "var(--text-secondary)";
+                          }
+                        }}
+                      >
+                        {tab.label}
+                      </button>
+                    );
+                  })}
+                  </div>
+                </div>
+                {overviewChartTab === "entries_over_time" ? (
+                  entriesByMonth.length === 0 ? (
+                    <div
+                      style={{
+                        height: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "var(--text-secondary)",
+                        fontSize: "13px",
+                      }}
+                    >
+                      No entries match the current filters.
+                    </div>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={entriesByMonth}
+                        activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                        <XAxis
+                          dataKey="month"
+                          stroke="var(--text-secondary)"
+                          tick={{ fontSize: 12, fill: "var(--text-secondary)" }}
+                        />
+                        <YAxis
+                          stroke="var(--text-secondary)"
+                          tick={{ fontSize: 12, fill: "var(--text-secondary)" }}
+                          allowDecimals={false}
+                        />
+                        <Tooltip
+                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
+                          contentStyle={{
+                            backgroundColor: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            color: "var(--text-primary)",
+                          }}
+                        />
+                        <Bar
+                          dataKey="count"
+                          fill="var(--accent)"
+                          fillOpacity={0.5}
+                          stroke="var(--accent)"
+                          strokeWidth={1.6}
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )
+                ) : (() => {
+                  const key = overviewChartTab;
+                  const data = journalChartData[key];
+                  if (!data || data.length === 0) {
+                    return (
+                      <div
+                        style={{
+                          height: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: "var(--text-secondary)",
+                          fontSize: "13px",
+                        }}
+                      >
+                        No journal trades match the current filters for this dimension.
+                      </div>
+                    );
+                  }
+                  return (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={data}
+                        activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" />
+                        <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
+                        <Tooltip
+                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
+                          contentStyle={{
+                            backgroundColor: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            color: "var(--text-primary)",
+                          }}
+                          formatter={(value: any) => [value, "Entries"]}
+                        />
+                        <Bar
+                          dataKey="count"
+                          fill="var(--accent)"
+                          fillOpacity={0.5}
+                          stroke="var(--accent)"
+                          strokeWidth={1.6}
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  );
+                })()}
               </div>
             </div>
 
@@ -4961,9 +5132,28 @@ export default function Journal() {
                 padding: "20px",
               }}
             >
-              <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px" }}>
-                Recent journal entries
-              </h3>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px", gap: "12px", flexWrap: "wrap" }}>
+                <h3 style={{ fontSize: "16px", fontWeight: "600" }}>
+                  Recent Journal Entries
+                </h3>
+                {filteredEntries.length > 10 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllRecent((v) => !v)}
+                    style={{
+                      padding: "6px 10px",
+                      fontSize: "12px",
+                      borderRadius: "6px",
+                      border: "1px solid var(--border-color)",
+                      backgroundColor: "var(--bg-tertiary)",
+                      color: "var(--text-secondary)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {showAllRecent ? "Show latest 10" : `Show all (${filteredEntries.length})`}
+                  </button>
+                )}
+              </div>
               {recentEntries.length === 0 ? (
                 <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
                   No journal entries yet. Use the button above to create your first entry.
@@ -4973,6 +5163,14 @@ export default function Journal() {
                   {recentEntries.map((entry) => (
                     <div
                       key={entry.id}
+                      onClick={() => {
+                        clearWorkInProgress();
+                        localStorage.setItem("journal_selected_entry_id", entry.id.toString());
+                        tabScrollPositions.current.clear();
+                        loadEntry(entry.id);
+                        setIsCreating(false);
+                        setIsEditing(false);
+                      }}
                       style={{
                         padding: "10px 12px",
                         borderRadius: "6px",
@@ -4981,6 +5179,7 @@ export default function Journal() {
                         display: "flex",
                         flexDirection: "column",
                         gap: "2px",
+                        cursor: "pointer",
                       }}
                     >
                       <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-primary)" }}>
