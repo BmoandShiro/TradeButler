@@ -1120,8 +1120,6 @@ export default function Emotions() {
     );
   }
 
-  const currentSurveyQuestions = formTab !== "basic" ? SURVEY_QUESTIONS[formTab] : [];
-
   return (
     <div ref={mainScrollRef} style={{ padding: "30px", overflowY: "auto", height: "100%", minHeight: 0 }}>
       <h1 style={{ fontSize: "28px", fontWeight: "700", marginBottom: "28px", color: "var(--text-primary)" }}>Emotions</h1>
@@ -1476,8 +1474,9 @@ export default function Emotions() {
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
-            height: editingState && isMaximized ? "calc(100vh - 220px)" : editingState ? "calc(100vh - 180px)" : "auto",
-            minHeight: editingState ? "400px" : "auto",
+            height: editingState && isMaximized ? "calc(100vh - 220px)" : editingState ? "calc(100vh - 180px)" : "85vh",
+            maxHeight: editingState ? undefined : "85vh",
+            minHeight: editingState ? "400px" : "300px",
             position: isMaximized ? "fixed" : "relative",
             top: isMaximized ? "50px" : "auto",
             left: isMaximized ? "50px" : "auto",
@@ -1500,6 +1499,56 @@ export default function Emotions() {
                 ? `${editingStateGroup?.length ? `${editingStateGroup.length} emotions — ` : ""}${format(new Date(editingState.timestamp), "MMM dd, yyyy HH:mm")}`
                 : "Add New Emotional State"}
             </h2>
+            {!editingState && (
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    saveScrollPosition();
+                    setShowForm(false);
+                    setEditingState(null);
+                    setEditingStateGroup(null);
+                    setFormTab("basic");
+                    setFormData({ timestamp: new Date().toISOString(), selectedEmotions: {}, notes: "", journalEntryIds: [], journalTradeIds: [], tradeIds: [] });
+                    const initial: Record<string, number> = {};
+                    Object.values(SURVEY_QUESTIONS).flat().forEach((q) => { initial[q.key] = 3; });
+                    setSurveyResponses(initial);
+                  }}
+                  style={{
+                    padding: "10px 20px",
+                    backgroundColor: "var(--bg-secondary)",
+                    color: "var(--text-primary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    fontSize: "14px",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  form="emotion-form"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    const form = document.getElementById("emotion-form") as HTMLFormElement;
+                    if (form) form.requestSubmit();
+                  }}
+                  style={{
+                    padding: "10px 20px",
+                    backgroundColor: "var(--accent)",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    fontSize: "14px",
+                    fontWeight: "500",
+                  }}
+                >
+                  Save State
+                </button>
+              </div>
+            )}
             {editingState && (
               <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                 <button
@@ -1697,46 +1746,7 @@ export default function Emotions() {
             )}
           </div>
 
-          {/* Form Tabs */}
-          <div
-            style={{
-              display: "flex",
-              borderBottom: "1px solid var(--border-color)",
-              backgroundColor: "var(--bg-tertiary)",
-            }}
-          >
-            {[
-              { id: "basic" as const, label: "Basic Info" },
-              ...(editingState ? [] : [
-                { id: "before" as SurveyTabType, label: "Before Trade" },
-                { id: "during" as SurveyTabType, label: "During Trade" },
-                { id: "after" as SurveyTabType, label: "After Trade" },
-              ]),
-            ].map((tab) => {
-              const isActive = formTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setFormTab(tab.id)}
-                  style={{
-                    padding: "12px 20px",
-                    background: isActive ? "var(--bg-secondary)" : "transparent",
-                    border: "none",
-                    borderBottom: isActive ? "2px solid var(--accent)" : "2px solid transparent",
-                    color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
-                    cursor: "pointer",
-                    fontSize: "14px",
-                    fontWeight: isActive ? "600" : "400",
-                    transition: "all 0.2s",
-                  }}
-                >
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
-
-          <form id="emotion-form" onSubmit={handleSubmit}>
+          <form id="emotion-form" onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
             <div style={{ 
               padding: "24px", 
               display: "flex", 
@@ -1746,7 +1756,8 @@ export default function Emotions() {
               overflowY: "auto",
               overflowX: "hidden",
             }}>
-              {formTab === "basic" && (
+              {/* Single unified form: emotions first, then each group of questions */}
+              {(
                 <>
                   {/* Date — editable when creating or editing */}
                   <div style={{ marginBottom: "24px" }}>
@@ -1941,33 +1952,6 @@ export default function Emotions() {
                       </div>
                     </div>
                   )}
-
-                  <div style={{ 
-                    display: "flex", 
-                    flexDirection: "column", 
-                    minHeight: "200px",
-                    marginBottom: "16px",
-                  }}>
-                    <h3 style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                      Notes (for this whole entry)
-                    </h3>
-                    <div style={{ 
-                      minHeight: "180px",
-                      display: "flex", 
-                      flexDirection: "column", 
-                      backgroundColor: "var(--bg-secondary)",
-                      borderRadius: "8px",
-                      padding: "1px"
-                    }}>
-                      <RichTextEditor
-                        key={`notes-${editingState?.id || 'new'}-${isEditingSelectedState ? 'edit' : 'view'}`}
-                        value={formData.notes}
-                        onChange={(content: string) => setFormData({ ...formData, notes: content })}
-                        placeholder="Add notes about your emotional state for this entry..."
-                        readOnly={editingState !== null && !isEditingSelectedState}
-                      />
-                    </div>
-                  </div>
 
                   <div style={{ marginTop: "20px", paddingTop: "16px", borderTop: "1px solid var(--border-color)" }}>
                     <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", color: "var(--text-secondary)" }}>
@@ -2183,50 +2167,80 @@ export default function Emotions() {
 
                   {!editingState && (
                     <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "8px" }}>
-                      Survey tabs are optional — if you don't change any answers, nothing will be saved for the survey.
+                      Survey questions are optional — if you don't change any answers, nothing will be saved for the survey.
                     </p>
                   )}
-                </>
-              )}
 
-              {formTab !== "basic" && (
-                <div>
-                  {currentSurveyQuestions.map((q, idx) => (
-                    <div key={q.key} style={{ marginBottom: "24px" }}>
-                      <label style={{ display: "block", marginBottom: "12px", fontSize: "15px", fontWeight: "500" }}>
-                        {idx + 1}. {q.question}
-                      </label>
-                      <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "8px" }}>{q.scale}</p>
-                      <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-                        <span style={{ fontSize: "12px", color: "var(--text-secondary)", minWidth: "20px" }}>1</span>
-                        <input
-                          type="range"
-                          min="1"
-                          max="5"
-                          value={surveyResponses[q.key] || 3}
-                          onChange={(e) => setSurveyResponses({ ...surveyResponses, [q.key]: parseInt(e.target.value) })}
-                          style={{ flex: 1 }}
-                        />
-                        <span style={{ fontSize: "12px", color: "var(--text-secondary)", minWidth: "20px" }}>5</span>
-                        <span
-                          style={{
-                            minWidth: "40px",
-                            textAlign: "center",
-                            fontSize: "14px",
-                            fontWeight: "600",
-                            color: "var(--accent)",
-                          }}
-                        >
-                          {surveyResponses[q.key] || 3}
-                        </span>
-                      </div>
+                  {/* Question groups: Before Trade, During Trade, After Trade (single page, no tabs) */}
+                  {!editingState && (
+                    <>
+                      {(["before", "during", "after"] as const).map((phase) => (
+                        <div key={phase} style={{ marginTop: "28px", paddingTop: "20px", borderTop: "1px solid var(--border-color)" }}>
+                          <h3 style={{ margin: "0 0 16px", fontSize: "13px", fontWeight: "600", color: "var(--text-primary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                            {phase === "before" ? "Before Trade" : phase === "during" ? "During Trade" : "After Trade"}
+                          </h3>
+                          {SURVEY_QUESTIONS[phase].map((q, idx) => (
+                            <div key={q.key} style={{ marginBottom: "24px" }}>
+                              <label style={{ display: "block", marginBottom: "12px", fontSize: "15px", fontWeight: "500" }}>
+                                {idx + 1}. {q.question}
+                              </label>
+                              <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "8px" }}>{q.scale}</p>
+                              <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                                <span style={{ fontSize: "12px", color: "var(--text-secondary)", minWidth: "20px" }}>1</span>
+                                <input
+                                  type="range"
+                                  min="1"
+                                  max="5"
+                                  value={surveyResponses[q.key] || 3}
+                                  onChange={(e) => setSurveyResponses({ ...surveyResponses, [q.key]: parseInt(e.target.value) })}
+                                  style={{ flex: 1, accentColor: "var(--accent)" }}
+                                />
+                                <span style={{ fontSize: "12px", color: "var(--text-secondary)", minWidth: "20px" }}>5</span>
+                                <span style={{ minWidth: "40px", textAlign: "center", fontSize: "14px", fontWeight: "600", color: "var(--accent)" }}>
+                                  {surveyResponses[q.key] || 3}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </>
+                  )}
+
+                  {/* Notes at the very bottom (under all questions) */}
+                  <div style={{ 
+                    marginTop: "28px", 
+                    paddingTop: "20px", 
+                    borderTop: "1px solid var(--border-color)",
+                    display: "flex", 
+                    flexDirection: "column", 
+                    minHeight: "200px",
+                  }}>
+                    <h3 style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                      Notes (for this whole entry)
+                    </h3>
+                    <div style={{ 
+                      minHeight: "180px",
+                      display: "flex", 
+                      flexDirection: "column", 
+                      backgroundColor: "var(--bg-secondary)",
+                      borderRadius: "8px",
+                      padding: "1px"
+                    }}>
+                      <RichTextEditor
+                        key={`notes-${editingState?.id || 'new'}-${isEditingSelectedState ? 'edit' : 'view'}`}
+                        value={formData.notes}
+                        onChange={(content: string) => setFormData({ ...formData, notes: content })}
+                        placeholder="Add notes about your emotional state for this entry..."
+                        readOnly={editingState !== null && !isEditingSelectedState}
+                      />
                     </div>
-                  ))}
-                </div>
+                  </div>
+                </>
               )}
             </div>
 
-            {/* Form Actions */}
+            {/* Form Actions — only when editing (new entry uses header buttons) */}
             <div
               style={{
                 padding: "16px 24px",
@@ -2421,53 +2435,7 @@ export default function Emotions() {
                     </>
                   )}
                 </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      saveScrollPosition();
-                      setShowForm(false);
-                      setEditingState(null);
-                      setEditingStateGroup(null);
-                      setIsEditingSelectedState(false);
-                      setFormTab("basic");
-                      setFormData({ timestamp: new Date().toISOString(), selectedEmotions: {}, notes: "", journalEntryIds: [], journalTradeIds: [], tradeIds: [] });
-                      const initial: Record<string, number> = {};
-                      Object.values(SURVEY_QUESTIONS).flat().forEach((q) => {
-                        initial[q.key] = 3;
-                      });
-                      setSurveyResponses(initial);
-                    }}
-                    style={{
-                      padding: "10px 20px",
-                      backgroundColor: "var(--bg-secondary)",
-                      color: "var(--text-primary)",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                      fontSize: "14px",
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    style={{
-                      padding: "10px 20px",
-                      backgroundColor: "var(--accent)",
-                      color: "white",
-                      border: "none",
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                      fontSize: "14px",
-                      fontWeight: "500",
-                    }}
-                  >
-                    Save State
-                  </button>
-                </>
-              )}
+              ) : null}
             </div>
           </form>
         </div>

@@ -109,6 +109,36 @@ const INTENSITY_LABELS: Record<number, string> = {
   6: "Strong", 7: "Very strong", 8: "Intense", 9: "Severe", 10: "Extreme",
 };
 
+/** Same question groups as Emotions page — unified emotional state entry format */
+const JOURNAL_SURVEY_QUESTIONS = {
+  before: [
+    { key: "before_calm_clear", question: "How calm and mentally clear did you feel before considering this trade?", scale: "1 = Very anxious/confused, 5 = Very calm/clear" },
+    { key: "before_urgency_pressure", question: "Did you feel any urgency or pressure to \"make something happen\" in the market?", scale: "1 = No urgency, 5 = Extreme pressure" },
+    { key: "before_confidence_vs_validation", question: "Were you feeling confident in yourself, or seeking validation from a win?", scale: "1 = Confident in self, 5 = Seeking validation" },
+    { key: "before_fomo", question: "Did fear of missing out (FOMO) influence your desire to enter?", scale: "1 = No FOMO, 5 = Strong FOMO" },
+    { key: "before_recovering_loss", question: "Were you trying to recover from a previous loss emotionally?", scale: "1 = Not at all, 5 = Strongly trying to recover" },
+    { key: "before_patient_detached", question: "Did you feel patient and detached, or restless and impulsive?", scale: "1 = Patient/detached, 5 = Restless/impulsive" },
+    { key: "before_trust_process", question: "How strong was your trust in your process at that moment?", scale: "1 = No trust, 5 = Complete trust" },
+    { key: "before_emotional_state", question: "Were you feeling bored, excited, anxious, or neutral before entry?", scale: "1 = Neutral/calm, 5 = Extremely emotional (any)" },
+  ],
+  during: [
+    { key: "during_stable", question: "How stable were your emotions once the trade was live?", scale: "1 = Very stable, 5 = Very unstable" },
+    { key: "during_tension_stress", question: "Did you feel tension, nervousness, or physical stress while price moved?", scale: "1 = No tension, 5 = Extreme tension/stress" },
+    { key: "during_tempted_interfere", question: "Were you tempted to interfere with the trade out of fear or hope?", scale: "1 = No temptation, 5 = Strong temptation" },
+    { key: "during_need_control", question: "Did you feel a need to \"control\" the outcome instead of letting it play out?", scale: "1 = Let it play, 5 = Strong need to control" },
+    { key: "during_fear_loss", question: "How strong was your fear of loss while in the position?", scale: "1 = No fear, 5 = Extreme fear" },
+    { key: "during_excitement_greed", question: "How strong was your excitement or greed as price moved in your favor?", scale: "1 = Calm, 5 = Extreme excitement/greed" },
+    { key: "during_mentally_present", question: "Did you feel mentally present, or distracted and reactive?", scale: "1 = Very present, 5 = Very distracted/reactive" },
+  ],
+  after: [
+    { key: "after_accept_outcome", question: "How well did you accept the outcome emotionally, regardless of win or loss?", scale: "1 = Full acceptance, 5 = Poor acceptance" },
+    { key: "after_emotional_reaction", question: "Did you feel relief, frustration, disappointment, or satisfaction?", scale: "1 = Neutral/balanced, 5 = Strong emotional reaction" },
+    { key: "after_confidence_affected", question: "Did the result affect your confidence in yourself?", scale: "1 = No effect, 5 = Strong effect (positive or negative)" },
+    { key: "after_tempted_another_trade", question: "Did you feel tempted to immediately take another trade to change your emotional state?", scale: "1 = No temptation, 5 = Strong temptation" },
+    { key: "after_proud_discipline", question: "Did you feel proud of your discipline, or focused only on the money outcome?", scale: "1 = Proud of discipline, 5 = Only focused on money" },
+  ],
+};
+
 /** Group emotional states by timestamp (same timestamp = one entry with shared notes). */
 function groupEmotionalStatesByTimestamp(states: JournalEmotionalState[]): JournalEmotionalState[][] {
   const byTs = new Map<string, JournalEmotionalState[]>();
@@ -232,10 +262,11 @@ export default function Journal() {
   const [journalEmotionalStates, setJournalEmotionalStates] = useState<JournalEmotionalState[]>([]);
   const [showAddEmotionalStateForm, setShowAddEmotionalStateForm] = useState(false);
   const [newEmotionalStateForm, setNewEmotionalStateForm] = useState<{ selectedEmotions: Record<string, number>; notes: string }>({ selectedEmotions: {}, notes: "" });
+  const [newEmotionalStateSurveyResponses, setNewEmotionalStateSurveyResponses] = useState<Record<string, number>>({});
   const [newEmotionalStateLinkScope, setNewEmotionalStateLinkScope] = useState<"entry" | "trades">("entry");
   const [newEmotionalStateTradeIndices, setNewEmotionalStateTradeIndices] = useState<number[]>([]);
   // Pending emotional state entries (tradeIndex -1 = entire journal, >= 0 = that trade only; one state per scope)
-  const [pendingEmotionalStates, setPendingEmotionalStates] = useState<Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string }>>([]);
+  const [pendingEmotionalStates, setPendingEmotionalStates] = useState<Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string; surveyResponses?: Record<string, number> }>>([]);
   
   // Available symbols for dropdown
   const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
@@ -1521,14 +1552,14 @@ export default function Journal() {
       }
 
       // Persist emotional states: pending list + any form-in-progress (one state per trade or one for entire entry)
-      const toPersist: Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string }> = [...pendingEmotionalStates];
+      const toPersist: Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string; surveyResponses?: Record<string, number> }> = [...pendingEmotionalStates];
       const hasFormContent = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 || (newEmotionalStateForm.notes || "").trim() !== "";
       if (showAddEmotionalStateForm && hasFormContent) {
         if (newEmotionalStateLinkScope === "entry") {
-          toPersist.push({ tradeIndex: -1, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes });
+          toPersist.push({ tradeIndex: -1, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes, surveyResponses: { ...newEmotionalStateSurveyResponses } });
         } else {
           for (const i of newEmotionalStateTradeIndices) {
-            toPersist.push({ tradeIndex: i, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes });
+            toPersist.push({ tradeIndex: i, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes, surveyResponses: { ...newEmotionalStateSurveyResponses } });
           }
         }
       }
@@ -1539,12 +1570,13 @@ export default function Journal() {
       const now = new Date().toISOString();
       for (const pending of toPersist) {
         try {
+          let firstStateId: number | null = null;
           if (pending.tradeIndex === -1) {
             const entryLevel = allStatesForEntry.filter((s) => s.journal_trade_id == null);
             const groups = groupEmotionalStatesByTimestamp(entryLevel);
             for (const g of groups) await deleteGroup(g);
             for (const emotion of Object.keys(pending.selectedEmotions)) {
-              await invoke("add_emotional_state", {
+              const stateId = await invoke<number>("add_emotional_state", {
                 timestamp: now,
                 emotion,
                 intensity: pending.selectedEmotions[emotion],
@@ -1553,6 +1585,7 @@ export default function Journal() {
                 journalEntryId: entryId,
                 journalTradeId: null,
               });
+              if (firstStateId === null) firstStateId = stateId;
             }
           } else {
             const journalTradeId = tradeIdsInOrder[pending.tradeIndex];
@@ -1561,7 +1594,7 @@ export default function Journal() {
               const groups = groupEmotionalStatesByTimestamp(forTrade);
               for (const g of groups) await deleteGroup(g);
               for (const emotion of Object.keys(pending.selectedEmotions)) {
-                await invoke("add_emotional_state", {
+                const stateId = await invoke<number>("add_emotional_state", {
                   timestamp: now,
                   emotion,
                   intensity: pending.selectedEmotions[emotion],
@@ -1570,7 +1603,40 @@ export default function Journal() {
                   journalEntryId: entryId,
                   journalTradeId,
                 });
+                if (firstStateId === null) firstStateId = stateId;
               }
+            }
+          }
+          const sr = pending.surveyResponses ?? {};
+          const shouldSaveSurvey = firstStateId != null && Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 3) !== 3);
+          if (shouldSaveSurvey && firstStateId != null) {
+            try {
+              await invoke("add_emotion_survey", {
+                emotional_state_id: firstStateId,
+                timestamp: now,
+                before_calm_clear: sr.before_calm_clear ?? 3,
+                before_urgency_pressure: sr.before_urgency_pressure ?? 3,
+                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 3,
+                before_fomo: sr.before_fomo ?? 3,
+                before_recovering_loss: sr.before_recovering_loss ?? 3,
+                before_patient_detached: sr.before_patient_detached ?? 3,
+                before_trust_process: sr.before_trust_process ?? 3,
+                before_emotional_state: sr.before_emotional_state ?? 3,
+                during_stable: sr.during_stable ?? 3,
+                during_tension_stress: sr.during_tension_stress ?? 3,
+                during_tempted_interfere: sr.during_tempted_interfere ?? 3,
+                during_need_control: sr.during_need_control ?? 3,
+                during_fear_loss: sr.during_fear_loss ?? 3,
+                during_excitement_greed: sr.during_excitement_greed ?? 3,
+                during_mentally_present: sr.during_mentally_present ?? 3,
+                after_accept_outcome: sr.after_accept_outcome ?? 3,
+                after_emotional_reaction: sr.after_emotional_reaction ?? 3,
+                after_confidence_affected: sr.after_confidence_affected ?? 3,
+                after_tempted_another_trade: sr.after_tempted_another_trade ?? 3,
+                after_proud_discipline: sr.after_proud_discipline ?? 3,
+              });
+            } catch (e) {
+              console.error(e);
             }
           }
         } catch (e) {
@@ -1580,6 +1646,7 @@ export default function Journal() {
       if (toPersist.length > 0) {
         setShowAddEmotionalStateForm(false);
         setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
+        setNewEmotionalStateSurveyResponses({});
         setNewEmotionalStateLinkScope("entry");
         setNewEmotionalStateTradeIndices([]);
         setPendingEmotionalStates([]);
@@ -3984,6 +4051,7 @@ export default function Journal() {
                                         onClick={() => {
                                           setPendingEmotionalStates((prev) => prev.filter((p) => p !== pending));
                                           setNewEmotionalStateForm({ selectedEmotions: { ...pending.selectedEmotions }, notes: pending.notes });
+                                          setNewEmotionalStateSurveyResponses(pending.surveyResponses ? { ...pending.surveyResponses } : {});
                                           setNewEmotionalStateLinkScope(pending.tradeIndex === -1 ? "entry" : "trades");
                                           setNewEmotionalStateTradeIndices(pending.tradeIndex === -1 ? [] : [pending.tradeIndex]);
                                           setShowAddEmotionalStateForm(true);
@@ -4014,22 +4082,25 @@ export default function Journal() {
                               ))}
                             </div>
                             {((journalEmotionalStates.length === 0 && pendingEmotionalStates.filter((p) => p.tradeIndex === activeTradeIndex || p.tradeIndex === -1).length === 0) || showAddEmotionalStateForm) && (
-                              <div style={{ padding: "20px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "12px", marginBottom: "16px" }}>
-                                <h4 style={{ margin: "0 0 16px", fontSize: "14px", fontWeight: "600" }}>Add emotional state</h4>
-                                <div style={{ marginBottom: "20px", padding: "12px 14px", backgroundColor: "var(--bg-tertiary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                                  <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.5 }}>{INTENSITY_SCALE_LABEL}</p>
-                                </div>
-                                <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>
-                                  Add this emotional state to the journal entry using the button below. Save the journal entry when done to persist everything.
-                                </p>
-                                <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", alignItems: "center", marginBottom: "20px" }}>
-                                  <button
-                                    type="button"
-                                    disabled={
-                                      Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ||
-                                      (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0)
-                                    }
-                                    onClick={async () => {
+                              <div style={{ display: "flex", flexDirection: "column", maxHeight: "85vh", minHeight: "300px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "12px", marginBottom: "16px", overflow: "hidden" }}>
+                                {/* Header: title + buttons (same as Emotions page) */}
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)", flexShrink: 0 }}>
+                                  <h4 style={{ margin: 0, fontSize: "14px", fontWeight: "600" }}>Add emotional state</h4>
+                                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => { setShowAddEmotionalStateForm(false); setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" }); setNewEmotionalStateSurveyResponses({}); setNewEmotionalStateLinkScope("entry"); setNewEmotionalStateTradeIndices([]); }}
+                                      style={{ padding: "8px 14px", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-secondary)", cursor: "pointer", fontSize: "13px" }}
+                                    >
+                                      Close
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={
+                                        Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ||
+                                        (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0)
+                                      }
+                                      onClick={async () => {
                                       const hasAny = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0;
                                       if (!hasAny) return;
                                       if (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0) return;
@@ -4044,12 +4115,13 @@ export default function Journal() {
                                               await invoke("delete_emotional_state", { id: s.id });
                                             }
                                           };
+                                          let firstStateId: number | null = null;
                                           if (newEmotionalStateLinkScope === "entry") {
                                             const entryLevel = allStates.filter((s) => s.journal_trade_id == null);
                                             const groups = groupEmotionalStatesByTimestamp(entryLevel);
                                             for (const g of groups) await deleteGroup(g);
                                             for (const emotion of Object.keys(newEmotionalStateForm.selectedEmotions)) {
-                                              await invoke("add_emotional_state", {
+                                              const stateId = await invoke<number>("add_emotional_state", {
                                                 timestamp: now,
                                                 emotion,
                                                 intensity: newEmotionalStateForm.selectedEmotions[emotion],
@@ -4058,6 +4130,7 @@ export default function Journal() {
                                                 journalEntryId: entryId,
                                                 journalTradeId: null,
                                               });
+                                              if (firstStateId === null) firstStateId = stateId;
                                             }
                                           } else {
                                             for (const tradeIdx of newEmotionalStateTradeIndices) {
@@ -4068,7 +4141,7 @@ export default function Journal() {
                                               const groups = groupEmotionalStatesByTimestamp(forTrade);
                                               for (const g of groups) await deleteGroup(g);
                                               for (const emotion of Object.keys(newEmotionalStateForm.selectedEmotions)) {
-                                                await invoke("add_emotional_state", {
+                                                const stateId = await invoke<number>("add_emotional_state", {
                                                   timestamp: now,
                                                   emotion,
                                                   intensity: newEmotionalStateForm.selectedEmotions[emotion],
@@ -4077,12 +4150,46 @@ export default function Journal() {
                                                   journalEntryId: entryId,
                                                   journalTradeId: jtId,
                                                 });
+                                                if (firstStateId === null) firstStateId = stateId;
                                               }
+                                            }
+                                          }
+                                          const sr = newEmotionalStateSurveyResponses;
+                                          const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 3) !== 3);
+                                          if (shouldSaveSurvey && firstStateId != null) {
+                                            try {
+                                              await invoke("add_emotion_survey", {
+                                                emotional_state_id: firstStateId,
+                                                timestamp: now,
+                                                before_calm_clear: sr.before_calm_clear ?? 3,
+                                                before_urgency_pressure: sr.before_urgency_pressure ?? 3,
+                                                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 3,
+                                                before_fomo: sr.before_fomo ?? 3,
+                                                before_recovering_loss: sr.before_recovering_loss ?? 3,
+                                                before_patient_detached: sr.before_patient_detached ?? 3,
+                                                before_trust_process: sr.before_trust_process ?? 3,
+                                                before_emotional_state: sr.before_emotional_state ?? 3,
+                                                during_stable: sr.during_stable ?? 3,
+                                                during_tension_stress: sr.during_tension_stress ?? 3,
+                                                during_tempted_interfere: sr.during_tempted_interfere ?? 3,
+                                                during_need_control: sr.during_need_control ?? 3,
+                                                during_fear_loss: sr.during_fear_loss ?? 3,
+                                                during_excitement_greed: sr.during_excitement_greed ?? 3,
+                                                during_mentally_present: sr.during_mentally_present ?? 3,
+                                                after_accept_outcome: sr.after_accept_outcome ?? 3,
+                                                after_emotional_reaction: sr.after_emotional_reaction ?? 3,
+                                                after_confidence_affected: sr.after_confidence_affected ?? 3,
+                                                after_tempted_another_trade: sr.after_tempted_another_trade ?? 3,
+                                                after_proud_discipline: sr.after_proud_discipline ?? 3,
+                                              });
+                                            } catch (err) {
+                                              console.error("Failed to save emotion survey:", err);
                                             }
                                           }
                                           const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId! });
                                           setJournalEmotionalStates(states);
                                           setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
+                                          setNewEmotionalStateSurveyResponses({});
                                           setNewEmotionalStateLinkScope("entry");
                                           setNewEmotionalStateTradeIndices([]);
                                           setShowAddEmotionalStateForm(false);
@@ -4090,17 +4197,19 @@ export default function Journal() {
                                           console.error(e);
                                         }
                                       } else {
+                                        const surveyPayload = { ...newEmotionalStateSurveyResponses };
                                         if (newEmotionalStateLinkScope === "entry") {
-                                          setPendingEmotionalStates((prev) => prev.filter((p) => p.tradeIndex !== -1).concat([{ tradeIndex: -1, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes }]));
+                                          setPendingEmotionalStates((prev) => prev.filter((p) => p.tradeIndex !== -1).concat([{ tradeIndex: -1, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes, surveyResponses: surveyPayload }]));
                                         } else {
                                           let next = pendingEmotionalStates.filter((p) => p.tradeIndex === -1 || !newEmotionalStateTradeIndices.includes(p.tradeIndex));
                                           for (const i of newEmotionalStateTradeIndices) {
                                             next = next.filter((p) => p.tradeIndex !== i);
-                                            next.push({ tradeIndex: i, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes });
+                                            next.push({ tradeIndex: i, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes, surveyResponses: surveyPayload });
                                           }
                                           setPendingEmotionalStates(next);
                                         }
                                         setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
+                                        setNewEmotionalStateSurveyResponses({});
                                         setNewEmotionalStateLinkScope("entry");
                                         setNewEmotionalStateTradeIndices([]);
                                         setShowAddEmotionalStateForm(false);
@@ -4118,18 +4227,17 @@ export default function Journal() {
                                       opacity: Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ? 0.6 : 1,
                                     }}
                                     title="Add this emotional state to the journal entry"
-                                  >
-                                    Add emotional state to entry
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => { setShowAddEmotionalStateForm(false); setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" }); setNewEmotionalStateLinkScope("entry"); setNewEmotionalStateTradeIndices([]); }}
-                                    style={{ padding: "6px 12px", background: "transparent", border: "none", borderRadius: "6px", color: "var(--text-secondary)", cursor: "pointer", fontSize: "13px" }}
-                                  >
-                                    Close
-                                  </button>
+                                    >
+                                      Add emotional state to entry
+                                    </button>
+                                  </div>
                                 </div>
-                                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                                {/* Scrollable body */}
+                                <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", padding: "20px" }}>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                                  <div style={{ padding: "12px 14px", backgroundColor: "var(--bg-tertiary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
+                                    <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.5 }}>{INTENSITY_SCALE_LABEL}</p>
+                                  </div>
                                   <div>
                                     <h3 style={{ margin: "0 0 4px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Emotions</h3>
                                     <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>Tap to add or remove; then set strength below.</p>
@@ -4216,7 +4324,35 @@ export default function Journal() {
                                       </div>
                                     </div>
                                   )}
-                                  <div>
+                                  {/* Same question groups as Emotions page — unified format */}
+                                  {(["before", "during", "after"] as const).map((phase) => (
+                                    <div key={phase} style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--border-color)" }}>
+                                      <h3 style={{ margin: "0 0 12px", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                                        {phase === "before" ? "Before Trade" : phase === "during" ? "During Trade" : "After Trade"}
+                                      </h3>
+                                      {JOURNAL_SURVEY_QUESTIONS[phase].map((q, idx) => (
+                                        <div key={q.key} style={{ marginBottom: "16px" }}>
+                                          <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500" }}>{idx + 1}. {q.question}</label>
+                                          <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px" }}>{q.scale}</p>
+                                          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                                            <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "16px" }}>1</span>
+                                            <input
+                                              type="range"
+                                              min={1}
+                                              max={5}
+                                              value={newEmotionalStateSurveyResponses[q.key] ?? 3}
+                                              onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))}
+                                              style={{ flex: 1, minWidth: "80px", accentColor: "var(--accent)" }}
+                                            />
+                                            <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "16px" }}>5</span>
+                                            <span style={{ minWidth: "28px", textAlign: "center", fontSize: "13px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 3}</span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ))}
+                                  {/* Notes at the very bottom (under all questions) */}
+                                  <div style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--border-color)" }}>
                                     <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Notes (for this whole entry)</h3>
                                     <RichTextEditor
                                       value={newEmotionalStateForm.notes}
@@ -4225,6 +4361,7 @@ export default function Journal() {
                                       readOnly={false}
                                     />
                                   </div>
+                                </div>
                                 </div>
                               </div>
                             )}
