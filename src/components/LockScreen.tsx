@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { Lock, Unlock, AlertCircle, Trash2, Eye, EyeOff } from "lucide-react";
-import { unlockApp, hasPassword, getPasswordType, deletePassword } from "../utils/passwordManager";
+import { Lock, Unlock, AlertCircle, Trash2 } from "lucide-react";
+import { unlockApp, getPasswordType, deletePassword } from "../utils/passwordManager";
 import { invoke } from "@tauri-apps/api/tauri";
 
 interface LockScreenProps {
@@ -14,7 +14,6 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
-  const [showPin, setShowPin] = useState(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const passwordInputRef = useRef<HTMLInputElement>(null);
   const passwordType = getPasswordType();
@@ -62,15 +61,15 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     setError("");
 
     // Auto-focus next input
-    if (digit && index < 5 && inputRefs.current[index + 1]) {
-      inputRefs.current[index + 1].focus();
+    if (digit && index < 5) {
+      inputRefs.current[index + 1]?.focus();
     }
   };
 
   const handlePinKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
     // Handle backspace
-    if (e.key === "Backspace" && !pinDigits[index] && index > 0 && inputRefs.current[index - 1]) {
-      inputRefs.current[index - 1].focus();
+    if (e.key === "Backspace" && !pinDigits[index] && index > 0) {
+      inputRefs.current[index - 1]?.focus();
     }
     // Handle paste
     if (e.key === "v" && (e.ctrlKey || e.metaKey)) {
@@ -480,7 +479,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
                 <li>All journal entries</li>
                 <li>All emotional states</li>
                 <li>All settings and preferences</li>
-                <li>Your {passwordType === "PIN" ? "PIN" : "password"}</li>
+                <li>Your {passwordType === "pin" ? "PIN" : "password"}</li>
               </ul>
               <p style={{ fontSize: "13px", color: "var(--danger)", fontWeight: "600", marginBottom: "16px" }}>
                 This action cannot be undone!

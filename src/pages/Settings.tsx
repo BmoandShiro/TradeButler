@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, X, Lock, Key, Eye, EyeOff } from "lucide-react";
+import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, Lock, Eye, EyeOff } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { save } from "@tauri-apps/api/dialog";
 import { createPortal } from "react-dom";
@@ -18,7 +18,6 @@ import {
   deleteCustomPreset,
   saveCustomPreset,
   ThemePreset,
-  presetThemes
 } from "../utils/themeManager";
 import { 
   hasPassword, 
@@ -77,7 +76,7 @@ export default function Settings() {
   const [showNewPin, setShowNewPin] = useState(false);
   const [showConfirmPin, setShowConfirmPin] = useState(false);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
-  const [showRemovePin, setShowRemovePin] = useState(false);
+  const [_showRemovePin, _setShowRemovePin] = useState(false);
   const [removeVerification, setRemoveVerification] = useState("");
   const [removePinDigits, setRemovePinDigits] = useState<string[]>(["", "", "", "", "", ""]);
   const [lockScreenStyle, setLockScreenStyle] = useState<LockScreenStyle>(() => getLockScreenStyle());
@@ -305,8 +304,8 @@ export default function Settings() {
     newDigits[index] = digit;
     setNewPinDigits(newDigits);
     setPasswordError("");
-    if (digit && index < 5 && newPasswordInputRefs.current[index + 1]) {
-      newPasswordInputRefs.current[index + 1].focus();
+    if (digit && index < 5) {
+      newPasswordInputRefs.current[index + 1]?.focus();
     }
   };
 
@@ -316,8 +315,8 @@ export default function Settings() {
     newDigits[index] = digit;
     setConfirmPinDigits(newDigits);
     setPasswordError("");
-    if (digit && index < 5 && confirmPasswordInputRefs.current[index + 1]) {
-      confirmPasswordInputRefs.current[index + 1].focus();
+    if (digit && index < 5) {
+      confirmPasswordInputRefs.current[index + 1]?.focus();
     }
   };
 
@@ -327,8 +326,8 @@ export default function Settings() {
     newDigits[index] = digit;
     setRemovePinDigits(newDigits);
     setPasswordError("");
-    if (digit && index < 5 && removePasswordInputRefs.current[index + 1]) {
-      removePasswordInputRefs.current[index + 1].focus();
+    if (digit && index < 5) {
+      removePasswordInputRefs.current[index + 1]?.focus();
     }
   };
 
@@ -374,7 +373,7 @@ export default function Settings() {
     }
   };
 
-  const handleChangePassword = () => {
+  const handleChangePasswordPlaceholder = () => {
     setPasswordError("");
     setPasswordSuccess("");
     setNewPassword("");
@@ -382,6 +381,7 @@ export default function Settings() {
     setConfirmPassword("");
     setConfirmPinDigits(["", "", "", "", "", ""]);
   };
+  void handleChangePasswordPlaceholder;
 
   const handleRemovePassword = () => {
     if (!hasPassword()) {
@@ -1440,8 +1440,8 @@ export default function Settings() {
                         value={digit}
                         onChange={(e) => handleNewPinDigitChange(index, e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === "Backspace" && !digit && index > 0 && newPasswordInputRefs.current[index - 1]) {
-                            newPasswordInputRefs.current[index - 1].focus();
+                          if (e.key === "Backspace" && !digit && index > 0) {
+                            newPasswordInputRefs.current[index - 1]?.focus();
                           }
                         }}
                         maxLength={1}
@@ -1601,8 +1601,8 @@ export default function Settings() {
                         value={digit}
                         onChange={(e) => handleConfirmPinDigitChange(index, e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === "Backspace" && !digit && index > 0 && confirmPasswordInputRefs.current[index - 1]) {
-                            confirmPasswordInputRefs.current[index - 1].focus();
+                          if (e.key === "Backspace" && !digit && index > 0) {
+                            confirmPasswordInputRefs.current[index - 1]?.focus();
                           }
                         }}
                         maxLength={1}
@@ -1922,8 +1922,8 @@ export default function Settings() {
                           value={digit}
                           onChange={(e) => handleRemovePinDigitChange(index, e.target.value)}
                           onKeyDown={(e) => {
-                            if (e.key === "Backspace" && !digit && index > 0 && removePasswordInputRefs.current[index - 1]) {
-                              removePasswordInputRefs.current[index - 1].focus();
+                            if (e.key === "Backspace" && !digit && index > 0) {
+                              removePasswordInputRefs.current[index - 1]?.focus();
                             }
                           }}
                           maxLength={1}

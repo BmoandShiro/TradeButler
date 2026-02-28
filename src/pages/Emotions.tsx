@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
-import { Plus, X, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Heart, ClipboardList, Maximize2, Minimize2, Edit2, Trash2, ArrowLeft, RotateCcw, ExternalLink, ChevronDown } from "lucide-react";
+import { Plus, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Maximize2, Minimize2, Edit2, Trash2, ArrowLeft, RotateCcw, ExternalLink, ChevronDown } from "lucide-react";
 import { LineChart, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import RichTextEditor from "../components/RichTextEditor";
 
@@ -257,7 +257,7 @@ function getIntensityColorForEmotion(intensity: number): string {
 }
 
 // Gradient and glow for state overview cards (0–10 intensity)
-function getIntensityGradientStyles(intensity: number): { gradient: string; color: string; glow: string; border: string; borderHover: string } {
+function getIntensityGradientStyles(intensity: number): { gradient: string; color: string; glow: string; border: string; borderHover: string; badgeBg: string; badgeShadow: string } {
   const color = getIntensityColorForEmotion(intensity);
   const match = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
   const r = match ? match[1] : "128";
@@ -399,6 +399,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       .sort((a, b) => (a._sortKey as string).localeCompare(b._sortKey as string))
       .map(({ _sortKey, ...rest }) => rest);
   }, [states]);
+  void chartData; // reserved for chart use
 
   // Prepare survey trends data
   const surveyChartData = useMemo(() => {
@@ -557,8 +558,8 @@ export default function Emotions() {
     const saved = localStorage.getItem('emotions_show_form');
     return saved === "true";
   });
-  const [showSurvey, setShowSurvey] = useState(false);
-  const [pendingStateId, setPendingStateId] = useState<number | null>(null);
+  const [_showSurvey, _setShowSurvey] = useState(false);
+  const [_pendingStateId, _setPendingStateId] = useState<number | null>(null);
   const [editingState, setEditingState] = useState<EmotionalState | null>(null);
   const [isEditingSelectedState, setIsEditingSelectedState] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -1043,19 +1044,21 @@ export default function Emotions() {
     }
   };
 
-  const formatDate = (dateString: string) => {
+  const formatDateForDisplay = (dateString: string) => {
     try {
       return format(new Date(dateString), "MMM dd, yyyy HH:mm");
     } catch {
       return dateString;
     }
   };
+  void formatDateForDisplay;
 
-  const getIntensityColor = (intensity: number) => {
+  const getIntensityColorForDisplay = (intensity: number) => {
     if (intensity <= 3) return "var(--text-secondary)";
     if (intensity <= 6) return "var(--warning)";
     return "var(--danger)";
   };
+  void getIntensityColorForDisplay;
 
   // One data point per day for Emotional Intensity Over Time chart (in Emotional States section)
   const chartData = useMemo(() => {

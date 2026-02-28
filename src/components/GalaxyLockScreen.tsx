@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Lock, Unlock, AlertCircle, Trash2 } from "lucide-react";
-import { unlockApp, hasPassword, getPasswordType, deletePassword } from "../utils/passwordManager";
+import { unlockApp, getPasswordType, deletePassword } from "../utils/passwordManager";
 import { invoke } from "@tauri-apps/api/tauri";
 import { getGalaxyThemeSettings } from "../utils/galaxyThemeManager";
 
@@ -366,13 +366,13 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
     setError("");
 
     if (digit && index < 5 && inputRefs.current[index + 1]) {
-      inputRefs.current[index + 1].focus();
+      inputRefs.current[index + 1]?.focus();
     }
   };
 
   const handlePinKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Backspace" && !pinDigits[index] && index > 0 && inputRefs.current[index - 1]) {
-      inputRefs.current[index - 1].focus();
+      inputRefs.current[index - 1]?.focus();
     }
     if (e.key === "v" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -789,7 +789,7 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
                 <li>All journal entries</li>
                 <li>All emotional states</li>
                 <li>All settings and preferences</li>
-                <li>Your {passwordType === "PIN" ? "PIN" : "password"}</li>
+                <li>Your {passwordType === "pin" ? "PIN" : "password"}</li>
               </ul>
               <p style={{ fontSize: "13px", color: "#ff4444", fontWeight: "600", marginBottom: "16px" }}>
                 This action cannot be undone!

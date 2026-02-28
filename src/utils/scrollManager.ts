@@ -7,8 +7,8 @@ export type TabType = string | "notes" | "trades" | "checklists" | "survey" | "t
 
 export interface ScrollState {
   tabPositions: Map<TabType, number>;
-  leftPanelScroll?: number;
-  rightPanelScroll?: number;
+  leftPanelScroll?: number | null;
+  rightPanelScroll?: number | null;
 }
 
 /**

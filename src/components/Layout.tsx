@@ -31,7 +31,7 @@ import GalaxyLockScreen from "./GalaxyLockScreen";
 import AuroraLockScreen from "./AuroraLockScreen";
 import MilkyWayLockScreen from "./MilkyWayLockScreen";
 import GalaxyBackground from "./GalaxyBackground";
-import { isLocked, setLocked, hasPassword, lockApp } from "../utils/passwordManager";
+import { isLocked, hasPassword, lockApp } from "../utils/passwordManager";
 import { getLockScreenStyle } from "../utils/lockScreenManager";
 import { getGalaxyThemeSettings } from "../utils/galaxyThemeManager";
 import { applyGalaxyBackgroundStyles } from "../utils/galaxyBackgroundStyles";
@@ -121,7 +121,7 @@ export default function Layout({ children }: LayoutProps) {
     window.addEventListener("storage", checkGalaxySettings);
     
     // Also listen for custom event that Settings can dispatch
-    const handleGalaxySettingsChange = (e: Event) => {
+    const handleGalaxySettingsChange = (_e: Event) => {
       // Immediately check and update
       const settings = getGalaxyThemeSettings();
       const newUseBackground = settings.useAsBackground;
@@ -457,15 +457,6 @@ export default function Layout({ children }: LayoutProps) {
       localStorage.setItem(`scroll_${path}`, scrollTop.toString());
     }
   };
-
-  // Get current scroll position (from memory or DOM)
-  const getCurrentScrollPosition = (): number => {
-    if (mainContentRef.current) {
-      return mainContentRef.current.scrollTop;
-    }
-    return 0;
-  };
-
 
   // Save scroll position when route changes
   useEffect(() => {
@@ -834,7 +825,7 @@ export default function Layout({ children }: LayoutProps) {
               lineHeight: "1.4",
             }}
           >
-            v1.2.0 Created By:
+            v1.2.1 Created By:
             <br />
             @BMOandShiro @PlaneStation
           </div>

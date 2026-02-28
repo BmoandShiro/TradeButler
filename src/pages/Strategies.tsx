@@ -75,7 +75,6 @@ function SortableStrategy({
   strategyStats,
   expandedStats,
   setExpandedStats,
-  onSelect,
   saveAllScrollPositions,
   tabScrollPositions,
   leftPanelScrollRef,
@@ -92,8 +91,7 @@ function SortableStrategy({
   strategyStats: Map<number, { totalTrades: number; totalPnL: number; winRate: number }>;
   expandedStats: Set<number>;
   setExpandedStats: React.Dispatch<React.SetStateAction<Set<number>>>;
-  onSelect: () => void;
-  saveAllScrollPositions: (tabPositions: React.MutableRefObject<Map<TabType, number>>, leftScroll: number | null, rightScroll: number | null, page: string) => void;
+  saveAllScrollPositions: (tabPositions: Map<TabType, number>, leftScroll: number | null, rightScroll: number | null, page: string) => void;
   tabScrollPositions: React.MutableRefObject<Map<TabType, number>>;
   leftPanelScrollRef: React.RefObject<HTMLDivElement>;
   rightPanelScrollRef: React.RefObject<HTMLDivElement>;
@@ -518,7 +516,8 @@ function SortableChecklistItem({
   );
 }
 
-function SortableStrategyItem({
+/** @internal Reserved for optional sortable list UI */
+export function SortableStrategyItemUnused({
   strategy,
   isSelected,
   selectedStrategy,
@@ -1287,15 +1286,7 @@ export default function Strategies() {
   // Sensors for strategy drag-and-drop
   const strategySensors = useSensors(
     useSensor(PointerSensor, {
-      activationConstraint: (event) => {
-        const target = event.target as HTMLElement | null;
-        // Only activate drag if clicking on the drag handle
-        if (target?.closest('[data-drag-handle]')) {
-          return { distance: 8 }; // Require 8px movement before drag starts
-        }
-        // Never activate if not clicking on drag handle - allow clicks to work
-        return { distance: Infinity };
-      },
+      activationConstraint: { distance: 8 },
     }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
@@ -1488,8 +1479,8 @@ export default function Strategies() {
     localStorage.removeItem('strategies_work_in_progress');
   };
 
-  // Save scroll positions using utility
-  const saveScrollPositions = () => {
+  // Save scroll positions using utility (available for programmatic save)
+  const saveScrollPositionsForStrategies = () => {
     saveAllScrollPositions(
       tabScrollPositions.current,
       leftPanelScrollRef.current?.scrollTop ?? null,
@@ -1497,6 +1488,7 @@ export default function Strategies() {
       "strategies"
     );
   };
+  void saveScrollPositionsForStrategies;
 
   // Restore scroll positions using utility
   const restoreScrollPositions = () => {
@@ -1504,7 +1496,7 @@ export default function Strategies() {
     
     // Restore tab scroll positions to the ref
     scrollState.tabPositions.forEach((pos, tab) => {
-      tabScrollPositions.current.set(tab, pos);
+      tabScrollPositions.current.set(tab as TabType, pos);
     });
     
     // Restore left panel scroll
@@ -3763,7 +3755,6 @@ export default function Strategies() {
                         strategyStats={strategyStats}
                         expandedStats={expandedStats}
                         setExpandedStats={setExpandedStats}
-                        onSelect={() => {}}
                         saveAllScrollPositions={saveAllScrollPositions}
                         tabScrollPositions={tabScrollPositions}
                         leftPanelScrollRef={leftPanelScrollRef}

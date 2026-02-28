@@ -513,7 +513,7 @@ export default function Journal() {
           const scrollState = restoreAllScrollPositions(storageKey);
           // Restore tab scroll positions to the ref
           scrollState.tabPositions.forEach((pos, tab) => {
-            tabScrollPositions.current.set(tab, pos);
+            tabScrollPositions.current.set(tab as TabType, pos);
           });
           // Restore left panel scroll
           if (leftPanelScrollRef.current && scrollState.leftPanelScroll !== null) {
@@ -1295,7 +1295,7 @@ export default function Journal() {
       const scrollState = restoreAllScrollPositions(storageKey);
       // Restore tab scroll positions
       scrollState.tabPositions.forEach((pos, tab) => {
-        tabScrollPositions.current.set(tab, pos);
+        tabScrollPositions.current.set(tab as TabType, pos);
       });
       
       // Restore left panel scroll after a delay to ensure DOM is ready
@@ -1736,7 +1736,7 @@ export default function Journal() {
         const scrollState = restoreAllScrollPositions(storageKey);
         // Restore tab scroll positions to the ref
         scrollState.tabPositions.forEach((pos, tab) => {
-          tabScrollPositions.current.set(tab, pos);
+          tabScrollPositions.current.set(tab as TabType, pos);
         });
         // Restore left panel scroll
         if (leftPanelScrollRef.current && scrollState.leftPanelScroll !== null) {
