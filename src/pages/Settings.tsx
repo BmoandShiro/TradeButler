@@ -161,8 +161,8 @@ export default function Settings() {
       if (versionInfo.is_installer) {
         // For installer version, download and run the installer
         await invoke("download_and_install_update", { 
-          download_url: versionInfo.download_url,
-          download_filename: versionInfo.download_filename ?? undefined,
+          downloadUrl: versionInfo.download_url,
+          downloadFilename: versionInfo.download_filename ?? undefined,
         });
         alert("Update downloaded and installer started. Please follow the installation wizard. Your data will be preserved.");
       } else {
@@ -186,10 +186,10 @@ export default function Settings() {
           return;
         }
 
-        // Download to user-selected location
+        // Download to user-selected location (Tauri 1 expects camelCase arg names)
         await invoke("download_portable_update", { 
-          download_url: versionInfo.download_url,
-          file_path: filePath,
+          downloadUrl: versionInfo.download_url,
+          filePath: filePath,
         });
         alert(`Update downloaded successfully!\n\nSaved to: ${filePath}\n\nYou can now run the new version from that location. Your data will be preserved.`);
       }
