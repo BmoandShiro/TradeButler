@@ -1,6 +1,6 @@
 [package]
 name = "tradebutler"
-version = "1.2.1"
+version = "1.2.2"
 description = "Local trading analytics and metrics application"
 authors = ["TradeButler"]
 license = "Proprietary"
