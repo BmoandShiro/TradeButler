@@ -1,6 +1,6 @@
 {
   "name": "tradebutler",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "Local trading analytics and metrics application",
   "license": "UNLICENSED",
   "type": "module",
