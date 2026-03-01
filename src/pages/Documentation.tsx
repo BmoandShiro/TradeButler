@@ -162,7 +162,7 @@ export default function Documentation() {
         next.delete(id);
         return next;
       });
-      if (selectedId === id || toRemove.includes(selectedId)) {
+      if (selectedId === id || (selectedId !== null && toRemove.includes(selectedId))) {
         const remaining = pages.filter((p) => !toRemove.includes(p.id));
         setSelectedId(remaining.length > 0 ? remaining[0].id : null);
       }
@@ -176,7 +176,6 @@ export default function Documentation() {
   }, []);
 
   const selectedPage = selectedId ? pages.find((p) => p.id === selectedId) : null;
-  const selectedParentId = selectedPage?.parentId ?? null;
 
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) => {
