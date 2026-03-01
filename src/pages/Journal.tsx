@@ -5009,10 +5009,7 @@ export default function Journal() {
                     </div>
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={entriesByMonth}
-                        activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }}
-                      >
+                      <BarChart data={entriesByMonth}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                         <XAxis
                           dataKey="month"
@@ -5038,6 +5035,7 @@ export default function Journal() {
                           fillOpacity={0.5}
                           stroke="var(--accent)"
                           strokeWidth={1.6}
+                          activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }}
                         />
                       </BarChart>
                     </ResponsiveContainer>
@@ -5063,10 +5061,7 @@ export default function Journal() {
                   }
                   return (
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={data}
-                        activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }}
-                      >
+                      <BarChart data={data}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                         <XAxis dataKey="name" stroke="var(--text-secondary)" />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
@@ -5085,6 +5080,7 @@ export default function Journal() {
                           fillOpacity={0.5}
                           stroke="var(--accent)"
                           strokeWidth={1.6}
+                          activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }}
                         />
                       </BarChart>
                     </ResponsiveContainer>

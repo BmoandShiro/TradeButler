@@ -563,7 +563,7 @@ export default function Emotions() {
   const [editingState, setEditingState] = useState<EmotionalState | null>(null);
   const [isEditingSelectedState, setIsEditingSelectedState] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
-  const [formTab, setFormTab] = useState<"basic" | SurveyTabType>("basic");
+  const [_formTab, setFormTab] = useState<"basic" | SurveyTabType>("basic");
   const [formData, setFormData] = useState<{
     timestamp: string;
     selectedEmotions: Record<string, number>;
