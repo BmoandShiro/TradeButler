@@ -835,6 +835,7 @@ function ChecklistSection({
   onDeleteChecklist,
   moveItemsToGroup,
   useParentDndContext = false,
+  onEditTitle,
 }: { 
   type: string; 
   title: string; 
@@ -864,9 +865,14 @@ function ChecklistSection({
   moveItemsToGroup: (itemIds: number[], groupId: number, checklistType: string) => Promise<void>;
   /** When true, do not wrap in DndContext (parent provides one for section + item reorder). */
   useParentDndContext?: boolean;
+  /** When provided and isEditing, show an edit control to change the section title (readonly by default to avoid drag conflicts). */
+  onEditTitle?: (type: string, newTitle: string) => void;
 }) {
-  // Sort items by item_order first
-  const sortedItems = [...items].sort((a, b) => a.item_order - b.item_order);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [editTitleValue, setEditTitleValue] = useState("");
+  // Hide internal placeholders (used in DB for empty custom checklist types)
+  const visibleItems = items.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
+  const sortedItems = [...visibleItems].sort((a, b) => a.item_order - b.item_order);
   
   // Organize items: groups (items with no parent_id that have children) and regular items
   const itemIdsSet = new Set(sortedItems.map(item => item.id));
@@ -894,7 +900,7 @@ function ChecklistSection({
   // Create a combined sorted list: merge groups and regular items, sorted by item_order
   const allTopLevelItems = [...groups, ...regularItems].sort((a, b) => a.item_order - b.item_order);
   
-  const itemIds = items.map(item => item.id);
+  const itemIds = sortedItems.map((item) => item.id);
   const currentValue = newChecklistItem.get(type) || "";
   const selectedItems = Array.from(selectedChecklistItems);
   const hasSelection = selectedItems.length > 0;
@@ -927,12 +933,61 @@ function ChecklistSection({
   
   const availableGroups = groups;
   
+  const startEditingTitle = () => {
+    setEditTitleValue(title);
+    setEditingTitle(true);
+  };
+  const saveTitle = () => {
+    if (onEditTitle) onEditTitle(type, editTitleValue.trim());
+    setEditingTitle(false);
+  };
+
   return (
     <div style={{ marginBottom: "40px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px", paddingBottom: "12px", borderBottom: "2px solid var(--border-color)" }}>
-        <h4 style={{ fontSize: "18px", fontWeight: "700", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
-          <ListChecks size={18} style={{ color: "var(--accent)" }} />
-          {title}
+        <h4 style={{ fontSize: "18px", fontWeight: "700", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", flex: 1, minWidth: 0 }}>
+          <ListChecks size={18} style={{ color: "var(--accent)", flexShrink: 0 }} />
+          {editingTitle && onEditTitle ? (
+            <>
+              <input
+                type="text"
+                value={editTitleValue}
+                onChange={(e) => setEditTitleValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveTitle();
+                  if (e.key === "Escape") { setEditingTitle(false); setEditTitleValue(title); }
+                }}
+                onBlur={saveTitle}
+                autoFocus
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  padding: "4px 8px",
+                  fontSize: "18px",
+                  fontWeight: "700",
+                  background: "var(--bg-primary)",
+                  border: "1px solid var(--accent)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  outline: "none",
+                }}
+              />
+            </>
+          ) : (
+            <>
+              <span style={{ flex: 1, minWidth: 0 }}>{title}</span>
+              {isEditing && onEditTitle && (
+                <button
+                  type="button"
+                  onClick={startEditingTitle}
+                  title="Edit checklist title"
+                  style={{ background: "none", border: "none", padding: "4px", cursor: "pointer", color: "var(--text-secondary)", display: "flex" }}
+                >
+                  <Edit2 size={16} />
+                </button>
+              )}
+            </>
+          )}
         </h4>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           {isEditing && isCustom && onDeleteChecklist && (
@@ -1677,6 +1732,30 @@ export default function Strategies() {
     });
     localStorage.setItem(CHECKLIST_TYPE_ORDER_KEY, JSON.stringify(obj));
   }, [checklistTypeOrder]);
+
+  const CHECKLIST_TITLES_KEY = "tradebutler_checklist_titles";
+  const [checklistTitles, setChecklistTitles] = useState<Map<number, Map<string, string>>>(() => {
+    try {
+      const raw = localStorage.getItem(CHECKLIST_TITLES_KEY);
+      if (!raw) return new Map();
+      const parsed = JSON.parse(raw) as Record<string, Record<string, string>>;
+      const map = new Map<number, Map<string, string>>();
+      Object.entries(parsed).forEach(([k, v]) => {
+        map.set(parseInt(k, 10), new Map(Object.entries(v)));
+      });
+      return map;
+    } catch {
+      return new Map();
+    }
+  });
+  useEffect(() => {
+    if (checklistTitles.size === 0) return;
+    const obj: Record<string, Record<string, string>> = {};
+    checklistTitles.forEach((titles, strategyId) => {
+      obj[String(strategyId)] = Object.fromEntries(titles);
+    });
+    localStorage.setItem(CHECKLIST_TITLES_KEY, JSON.stringify(obj));
+  }, [checklistTitles]);
 
   // Restore state from localStorage
   const restoreState = () => {
@@ -3211,12 +3290,21 @@ export default function Strategies() {
       await loadStrategies();
       // Select the newly created strategy
       setSelectedStrategy(newStrategyId);
-      // Preserve checklist type order from create flow (-1) to the new strategy
+      // Preserve checklist type order and custom titles from create flow (-1) to the new strategy
       const orderFromCreate = checklistTypeOrder.get(-1);
       if (orderFromCreate && orderFromCreate.length > 0) {
         setChecklistTypeOrder((prev) => {
           const next = new Map(prev);
           next.set(newStrategyId, orderFromCreate);
+          next.delete(-1);
+          return next;
+        });
+      }
+      const titlesFromCreate = checklistTitles.get(-1);
+      if (titlesFromCreate && titlesFromCreate.size > 0) {
+        setChecklistTitles((prev) => {
+          const next = new Map(prev);
+          next.set(newStrategyId, new Map(titlesFromCreate));
           next.delete(-1);
           return next;
         });
@@ -4809,16 +4897,28 @@ export default function Strategies() {
                   }
                 };
 
-                // Helper function to get display title for checklist type
+                const defaultTitleMap: Record<string, string> = {
+                  "daily_mantra": "Mantra",
+                  "daily_analysis": "Analysis",
+                  "entry": "Entry Checklist",
+                  "take_profit": "Take Profit Checklist",
+                  "survey": "Survey",
+                };
                 const getChecklistTitle = (type: string): string => {
-                  const titleMap: Record<string, string> = {
-                    "daily_mantra": "Mantra",
-                    "daily_analysis": "Analysis",
-                    "entry": "Entry Checklist",
-                    "take_profit": "Take Profit Checklist",
-                    "survey": "Survey",
-                  };
-                  return titleMap[type] || type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') + " Checklist";
+                  const custom = checklistTitles.get(virtualStrategyId)?.get(type);
+                  if (custom?.trim()) return custom.trim();
+                  return defaultTitleMap[type] || type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') + " Checklist";
+                };
+                const onEditChecklistTitle = (type: string, newTitle: string) => {
+                  const trimmed = newTitle.trim();
+                  setChecklistTitles((prev) => {
+                    const next = new Map(prev);
+                    const strategyTitles = new Map(next.get(virtualStrategyId) || []);
+                    if (trimmed) strategyTitles.set(type, trimmed);
+                    else strategyTitles.delete(type);
+                    next.set(virtualStrategyId, strategyTitles);
+                    return next;
+                  });
                 };
 
                 // Ordered checklist types: use saved order if any, else default first then custom. Allows custom above Analysis/Mantra/Entry/Take Profit.
@@ -4981,6 +5081,7 @@ export default function Strategies() {
                                   onDeleteChecklist={isCustom && !isCreating ? () => deleteChecklistType(virtualStrategyId, type) : undefined}
                                   moveItemsToGroup={moveItemsToGroup}
                                   useParentDndContext
+                                  onEditTitle={onEditChecklistTitle}
                                 />
                               </SortableChecklistSection>
                             );

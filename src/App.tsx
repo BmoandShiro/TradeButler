@@ -7,6 +7,7 @@ import Analytics from "./pages/Analytics";
 import CalendarPage from "./pages/Calendar";
 import Strategies from "./pages/Strategies";
 import Journal from "./pages/Journal";
+import Documentation from "./pages/Documentation";
 import Evaluation from "./pages/Evaluation";
 import AverageDownCalculator from "./pages/AverageDownCalculator";
 import DividendCalculator from "./pages/DividendCalculator";
@@ -22,6 +23,7 @@ function App() {
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/journal" element={<Journal />} />
+          <Route path="/documentation" element={<Documentation />} />
           <Route path="/emotions" element={<Emotions />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/evaluation" element={<Evaluation />} />

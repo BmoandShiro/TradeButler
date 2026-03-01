@@ -13,6 +13,7 @@ import {
   Calculator,
   DollarSign,
   FileText,
+  BookOpen,
   Settings,
   Lock,
   Unlock,
@@ -74,7 +75,7 @@ export default function Layout({ children }: LayoutProps) {
   // Initialize: Load saved scroll positions from localStorage
   useEffect(() => {
     // Load all saved scroll positions on mount
-    const paths = ["/", "/trades", "/calendar", "/strategies", "/journal", "/emotions", "/analytics", "/evaluation", "/average-down-calculator", "/dividend-calculator", "/settings"];
+    const paths = ["/", "/trades", "/calendar", "/strategies", "/journal", "/documentation", "/emotions", "/analytics", "/evaluation", "/average-down-calculator", "/dividend-calculator", "/settings"];
     paths.forEach(path => {
       const saved = localStorage.getItem(`scroll_${path}`);
       if (saved) {
@@ -598,6 +599,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: "/calendar", icon: Calendar, label: "Calendar" },
     { path: "/strategies", icon: Target, label: "Strategies" },
     { path: "/journal", icon: FileText, label: "Journal" },
+    { path: "/documentation", icon: BookOpen, label: "Documentation" },
     { path: "/emotions", icon: Heart, label: "Emotions" },
     { path: "/analytics", icon: BarChart3, label: "Analytics" },
     { path: "/evaluation", icon: TrendingDown, label: "Evaluation" },
