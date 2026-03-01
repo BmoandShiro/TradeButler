@@ -194,8 +194,12 @@ export default function Settings() {
       }
       
       setShowUpdateModal(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to download update");
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message
+        : typeof err === "string" ? err
+        : (err as { message?: string })?.message ?? "Failed to download update";
+      setError(msg);
       console.error("Download error:", err);
     } finally {
       setIsDownloading(false);

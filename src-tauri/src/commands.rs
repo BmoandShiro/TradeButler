@@ -6328,13 +6328,20 @@ pub fn exit_app() {
 
 #[tauri::command]
 pub async fn download_portable_update(download_url: String, file_path: String) -> Result<(), String> {
+    let file_path = file_path.trim().to_string();
+    if file_path.is_empty() {
+        return Err("Save path is empty".to_string());
+    }
+    eprintln!("[Update] Downloading from: {}...", &download_url[..download_url.len().min(80)]);
+    eprintln!("[Update] Saving to: {}", file_path);
+
     let client = reqwest::Client::builder()
-        .user_agent("TradeButler-Updater/1.0")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .redirect(reqwest::redirect::Policy::default())
+        .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-    
-    // browser_download_url: no special headers needed. API url would need Accept: application/octet-stream
+
     let mut request = client.get(&download_url);
     if download_url.contains("api.github.com/repos/") && download_url.contains("/assets/") {
         request = request.header("Accept", "application/octet-stream");
@@ -6342,32 +6349,39 @@ pub async fn download_portable_update(download_url: String, file_path: String) -
     let response = request
         .send()
         .await
-        .map_err(|e| format!("Failed to download update: {}", e))?;
-    
-    if !response.status().is_success() {
-        let status = response.status();
+        .map_err(|e| format!("Network error: {}. Check your connection and try again.", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
         let body = response.text().await.unwrap_or_else(|_| String::new());
-        return Err(format!("Download failed with status {}: {}", status, if body.is_empty() { "no details" } else { body.trim() }));
+        let detail = body.trim();
+        let detail = if detail.len() > 300 { &detail[..300] } else { detail };
+        let msg = if status.as_u16() == 403 {
+            format!("Download blocked (403). {} If this keeps happening, download the update from the GitHub release page.", detail)
+        } else {
+            format!("Download failed ({}): {}", status, if detail.is_empty() { "no details" } else { detail })
+        };
+        return Err(msg);
     }
-    
-    // Download file to user-selected location
+
     let bytes = response
         .bytes()
         .await
         .map_err(|e| format!("Failed to read download: {}", e))?;
-    
-    fs::write(&file_path, bytes)
-        .map_err(|e| format!("Failed to save file to {}: {}", file_path, e))?;
+
+    let path = std::path::Path::new(&file_path);
+    fs::write(path, bytes.as_ref())
+        .map_err(|e| format!("Failed to save file to {}: {}. Try a different folder (e.g. Desktop or Downloads).", file_path, e))?;
     
     // On Unix systems, make the file executable
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&file_path)
+        let mut perms = fs::metadata(path)
             .map_err(|e| format!("Failed to get file metadata: {}", e))?
             .permissions();
         perms.set_mode(0o755); // rwxr-xr-x
-        fs::set_permissions(&file_path, perms)
+        fs::set_permissions(path, perms)
             .map_err(|e| format!("Failed to set file permissions: {}", e))?;
     }
     
@@ -6377,12 +6391,12 @@ pub async fn download_portable_update(download_url: String, file_path: String) -
 #[tauri::command]
 pub async fn download_and_install_update(download_url: String, download_filename: Option<String>) -> Result<(), String> {
     let client = reqwest::Client::builder()
-        .user_agent("TradeButler-Updater/1.0")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .redirect(reqwest::redirect::Policy::default())
+        .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-    
-    // browser_download_url: no special headers needed. API url would need Accept: application/octet-stream
+
     let mut request = client.get(&download_url);
     if download_url.contains("api.github.com/repos/") && download_url.contains("/assets/") {
         request = request.header("Accept", "application/octet-stream");
@@ -6390,12 +6404,19 @@ pub async fn download_and_install_update(download_url: String, download_filename
     let response = request
         .send()
         .await
-        .map_err(|e| format!("Failed to download update: {}", e))?;
-    
-    if !response.status().is_success() {
-        let status = response.status();
+        .map_err(|e| format!("Network error: {}. Check your connection and try again.", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
         let body = response.text().await.unwrap_or_else(|_| String::new());
-        return Err(format!("Download failed with status {}: {}", status, if body.is_empty() { "no details" } else { body.trim() }));
+        let detail = body.trim();
+        let detail = if detail.len() > 300 { &detail[..300] } else { detail };
+        let msg = if status.as_u16() == 403 {
+            format!("Download blocked (403). {} If this keeps happening, download the update from the GitHub release page.", detail)
+        } else {
+            format!("Download failed ({}): {}", status, if detail.is_empty() { "no details" } else { detail })
+        };
+        return Err(msg);
     }
     
     // Get filename (API URL has no extension; use provided name when available)
