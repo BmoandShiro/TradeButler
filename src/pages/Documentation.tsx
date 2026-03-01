@@ -214,7 +214,7 @@ export default function Documentation() {
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <BookOpen size={22} style={{ color: "var(--accent)" }} />
             <h2 style={{ margin: 0, fontSize: "18px", fontWeight: "700", color: "var(--text-primary)" }}>
-              Documentation
+              Resources
             </h2>
           </div>
           <button
