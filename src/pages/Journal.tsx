@@ -81,6 +81,9 @@ interface JournalChecklistResponse {
 
 const ENTRY_LEVEL_CHECKLIST_TYPES = ["daily_analysis", "daily_mantra"];
 
+/** Hidden placeholder used in the DB for empty custom checklist types; never show to users. */
+const EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER = "__empty_custom_checklist_placeholder__";
+
   /** Emotional state from Emotions (linked to journal entry/implementation) */
 interface JournalEmotionalState {
   id: number;
@@ -1896,6 +1899,19 @@ export default function Journal() {
   };
 
   const getChecklistTitle = (type: string): string => {
+    const strategyId = entryFormData.strategy_id;
+    if (strategyId) {
+      try {
+        const raw = localStorage.getItem("tradebutler_checklist_titles");
+        if (raw) {
+          const parsed = JSON.parse(raw) as Record<string, Record<string, string>>;
+          const titles = parsed[String(strategyId)];
+          if (titles?.[type]?.trim()) return titles[type].trim();
+        }
+      } catch {
+        /* use default */
+      }
+    }
     const titleMap: Record<string, string> = {
       "daily_mantra": "Mantra",
       "daily_analysis": "Analysis",
@@ -2044,7 +2060,29 @@ export default function Journal() {
   const customTypes = currentChecklists 
     ? Array.from(currentChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")
     : [];
-  const allTypes = [...defaultTypes, ...customTypes.filter(t => !defaultTypes.includes(t))];
+  // Use same order as Strategies page (from localStorage) so Journal checklists match strategy arrangement
+  const CHECKLIST_TYPE_ORDER_KEY = "tradebutler_checklist_type_order";
+  const allTypes = (() => {
+    const strategyId = entryFormData.strategy_id;
+    if (!strategyId) return [...defaultTypes, ...customTypes.filter(t => !defaultTypes.includes(t))];
+    let savedOrder: string[] | null = null;
+    try {
+      const raw = localStorage.getItem(CHECKLIST_TYPE_ORDER_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, string[]>;
+        savedOrder = parsed[String(strategyId)] ?? null;
+      }
+    } catch {
+      savedOrder = null;
+    }
+    const allNeeded = new Set([...defaultTypes, ...customTypes]);
+    if (!savedOrder || savedOrder.length === 0) {
+      return [...defaultTypes, ...customTypes.filter(t => !defaultTypes.includes(t))];
+    }
+    const ordered = savedOrder.filter((t: string) => allNeeded.has(t));
+    const appended = [...allNeeded].filter(t => !ordered.includes(t));
+    return [...ordered, ...appended];
+  })();
 
   const journalTradesByEntry = useMemo(() => {
     const map = new Map<number, JournalTrade[]>();
@@ -4248,7 +4286,8 @@ export default function Journal() {
                         {entryFormData.strategy_id && currentChecklists ? (
                           <div style={{ overflowY: "auto" }}>
                             {allTypes.map((type) => {
-                              const items = currentChecklists.get(type) || [];
+                              const rawItems = currentChecklists.get(type) || [];
+                              const items = rawItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
                               if (items.length === 0) return null;
 
                               const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(type);
@@ -4396,7 +4435,8 @@ export default function Journal() {
                         {entryFormData.strategy_id && currentChecklists ? (
                           <div style={{ overflowY: "auto" }}>
                             {(() => {
-                              const surveyItems = currentChecklists.get("survey") || [];
+                              const rawSurveyItems = currentChecklists.get("survey") || [];
+                              const surveyItems = rawSurveyItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
                               if (surveyItems.length === 0) {
                                 return (
                                   <div style={{ 
@@ -5353,7 +5393,7 @@ export default function Journal() {
             <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "12px" }}>
               {/* Analysis & Mantra (first) */}
               {(["daily_analysis", "daily_mantra"] as const).map((type) => {
-                const items = currentChecklists?.get(type) || [];
+                const items = (currentChecklists?.get(type) || []).filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
                 if (items.length === 0) return null;
                 const progress = calculateChecklistProgress(activeTradeIndex, type);
                 const getProgressColor = () => {
@@ -5476,7 +5516,7 @@ export default function Journal() {
               
               {/* Custom Checklist Progress Bars */}
               {customTypes.map((type) => {
-                const items = currentChecklists?.get(type) || [];
+                const items = (currentChecklists?.get(type) || []).filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
                 if (items.length === 0) return null;
                 
                 const progress = calculateChecklistProgress(activeTradeIndex, type);
