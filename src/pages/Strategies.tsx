@@ -758,6 +758,55 @@ export function SortableStrategyItemUnused({
   );
 }
 
+/** Wraps a checklist section so the whole section can be reordered (drag to move above/below other sections including defaults). */
+function SortableChecklistSection({
+  type,
+  isEditing,
+  children,
+}: {
+  type: string;
+  isEditing: boolean;
+  children: React.ReactNode;
+}) {
+  const {
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+    attributes,
+    listeners,
+  } = useSortable({ id: `section:${type}` });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+  return (
+    <div ref={setNodeRef} style={style}>
+      {isEditing && (
+        <div
+          {...attributes}
+          {...listeners}
+          style={{
+            padding: "4px 0",
+            marginBottom: "8px",
+            cursor: "grab",
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            fontSize: "13px",
+            color: "var(--text-secondary)",
+          }}
+        >
+          <GripVertical size={16} />
+          <span>Drag to reorder checklist</span>
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+
 function ChecklistSection({ 
   type, 
   title, 
@@ -785,6 +834,7 @@ function ChecklistSection({
   isCustom,
   onDeleteChecklist,
   moveItemsToGroup,
+  useParentDndContext = false,
 }: { 
   type: string; 
   title: string; 
@@ -812,6 +862,8 @@ function ChecklistSection({
   isCustom: boolean;
   onDeleteChecklist?: () => void;
   moveItemsToGroup: (itemIds: number[], groupId: number, checklistType: string) => Promise<void>;
+  /** When true, do not wrap in DndContext (parent provides one for section + item reorder). */
+  useParentDndContext?: boolean;
 }) {
   // Sort items by item_order first
   const sortedItems = [...items].sort((a, b) => a.item_order - b.item_order);
@@ -903,12 +955,82 @@ function ChecklistSection({
         </div>
       </div>
       {isEditing ? (
+        useParentDndContext ? (
+          <SortableContext id={`checklist-items-${type}`} items={itemIds} strategy={verticalListSortingStrategy}>
+            {allTopLevelItems.map((item) => {
+              const isGroup = groups.some(g => g.id === item.id);
+              const children = isGroup ? (itemsByParent.get(item.id) || []) : [];
+              if (isGroup) {
+                return (
+                  <div key={item.id} style={{ marginBottom: "20px", position: "relative" }}>
+                    <SortableChecklistItem
+                      item={item}
+                      onDelete={() => deleteChecklistItem(selectedStrategy, item.id, type)}
+                      isEditing={isEditing}
+                      isSelected={selectedChecklistItems.has(item.id)}
+                      onSelect={(selected) => handleToggleSelect(item.id, selected)}
+                      onEdit={() => startEditingItem(item)}
+                      isEditingText={editingItemId === item.id}
+                      editingText={editingItemText}
+                      onEditingTextChange={setEditingItemText}
+                      onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
+                      onCancelEdit={cancelEditingItem}
+                      isGroup={true}
+                    />
+                    {children.length > 0 && (
+                      <div style={{ position: "relative", marginLeft: "20px", paddingLeft: "24px", borderLeft: "2px solid var(--accent)", opacity: 0.6 }}>
+                        {children.map((child, index) => (
+                          <div key={child.id} style={{ position: "relative" }}>
+                            {index < children.length - 1 && (
+                              <div style={{ position: "absolute", left: "-26px", top: "24px", width: "2px", height: "calc(100% + 8px)", backgroundColor: "var(--accent)", opacity: 0.4 }} />
+                            )}
+                            <SortableChecklistItem
+                              item={child}
+                              onDelete={() => deleteChecklistItem(selectedStrategy, child.id, type)}
+                              isEditing={isEditing}
+                              isSelected={selectedChecklistItems.has(child.id)}
+                              onSelect={(selected) => handleToggleSelect(child.id, selected)}
+                              onEdit={() => startEditingItem(child)}
+                              isEditingText={editingItemId === child.id}
+                              editingText={editingItemText}
+                              onEditingTextChange={setEditingItemText}
+                              onSaveEdit={() => saveEditedItem(child.id, editingItemText)}
+                              onCancelEdit={cancelEditingItem}
+                              isGroup={false}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+              return (
+                <SortableChecklistItem
+                  key={item.id}
+                  item={item}
+                  onDelete={() => deleteChecklistItem(selectedStrategy, item.id, type)}
+                  isEditing={isEditing}
+                  isSelected={selectedChecklistItems.has(item.id)}
+                  onSelect={(selected) => handleToggleSelect(item.id, selected)}
+                  onEdit={() => startEditingItem(item)}
+                  isEditingText={editingItemId === item.id}
+                  editingText={editingItemText}
+                  onEditingTextChange={setEditingItemText}
+                  onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
+                  onCancelEdit={cancelEditingItem}
+                  isGroup={false}
+                />
+              );
+            })}
+          </SortableContext>
+        ) : (
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
           onDragEnd={(e) => onDragEnd(type, e)}
         >
-          <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
+          <SortableContext id={`checklist-items-${type}`} items={itemIds} strategy={verticalListSortingStrategy}>
             {/* Render all top-level items (groups and regular items) sorted by item_order */}
             {allTopLevelItems.map((item) => {
               const isGroup = groups.some(g => g.id === item.id);
@@ -995,6 +1117,7 @@ function ChecklistSection({
             })}
           </SortableContext>
         </DndContext>
+        )
       ) : (
         <div>
           {/* Render all top-level items (groups and regular items) sorted by item_order in view mode */}
@@ -1355,6 +1478,19 @@ export default function Strategies() {
   const [originalChecklists, setOriginalChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [checklistEditHistory, setChecklistEditHistory] = useState<Map<number, Array<Map<string, ChecklistItem[]>>>>(new Map());
   
+  // Checklist type display order per strategy (allows custom checklists above Analysis, Mantra, Entry, Take Profit). Persisted in localStorage.
+  const CHECKLIST_TYPE_ORDER_KEY = "tradebutler_checklist_type_order";
+  const [checklistTypeOrder, setChecklistTypeOrder] = useState<Map<number, string[]>>(() => {
+    try {
+      const saved = localStorage.getItem(CHECKLIST_TYPE_ORDER_KEY);
+      if (!saved) return new Map();
+      const parsed = JSON.parse(saved) as Record<string, string[]>;
+      return new Map(Object.entries(parsed).map(([k, v]) => [parseInt(k, 10), v]));
+    } catch {
+      return new Map();
+    }
+  });
+  
   // Strategy order state (similar to metric card order)
   const STRATEGY_ORDER_KEY = "tradebutler_strategy_order";
   const [strategyOrder, setStrategyOrder] = useState<number[]>(() => {
@@ -1532,6 +1668,15 @@ export default function Strategies() {
   useEffect(() => {
     localStorage.setItem('strategies_active_tab', activeTab);
   }, [activeTab]);
+
+  useEffect(() => {
+    if (checklistTypeOrder.size === 0) return;
+    const obj: Record<string, string[]> = {};
+    checklistTypeOrder.forEach((order, strategyId) => {
+      obj[String(strategyId)] = order;
+    });
+    localStorage.setItem(CHECKLIST_TYPE_ORDER_KEY, JSON.stringify(obj));
+  }, [checklistTypeOrder]);
 
   // Restore state from localStorage
   const restoreState = () => {
@@ -3066,7 +3211,16 @@ export default function Strategies() {
       await loadStrategies();
       // Select the newly created strategy
       setSelectedStrategy(newStrategyId);
-      
+      // Preserve checklist type order from create flow (-1) to the new strategy
+      const orderFromCreate = checklistTypeOrder.get(-1);
+      if (orderFromCreate && orderFromCreate.length > 0) {
+        setChecklistTypeOrder((prev) => {
+          const next = new Map(prev);
+          next.set(newStrategyId, orderFromCreate);
+          next.delete(-1);
+          return next;
+        });
+      }
       // Always load checklists for the new strategy to ensure custom checklists are loaded
       await loadChecklists(newStrategyId);
       
@@ -4667,22 +4821,90 @@ export default function Strategies() {
                   return titleMap[type] || type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') + " Checklist";
                 };
 
-                // Get all checklist types in order: default types first, then custom
-                // Exclude "survey" type from Checklists tab - it should only appear in Survey tab
+                // Ordered checklist types: use saved order if any, else default first then custom. Allows custom above Analysis/Mantra/Entry/Take Profit.
                 const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
                 const tempCustomTypes = isCreating 
                   ? Array.from(new Set(Array.from(tempChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")))
                   : isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)
                     ? Array.from(new Set(Array.from(currentChecklist.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")))
                     : (() => {
-                        // When viewing (not creating/editing), combine types from currentChecklist and customChecklistTypes
-                        // to ensure custom types are displayed even if they have no items
                         const checklistKeys = Array.from(currentChecklist.keys());
                         const customTypes = selectedStrategy ? Array.from(customChecklistTypes.get(selectedStrategy) || []) : [];
                         const allCustomKeys = new Set([...checklistKeys, ...customTypes]);
                         return Array.from(allCustomKeys).filter(t => !defaultTypes.includes(t) && t !== "survey");
                       })();
-                const allTypes = [...defaultTypes, ...tempCustomTypes.filter(t => !defaultTypes.includes(t) && t !== "survey")];
+                const allNeeded = new Set([...defaultTypes, ...tempCustomTypes]);
+                const savedOrder = checklistTypeOrder.get(virtualStrategyId);
+                const allTypes = (() => {
+                  if (!savedOrder || savedOrder.length === 0) {
+                    return [...defaultTypes, ...tempCustomTypes.filter(t => !defaultTypes.includes(t))];
+                  }
+                  const ordered = savedOrder.filter((t: string) => allNeeded.has(t));
+                  const appended = [...allNeeded].filter(t => !ordered.includes(t));
+                  return [...ordered, ...appended];
+                })();
+
+                const unifiedHandleDragEnd = (event: DragEndEvent) => {
+                  const { active, over } = event;
+                  if (!over || active.id === over.id) return;
+                  const activeId = active.id;
+                  const overId = over.id;
+                  const isSectionId = (id: unknown) => typeof id === "string" && String(id).startsWith("section:");
+                  // Section reorder: ids are "section:entry", etc.
+                  if (isSectionId(activeId)) {
+                    const oldIndex = allTypes.findIndex((t) => `section:${t}` === activeId);
+                    let newIndex = allTypes.findIndex((t) => `section:${t}` === overId);
+                    // If dropped over an item, resolve to the section that contains that item
+                    if (newIndex === -1 && (typeof overId === "number" || (typeof overId === "string" && !String(overId).startsWith("section:")))) {
+                      const overItemId = typeof overId === "string" ? parseInt(overId, 10) : overId;
+                      if (!Number.isNaN(overItemId)) {
+                        for (let i = 0; i < allTypes.length; i++) {
+                          const items = currentChecklist.get(allTypes[i]) || [];
+                          if (items.some((it) => it.id === overItemId)) {
+                            newIndex = i;
+                            break;
+                          }
+                        }
+                      }
+                    }
+                    if (oldIndex === -1 || newIndex === -1) return;
+                    const newOrder = arrayMove(allTypes, oldIndex, newIndex);
+                    setChecklistTypeOrder((prev) => {
+                      const next = new Map(prev);
+                      next.set(virtualStrategyId, newOrder);
+                      return next;
+                    });
+                    return;
+                  }
+                  // Item reorder: only when over target is an item (same list), not a section
+                  if (isSectionId(overId)) return;
+                  const overItemId = typeof overId === "string" ? parseInt(overId, 10) : overId;
+                  let typeForItem: string | null = null;
+                  for (const [t, items] of currentChecklist.entries()) {
+                    if (items.some((i) => i.id === activeId)) {
+                      typeForItem = t;
+                      break;
+                    }
+                  }
+                  if (!typeForItem) return;
+                  const items = currentChecklist.get(typeForItem) || [];
+                  const oldIndex = items.findIndex((item) => item.id === activeId);
+                  const newIndex = items.findIndex((item) => item.id === overItemId);
+                  if (oldIndex === -1 || newIndex === -1) return;
+                  const reorderedItems = arrayMove(items, oldIndex, newIndex);
+                  const updatedItems = reorderedItems.map((item, index) => ({ ...item, item_order: index }));
+                  const updatedChecklist = new Map(currentChecklist);
+                  updatedChecklist.set(typeForItem, updatedItems);
+                  if (isCreating) {
+                    setTempChecklists(updatedChecklist);
+                  } else if (isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)) {
+                    setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, updatedChecklist)));
+                    const history = checklistEditHistory.get(selectedStrategy) || [];
+                    setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, [...history, new Map(updatedChecklist)].slice(-10))));
+                  } else {
+                    reorderChecklistItems(virtualStrategyId, typeForItem, activeId as number, overItemId as number);
+                  }
+                };
 
                 return (
                   <div 
@@ -4720,42 +4942,52 @@ export default function Strategies() {
                         </button>
                       )}
                     </div>
-                    <div>
-                      {allTypes.map((type) => {
-                        const isCustom = !defaultTypes.includes(type);
-                        return (
-                          <ChecklistSection
-                            key={type}
-                            type={type}
-                            title={getChecklistTitle(type)}
-                            items={currentChecklist.get(type) || []}
-                            selectedStrategy={virtualStrategyId}
-                            isEditing={isEditing || isCreating}
-                            newChecklistItem={newChecklistItem}
-                            setNewChecklistItem={setNewChecklistItem}
-                            selectedChecklistItems={selectedChecklistItems}
-                            setSelectedChecklistItems={setSelectedChecklistItems}
-                            editingItemId={editingItemId}
-                            editingItemText={editingItemText}
-                            setEditingItemText={setEditingItemText}
-                            sensors={sensors}
-                            onDragEnd={handleDragEnd}
-                            deleteChecklistItem={deleteChecklistItem}
-                            startEditingItem={startEditingItem}
-                            saveEditedItem={saveEditedItem}
-                            cancelEditingItem={cancelEditingItem}
-                            addChecklistItem={addChecklistItem}
-                            setPendingGroupAction={setPendingGroupAction}
-                            setGroupName={setGroupName}
-                            setShowGroupModal={setShowGroupModal}
-                            ungroupChecklistItems={ungroupChecklistItems}
-                            isCustom={isCustom}
-                            onDeleteChecklist={isCustom && !isCreating ? () => deleteChecklistType(virtualStrategyId, type) : undefined}
-                            moveItemsToGroup={moveItemsToGroup}
-                          />
-                        );
-                      })}
-                    </div>
+                    <DndContext
+                      sensors={sensors}
+                      collisionDetection={closestCenter}
+                      onDragEnd={unifiedHandleDragEnd}
+                    >
+                      <SortableContext id="checklist-sections" items={allTypes.map((t) => `section:${t}`)} strategy={verticalListSortingStrategy}>
+                        <div>
+                          {allTypes.map((type) => {
+                            const isCustom = !defaultTypes.includes(type);
+                            return (
+                              <SortableChecklistSection key={type} type={type} isEditing={isEditing || isCreating}>
+                                <ChecklistSection
+                                  type={type}
+                                  title={getChecklistTitle(type)}
+                                  items={currentChecklist.get(type) || []}
+                                  selectedStrategy={virtualStrategyId}
+                                  isEditing={isEditing || isCreating}
+                                  newChecklistItem={newChecklistItem}
+                                  setNewChecklistItem={setNewChecklistItem}
+                                  selectedChecklistItems={selectedChecklistItems}
+                                  setSelectedChecklistItems={setSelectedChecklistItems}
+                                  editingItemId={editingItemId}
+                                  editingItemText={editingItemText}
+                                  setEditingItemText={setEditingItemText}
+                                  sensors={sensors}
+                                  onDragEnd={handleDragEnd}
+                                  deleteChecklistItem={deleteChecklistItem}
+                                  startEditingItem={startEditingItem}
+                                  saveEditedItem={saveEditedItem}
+                                  cancelEditingItem={cancelEditingItem}
+                                  addChecklistItem={addChecklistItem}
+                                  setPendingGroupAction={setPendingGroupAction}
+                                  setGroupName={setGroupName}
+                                  setShowGroupModal={setShowGroupModal}
+                                  ungroupChecklistItems={ungroupChecklistItems}
+                                  isCustom={isCustom}
+                                  onDeleteChecklist={isCustom && !isCreating ? () => deleteChecklistType(virtualStrategyId, type) : undefined}
+                                  moveItemsToGroup={moveItemsToGroup}
+                                  useParentDndContext
+                                />
+                              </SortableChecklistSection>
+                            );
+                          })}
+                        </div>
+                      </SortableContext>
+                    </DndContext>
                   </div>
                 );
               })()}
@@ -5070,7 +5302,13 @@ export default function Strategies() {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && newChecklistName.trim()) {
                   const typeName = newChecklistName.trim().toLowerCase().replace(/\s+/g, '_');
-                  
+                  const virtualId = isCreating ? -1 : (selectedStrategy ?? 0);
+                  const defaultTypesList = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+                  const currentMapForOrder = isCreating ? tempChecklists : (editingChecklists.get(selectedStrategy!) ?? checklists.get(selectedStrategy!) ?? new Map<string, ChecklistItem[]>());
+                  const existingCustom = Array.from(currentMapForOrder.keys()).filter((t: string) => !defaultTypesList.includes(t) && t !== "survey");
+                  const currentOrder = checklistTypeOrder.get(virtualId) ?? [...defaultTypesList, ...existingCustom];
+                  const newOrder = newChecklistAtTop ? [typeName, ...currentOrder.filter((t: string) => t !== typeName)] : [...currentOrder.filter((t: string) => t !== typeName), typeName];
+                  setChecklistTypeOrder((prev) => new Map(prev).set(virtualId, newOrder));
                   if (isCreating) {
                     setTempChecklists(addChecklistTypeToMap(tempChecklists, typeName, newChecklistAtTop));
                   } else if (isEditing && selectedStrategy) {
@@ -5165,7 +5403,13 @@ export default function Strategies() {
                 onClick={() => {
                   if (newChecklistName.trim()) {
                     const typeName = newChecklistName.trim().toLowerCase().replace(/\s+/g, '_');
-                    
+                    const virtualId = isCreating ? -1 : (selectedStrategy ?? 0);
+                    const defaultTypesList = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+                    const currentMapForOrder = isCreating ? tempChecklists : (editingChecklists.get(selectedStrategy!) ?? checklists.get(selectedStrategy!) ?? new Map<string, ChecklistItem[]>());
+                    const existingCustom = Array.from(currentMapForOrder.keys()).filter((t: string) => !defaultTypesList.includes(t) && t !== "survey");
+                    const currentOrder = checklistTypeOrder.get(virtualId) ?? [...defaultTypesList, ...existingCustom];
+                    const newOrder = newChecklistAtTop ? [typeName, ...currentOrder.filter((t: string) => t !== typeName)] : [...currentOrder.filter((t: string) => t !== typeName), typeName];
+                    setChecklistTypeOrder((prev) => new Map(prev).set(virtualId, newOrder));
                     if (isCreating) {
                       setTempChecklists(addChecklistTypeToMap(tempChecklists, typeName, newChecklistAtTop));
                     } else if (isEditing && selectedStrategy) {
