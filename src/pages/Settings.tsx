@@ -62,6 +62,7 @@ export default function Settings() {
   const [presetName, setPresetName] = useState("");
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [editingPresetName, setEditingPresetName] = useState("");
+  const [previewThemeOnButtons, setPreviewThemeOnButtons] = useState(false);
   
   // Password/PIN state
   const [passwordType, setPasswordType] = useState<"pin" | "password">(() => getPasswordType() || "pin");
@@ -523,11 +524,26 @@ export default function Settings() {
 
           {/* Preset Selector */}
           <div style={{ marginBottom: "24px" }}>
-            <label style={{ display: "block", fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
-              Theme Presets
-            </label>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px", marginBottom: "8px" }}>
+              <label style={{ fontSize: "14px", fontWeight: "500", color: "var(--text-primary)" }}>
+                Theme Presets
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px", color: "var(--text-secondary)" }}>
+                <input
+                  type="checkbox"
+                  checked={previewThemeOnButtons}
+                  onChange={(e) => setPreviewThemeOnButtons(e.target.checked)}
+                  className="dark-checkbox"
+                />
+                Preview theme on buttons
+              </label>
+            </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "12px" }}>
-              {presets.map((preset) => (
+              {presets.map((preset) => {
+                const isSelected = selectedPresetId === preset.id;
+                const c = preset.colors;
+                const usePreview = previewThemeOnButtons;
+                return (
                 <div
                   key={preset.id}
                   style={{
@@ -535,15 +551,18 @@ export default function Settings() {
                     alignItems: "center",
                     gap: "6px",
                     padding: "8px 12px",
-                    backgroundColor: selectedPresetId === preset.id ? "var(--accent)" : "var(--bg-tertiary)",
-                    border: `1px solid ${selectedPresetId === preset.id ? "var(--accent)" : "var(--border-color)"}`,
+                    backgroundColor: usePreview ? (isSelected ? c.accent : c.bgTertiary) : (isSelected ? "var(--accent)" : "var(--bg-tertiary)"),
+                    border: `1px solid ${usePreview ? (isSelected ? c.accent : c.borderColor) : (isSelected ? "var(--accent)" : "var(--border-color)")}`,
                     borderRadius: "6px",
                     cursor: "pointer",
                     transition: "all 0.2s",
                   }}
                   onClick={() => handleApplyPreset(preset.id)}
                 >
-                  <span style={{ fontSize: "13px", color: selectedPresetId === preset.id ? "white" : "var(--text-primary)" }}>
+                  <span style={{
+                    fontSize: "13px",
+                    color: usePreview ? (isSelected ? "#fff" : c.textPrimary) : (isSelected ? "white" : "var(--text-primary)"),
+                  }}>
                     {editingPresetId === preset.id ? (
                       <input
                         type="text"
@@ -574,7 +593,7 @@ export default function Settings() {
                     <>
                       <Edit2
                         size={12}
-                        style={{ color: selectedPresetId === preset.id ? "white" : "var(--text-secondary)", cursor: "pointer" }}
+                        style={{ color: (usePreview && isSelected) ? "#fff" : (usePreview ? c.textSecondary : (isSelected ? "white" : "var(--text-secondary)")), cursor: "pointer" }}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleStartEditPreset(preset.id);
@@ -582,7 +601,7 @@ export default function Settings() {
                       />
                       <Trash2
                         size={12}
-                        style={{ color: selectedPresetId === preset.id ? "white" : "var(--text-secondary)", cursor: "pointer" }}
+                        style={{ color: (usePreview && isSelected) ? "#fff" : (usePreview ? c.textSecondary : (isSelected ? "white" : "var(--text-secondary)")), cursor: "pointer" }}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDeletePreset(preset.id);
@@ -591,7 +610,7 @@ export default function Settings() {
                     </>
                   )}
                 </div>
-              ))}
+              ); })}
             </div>
             <button
               onClick={() => setShowSavePresetModal(true)}

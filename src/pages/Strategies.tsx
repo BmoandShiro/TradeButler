@@ -1301,6 +1301,8 @@ export default function Strategies() {
   const [pendingGroupAction, setPendingGroupAction] = useState<{ strategyId: number; type: string; itemIds: number[] } | null>(null);
   const [customChecklistTypes, setCustomChecklistTypes] = useState<Map<number, Set<string>>>(new Map());
   const [showNewChecklistModal, setShowNewChecklistModal] = useState(false);
+  /** When true, newly created checklists are inserted at the top (after default types); when false, appended at the bottom. */
+  const [newChecklistAtTop, setNewChecklistAtTop] = useState(true);
   const [newChecklistName, setNewChecklistName] = useState("");
   const [expandedStats, setExpandedStats] = useState<Set<number>>(new Set());
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
@@ -1901,6 +1903,20 @@ export default function Strategies() {
         return next;
       });
     }
+  };
+
+  /** Inserts a new checklist type into a map at top (first) or bottom (last) of iteration order. */
+  const addChecklistTypeToMap = (map: Map<string, ChecklistItem[]>, typeName: string, atTop: boolean): Map<string, ChecklistItem[]> => {
+    if (map.has(typeName)) return new Map(map);
+    if (atTop) {
+      const next = new Map<string, ChecklistItem[]>();
+      next.set(typeName, []);
+      for (const [k, v] of map.entries()) next.set(k, v);
+      return next;
+    }
+    const next = new Map(map);
+    next.set(typeName, []);
+    return next;
   };
 
   const addChecklistItem = async (strategyId: number, type: string, text: string, parentId: number | null = null) => {
@@ -5056,28 +5072,19 @@ export default function Strategies() {
                   const typeName = newChecklistName.trim().toLowerCase().replace(/\s+/g, '_');
                   
                   if (isCreating) {
-                    // Add to tempChecklists when creating
-                    const updatedChecklist = new Map(tempChecklists);
-                    if (!updatedChecklist.has(typeName)) {
-                      updatedChecklist.set(typeName, []);
-                    }
-                    setTempChecklists(updatedChecklist);
+                    setTempChecklists(addChecklistTypeToMap(tempChecklists, typeName, newChecklistAtTop));
                   } else if (isEditing && selectedStrategy) {
                     // Add to editingChecklists when editing
-                    // Initialize editingChecklists if it doesn't have this strategy yet
                     let currentChecklist: Map<string, ChecklistItem[]>;
                     if (editingChecklists.has(selectedStrategy)) {
                       currentChecklist = editingChecklists.get(selectedStrategy)!;
                     } else {
-                      // Initialize from current checklists state
                       const existingChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
                       currentChecklist = new Map<string, ChecklistItem[]>();
                       for (const [checklistType, items] of existingChecklist.entries()) {
                         currentChecklist.set(checklistType, items.map(item => ({ ...item })));
                       }
                       setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, currentChecklist)));
-                      
-                      // Initialize history if needed
                       if (!checklistEditHistory.has(selectedStrategy)) {
                         const originalCopy = new Map<string, ChecklistItem[]>();
                         for (const [checklistType, items] of existingChecklist.entries()) {
@@ -5086,26 +5093,15 @@ export default function Strategies() {
                         setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, [originalCopy])));
                       }
                     }
-                    
-                    const updatedChecklist = new Map(currentChecklist);
-                    if (!updatedChecklist.has(typeName)) {
-                      updatedChecklist.set(typeName, []);
-                    }
+                    const updatedChecklist = addChecklistTypeToMap(currentChecklist, typeName, newChecklistAtTop);
                     setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, updatedChecklist)));
-                    
-                    // Update history
                     const history = checklistEditHistory.get(selectedStrategy) || [];
                     const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
                     setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, newHistory)));
                   } else if (selectedStrategy) {
                     const currentChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
-                    const updatedChecklist = new Map(currentChecklist);
-                    if (!updatedChecklist.has(typeName)) {
-                      updatedChecklist.set(typeName, []);
-                    }
+                    const updatedChecklist = addChecklistTypeToMap(currentChecklist, typeName, newChecklistAtTop);
                     setChecklists(new Map(checklists.set(selectedStrategy, updatedChecklist)));
-                    
-                    // Add to custom types
                     const customTypesSet = new Set(customChecklistTypes.get(selectedStrategy) || []);
                     customTypesSet.add(typeName);
                     setCustomChecklistTypes(new Map(customChecklistTypes.set(selectedStrategy, customTypesSet)));
@@ -5128,10 +5124,18 @@ export default function Strategies() {
                 borderRadius: "6px",
                 color: "var(--text-primary)",
                 fontSize: "14px",
-                marginBottom: "20px",
+                marginBottom: "12px",
                 outline: "none",
               }}
             />
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "20px", cursor: "pointer", fontSize: "14px", color: "var(--text-secondary)" }}>
+              <input
+                type="checkbox"
+                checked={newChecklistAtTop}
+                onChange={(e) => setNewChecklistAtTop(e.target.checked)}
+              />
+              Add to top of checklists
+            </label>
             <div
               style={{
                 display: "flex",
@@ -5163,28 +5167,18 @@ export default function Strategies() {
                     const typeName = newChecklistName.trim().toLowerCase().replace(/\s+/g, '_');
                     
                     if (isCreating) {
-                      // Add to tempChecklists when creating
-                      const updatedChecklist = new Map(tempChecklists);
-                      if (!updatedChecklist.has(typeName)) {
-                        updatedChecklist.set(typeName, []);
-                      }
-                      setTempChecklists(updatedChecklist);
+                      setTempChecklists(addChecklistTypeToMap(tempChecklists, typeName, newChecklistAtTop));
                     } else if (isEditing && selectedStrategy) {
-                      // Add to editingChecklists when editing
-                      // Initialize editingChecklists if it doesn't have this strategy yet
                       let currentChecklist: Map<string, ChecklistItem[]>;
                       if (editingChecklists.has(selectedStrategy)) {
                         currentChecklist = editingChecklists.get(selectedStrategy)!;
                       } else {
-                        // Initialize from current checklists state
                         const existingChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
                         currentChecklist = new Map<string, ChecklistItem[]>();
                         for (const [checklistType, items] of existingChecklist.entries()) {
                           currentChecklist.set(checklistType, items.map(item => ({ ...item })));
                         }
                         setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, currentChecklist)));
-                        
-                        // Initialize history if needed
                         if (!checklistEditHistory.has(selectedStrategy)) {
                           const originalCopy = new Map<string, ChecklistItem[]>();
                           for (const [checklistType, items] of existingChecklist.entries()) {
@@ -5193,26 +5187,15 @@ export default function Strategies() {
                           setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, [originalCopy])));
                         }
                       }
-                      
-                      const updatedChecklist = new Map(currentChecklist);
-                      if (!updatedChecklist.has(typeName)) {
-                        updatedChecklist.set(typeName, []);
-                      }
+                      const updatedChecklist = addChecklistTypeToMap(currentChecklist, typeName, newChecklistAtTop);
                       setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, updatedChecklist)));
-                      
-                      // Update history
                       const history = checklistEditHistory.get(selectedStrategy) || [];
                       const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
                       setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, newHistory)));
                     } else if (selectedStrategy) {
                       const currentChecklist = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
-                      const updatedChecklist = new Map(currentChecklist);
-                      if (!updatedChecklist.has(typeName)) {
-                        updatedChecklist.set(typeName, []);
-                      }
+                      const updatedChecklist = addChecklistTypeToMap(currentChecklist, typeName, newChecklistAtTop);
                       setChecklists(new Map(checklists.set(selectedStrategy, updatedChecklist)));
-                      
-                      // Add to custom types
                       const customTypesSet = new Set(customChecklistTypes.get(selectedStrategy) || []);
                       customTypesSet.add(typeName);
                       setCustomChecklistTypes(new Map(customChecklistTypes.set(selectedStrategy, customTypesSet)));
