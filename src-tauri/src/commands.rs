@@ -6021,6 +6021,8 @@ pub struct VersionInfo {
     pub latest: String,
     pub is_up_to_date: bool,
     pub download_url: Option<String>,
+    /// Asset filename (e.g. TradeButler-1.2.1.msi) for installer temp file; API URL does not contain it.
+    pub download_filename: Option<String>,
     pub release_notes: Option<String>,
     pub is_installer: bool,
 }
@@ -6037,6 +6039,9 @@ struct GitHubRelease {
 #[derive(Debug, Deserialize, Clone)]
 struct GitHubAsset {
     name: String,
+    /// API URL for programmatic download (use with Accept: application/octet-stream)
+    url: String,
+    #[allow(dead_code)]
     browser_download_url: String,
     #[allow(dead_code)]
     content_type: String,
@@ -6225,8 +6230,9 @@ pub async fn check_version() -> Result<VersionInfo, String> {
     eprintln!("[Version Check] Latest version: {}", latest_version);
     eprintln!("[Version Check] Is up to date: {}", is_up_to_date);
     
-    // Find appropriate download asset
+    // Find appropriate download asset (use API url for reliable binary download)
     let mut download_url: Option<String> = None;
+    let mut download_filename: Option<String> = None;
     
     #[cfg(windows)]
     {
@@ -6234,7 +6240,8 @@ pub async fn check_version() -> Result<VersionInfo, String> {
             // Look for .msi or .exe installer
             for asset in &release.assets {
                 if asset.name.ends_with(".msi") || (asset.name.ends_with(".exe") && asset.name.contains("installer")) {
-                    download_url = Some(asset.browser_download_url.clone());
+                    download_url = Some(asset.url.clone());
+                    download_filename = Some(asset.name.clone());
                     break;
                 }
             }
@@ -6242,7 +6249,8 @@ pub async fn check_version() -> Result<VersionInfo, String> {
             // Look for portable .exe (not installer)
             for asset in &release.assets {
                 if asset.name.ends_with(".exe") && !asset.name.contains("installer") && !asset.name.ends_with(".msi") {
-                    download_url = Some(asset.browser_download_url.clone());
+                    download_url = Some(asset.url.clone());
+                    download_filename = Some(asset.name.clone());
                     break;
                 }
             }
@@ -6255,7 +6263,8 @@ pub async fn check_version() -> Result<VersionInfo, String> {
             // Look for .dmg
             for asset in &release.assets {
                 if asset.name.ends_with(".dmg") {
-                    download_url = Some(asset.browser_download_url.clone());
+                    download_url = Some(asset.url.clone());
+                    download_filename = Some(asset.name.clone());
                     break;
                 }
             }
@@ -6263,7 +6272,8 @@ pub async fn check_version() -> Result<VersionInfo, String> {
             // Look for .app bundle
             for asset in &release.assets {
                 if asset.name.ends_with(".app") || asset.name.ends_with(".app.tar.gz") {
-                    download_url = Some(asset.browser_download_url.clone());
+                    download_url = Some(asset.url.clone());
+                    download_filename = Some(asset.name.clone());
                     break;
                 }
             }
@@ -6276,7 +6286,8 @@ pub async fn check_version() -> Result<VersionInfo, String> {
             // Look for .deb
             for asset in &release.assets {
                 if asset.name.ends_with(".deb") {
-                    download_url = Some(asset.browser_download_url.clone());
+                    download_url = Some(asset.url.clone());
+                    download_filename = Some(asset.name.clone());
                     break;
                 }
             }
@@ -6284,7 +6295,8 @@ pub async fn check_version() -> Result<VersionInfo, String> {
             // Look for AppImage
             for asset in &release.assets {
                 if asset.name.ends_with(".AppImage") {
-                    download_url = Some(asset.browser_download_url.clone());
+                    download_url = Some(asset.url.clone());
+                    download_filename = Some(asset.name.clone());
                     break;
                 }
             }
@@ -6296,6 +6308,7 @@ pub async fn check_version() -> Result<VersionInfo, String> {
         latest: latest_version,
         is_up_to_date,
         download_url,
+        download_filename,
         release_notes: release.body,
         is_installer,
     })
@@ -6313,8 +6326,10 @@ pub async fn download_portable_update(download_url: String, file_path: String) -
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
     
+    // Use Accept: application/octet-stream so GitHub API returns the binary (required for asset API URL)
     let response = client
         .get(&download_url)
+        .header("Accept", "application/octet-stream")
         .send()
         .await
         .map_err(|e| format!("Failed to download update: {}", e))?;
@@ -6348,14 +6363,16 @@ pub async fn download_portable_update(download_url: String, file_path: String) -
 }
 
 #[tauri::command]
-pub async fn download_and_install_update(download_url: String) -> Result<(), String> {
+pub async fn download_and_install_update(download_url: String, download_filename: Option<String>) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .user_agent("TradeButler-Updater/1.0")
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
     
+    // Use Accept: application/octet-stream so GitHub API returns the binary (required for asset API URL)
     let response = client
         .get(&download_url)
+        .header("Accept", "application/octet-stream")
         .send()
         .await
         .map_err(|e| format!("Failed to download update: {}", e))?;
@@ -6364,15 +6381,14 @@ pub async fn download_and_install_update(download_url: String) -> Result<(), Str
         return Err(format!("Download failed with status: {}", response.status()));
     }
     
-    // Get filename from URL
-    let filename = download_url
-        .split('/')
-        .last()
-        .unwrap_or("TradeButler-update.msi");
+    // Get filename (API URL has no extension; use provided name when available)
+    let filename = download_filename
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| download_url.split('/').last().unwrap_or("TradeButler-update.msi").to_string());
     
     // Get temp directory
     let temp_dir = std::env::temp_dir();
-    let file_path = temp_dir.join(filename);
+    let file_path = temp_dir.join(&filename);
     
     // Download file
     let bytes = response

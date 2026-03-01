@@ -43,6 +43,7 @@ interface VersionInfo {
   latest: string;
   is_up_to_date: boolean;
   download_url?: string;
+  download_filename?: string;
   release_notes?: string;
   is_installer: boolean;
 }
@@ -159,25 +160,27 @@ export default function Settings() {
       if (versionInfo.is_installer) {
         // For installer version, download and run the installer
         await invoke("download_and_install_update", { 
-          download_url: versionInfo.download_url 
+          download_url: versionInfo.download_url,
+          download_filename: versionInfo.download_filename ?? undefined,
         });
         alert("Update downloaded and installer started. Please follow the installation wizard. Your data will be preserved.");
       } else {
         // For portable version, let user choose where to save it
-        const filePath = await save({
+        const rawPath = await save({
           filters: [
             { 
               name: "Executable", 
-              extensions: versionInfo.download_url.includes(".exe") ? ["exe"] : 
-                         versionInfo.download_url.includes(".AppImage") ? ["AppImage"] :
-                         versionInfo.download_url.includes(".app") ? ["app"] : ["*"]
+              extensions: versionInfo.download_filename?.includes(".exe") ? ["exe"] : 
+                         versionInfo.download_filename?.includes(".AppImage") ? ["AppImage"] :
+                         versionInfo.download_filename?.includes(".app") ? ["app"] : ["*"]
             },
           ],
-          defaultPath: `TradeButler-${versionInfo.latest}${versionInfo.download_url.includes(".exe") ? ".exe" : versionInfo.download_url.includes(".AppImage") ? ".AppImage" : versionInfo.download_url.includes(".app") ? ".app" : ""}`,
+          defaultPath: versionInfo.download_filename ?? `TradeButler-${versionInfo.latest}.exe`,
         });
 
-        if (!filePath) {
-          // User cancelled
+        // Normalize: Tauri save() returns string | null; ensure we have a single path string
+        const filePath = rawPath == null ? null : Array.isArray(rawPath) ? rawPath[0] ?? null : rawPath;
+        if (!filePath || typeof filePath !== "string") {
           setIsDownloading(false);
           return;
         }
@@ -185,7 +188,7 @@ export default function Settings() {
         // Download to user-selected location
         await invoke("download_portable_update", { 
           download_url: versionInfo.download_url,
-          file_path: filePath
+          file_path: filePath,
         });
         alert(`Update downloaded successfully!\n\nSaved to: ${filePath}\n\nYou can now run the new version from that location. Your data will be preserved.`);
       }
@@ -201,6 +204,7 @@ export default function Settings() {
 
   const handleCancelUpdate = () => {
     setShowUpdateModal(false);
+    setError(null);
   };
 
   // Theme handlers
@@ -2363,6 +2367,21 @@ export default function Settings() {
                 ? "The installer will update your application. Your data will be preserved."
                 : "You will be prompted to choose where to save the new portable version. You can then run it from that location. Your data will be preserved."}
             </p>
+            {error && (
+              <div
+                style={{
+                  marginBottom: "16px",
+                  padding: "12px",
+                  backgroundColor: "var(--loss)",
+                  color: "white",
+                  borderRadius: "6px",
+                  fontSize: "13px",
+                  lineHeight: "1.4",
+                }}
+              >
+                {error}
+              </div>
+            )}
             <div
               style={{
                 display: "flex",
