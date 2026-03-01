@@ -28,7 +28,10 @@
         "writeFile": true,
         "readDir": true,
         "createDir": true,
-        "scope": ["$APPDATA/**", "$DOCUMENT/**"]
+        "scope": [
+          "$APPDATA/**",
+          "$DOCUMENT/**"
+        ]
       },
       "path": {
         "all": true
@@ -36,7 +39,10 @@
       "http": {
         "all": true,
         "request": true,
-        "scope": ["http://**", "https://**"]
+        "scope": [
+          "http://**",
+          "https://**"
+        ]
       }
     },
     "bundle": {
@@ -80,4 +86,3 @@
     ]
   }
 }
-

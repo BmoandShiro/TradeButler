@@ -91,6 +91,7 @@ fn main() {
             commands::clear_all_data,
             commands::export_data,
             commands::import_data,
+            commands::get_app_version,
             commands::check_version,
             commands::download_portable_update,
             commands::download_and_install_update,

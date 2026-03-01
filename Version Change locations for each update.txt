@@ -1,8 +1,22 @@
-#	File	What changed
-1	src-tauri/Cargo.toml	version = "1.2.2" (used by Rust and env!("CARGO_PKG_VERSION") at build time)
-2	src-tauri/tauri.conf.json	"version": "1.2.2" (Tauri app version for the bundle)
-3	package.json	"version": "1.2.2" (Node/frontend app version)
-4	src/components/Layout.tsx	Footer text: v1.2.2 Created By:
-5	package-lock.json	Root "version": "1.2.2" and the "" package entry (your app’s version in the lockfile)
-6	src-tauri/Cargo.lock	tradebutler package was already 1.2.2 (e.g. from a previous build); no change made
-7	src-tauri/src/commands.rs	Comment example: TradeButler-1.2.2.msi (cosmetic only)
+# Version: single source of truth
+
+The only place you edit the version is:
+
+  src-tauri/Cargo.toml   →   version = "X.Y.Z"
+
+Then run:
+
+  npm run version:sync
+
+This script copies that version into:
+
+  1. src-tauri/tauri.conf.json   →  "package"."version"
+  2. package.json                →  "version"
+  3. src-tauri/src/commands.rs   →  comment (e.g. TradeButler-X.Y.Z.msi)
+
+The footer in Layout.tsx shows the version from the app at runtime (get_app_version from Cargo.toml), so you never edit Layout for version.
+
+After syncing, run:
+
+  npm install     (updates package-lock.json)
+  cargo build     (updates Cargo.lock in src-tauri)

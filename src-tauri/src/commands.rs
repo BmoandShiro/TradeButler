@@ -6039,9 +6039,9 @@ struct GitHubRelease {
 #[derive(Debug, Deserialize, Clone)]
 struct GitHubAsset {
     name: String,
-    /// API URL for programmatic download (use with Accept: application/octet-stream)
-    url: String,
     #[allow(dead_code)]
+    url: String,
+    /// Direct download link (used for reliable downloads; no API redirects)
     browser_download_url: String,
     #[allow(dead_code)]
     content_type: String,
@@ -6051,6 +6051,12 @@ struct GitHubAsset {
 fn get_current_version() -> String {
     // Get version from Cargo.toml at compile time
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Returns the app version (from Cargo.toml at build time). Used by the UI footer and as single source of truth.
+#[tauri::command]
+pub fn get_app_version() -> String {
+    get_current_version()
 }
 
 // Detect if running as installer or portable
@@ -6234,13 +6240,14 @@ pub async fn check_version() -> Result<VersionInfo, String> {
     let mut download_url: Option<String> = None;
     let mut download_filename: Option<String> = None;
     
+    // Use browser_download_url for downloads: direct link, no API redirects or Accept header needed (more reliable for public repos)
     #[cfg(windows)]
     {
         if is_installer {
             // Look for .msi or .exe installer
             for asset in &release.assets {
                 if asset.name.ends_with(".msi") || (asset.name.ends_with(".exe") && asset.name.contains("installer")) {
-                    download_url = Some(asset.url.clone());
+                    download_url = Some(asset.browser_download_url.clone());
                     download_filename = Some(asset.name.clone());
                     break;
                 }
@@ -6249,7 +6256,7 @@ pub async fn check_version() -> Result<VersionInfo, String> {
             // Look for portable .exe (not installer)
             for asset in &release.assets {
                 if asset.name.ends_with(".exe") && !asset.name.contains("installer") && !asset.name.ends_with(".msi") {
-                    download_url = Some(asset.url.clone());
+                    download_url = Some(asset.browser_download_url.clone());
                     download_filename = Some(asset.name.clone());
                     break;
                 }
@@ -6263,7 +6270,7 @@ pub async fn check_version() -> Result<VersionInfo, String> {
             // Look for .dmg
             for asset in &release.assets {
                 if asset.name.ends_with(".dmg") {
-                    download_url = Some(asset.url.clone());
+                    download_url = Some(asset.browser_download_url.clone());
                     download_filename = Some(asset.name.clone());
                     break;
                 }
@@ -6272,7 +6279,7 @@ pub async fn check_version() -> Result<VersionInfo, String> {
             // Look for .app bundle
             for asset in &release.assets {
                 if asset.name.ends_with(".app") || asset.name.ends_with(".app.tar.gz") {
-                    download_url = Some(asset.url.clone());
+                    download_url = Some(asset.browser_download_url.clone());
                     download_filename = Some(asset.name.clone());
                     break;
                 }
@@ -6286,7 +6293,7 @@ pub async fn check_version() -> Result<VersionInfo, String> {
             // Look for .deb
             for asset in &release.assets {
                 if asset.name.ends_with(".deb") {
-                    download_url = Some(asset.url.clone());
+                    download_url = Some(asset.browser_download_url.clone());
                     download_filename = Some(asset.name.clone());
                     break;
                 }
@@ -6295,7 +6302,7 @@ pub async fn check_version() -> Result<VersionInfo, String> {
             // Look for AppImage
             for asset in &release.assets {
                 if asset.name.ends_with(".AppImage") {
-                    download_url = Some(asset.url.clone());
+                    download_url = Some(asset.browser_download_url.clone());
                     download_filename = Some(asset.name.clone());
                     break;
                 }
@@ -6323,19 +6330,24 @@ pub fn exit_app() {
 pub async fn download_portable_update(download_url: String, file_path: String) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .user_agent("TradeButler-Updater/1.0")
+        .redirect(reqwest::redirect::Policy::default())
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
     
-    // Use Accept: application/octet-stream so GitHub API returns the binary (required for asset API URL)
-    let response = client
-        .get(&download_url)
-        .header("Accept", "application/octet-stream")
+    // browser_download_url: no special headers needed. API url would need Accept: application/octet-stream
+    let mut request = client.get(&download_url);
+    if download_url.contains("api.github.com/repos/") && download_url.contains("/assets/") {
+        request = request.header("Accept", "application/octet-stream");
+    }
+    let response = request
         .send()
         .await
         .map_err(|e| format!("Failed to download update: {}", e))?;
     
     if !response.status().is_success() {
-        return Err(format!("Download failed with status: {}", response.status()));
+        let status = response.status();
+        let body = response.text().await.unwrap_or_else(|_| String::new());
+        return Err(format!("Download failed with status {}: {}", status, if body.is_empty() { "no details" } else { body.trim() }));
     }
     
     // Download file to user-selected location
@@ -6366,19 +6378,24 @@ pub async fn download_portable_update(download_url: String, file_path: String) -
 pub async fn download_and_install_update(download_url: String, download_filename: Option<String>) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .user_agent("TradeButler-Updater/1.0")
+        .redirect(reqwest::redirect::Policy::default())
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
     
-    // Use Accept: application/octet-stream so GitHub API returns the binary (required for asset API URL)
-    let response = client
-        .get(&download_url)
-        .header("Accept", "application/octet-stream")
+    // browser_download_url: no special headers needed. API url would need Accept: application/octet-stream
+    let mut request = client.get(&download_url);
+    if download_url.contains("api.github.com/repos/") && download_url.contains("/assets/") {
+        request = request.header("Accept", "application/octet-stream");
+    }
+    let response = request
         .send()
         .await
         .map_err(|e| format!("Failed to download update: {}", e))?;
     
     if !response.status().is_success() {
-        return Err(format!("Download failed with status: {}", response.status()));
+        let status = response.status();
+        let body = response.text().await.unwrap_or_else(|_| String::new());
+        return Err(format!("Download failed with status {}: {}", status, if body.is_empty() { "no details" } else { body.trim() }));
     }
     
     // Get filename (API URL has no extension; use provided name when available)

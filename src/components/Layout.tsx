@@ -67,10 +67,16 @@ export default function Layout({ children }: LayoutProps) {
     return settings.useAsBackground;
   });
   const [galaxyBgColor, setGalaxyBgColor] = useState(() => getGalaxyThemeSettings().backgroundColor);
+  const [appVersion, setAppVersion] = useState<string>("");
   const mainContentRef = useRef<HTMLElement>(null);
   const scrollPositions = useRef<Map<string, number>>(new Map());
   const previousPathRef = useRef<string>(location.pathname);
   
+  // Load app version from backend (single source: Cargo.toml)
+  useEffect(() => {
+    invoke<string>("get_app_version").then(setAppVersion).catch(() => setAppVersion(""));
+  }, []);
+
   // Initialize: Load saved scroll positions from localStorage
   useEffect(() => {
     // Load all saved scroll positions on mount
@@ -825,7 +831,7 @@ export default function Layout({ children }: LayoutProps) {
               lineHeight: "1.4",
             }}
           >
-            v1.2.2 Created By:
+            {appVersion ? `v${appVersion}` : "v—"} Created By:
             <br />
             @BMOandShiro @PlaneStation
           </div>
