@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
-import { Plus, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Maximize2, Minimize2, Edit2, Trash2, ArrowLeft, RotateCcw, ExternalLink, ChevronDown } from "lucide-react";
+import { Plus, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Maximize2, Minimize2, Edit2, Trash2, ArrowLeft, RotateCcw, ExternalLink, ChevronDown, Info, X } from "lucide-react";
 import { LineChart, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import RichTextEditor from "../components/RichTextEditor";
 
@@ -211,6 +211,194 @@ const SURVEY_QUESTIONS = {
   ],
 };
 
+/** Short labels for diagram nodes (survey question keys). */
+const SURVEY_KEY_LABELS: Record<string, string> = {
+  before_calm_clear: "Calm & clear before",
+  before_urgency_pressure: "Urgency / pressure",
+  before_confidence_vs_validation: "Confidence vs validation",
+  before_fomo: "FOMO influence",
+  before_recovering_loss: "Recovering from loss",
+  before_patient_detached: "Patient & detached",
+  before_trust_process: "Trust in process",
+  before_emotional_state: "Emotional state before",
+  during_stable: "Stable during",
+  during_tension_stress: "Tension & stress",
+  during_tempted_interfere: "Tempted to interfere",
+  during_need_control: "Need to control",
+  during_fear_loss: "Fear of loss",
+  during_excitement_greed: "Excitement / greed",
+  during_mentally_present: "Mentally present",
+  after_accept_outcome: "Accept outcome",
+  after_emotional_reaction: "Emotional reaction",
+  after_confidence_affected: "Confidence affected",
+  after_tempted_another_trade: "Tempted another trade",
+  after_proud_discipline: "Proud / disciplined",
+};
+
+/** Metric → survey keys and formula for diagram. */
+const SURVEY_METRIC_DIAGRAMS: { metric: string; keys: string[]; formula: string; phaseColor: string }[] = [
+  { metric: "Emotional Stability Index", keys: ["during_stable", "during_mentally_present", "after_accept_outcome"], formula: "6 − avg (inverted)", phaseColor: "#3b82f6" },
+  { metric: "FOMO Index", keys: ["before_fomo"], formula: "6 − avg", phaseColor: "#22c55e" },
+  { metric: "Discipline Consistency", keys: ["before_patient_detached", "during_need_control", "after_proud_discipline"], formula: "mixed invert + direct", phaseColor: "#22c55e" },
+  { metric: "Revenge-Trade Risk", keys: ["before_recovering_loss", "after_tempted_another_trade"], formula: "6 − avg", phaseColor: "#f59e0b" },
+  { metric: "Overconfidence After Wins", keys: ["after_confidence_affected"], formula: "6 − avg", phaseColor: "#f59e0b" },
+  { metric: "Fear After Losses", keys: ["during_fear_loss", "after_emotional_reaction"], formula: "6 − avg", phaseColor: "#ef4444" },
+  { metric: "Trust in Process", keys: ["before_trust_process"], formula: "avg", phaseColor: "#22c55e" },
+  { metric: "Stress Resistance", keys: ["during_tension_stress"], formula: "6 − avg", phaseColor: "#3b82f6" },
+  { metric: "Pre-Trade Clarity", keys: ["before_calm_clear"], formula: "avg", phaseColor: "#22c55e" },
+  { metric: "Urgency Resistance", keys: ["before_urgency_pressure"], formula: "6 − avg", phaseColor: "#22c55e" },
+  { metric: "Interference Resistance", keys: ["during_tempted_interfere"], formula: "6 − avg", phaseColor: "#3b82f6" },
+  { metric: "Excitement/Greed Control", keys: ["during_excitement_greed"], formula: "6 − avg", phaseColor: "#3b82f6" },
+];
+
+/** Rounded-rect (pill) dimensions. Large bubbles with generous internal padding so text doesn’t sit on edges. */
+const PILL = { outerW: 200, outerH: 48, outerRx: 24, centerW: 260, centerH: 56, centerRx: 28 };
+/** Min radius so outer pill clears center pill (no overlap). */
+const MIN_RADIUS = 130 + 100 + 14;
+
+/** One mind-map style diagram: metric in center, curved branches to question nodes. */
+function MetricDiagram({ metric, keys, formula, phaseColor, diagramId }: { metric: string; keys: string[]; formula: string; phaseColor: string; diagramId: string }) {
+  const radius = MIN_RADIUS;
+  const viewW = 732;
+  const viewH = 580;
+  const cx = viewW / 2;
+  const cy = viewH / 2;
+  const filterId = `metric-diagram-shadow-${diagramId}`;
+  const gradientId = `survey-gradient-${diagramId}`;
+  const nodes = keys.map((_, i) => {
+    const angle = (Math.PI * 2 * i) / keys.length - Math.PI / 2;
+    return { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle), label: SURVEY_KEY_LABELS[keys[i]] ?? keys[i] };
+  });
+  return (
+    <div style={{
+      position: "relative",
+      width: "100%",
+      maxWidth: "520px",
+      margin: "0 auto 12px",
+      padding: "20px",
+      background: "linear-gradient(145deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%)",
+      borderRadius: "12px",
+      border: "1px solid var(--border-color)",
+      boxShadow: "0 2px 12px rgba(0,0,0,0.08)",
+    }}>
+      <svg viewBox={`0 0 ${viewW} ${viewH}`} style={{ width: "100%", height: "auto", minHeight: "320px", overflow: "visible" }} preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity={1} />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.78} />
+          </linearGradient>
+          <filter id={filterId} x="-30%" y="-30%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.2" floodColor="var(--accent)" />
+          </filter>
+        </defs>
+        {nodes.map((n, i) => {
+          const midX = (cx + n.x) / 2 + (n.y > cy ? 10 : -10);
+          const midY = (cy + n.y) / 2 + (n.x > cx ? -8 : 8);
+          const pathD = `M ${cx} ${cy} Q ${midX} ${midY} ${n.x} ${n.y}`;
+          const w = PILL.outerW; const h = PILL.outerH; const rx = PILL.outerRx;
+          return (
+            <g key={i}>
+              <path d={pathD} fill="none" stroke={phaseColor} strokeWidth="1.8" strokeLinecap="round" opacity={0.55} />
+              <rect x={n.x - w / 2} y={n.y - h / 2} width={w} height={h} rx={rx} ry={rx} fill="var(--bg-primary)" stroke={phaseColor} strokeWidth="1" opacity={0.95} />
+              <text x={n.x} y={n.y} textAnchor="middle" dominantBaseline="middle" fontSize="17" fill="var(--text-primary)" style={{ fontWeight: 600, letterSpacing: "0.02em" }}>{n.label}</text>
+            </g>
+          );
+        })}
+        <rect x={cx - PILL.centerW / 2} y={cy - PILL.centerH / 2} width={PILL.centerW} height={PILL.centerH} rx={PILL.centerRx} ry={PILL.centerRx} fill={`url(#${gradientId})`} stroke="rgba(255,255,255,0.25)" strokeWidth="1.5" filter={`url(#${filterId})`} />
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize="20" fill="var(--bg-primary)" style={{ fontWeight: 700, letterSpacing: "0.03em" }}>{metric}</text>
+      </svg>
+      <div style={{
+        textAlign: "center",
+        fontSize: "15px",
+        color: "var(--text-secondary)",
+        marginTop: "12px",
+        padding: "10px 18px",
+        borderRadius: "10px",
+        background: "var(--bg-primary)",
+        display: "inline-block",
+        width: "100%",
+        boxSizing: "border-box",
+      }}>Formula: {formula}</div>
+    </div>
+  );
+}
+
+/** Entry-based metric diagram (single flow from inputs to metric). */
+const ENTRY_METRIC_DIAGRAMS: { metric: string; inputs: string[]; formula: string }[] = [
+  { metric: "Calm Index", inputs: ["Avg intensity (0–10)"], formula: "5 − (avg / 2)" },
+  { metric: "Emotional Consistency", inputs: ["Intensity variance"], formula: "5 − std dev" },
+  { metric: "Negative Emotion Load", inputs: ["Anxious", "Fearful", "Frustrated", "Greedy", "Pessimistic"], formula: "5 − (avg / 2)" },
+  { metric: "Positive Emotion Presence", inputs: ["Confident", "Calm", "Optimistic", "Neutral"], formula: "avg / 2" },
+  { metric: "Intensity Trend", inputs: ["Recent avg", "Older avg"], formula: "5 − trend" },
+];
+
+function EntryMetricDiagram({ metric, inputs, formula, diagramId }: { metric: string; inputs: string[]; formula: string; diagramId: string }) {
+  const radius = MIN_RADIUS;
+  const viewW = 732;
+  const viewH = 580;
+  const cx = viewW / 2;
+  const cy = viewH / 2;
+  const filterId = `entry-diagram-shadow-${diagramId}`;
+  const gradientId = `entry-gradient-${diagramId}`;
+  const nodes = inputs.map((_, i) => {
+    const angle = (Math.PI * 2 * i) / inputs.length - Math.PI / 2;
+    return { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle), label: inputs[i] };
+  });
+  const metricShort = metric.length > 18 ? metric.replace(/Emotion |Emotional /g, "").replace(/\s+/g, " ").trim() : metric;
+  return (
+    <div style={{
+      position: "relative",
+      width: "100%",
+      maxWidth: "520px",
+      margin: "0 auto 12px",
+      padding: "20px",
+      background: "linear-gradient(145deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%)",
+      borderRadius: "12px",
+      border: "1px solid var(--border-color)",
+      boxShadow: "0 2px 12px rgba(0,0,0,0.08)",
+    }}>
+      <svg viewBox={`0 0 ${viewW} ${viewH}`} style={{ width: "100%", height: "auto", minHeight: "320px", overflow: "visible" }} preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity={1} />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.75} />
+          </linearGradient>
+          <filter id={filterId} x="-30%" y="-30%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.2" floodColor="var(--accent)" />
+          </filter>
+        </defs>
+        {nodes.map((n, i) => {
+          const midX = (cx + n.x) / 2 + (n.y > cy ? 8 : -8);
+          const midY = (cy + n.y) / 2 + (n.x > cx ? -5 : 5);
+          const pathD = `M ${cx} ${cy} Q ${midX} ${midY} ${n.x} ${n.y}`;
+          const w = PILL.outerW; const h = PILL.outerH; const rx = PILL.outerRx;
+          return (
+            <g key={i}>
+              <path d={pathD} fill="none" stroke="var(--border-color)" strokeWidth="1.5" strokeLinecap="round" opacity={0.5} />
+              <rect x={n.x - w / 2} y={n.y - h / 2} width={w} height={h} rx={rx} ry={rx} fill="var(--bg-primary)" stroke="var(--border-color)" strokeWidth="1" opacity={0.95} />
+              <text x={n.x} y={n.y} textAnchor="middle" dominantBaseline="middle" fontSize="17" fill="var(--text-primary)" style={{ fontWeight: 600, letterSpacing: "0.02em" }}>{n.label}</text>
+            </g>
+          );
+        })}
+        <rect x={cx - PILL.centerW / 2} y={cy - PILL.centerH / 2} width={PILL.centerW} height={PILL.centerH} rx={PILL.centerRx} ry={PILL.centerRx} fill={`url(#${gradientId})`} stroke="rgba(255,255,255,0.2)" strokeWidth="1.5" filter={`url(#${filterId})`} />
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize="20" fill="var(--bg-primary)" style={{ fontWeight: 700, letterSpacing: "0.03em" }}>{metricShort}</text>
+      </svg>
+      <div style={{
+        textAlign: "center",
+        fontSize: "15px",
+        color: "var(--text-secondary)",
+        marginTop: "12px",
+        padding: "10px 18px",
+        borderRadius: "10px",
+        background: "var(--bg-primary)",
+        display: "inline-block",
+        width: "100%",
+        boxSizing: "border-box",
+      }}>Formula: {formula}</div>
+    </div>
+  );
+}
+
 // Helper function to get gradient color from red -> yellow -> green (for metrics: higher = better)
 // normalizedValue: 0 (bad/red) to 1 (good/green), with 0.5 being neutral/yellow
 function getGradientColor(normalizedValue: number): string {
@@ -277,69 +465,117 @@ function getIntensityGradientStyles(intensity: number): { gradient: string; colo
   };
 }
 
+/** Emotions that tend to impair trading (higher intensity = more risk). Lower is better. */
+const NEGATIVE_EMOTIONS = new Set(["Anxious", "Frustrated", "Fearful", "Greedy", "Pessimistic"]);
+/** Emotions that support clear-headed trading. Higher is better in moderation. */
+const POSITIVE_EMOTIONS = new Set(["Confident", "Calm", "Optimistic", "Neutral"]);
+
 function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states: EmotionalState[] }) {
+  const [showMetricsHelp, setShowMetricsHelp] = useState(false);
   if (surveys.length === 0 && states.length === 0) return null;
 
-  // Calculate metrics
-  const calculateMetric = (values: number[], inverted: boolean = false) => {
-    if (values.length === 0) return 3;
+  // —— Survey-based metrics (1–5 scale). Returns null when no data (for "extra" metrics); use fallback 3 for core 6 so they always show.
+  const calculateMetric = (values: number[], inverted: boolean = false, fallback: number | null = null) => {
+    if (values.length === 0) return fallback;
     const avg = values.reduce((a, b) => a + b, 0) / values.length;
-    return inverted ? 6 - avg : avg; // Invert if needed (1-5 scale, so 6-avg gives inverse)
+    return inverted ? 6 - avg : avg;
   };
+  const DEFAULT_NO_DATA = 3;
 
-  // Emotional Stability Index (avg of during_stable, during_mentally_present, after_accept_outcome)
   const emotionalStabilityValues = surveys.flatMap((s) => [
-    6 - s.during_stable, // Inverted - higher is better
-    6 - s.during_mentally_present, // Inverted
-    6 - s.after_accept_outcome, // Inverted
+    6 - s.during_stable,
+    6 - s.during_mentally_present,
+    6 - s.after_accept_outcome,
   ]);
-  const emotionalStabilityIndex = calculateMetric(emotionalStabilityValues);
-
-  // FOMO Index (before_fomo average) - lower is better, so we invert
+  const emotionalStabilityIndex = calculateMetric(emotionalStabilityValues, false, DEFAULT_NO_DATA) ?? DEFAULT_NO_DATA;
   const fomoValues = surveys.map((s) => s.before_fomo);
-  const fomoIndex = 6 - calculateMetric(fomoValues); // Inverted because lower is better
-
-  // Discipline Consistency (avg of before_patient_detached, during_need_control, after_proud_discipline - inverted)
+  const fomoIndex = surveys.length > 0 ? 6 - (fomoValues.reduce((a, b) => a + b, 0) / fomoValues.length) : DEFAULT_NO_DATA;
   const disciplineValues = surveys.flatMap((s) => [
     6 - s.before_patient_detached,
     6 - s.during_need_control,
-    s.after_proud_discipline, // Already positive (1 = proud, 5 = money focused)
+    s.after_proud_discipline,
   ]);
-  const disciplineConsistency = calculateMetric(disciplineValues);
-
-  // Revenge-trade Risk (before_recovering_loss, after_tempted_another_trade) - lower is better
+  const disciplineConsistency = calculateMetric(disciplineValues, false, DEFAULT_NO_DATA) ?? DEFAULT_NO_DATA;
   const revengeTradeValues = surveys.flatMap((s) => [s.before_recovering_loss, s.after_tempted_another_trade]);
-  const revengeTradeRisk = 6 - calculateMetric(revengeTradeValues); // Inverted because lower is better
-
-  // Overconfidence after wins - lower is better
+  const revengeTradeRisk = surveys.length > 0 ? 6 - (calculateMetric(revengeTradeValues, false, null) ?? 0) : DEFAULT_NO_DATA;
   const overconfidenceValues = surveys.map((s) => s.after_confidence_affected);
-  const overconfidenceAfterWins = 6 - calculateMetric(overconfidenceValues); // Inverted because lower is better
+  const overconfidenceAfterWins = surveys.length > 0 ? 6 - (overconfidenceValues.reduce((a, b) => a + b, 0) / overconfidenceValues.length) : DEFAULT_NO_DATA;
+  const fearAfterLossesValues = surveys.flatMap((s) => [s.during_fear_loss, s.after_emotional_reaction]);
+  const fearAfterLossesRaw = calculateMetric(fearAfterLossesValues, false, null);
+  const fearAfterLosses = fearAfterLossesRaw !== null ? 6 - fearAfterLossesRaw : DEFAULT_NO_DATA;
+  const trustInProcessValues = surveys.map((s) => s.before_trust_process);
+  const trustInProcess = calculateMetric(trustInProcessValues);
+  const tensionStressValues = surveys.map((s) => s.during_tension_stress);
+  const tensionStressResistance = tensionStressValues.length > 0 ? 6 - (tensionStressValues.reduce((a, b) => a + b, 0) / tensionStressValues.length) : null;
+  const preTradeClarityValues = surveys.map((s) => s.before_calm_clear);
+  const preTradeClarity = calculateMetric(preTradeClarityValues, false, DEFAULT_NO_DATA) ?? DEFAULT_NO_DATA;
+  const urgencyValues = surveys.map((s) => s.before_urgency_pressure);
+  const urgencyResistance = surveys.length > 0 ? 6 - (urgencyValues.reduce((a, b) => a + b, 0) / urgencyValues.length) : DEFAULT_NO_DATA;
+  const interferenceValues = surveys.map((s) => s.during_tempted_interfere);
+  const interferenceResistance = surveys.length > 0 ? 6 - (interferenceValues.reduce((a, b) => a + b, 0) / interferenceValues.length) : DEFAULT_NO_DATA;
+  const excitementGreedValues = surveys.map((s) => s.during_excitement_greed);
+  const excitementGreedControl = surveys.length > 0 ? 6 - (excitementGreedValues.reduce((a, b) => a + b, 0) / excitementGreedValues.length) : DEFAULT_NO_DATA;
 
-  // Fear after losses - lower is better
-  const fearAfterLossesValues = surveys.flatMap((s) => [s.during_fear_loss, s.after_confidence_affected]);
-  const fearAfterLosses = 6 - calculateMetric(fearAfterLossesValues); // Inverted because lower is better
+  // —— State-based metrics (from emotional state entries: intensity 0–10, emotion type)
+  const intensities = states.map((s) => s.intensity);
+  const avgIntensity = intensities.length > 0 ? intensities.reduce((a, b) => a + b, 0) / intensities.length : null;
+  const variance =
+    intensities.length > 1
+      ? intensities.reduce((sum, v) => sum + (v - avgIntensity!) ** 2, 0) / (intensities.length - 1)
+      : 0;
+  const stdDev = Math.sqrt(variance);
+  const calmIndex = avgIntensity != null ? Math.max(0, Math.min(5, 5 - avgIntensity / 2)) : null;
+  const stabilityFromStates = intensities.length > 1 ? Math.max(0, Math.min(5, 5 - stdDev)) : avgIntensity != null ? Math.max(0, Math.min(5, 5 - avgIntensity / 5)) : null;
+  const negativeIntensities = states.filter((s) => NEGATIVE_EMOTIONS.has(s.emotion)).map((s) => s.intensity);
+  const avgNegative = negativeIntensities.length > 0 ? negativeIntensities.reduce((a, b) => a + b, 0) / negativeIntensities.length : null;
+  const negativeLoadResistance = avgNegative != null ? Math.max(0, Math.min(5, 5 - avgNegative / 2)) : null;
+  const positiveIntensities = states.filter((s) => POSITIVE_EMOTIONS.has(s.emotion)).map((s) => s.intensity);
+  const avgPositive = positiveIntensities.length > 0 ? positiveIntensities.reduce((a, b) => a + b, 0) / positiveIntensities.length : null;
+  const positivePresence = avgPositive != null ? Math.max(0, Math.min(5, avgPositive / 2)) : null;
+  const recentCount = Math.min(5, Math.floor(states.length / 2));
+  const olderCount = states.length - recentCount;
+  let intensityTrend: number | null = null;
+  if (recentCount >= 2 && olderCount >= 2) {
+    const sorted = [...states].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    const older = sorted.slice(0, olderCount);
+    const recent = sorted.slice(-recentCount);
+    const avgOlder = older.reduce((s, x) => s + x.intensity, 0) / older.length;
+    const avgRecent = recent.reduce((s, x) => s + x.intensity, 0) / recent.length;
+    const diff = avgRecent - avgOlder;
+    intensityTrend = Math.max(-5, Math.min(5, diff * 0.5));
+  }
 
-  // Helper to normalize metric value (0-1) where 1 is best
-  const normalizeForColor = (value: number, max: number = 5): number => {
-    return Math.max(0, Math.min(1, value / max));
+  const normalizeForColor = (value: number, max: number = 5): number => Math.max(0, Math.min(1, value / max));
+
+  type MetricItem = {
+    name: string;
+    value: string;
+    max: number;
+    icon: typeof Shield;
+    normalizedValue: number;
+    description: string;
+    source: "survey" | "states";
   };
 
-  const metrics = [
+  const hasSurveyData = surveys.length > 0;
+  const surveyMetrics: MetricItem[] = [
     {
       name: "Emotional Stability Index",
       value: emotionalStabilityIndex.toFixed(2),
       max: 5,
       icon: Shield,
       normalizedValue: normalizeForColor(emotionalStabilityIndex),
-      description: "Your ability to stay emotionally stable during and after trades",
+      description: hasSurveyData ? "Your ability to stay emotionally stable during and after trades" : "Complete the before/during/after survey to see this metric",
+      source: "survey",
     },
     {
       name: "FOMO Index",
       value: fomoIndex.toFixed(2),
       max: 5,
       icon: AlertTriangle,
-      normalizedValue: normalizeForColor(fomoIndex), // Already inverted in calculation
-      description: "How often FOMO influences your trading decisions (lower is better)",
+      normalizedValue: normalizeForColor(fomoIndex),
+      description: hasSurveyData ? "How often FOMO influences your trading decisions (lower is better)" : "Complete the before/during/after survey to see this metric",
+      source: "survey",
     },
     {
       name: "Discipline Consistency",
@@ -347,33 +583,193 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       max: 5,
       icon: Target,
       normalizedValue: normalizeForColor(disciplineConsistency),
-      description: "Your consistency in maintaining discipline throughout trades",
+      description: hasSurveyData ? "Your consistency in maintaining discipline throughout trades" : "Complete the before/during/after survey to see this metric",
+      source: "survey",
     },
     {
       name: "Revenge-Trade Risk",
       value: revengeTradeRisk.toFixed(2),
       max: 5,
       icon: TrendingUp,
-      normalizedValue: normalizeForColor(revengeTradeRisk), // Already inverted
-      description: "Tendency to take trades to recover from losses (lower is better)",
+      normalizedValue: normalizeForColor(revengeTradeRisk),
+      description: hasSurveyData ? "Tendency to take trades to recover from losses (lower is better)" : "Complete the before/during/after survey to see this metric",
+      source: "survey",
     },
     {
       name: "Overconfidence After Wins",
       value: overconfidenceAfterWins.toFixed(2),
       max: 5,
       icon: BarChart3,
-      normalizedValue: normalizeForColor(overconfidenceAfterWins), // Already inverted
-      description: "How wins affect your confidence and decision-making",
+      normalizedValue: normalizeForColor(overconfidenceAfterWins),
+      description: hasSurveyData ? "How wins affect your confidence and decision-making" : "Complete the before/during/after survey to see this metric",
+      source: "survey",
     },
     {
       name: "Fear After Losses",
       value: fearAfterLosses.toFixed(2),
       max: 5,
       icon: AlertTriangle,
-      normalizedValue: normalizeForColor(fearAfterLosses), // Already inverted
-      description: "Emotional impact of losses on future trading (lower is better)",
+      normalizedValue: normalizeForColor(fearAfterLosses),
+      description: hasSurveyData ? "Emotional impact of losses on future trading (lower is better)" : "Complete the before/during/after survey to see this metric",
+      source: "survey",
+    },
+    {
+      name: "Pre-Trade Clarity",
+      value: preTradeClarity.toFixed(2),
+      max: 5,
+      icon: Shield,
+      normalizedValue: normalizeForColor(preTradeClarity),
+      description: hasSurveyData ? "How calm and mentally clear you felt before considering the trade" : "Complete the before/during/after survey to see this metric",
+      source: "survey",
+    },
+    {
+      name: "Urgency Resistance",
+      value: urgencyResistance.toFixed(2),
+      max: 5,
+      icon: AlertTriangle,
+      normalizedValue: normalizeForColor(urgencyResistance),
+      description: hasSurveyData ? "Resistance to pressure to \"make something happen\" (higher = less urgency)" : "Complete the before/during/after survey to see this metric",
+      source: "survey",
+    },
+    {
+      name: "Interference Resistance",
+      value: interferenceResistance.toFixed(2),
+      max: 5,
+      icon: Target,
+      normalizedValue: normalizeForColor(interferenceResistance),
+      description: hasSurveyData ? "Ability to avoid interfering with the trade out of fear or hope (higher is better)" : "Complete the before/during/after survey to see this metric",
+      source: "survey",
+    },
+    {
+      name: "Excitement/Greed Control",
+      value: excitementGreedControl.toFixed(2),
+      max: 5,
+      icon: BarChart3,
+      normalizedValue: normalizeForColor(excitementGreedControl),
+      description: hasSurveyData ? "Control over excitement or greed as price moved in your favor (higher is better)" : "Complete the before/during/after survey to see this metric",
+      source: "survey",
     },
   ];
+  if (trustInProcess != null)
+    surveyMetrics.push({
+      name: "Trust in Process",
+      value: trustInProcess.toFixed(2),
+      max: 5,
+      icon: Target,
+      normalizedValue: normalizeForColor(trustInProcess),
+      description: "How strongly you trust your trading process before entering",
+      source: "survey",
+    });
+  if (tensionStressResistance != null)
+    surveyMetrics.push({
+      name: "Stress Resistance",
+      value: tensionStressResistance.toFixed(2),
+      max: 5,
+      icon: Shield,
+      normalizedValue: normalizeForColor(tensionStressResistance),
+      description: "Ability to stay calm under tension while in a trade (lower stress is better)",
+      source: "survey",
+    });
+
+  const stateMetrics: MetricItem[] = [];
+  if (calmIndex != null)
+    stateMetrics.push({
+      name: "Calm Index",
+      value: calmIndex.toFixed(2),
+      max: 5,
+      icon: Shield,
+      normalizedValue: normalizeForColor(calmIndex),
+      description: "From your logged emotions: lower average intensity = calmer baseline (higher is better)",
+      source: "states",
+    });
+  if (stabilityFromStates != null)
+    stateMetrics.push({
+      name: "Emotional Consistency",
+      value: stabilityFromStates.toFixed(2),
+      max: 5,
+      icon: Target,
+      normalizedValue: normalizeForColor(stabilityFromStates),
+      description: "How consistent your emotional intensity is across entries (higher = more stable)",
+      source: "states",
+    });
+  if (negativeLoadResistance != null)
+    stateMetrics.push({
+      name: "Negative Emotion Load",
+      value: negativeLoadResistance.toFixed(2),
+      max: 5,
+      icon: AlertTriangle,
+      normalizedValue: normalizeForColor(negativeLoadResistance),
+      description: "Resistance to anxious, fearful, frustrated states (higher = less negative load)",
+      source: "states",
+    });
+  if (positivePresence != null)
+    stateMetrics.push({
+      name: "Positive Emotion Presence",
+      value: positivePresence.toFixed(2),
+      max: 5,
+      icon: BarChart3,
+      normalizedValue: normalizeForColor(positivePresence),
+      description: "Presence of calm, confident, optimistic states (higher is better)",
+      source: "states",
+    });
+  if (intensityTrend != null) {
+    const trendScore = Math.max(0, Math.min(5, 5 - intensityTrend));
+    stateMetrics.push({
+      name: "Intensity Trend",
+      value: trendScore.toFixed(2),
+      max: 5,
+      icon: TrendingUp,
+      normalizedValue: normalizeForColor(trendScore),
+      description: "Trend in emotional intensity: higher = calmer recently, lower = more intense recently",
+      source: "states",
+    });
+  }
+
+  const renderMetricCard = (metric: MetricItem) => {
+    const Icon = metric.icon;
+    const percentage = (parseFloat(metric.value) / metric.max) * 100;
+    const color = getGradientColor(metric.normalizedValue);
+    return (
+      <div
+        key={metric.name}
+        style={{
+          backgroundColor: "var(--bg-tertiary)",
+          border: "1px solid var(--border-color)",
+          borderRadius: "8px",
+          padding: "14px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "8px" }}>
+          <Icon size={18} style={{ color }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: "12px", fontWeight: "600", marginBottom: "2px" }}>{metric.name}</div>
+            <div style={{ fontSize: "20px", fontWeight: "bold", color }}>
+              {metric.value}<span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>/{metric.max}</span>
+            </div>
+          </div>
+        </div>
+        <div
+          style={{
+            height: "5px",
+            backgroundColor: "var(--bg-secondary)",
+            borderRadius: "3px",
+            overflow: "hidden",
+            marginBottom: "6px",
+          }}
+        >
+          <div
+            style={{
+              height: "100%",
+              width: `${percentage}%`,
+              backgroundColor: color,
+              transition: "width 0.3s ease",
+            }}
+          />
+        </div>
+        <p style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: "1.35" }}>{metric.description}</p>
+      </div>
+    );
+  };
 
   // Prepare chart data for emotional states over time — one data point per day (average intensity)
   const chartData = useMemo(() => {
@@ -433,55 +829,186 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
           marginBottom: "30px",
         }}
       >
-        <h2 style={{ fontSize: "20px", fontWeight: "bold", marginBottom: "20px" }}>Psychological Metrics</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
-          {metrics.map((metric) => {
-            const Icon = metric.icon;
-            const percentage = (parseFloat(metric.value) / metric.max) * 100;
-            const color = getGradientColor(metric.normalizedValue);
-            return (
-              <div
-                key={metric.name}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
+          <h2 style={{ fontSize: "20px", fontWeight: "bold", margin: 0 }}>Psychological Metrics</h2>
+          <button
+            type="button"
+            onClick={() => setShowMetricsHelp(true)}
+            title="How are these metrics calculated?"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "28px",
+              height: "28px",
+              borderRadius: "50%",
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-tertiary)",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+            }}
+          >
+            <Info size={16} />
+          </button>
+        </div>
+
+        {surveyMetrics.length > 0 && (
+          <>
+            <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "10px", marginTop: "4px" }}>
+              From your before/during/after survey
+            </h3>
+            <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "12px" }}>
+              Complete the survey when adding an emotional state to populate these.
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "14px", marginBottom: "24px" }}>
+              {surveyMetrics.map((m) => renderMetricCard(m))}
+            </div>
+          </>
+        )}
+
+        {stateMetrics.length > 0 && (
+          <>
+            <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "10px" }}>
+              From your emotional state entries
+            </h3>
+            <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "12px" }}>
+              Based on your logged emotions (date + intensity).
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "14px" }}>
+              {stateMetrics.map((m) => renderMetricCard(m))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* How metrics are calculated — modal */}
+      {showMetricsHelp && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="metrics-help-title"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+            backgroundColor: "rgba(0,0,0,0.6)",
+          }}
+          onClick={() => setShowMetricsHelp(false)}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              maxWidth: "980px",
+              width: "100%",
+              maxHeight: "90vh",
+              overflow: "auto",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ padding: "24px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <h2 id="metrics-help-title" style={{ margin: 0, fontSize: "20px", fontWeight: "bold" }}>How metrics are calculated</h2>
+              <button
+                type="button"
+                onClick={() => setShowMetricsHelp(false)}
                 style={{
-                  backgroundColor: "var(--bg-tertiary)",
-                  border: "1px solid var(--border-color)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "36px",
+                  height: "36px",
                   borderRadius: "8px",
-                  padding: "16px",
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-tertiary)",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "12px" }}>
-                  <Icon size={20} style={{ color }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: "13px", fontWeight: "600", marginBottom: "4px" }}>{metric.name}</div>
-                    <div style={{ fontSize: "24px", fontWeight: "bold", color }}>
-                      {metric.value}<span style={{ fontSize: "14px", color: "var(--text-secondary)" }}>/{metric.max}</span>
-                    </div>
-                  </div>
-                </div>
+                <X size={20} />
+              </button>
+            </div>
+            <div style={{ padding: "24px" }}>
+              <p style={{ fontSize: "14px", color: "var(--text-secondary)", marginBottom: "24px", lineHeight: 1.5 }}>
+                Each metric is built from survey questions or logged emotions. The diagrams show which inputs feed into each metric (center node).
+              </p>
+              <section style={{ marginBottom: "28px" }}>
+                <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--accent)", marginBottom: "12px" }}>From your before/during/after survey</h3>
                 <div
                   style={{
-                    height: "6px",
-                    backgroundColor: "var(--bg-secondary)",
-                    borderRadius: "3px",
-                    overflow: "hidden",
-                    marginBottom: "8px",
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    gap: "8px",
+                    marginBottom: "16px",
+                    padding: "14px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
                   }}
                 >
-                  <div
-                    style={{
-                      height: "100%",
-                      width: `${percentage}%`,
-                      backgroundColor: color,
-                      transition: "width 0.3s ease",
-                    }}
-                  />
+                  <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Survey answers (1–5)</span>
+                  <span style={{ color: "var(--text-secondary)", fontSize: "18px" }}>→</span>
+                  <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Average across entries</span>
+                  <span style={{ color: "var(--text-secondary)", fontSize: "18px" }}>→</span>
+                  <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>If “lower is better”: score = 6 − avg</span>
+                  <span style={{ color: "var(--text-secondary)", fontSize: "18px" }}>→</span>
+                  <span style={{ padding: "6px 12px", backgroundColor: "var(--accent)", color: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Display as /5</span>
                 </div>
-                <p style={{ fontSize: "12px", color: "var(--text-secondary)", lineHeight: "1.4" }}>{metric.description}</p>
-              </div>
-            );
-          })}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: "24px" }}>
+                  {SURVEY_METRIC_DIAGRAMS.map((d, i) => (
+                    <div
+                      key={d.metric}
+                      style={{
+                        padding: "14px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        borderRadius: "10px",
+                        border: "1px solid var(--border-color)",
+                      }}
+                    >
+                      <MetricDiagram
+                        metric={d.metric}
+                        keys={d.keys}
+                        formula={d.formula}
+                        phaseColor={d.phaseColor}
+                        diagramId={`survey-${i}-${d.metric.replace(/\s+/g, "-")}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </section>
+              <section>
+                <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--accent)", marginBottom: "14px" }}>From your emotional state entries</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: "24px" }}>
+                  {ENTRY_METRIC_DIAGRAMS.map((d, i) => (
+                    <div
+                      key={d.metric}
+                      style={{
+                        padding: "14px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        borderRadius: "10px",
+                        border: "1px solid var(--border-color)",
+                      }}
+                    >
+                      <EntryMetricDiagram
+                        metric={d.metric}
+                        inputs={d.inputs}
+                        formula={d.formula}
+                        diagramId={`entry-${i}-${d.metric.replace(/\s+/g, "-")}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Survey Trends Chart */}
       {surveys.length > 0 && (
