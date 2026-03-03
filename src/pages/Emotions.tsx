@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
-import { Plus, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Maximize2, Minimize2, Edit2, Trash2, ArrowLeft, RotateCcw, ExternalLink, ChevronDown, Info, X } from "lucide-react";
+import { Plus, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Maximize2, Minimize2, Edit2, Trash2, ArrowLeft, RotateCcw, ExternalLink, ChevronDown, Info, X, BarChart2 } from "lucide-react";
 import { LineChart, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import RichTextEditor from "../components/RichTextEditor";
 
@@ -472,6 +472,7 @@ const POSITIVE_EMOTIONS = new Set(["Confident", "Calm", "Optimistic", "Neutral"]
 
 function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states: EmotionalState[] }) {
   const [showMetricsHelp, setShowMetricsHelp] = useState(false);
+  const [metricGraphOpen, setMetricGraphOpen] = useState<string | null>(null);
   if (surveys.length === 0 && states.length === 0) return null;
 
   // —— Survey-based metrics (1–5 scale). Returns null when no data (for "extra" metrics); use fallback 3 for core 6 so they always show.
@@ -747,6 +748,26 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
               {metric.value}<span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>/{metric.max}</span>
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => setMetricGraphOpen(metric.name)}
+            title={`View ${metric.name} over time`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "28px",
+              height: "28px",
+              borderRadius: "6px",
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-secondary)",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <BarChart2 size={16} />
+          </button>
         </div>
         <div
           style={{
@@ -797,25 +818,108 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
   }, [states]);
   void chartData; // reserved for chart use
 
-  // Prepare survey trends data
-  const surveyChartData = useMemo(() => {
+  // Full survey time-series: one row per survey with all metric values (for metric graph modal)
+  const surveyChartDataFull = useMemo(() => {
     if (surveys.length === 0) return [];
-    
     return surveys
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
       .map((survey) => {
-        const stability = (6 - survey.during_stable + 6 - survey.during_mentally_present + 6 - survey.after_accept_outcome) / 3;
+        const emotionalStability = (6 - survey.during_stable + 6 - survey.during_mentally_present + 6 - survey.after_accept_outcome) / 3;
         const discipline = (6 - survey.before_patient_detached + 6 - survey.during_need_control + survey.after_proud_discipline) / 3;
         const fomo = 6 - survey.before_fomo;
-        
+        const revengeRaw = (survey.before_recovering_loss + survey.after_tempted_another_trade) / 2;
+        const revengeRisk = 6 - revengeRaw;
+        const overconfidence = 6 - survey.after_confidence_affected;
+        const fearRaw = (survey.during_fear_loss + survey.after_emotional_reaction) / 2;
+        const fear = 6 - fearRaw;
+        const preTradeClarity = survey.before_calm_clear;
+        const urgency = 6 - survey.before_urgency_pressure;
+        const interference = 6 - survey.during_tempted_interfere;
+        const excitementGreed = 6 - survey.during_excitement_greed;
+        const trust = survey.before_trust_process;
+        const stress = 6 - survey.during_tension_stress;
         return {
           date: format(new Date(survey.timestamp), "MMM dd"),
-          stability: parseFloat(stability.toFixed(2)),
+          emotionalStability: parseFloat(emotionalStability.toFixed(2)),
           discipline: parseFloat(discipline.toFixed(2)),
           fomo: parseFloat(fomo.toFixed(2)),
+          revengeRisk: parseFloat(revengeRisk.toFixed(2)),
+          overconfidence: parseFloat(overconfidence.toFixed(2)),
+          fear: parseFloat(fear.toFixed(2)),
+          preTradeClarity: parseFloat(preTradeClarity.toFixed(2)),
+          urgency: parseFloat(urgency.toFixed(2)),
+          interference: parseFloat(interference.toFixed(2)),
+          excitementGreed: parseFloat(excitementGreed.toFixed(2)),
+          trust: parseFloat(trust.toFixed(2)),
+          stress: parseFloat(stress.toFixed(2)),
         };
       });
   }, [surveys]);
+
+  // State metrics time-series: one row per day (for metric graph modal)
+  const stateMetricChartData = useMemo(() => {
+    if (states.length === 0) return [];
+    const byDay = new Map<
+      string,
+      {
+        t: number;
+        intensities: number[];
+        negative: number[];
+        positive: number[];
+      }
+    >();
+    for (const state of states) {
+      const d = new Date(state.timestamp);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const t = d.getTime();
+      let row = byDay.get(key);
+      if (!row) {
+        row = { t, intensities: [], negative: [], positive: [] };
+        byDay.set(key, row);
+      }
+      row.intensities.push(state.intensity);
+      if (NEGATIVE_EMOTIONS.has(state.emotion)) row.negative.push(state.intensity);
+      if (POSITIVE_EMOTIONS.has(state.emotion)) row.positive.push(state.intensity);
+    }
+    const sorted = Array.from(byDay.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    return sorted.map(([key, row]) => {
+      const n = row.intensities.length;
+      const avg = n ? row.intensities.reduce((a, b) => a + b, 0) / n : 0;
+      const variance = n > 1 ? row.intensities.reduce((s, v) => s + (v - avg) ** 2, 0) / (n - 1) : 0;
+      const stdDev = Math.sqrt(variance);
+      const calmIndex = Math.max(0, Math.min(5, 5 - avg / 2));
+      const emotionalConsistency = Math.max(0, Math.min(5, 5 - stdDev));
+      const avgNeg = row.negative.length ? row.negative.reduce((a, b) => a + b, 0) / row.negative.length : null;
+      const negativeLoad = avgNeg != null ? Math.max(0, Math.min(5, 5 - avgNeg / 2)) : null;
+      const avgPos = row.positive.length ? row.positive.reduce((a, b) => a + b, 0) / row.positive.length : null;
+      const positivePresence = avgPos != null ? Math.max(0, Math.min(5, avgPos / 2)) : null;
+      return {
+        date: format(new Date(row.t), "MMM dd"),
+        calmIndex: parseFloat(calmIndex.toFixed(2)),
+        emotionalConsistency: parseFloat(emotionalConsistency.toFixed(2)),
+        negativeLoad: negativeLoad != null ? parseFloat(negativeLoad.toFixed(2)) : null,
+        positivePresence: positivePresence != null ? parseFloat(positivePresence.toFixed(2)) : null,
+        avgIntensity: parseFloat(avg.toFixed(2)),
+      };
+    });
+  }, [states]);
+
+  // Intensity trend over time: per-day avg then "trend score" as 5 - (recent - older) scaled
+  const stateIntensityTrendChartData = useMemo(() => {
+    if (stateMetricChartData.length < 2) return stateMetricChartData.map((r) => ({ ...r, intensityTrend: null as number | null }));
+    const withTrend = stateMetricChartData.map((row, i) => {
+      const recentCount = Math.min(3, stateMetricChartData.length - i - 1);
+      const olderCount = Math.min(3, i);
+      if (recentCount < 1 || olderCount < 1) return { ...row, intensityTrend: null as number | null };
+      const recentAvg = stateMetricChartData.slice(i + 1, i + 1 + recentCount).reduce((s, r) => s + r.avgIntensity, 0) / recentCount;
+      const olderAvg = stateMetricChartData.slice(i - olderCount, i).reduce((s, r) => s + r.avgIntensity, 0) / olderCount;
+      const diff = recentAvg - olderAvg;
+      const trendRaw = Math.max(-5, Math.min(5, diff * 0.5));
+      const intensityTrend = parseFloat((Math.max(0, Math.min(5, 5 - trendRaw))).toFixed(2));
+      return { ...row, intensityTrend };
+    });
+    return withTrend;
+  }, [stateMetricChartData]);
 
   return (
     <div style={{ marginBottom: "30px" }}>
@@ -1009,6 +1113,155 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
           </div>
         </div>
       )}
+
+      {/* Metric graph modal — one chart per metric over time */}
+      {metricGraphOpen && (() => {
+        const surveyKeyByMetric: Record<string, keyof typeof surveyChartDataFull[0]> = {
+          "Emotional Stability Index": "emotionalStability",
+          "FOMO Index": "fomo",
+          "Discipline Consistency": "discipline",
+          "Revenge-Trade Risk": "revengeRisk",
+          "Overconfidence After Wins": "overconfidence",
+          "Fear After Losses": "fear",
+          "Pre-Trade Clarity": "preTradeClarity",
+          "Urgency Resistance": "urgency",
+          "Interference Resistance": "interference",
+          "Excitement/Greed Control": "excitementGreed",
+          "Trust in Process": "trust",
+          "Stress Resistance": "stress",
+        };
+        const stateKeyByMetric: Record<string, keyof typeof stateMetricChartData[0] | "intensityTrend"> = {
+          "Calm Index": "calmIndex",
+          "Emotional Consistency": "emotionalConsistency",
+          "Negative Emotion Load": "negativeLoad",
+          "Positive Emotion Presence": "positivePresence",
+          "Intensity Trend": "intensityTrend",
+        };
+        const surveyKey = surveyKeyByMetric[metricGraphOpen];
+        const stateKey = stateKeyByMetric[metricGraphOpen];
+        const data = surveyKey
+          ? surveyChartDataFull.map((row) => ({ date: row.date, value: row[surveyKey] as number }))
+          : stateKey === "intensityTrend"
+            ? stateIntensityTrendChartData.map((row) => ({ date: row.date, value: row.intensityTrend }))
+            : stateMetricChartData.map((row) => ({ date: row.date, value: row[stateKey as keyof typeof stateMetricChartData[0]] }));
+        const chartData = data.filter((d) => d.value != null) as { date: string; value: number }[];
+        const hasData = chartData.length > 0;
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="metric-graph-title"
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 100,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "20px",
+              backgroundColor: "rgba(0,0,0,0.6)",
+            }}
+            onClick={() => setMetricGraphOpen(null)}
+          >
+            <div
+              style={{
+                backgroundColor: "var(--bg-secondary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "12px",
+                maxWidth: "640px",
+                width: "100%",
+                maxHeight: "90vh",
+                overflow: "auto",
+                boxShadow: "0 20px 60px rgba(0,0,0,0.4)",
+                backgroundImage: "linear-gradient(145deg, rgba(34, 197, 94, 0.06) 0%, transparent 40%, transparent 60%, rgba(255, 80, 80, 0.06) 100%)",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <h2 id="metric-graph-title" style={{ margin: 0, fontSize: "18px", fontWeight: "bold" }}>{metricGraphOpen} over time</h2>
+                <button
+                  type="button"
+                  onClick={() => setMetricGraphOpen(null)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: "36px",
+                    height: "36px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-tertiary)",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <div style={{ padding: "24px" }}>
+                {hasData ? (
+                  <ResponsiveContainer width="100%" height={280}>
+                    <LineChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="2 2" stroke="var(--border-color)" strokeOpacity={0.5} vertical={false} />
+                      <XAxis
+                        dataKey="date"
+                        axisLine={{ stroke: "var(--border-color)", strokeOpacity: 0.6 }}
+                        tickLine={false}
+                        tick={{ fill: "var(--text-secondary)", fontSize: 11, fontWeight: 500 }}
+                        dy={4}
+                      />
+                      <YAxis
+                        domain={[0, 5]}
+                        width={28}
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fill: "var(--text-secondary)", fontSize: 11, fontWeight: 500 }}
+                        dx={-4}
+                      />
+                      <Tooltip
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload?.length) return null;
+                          const v = payload[0]?.value as number | undefined;
+                          if (v == null) return null;
+                          return (
+                            <div
+                              style={{
+                                padding: "8px 12px",
+                                backgroundColor: "var(--bg-primary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "8px",
+                                fontSize: "13px",
+                                boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
+                              }}
+                            >
+                              <div style={{ color: "var(--text-secondary)", marginBottom: "4px" }}>{label}</div>
+                              <div style={{ fontWeight: "600", color: "var(--accent)" }}>{v.toFixed(2)}/5</div>
+                            </div>
+                          );
+                        }}
+                        labelFormatter={(label) => label}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="value"
+                        stroke="var(--accent)"
+                        strokeWidth={2}
+                        dot={{ fill: "var(--accent)", strokeWidth: 2, r: 4 }}
+                        activeDot={{ r: 6, strokeWidth: 2 }}
+                        name={metricGraphOpen}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <p style={{ fontSize: "14px", color: "var(--text-secondary)", textAlign: "center", padding: "24px" }}>
+                    No time-series data yet. {surveyKey ? "Complete more surveys when adding emotional states." : "Log more emotional state entries to see this metric over time."}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Survey Trends Chart */}
       {surveys.length > 0 && (
