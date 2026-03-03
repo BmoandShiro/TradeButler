@@ -65,6 +65,7 @@ fn main() {
             commands::get_strategy_checklist,
             commands::save_strategy_checklist_item,
             commands::delete_strategy_checklist_item,
+            commands::remove_duplicate_checklist_items,
             commands::group_checklist_items,
             commands::ungroup_checklist_items,
             commands::create_journal_entry,

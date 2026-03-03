@@ -3993,6 +3993,25 @@ pub fn delete_strategy_checklist_item(id: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// Removes duplicate checklist rows (same strategy_id, checklist_type, item_text, item_order).
+/// Keeps the row with the smallest id in each group. Returns the number of rows deleted.
+#[tauri::command]
+pub fn remove_duplicate_checklist_items() -> Result<i64, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+
+    // Delete all rows whose id is not the minimum id for its (strategy_id, checklist_type, item_text, item_order) group.
+    let deleted = conn.execute(
+        "DELETE FROM strategy_checklists WHERE id NOT IN (
+            SELECT MIN(id) FROM strategy_checklists
+            GROUP BY strategy_id, checklist_type, item_text, item_order
+        )",
+        [],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(deleted as i64)
+}
+
 // Evaluation Metrics Structures
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WeekdayPerformance {

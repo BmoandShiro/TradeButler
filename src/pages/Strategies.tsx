@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, Dispatch, SetStateAction } from "re
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
-import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, AlertTriangle, CheckCircle } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle } from "lucide-react";
 import { format } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import { ColorPicker } from "../components/ColorPicker";
@@ -870,8 +870,15 @@ function ChecklistSection({
 }) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState("");
-  // Hide internal placeholders (used in DB for empty custom checklist types)
-  const visibleItems = items.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
+  // Deduplicate by id (first occurrence wins), then hide internal placeholders (used in DB for empty custom checklist types)
+  const dedupedById = (() => {
+    const byId = new Map<number, ChecklistItem>();
+    for (const item of items) {
+      if (!byId.has(item.id)) byId.set(item.id, item);
+    }
+    return Array.from(byId.values());
+  })();
+  const visibleItems = dedupedById.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
   const sortedItems = [...visibleItems].sort((a, b) => a.item_order - b.item_order);
   
   // Organize items: groups (items with no parent_id that have children) and regular items
@@ -2085,7 +2092,9 @@ export default function Strategies() {
         checklistMap.set(type, []);
       }
       
-      // Group items by type (exclude placeholder items from display, but ensure their type is registered)
+      // Group items by type (exclude placeholder items from display, but ensure their type is registered).
+      // Deduplicate by item id so the same row is never shown twice (handles duplicate DB rows or double-loads).
+      const seenIds = new Set<number>();
       for (const item of allItems) {
         const type = item.checklist_type;
         if (!checklistMap.has(type)) {
@@ -2095,6 +2104,8 @@ export default function Strategies() {
           }
         }
         if (item.item_text === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER) continue;
+        if (seenIds.has(item.id)) continue;
+        seenIds.add(item.id);
         checklistMap.get(type)!.push(item);
       }
       
@@ -5020,15 +5031,29 @@ export default function Strategies() {
                       <h2 style={{ fontSize: "24px", fontWeight: "700", color: "var(--text-primary)", margin: 0 }}>
                         Checklists
                       </h2>
-                      {(isEditing || isCreating) && (
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <button
-                          onClick={() => setShowNewChecklistModal(true)}
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const deleted = await invoke<number>("remove_duplicate_checklist_items");
+                              if (selectedStrategy) await loadChecklists(selectedStrategy);
+                              if (deleted > 0) {
+                                alert(`Removed ${deleted} duplicate checklist item(s).`);
+                              } else {
+                                alert("No duplicate checklist items found.");
+                              }
+                            } catch (e) {
+                              console.error(e);
+                              alert("Failed to remove duplicates: " + String(e));
+                            }
+                          }}
                           style={{
-                            background: "var(--accent)",
-                            border: "none",
+                            background: "transparent",
+                            border: "1px solid var(--border-color)",
                             borderRadius: "6px",
                             padding: "8px 12px",
-                            color: "white",
+                            color: "var(--text-secondary)",
                             cursor: "pointer",
                             display: "flex",
                             alignItems: "center",
@@ -5037,10 +5062,31 @@ export default function Strategies() {
                             fontWeight: "500",
                           }}
                         >
-                          <Plus size={16} />
-                          New Checklist
+                          <CopyMinus size={16} />
+                          Remove duplicates
                         </button>
-                      )}
+                        {(isEditing || isCreating) && (
+                          <button
+                            onClick={() => setShowNewChecklistModal(true)}
+                            style={{
+                              background: "var(--accent)",
+                              border: "none",
+                              borderRadius: "6px",
+                              padding: "8px 12px",
+                              color: "white",
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "6px",
+                              fontSize: "13px",
+                              fontWeight: "500",
+                            }}
+                          >
+                            <Plus size={16} />
+                            New Checklist
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <DndContext
                       sensors={sensors}
