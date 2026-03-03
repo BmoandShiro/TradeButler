@@ -252,17 +252,21 @@ const SURVEY_METRIC_DIAGRAMS: { metric: string; keys: string[]; formula: string;
 ];
 
 /** Rounded-rect (pill) dimensions. Large bubbles with generous internal padding so text doesn’t sit on edges. */
-const PILL = { outerW: 200, outerH: 48, outerRx: 24, centerW: 260, centerH: 56, centerRx: 28 };
-/** Min radius so outer pill clears center pill (no overlap). */
-const MIN_RADIUS = 130 + 100 + 14;
+const PILL = { outerW: 140, outerH: 36, outerRx: 18, centerW: 200, centerH: 44, centerRx: 22 };
+/** Radius from center to input nodes: smaller for 1–2 inputs so single-node diagrams don't look stretched. */
+function getDiagramRadius(keysLength: number): number {
+  if (keysLength <= 1) return 72;
+  if (keysLength <= 2) return 95;
+  return 118;
+}
 
 /** One mind-map style diagram: metric in center, curved branches to question nodes. */
 function MetricDiagram({ metric, keys, formula, phaseColor, diagramId }: { metric: string; keys: string[]; formula: string; phaseColor: string; diagramId: string }) {
-  const radius = MIN_RADIUS;
-  const viewW = 732;
-  const viewH = 580;
+  const radius = getDiagramRadius(keys.length);
+  const viewW = 380;
+  const viewH = keys.length <= 1 ? 220 : 320;
   const cx = viewW / 2;
-  const cy = viewH / 2;
+  const cy = keys.length <= 1 ? 88 : viewH / 2;
   const filterId = `metric-diagram-shadow-${diagramId}`;
   const gradientId = `survey-gradient-${diagramId}`;
   const nodes = keys.map((_, i) => {
@@ -273,15 +277,15 @@ function MetricDiagram({ metric, keys, formula, phaseColor, diagramId }: { metri
     <div style={{
       position: "relative",
       width: "100%",
-      maxWidth: "520px",
-      margin: "0 auto 12px",
-      padding: "20px",
+      maxWidth: "380px",
+      margin: "0 auto",
+      padding: "16px",
       background: "linear-gradient(145deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%)",
       borderRadius: "12px",
       border: "1px solid var(--border-color)",
       boxShadow: "0 2px 12px rgba(0,0,0,0.08)",
     }}>
-      <svg viewBox={`0 0 ${viewW} ${viewH}`} style={{ width: "100%", height: "auto", minHeight: "320px", overflow: "visible" }} preserveAspectRatio="xMidYMid meet">
+      <svg viewBox={`0 0 ${viewW} ${viewH}`} style={{ width: "100%", height: "auto", display: "block", overflow: "visible" }} preserveAspectRatio="xMidYMid meet">
         <defs>
           <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor="var(--accent)" stopOpacity={1} />
@@ -292,33 +296,33 @@ function MetricDiagram({ metric, keys, formula, phaseColor, diagramId }: { metri
           </filter>
         </defs>
         {nodes.map((n, i) => {
-          const midX = (cx + n.x) / 2 + (n.y > cy ? 10 : -10);
-          const midY = (cy + n.y) / 2 + (n.x > cx ? -8 : 8);
+          const midX = (cx + n.x) / 2 + (n.y > cy ? 6 : -6);
+          const midY = (cy + n.y) / 2 + (n.x > cx ? -5 : 5);
           const pathD = `M ${cx} ${cy} Q ${midX} ${midY} ${n.x} ${n.y}`;
           const w = PILL.outerW; const h = PILL.outerH; const rx = PILL.outerRx;
           return (
             <g key={i}>
-              <path d={pathD} fill="none" stroke={phaseColor} strokeWidth="1.8" strokeLinecap="round" opacity={0.55} />
+              <path d={pathD} fill="none" stroke={phaseColor} strokeWidth="1.6" strokeLinecap="round" opacity={0.6} />
               <rect x={n.x - w / 2} y={n.y - h / 2} width={w} height={h} rx={rx} ry={rx} fill="var(--bg-primary)" stroke={phaseColor} strokeWidth="1" opacity={0.95} />
-              <text x={n.x} y={n.y} textAnchor="middle" dominantBaseline="middle" fontSize="17" fill="var(--text-primary)" style={{ fontWeight: 600, letterSpacing: "0.02em" }}>{n.label}</text>
+              <text x={n.x} y={n.y} textAnchor="middle" dominantBaseline="middle" fontSize="13" fill="var(--text-primary)" style={{ fontWeight: 600 }}>{n.label}</text>
             </g>
           );
         })}
         <rect x={cx - PILL.centerW / 2} y={cy - PILL.centerH / 2} width={PILL.centerW} height={PILL.centerH} rx={PILL.centerRx} ry={PILL.centerRx} fill={`url(#${gradientId})`} stroke="rgba(255,255,255,0.25)" strokeWidth="1.5" filter={`url(#${filterId})`} />
-        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize="20" fill="var(--bg-primary)" style={{ fontWeight: 700, letterSpacing: "0.03em" }}>{metric}</text>
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize="14" fill="var(--bg-primary)" style={{ fontWeight: 700 }}>{metric}</text>
       </svg>
       <div style={{
         textAlign: "center",
-        fontSize: "15px",
+        fontSize: "12px",
         color: "var(--text-secondary)",
-        marginTop: "12px",
-        padding: "10px 18px",
-        borderRadius: "10px",
+        marginTop: "8px",
+        padding: "8px 12px",
+        borderRadius: "8px",
         background: "var(--bg-primary)",
-        display: "inline-block",
-        width: "100%",
-        boxSizing: "border-box",
-      }}>Formula: {formula}</div>
+        border: "1px solid var(--border-color)",
+      }}>
+        Formula: {formula}
+      </div>
     </div>
   );
 }
@@ -333,11 +337,11 @@ const ENTRY_METRIC_DIAGRAMS: { metric: string; inputs: string[]; formula: string
 ];
 
 function EntryMetricDiagram({ metric, inputs, formula, diagramId }: { metric: string; inputs: string[]; formula: string; diagramId: string }) {
-  const radius = MIN_RADIUS;
-  const viewW = 732;
-  const viewH = 580;
+  const radius = getDiagramRadius(inputs.length);
+  const viewW = 380;
+  const viewH = inputs.length <= 1 ? 220 : inputs.length <= 2 ? 280 : 320;
   const cx = viewW / 2;
-  const cy = viewH / 2;
+  const cy = inputs.length <= 1 ? 88 : viewH / 2;
   const filterId = `entry-diagram-shadow-${diagramId}`;
   const gradientId = `entry-gradient-${diagramId}`;
   const nodes = inputs.map((_, i) => {
@@ -349,15 +353,15 @@ function EntryMetricDiagram({ metric, inputs, formula, diagramId }: { metric: st
     <div style={{
       position: "relative",
       width: "100%",
-      maxWidth: "520px",
-      margin: "0 auto 12px",
-      padding: "20px",
+      maxWidth: "380px",
+      margin: "0 auto",
+      padding: "16px",
       background: "linear-gradient(145deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%)",
       borderRadius: "12px",
       border: "1px solid var(--border-color)",
       boxShadow: "0 2px 12px rgba(0,0,0,0.08)",
     }}>
-      <svg viewBox={`0 0 ${viewW} ${viewH}`} style={{ width: "100%", height: "auto", minHeight: "320px", overflow: "visible" }} preserveAspectRatio="xMidYMid meet">
+      <svg viewBox={`0 0 ${viewW} ${viewH}`} style={{ width: "100%", height: "auto", display: "block", overflow: "visible" }} preserveAspectRatio="xMidYMid meet">
         <defs>
           <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor="var(--accent)" stopOpacity={1} />
@@ -368,33 +372,33 @@ function EntryMetricDiagram({ metric, inputs, formula, diagramId }: { metric: st
           </filter>
         </defs>
         {nodes.map((n, i) => {
-          const midX = (cx + n.x) / 2 + (n.y > cy ? 8 : -8);
+          const midX = (cx + n.x) / 2 + (n.y > cy ? 6 : -6);
           const midY = (cy + n.y) / 2 + (n.x > cx ? -5 : 5);
           const pathD = `M ${cx} ${cy} Q ${midX} ${midY} ${n.x} ${n.y}`;
           const w = PILL.outerW; const h = PILL.outerH; const rx = PILL.outerRx;
           return (
             <g key={i}>
-              <path d={pathD} fill="none" stroke="var(--border-color)" strokeWidth="1.5" strokeLinecap="round" opacity={0.5} />
+              <path d={pathD} fill="none" stroke="var(--border-color)" strokeWidth="1.5" strokeLinecap="round" opacity={0.55} />
               <rect x={n.x - w / 2} y={n.y - h / 2} width={w} height={h} rx={rx} ry={rx} fill="var(--bg-primary)" stroke="var(--border-color)" strokeWidth="1" opacity={0.95} />
-              <text x={n.x} y={n.y} textAnchor="middle" dominantBaseline="middle" fontSize="17" fill="var(--text-primary)" style={{ fontWeight: 600, letterSpacing: "0.02em" }}>{n.label}</text>
+              <text x={n.x} y={n.y} textAnchor="middle" dominantBaseline="middle" fontSize="12" fill="var(--text-primary)" style={{ fontWeight: 600 }}>{n.label}</text>
             </g>
           );
         })}
         <rect x={cx - PILL.centerW / 2} y={cy - PILL.centerH / 2} width={PILL.centerW} height={PILL.centerH} rx={PILL.centerRx} ry={PILL.centerRx} fill={`url(#${gradientId})`} stroke="rgba(255,255,255,0.2)" strokeWidth="1.5" filter={`url(#${filterId})`} />
-        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize="20" fill="var(--bg-primary)" style={{ fontWeight: 700, letterSpacing: "0.03em" }}>{metricShort}</text>
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize="14" fill="var(--bg-primary)" style={{ fontWeight: 700 }}>{metricShort}</text>
       </svg>
       <div style={{
         textAlign: "center",
-        fontSize: "15px",
+        fontSize: "12px",
         color: "var(--text-secondary)",
-        marginTop: "12px",
-        padding: "10px 18px",
-        borderRadius: "10px",
+        marginTop: "8px",
+        padding: "8px 12px",
+        borderRadius: "8px",
         background: "var(--bg-primary)",
-        display: "inline-block",
-        width: "100%",
-        boxSizing: "border-box",
-      }}>Formula: {formula}</div>
+        border: "1px solid var(--border-color)",
+      }}>
+        Formula: {formula}
+      </div>
     </div>
   );
 }
@@ -566,7 +570,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       max: 5,
       icon: Shield,
       normalizedValue: normalizeForColor(emotionalStabilityIndex),
-      description: hasSurveyData ? "Your ability to stay emotionally stable during and after trades" : "Complete the before/during/after survey to see this metric",
+      description: hasSurveyData ? "Your ability to stay emotionally stable during and after trades" : "Stability during and after trades",
       source: "survey",
     },
     {
@@ -575,7 +579,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       max: 5,
       icon: AlertTriangle,
       normalizedValue: normalizeForColor(fomoIndex),
-      description: hasSurveyData ? "How often FOMO influences your trading decisions (lower is better)" : "Complete the before/during/after survey to see this metric",
+      description: hasSurveyData ? "How often FOMO influences your trading decisions (lower is better)" : "FOMO influence on decisions",
       source: "survey",
     },
     {
@@ -584,7 +588,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       max: 5,
       icon: Target,
       normalizedValue: normalizeForColor(disciplineConsistency),
-      description: hasSurveyData ? "Your consistency in maintaining discipline throughout trades" : "Complete the before/during/after survey to see this metric",
+      description: hasSurveyData ? "Your consistency in maintaining discipline throughout trades" : "Discipline through the trade",
       source: "survey",
     },
     {
@@ -593,7 +597,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       max: 5,
       icon: TrendingUp,
       normalizedValue: normalizeForColor(revengeTradeRisk),
-      description: hasSurveyData ? "Tendency to take trades to recover from losses (lower is better)" : "Complete the before/during/after survey to see this metric",
+      description: hasSurveyData ? "Tendency to take trades to recover from losses (lower is better)" : "Urge to recover losses by trading",
       source: "survey",
     },
     {
@@ -602,7 +606,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       max: 5,
       icon: BarChart3,
       normalizedValue: normalizeForColor(overconfidenceAfterWins),
-      description: hasSurveyData ? "How wins affect your confidence and decision-making" : "Complete the before/during/after survey to see this metric",
+      description: hasSurveyData ? "How wins affect your confidence and decision-making" : "Wins affecting judgment",
       source: "survey",
     },
     {
@@ -611,7 +615,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       max: 5,
       icon: AlertTriangle,
       normalizedValue: normalizeForColor(fearAfterLosses),
-      description: hasSurveyData ? "Emotional impact of losses on future trading (lower is better)" : "Complete the before/during/after survey to see this metric",
+      description: hasSurveyData ? "Emotional impact of losses on future trading (lower is better)" : "Losses affecting next trades",
       source: "survey",
     },
     {
@@ -620,7 +624,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       max: 5,
       icon: Shield,
       normalizedValue: normalizeForColor(preTradeClarity),
-      description: hasSurveyData ? "How calm and mentally clear you felt before considering the trade" : "Complete the before/during/after survey to see this metric",
+      description: hasSurveyData ? "How calm and mentally clear you felt before considering the trade" : "Calm and clarity before entry",
       source: "survey",
     },
     {
@@ -629,7 +633,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       max: 5,
       icon: AlertTriangle,
       normalizedValue: normalizeForColor(urgencyResistance),
-      description: hasSurveyData ? "Resistance to pressure to \"make something happen\" (higher = less urgency)" : "Complete the before/during/after survey to see this metric",
+      description: hasSurveyData ? "Resistance to pressure to \"make something happen\" (higher = less urgency)" : "Resisting urge to act",
       source: "survey",
     },
     {
@@ -638,7 +642,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       max: 5,
       icon: Target,
       normalizedValue: normalizeForColor(interferenceResistance),
-      description: hasSurveyData ? "Ability to avoid interfering with the trade out of fear or hope (higher is better)" : "Complete the before/during/after survey to see this metric",
+      description: hasSurveyData ? "Ability to avoid interfering with the trade out of fear or hope (higher is better)" : "Not overriding trade from emotion",
       source: "survey",
     },
     {
@@ -647,7 +651,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       max: 5,
       icon: BarChart3,
       normalizedValue: normalizeForColor(excitementGreedControl),
-      description: hasSurveyData ? "Control over excitement or greed as price moved in your favor (higher is better)" : "Complete the before/during/after survey to see this metric",
+      description: hasSurveyData ? "Control over excitement or greed as price moved in your favor (higher is better)" : "Controlling excitement or greed",
       source: "survey",
     },
   ];
