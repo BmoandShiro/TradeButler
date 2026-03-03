@@ -376,6 +376,80 @@ const ENTRY_METRIC_DIAGRAMS: { metric: string; inputs: string[]; formula: string
   { metric: "Intensity Trend", inputs: ["Recent avg", "Older avg"], formula: "5 − trend" },
 ];
 
+/** All possible feedback cards (tone, title, body) for display in the help modal. */
+const FEEDBACK_CARD_CATALOG: { tone: "positive" | "caution" | "warning"; title: string; body: string }[] = [
+  { tone: "positive", title: "Emotional state looks trading‑ready", body: "Across your metrics you're showing strong stability, discipline, and low emotional drag. This is a good environment for following your plan — keep position size and risk rules consistent rather than ramping up just because you feel good." },
+  { tone: "warning", title: "High risk of trading tilted", body: "Multiple metrics are in a vulnerable zone. Consider pausing live trading, stepping away from the screens, and doing a short reset (walk, breathing, journaling) before taking new risk." },
+  { tone: "caution", title: "Mixed signals — trade smaller and be deliberate", body: "Some aspects of your psychology are supporting trading, while others are pulling you off‑center. This is a good time to stick to your A‑setups, trade smaller size, and lean on checklists instead of impulse." },
+  { tone: "caution", title: "FOMO may be pushing your trades", body: "Your FOMO Index suggests you may be chasing moves or feeling pressure not to \"miss out.\" Slow down entries, require your full checklist before clicking, and remind yourself that missed trades are cheaper than bad trades." },
+  { tone: "caution", title: "Risk of revenge trading", body: "Recent losses may be pulling you toward \"win it back\" thinking. Before placing another trade, ask whether it actually fits your plan — if the main motivation is to fix P&L, it's a good moment to step away." },
+  { tone: "caution", title: "Wins may be inflating confidence", body: "Your overconfidence metric suggests that recent wins could be loosening your risk boundaries. Consider locking in gains, keeping size unchanged, and committing to the same rules you'd use after a losing day." },
+  { tone: "caution", title: "Losses are weighing on you", body: "Fear after losses can lead to hesitation, second‑guessing, or passing on valid setups. It may help to step back, review your journal, and separate \"execution mistakes\" from normal variance before continuing." },
+  { tone: "caution", title: "Excitement and greed are elevated", body: "When excitement or greed is high, it's easy to overstay winners or add risk late in a move. Commit in advance to profit targets, stop‑moves, and position size so emotions don't expand the trade once you're in." },
+  { tone: "caution", title: "Your emotional stability is fragile", body: "Stability during and after trades looks shaky. Consider reducing frequency and size, and add a quick post‑trade reset (notes, breathing, quick walk) before you allow yourself to re‑enter." },
+  { tone: "caution", title: "Baseline arousal is high", body: "Your Calm Index suggests your overall emotional intensity is elevated. This is classic \"tilt\" territory — it's often better to pause or switch to sim until you feel your baseline come down." },
+  { tone: "caution", title: "Negative emotions are dominating", body: "Anxious, frustrated, or fearful states are showing up strongly. Before trading live, consider journaling what's driving those emotions and setting a simple rule like \"no new trades while I feel this activated.\"" },
+  { tone: "caution", title: "Emotional intensity has been rising", body: "Your recent entries show a climb in emotional intensity. That often precedes tilt. You might cap the number of trades, enforce a daily stop, or close the platform for a set period once that limit is hit." },
+  { tone: "positive", title: "You're bringing a calm, stable mindset", body: "High stability and calm suggest you're well‑positioned to execute your plan without overreacting to single trades. This is a good moment to focus on process quality rather than P&L swings." },
+  { tone: "positive", title: "Constructive emotions are supporting your trading", body: "Consistent, positive emotional states are showing up in your logs. Use that to your advantage by doing more of what creates this state — preparation, routines, and clear playbooks." },
+  { tone: "warning", title: "Trading from urgency and FOMO", body: "FOMO, pressure to act, and low pre‑trade clarity are lining up. This is a prime setup for impulsive trades — slow down, tighten your checklist, or step away before adding new risk." },
+  { tone: "warning", title: "Losses are driving your decisions", body: "Fear after losses, urge to win it back, and heavy negative emotion load suggest you're trading from pain, not process. It's safer to pause, debrief the losses, and only return when you can follow the plan cleanly." },
+  { tone: "caution", title: "Euphoria after wins", body: "Confidence and excitement are high while stability is starting to slip. Celebrate the wins, but keep size and rules unchanged so a good streak doesn't turn into over‑trading." },
+  { tone: "warning", title: "Tilt is building — step away", body: "Stability, calm, and recent intensity trend all point to a very activated state. This is classic tilt — best practice is to stop live trading for the session and only return after a full reset." },
+  { tone: "caution", title: "You trust your plan — protect it from impulse", body: "Trust and discipline are usually strengths for you, but recent urgency or interference metrics suggest more second‑guessing. Lean harder on your written rules and automation (alerts, bracket orders) so impulses don't override your process." },
+  { tone: "caution", title: "Calm until the market heats up", body: "Your baseline calm and stability are decent, but stress during trades spikes. Consider adding pre‑defined rules for what to do when tension rises — scaling out, hard stops, or stepping away briefly." },
+  { tone: "caution", title: "Emotionally flat — check your engagement", body: "Neither positive nor negative emotions are showing up strongly and intensity is low. This can signal fatigue or disengagement — review whether you're trading from boredom instead of clear opportunity." },
+  { tone: "positive", title: "Process first, emotions in check", body: "Trust in your process is high while FOMO, revenge impulses, and overconfidence are all contained. That's a strong foundation for sticking to selective, high‑quality trades." },
+];
+
+/** Per-card explanation of how that feedback is triggered (for the "i" in the modal). */
+const FEEDBACK_CARD_HOW_CALCULATED: Record<string, string> = {
+  "Emotional state looks trading‑ready":
+    "Shown when the average of all your metric scores (0–5) is at least 3.8 and no single metric is below 1.8.",
+  "High risk of trading tilted":
+    "Shown when the average score is 2.2 or lower, or when at least 3 different metrics are below 1.8.",
+  "Mixed signals — trade smaller and be deliberate":
+    "Shown when you don’t meet the “trading‑ready” or “high tilt risk” conditions — a mix of strengths and weak spots.",
+  "FOMO may be pushing your trades":
+    "Shown when FOMO Index (0–5) is below 2.5. Caution tone if 1.8–2.5, warning if below 1.8.",
+  "Risk of revenge trading":
+    "Shown when Revenge‑Trade Risk is below 2.5. Caution if 1.8–2.5, warning if below 1.8.",
+  "Wins may be inflating confidence":
+    "Shown when Overconfidence After Wins is below 2.5. Caution if 1.8–2.5, warning if below 1.8.",
+  "Losses are weighing on you":
+    "Shown when Fear After Losses is below 2.5. Caution if 1.8–2.5, warning if below 1.8.",
+  "Excitement and greed are elevated":
+    "Shown when Excitement/Greed Control is below 2.5. Caution if 1.8–2.5, warning if below 1.8.",
+  "Your emotional stability is fragile":
+    "Shown when Emotional Stability Index is below 2.5. Caution if 1.8–2.5, warning if below 1.8.",
+  "Baseline arousal is high":
+    "Shown when Calm Index is below 2.5. Caution if 1.8–2.5, warning if below 1.8.",
+  "Negative emotions are dominating":
+    "Shown when Negative Emotion Load is below 2.5. Caution if 1.8–2.5, warning if below 1.8.",
+  "Emotional intensity has been rising":
+    "Shown when Intensity Trend is below 2.5 (recent intensity higher than older). Caution if 1.8–2.5, warning if below 1.8.",
+  "You're bringing a calm, stable mindset":
+    "Shown when Emotional Stability Index and Calm Index are both above 3.8.",
+  "Constructive emotions are supporting your trading":
+    "Shown when Positive Emotion Presence is above 3.8 and Emotional Consistency is above 3.4.",
+  "Trading from urgency and FOMO":
+    "Shown when FOMO Index, Urgency Resistance, and Pre‑Trade Clarity are all in a weak zone (FOMO & Urgency < 2.3, Pre‑Trade Clarity < 2.5).",
+  "Losses are driving your decisions":
+    "Shown when Fear After Losses, Revenge‑Trade Risk, and Negative Emotion Load are all weak (e.g. < 2.3 and < 2.5).",
+  "Euphoria after wins":
+    "Shown when Overconfidence After Wins and Excitement/Greed Control are weak (< 2.3), Positive Emotion Presence is strong (> 3.4), and Emotional Stability Index is slipping (< 3.0).",
+  "Tilt is building — step away":
+    "Shown when Emotional Stability Index, Calm Index, and Intensity Trend are all weak (e.g. < 2.3 and < 2.5).",
+  "You trust your plan — protect it from impulse":
+    "Shown when Trust in Process and Discipline Consistency are strong (> 3.5) but Interference Resistance or Urgency Resistance is below 2.5.",
+  "Calm until the market heats up":
+    "Shown when Stress Resistance is low (< 2.3) while Calm Index and Emotional Stability Index are above 3.0 — baseline is okay but stress spikes during trades.",
+  "Emotionally flat — check your engagement":
+    "Shown when Positive Emotion Presence is low (< 2.3), Negative Emotion Load is high (> 3.2), and Intensity Trend is calm (> 3.0) — neither strong positives nor strong negatives; low engagement.",
+  "Process first, emotions in check":
+    "Shown when Trust in Process is high (> 3.8) and FOMO Index, Revenge‑Trade Risk, and Overconfidence After Wins are all contained (> 3.5).",
+};
+
 /** Look up inputs + formula for a metric name (survey or entry) for Venn diagram. */
 function getMetricVennInfo(metricName: string): { inputs: string[]; formula: string } | null {
   const survey = SURVEY_METRIC_DIAGRAMS.find((d) => d.metric === metricName);
@@ -582,6 +656,8 @@ const POSITIVE_EMOTIONS = new Set(["Confident", "Calm", "Optimistic", "Neutral"]
 
 function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states: EmotionalState[] }) {
   const [showMetricsHelp, setShowMetricsHelp] = useState(false);
+  const [showFeedbackHelp, setShowFeedbackHelp] = useState(false);
+  const [feedbackCatalogInfoOpen, setFeedbackCatalogInfoOpen] = useState<string | null>(null);
   const [metricGraphOpen, setMetricGraphOpen] = useState<string | null>(null);
   const [metricInfoOpen, setMetricInfoOpen] = useState<string | null>(null);
   if (surveys.length === 0 && states.length === 0) return null;
@@ -839,6 +915,326 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       source: "states",
     });
   }
+
+  type FeedbackTone = "positive" | "caution" | "warning";
+  type FeedbackKind = "overall" | "risk" | "combo" | "positive";
+
+  type FeedbackItem = {
+    tone: FeedbackTone;
+    title: string;
+    body: string;
+    kind: FeedbackKind;
+    priority: number;
+  };
+
+  const buildFeedbackItems = (): FeedbackItem[] => {
+    const items: FeedbackItem[] = [];
+    const allMetrics = [...surveyMetrics, ...stateMetrics];
+    if (allMetrics.length === 0) return items;
+
+    const scored = allMetrics
+      .map((m) => {
+        const raw = parseFloat(m.value);
+        if (Number.isNaN(raw)) return null;
+        const score = m.source === "survey" ? surveyMetricToDisplay(raw) : raw;
+        return { name: m.name, score };
+      })
+      .filter((x): x is { name: string; score: number } => !!x);
+
+    if (scored.length === 0) return items;
+
+    const avgScore = scored.reduce((sum, m) => sum + m.score, 0) / scored.length;
+    const veryLow = scored.filter((m) => m.score < 1.8);
+
+    if (avgScore >= 3.8 && veryLow.length === 0) {
+      items.push({
+        tone: "positive",
+        kind: "overall",
+        priority: 100,
+        title: "Emotional state looks trading‑ready",
+        body:
+          "Across your metrics you’re showing strong stability, discipline, and low emotional drag. This is a good environment for following your plan — keep position size and risk rules consistent rather than ramping up just because you feel good.",
+      });
+    } else if (avgScore <= 2.2 || veryLow.length >= 3) {
+      items.push({
+        tone: "warning",
+        kind: "overall",
+        priority: 100,
+        title: "High risk of trading tilted",
+        body:
+          "Multiple metrics are in a vulnerable zone. Consider pausing live trading, stepping away from the screens, and doing a short reset (walk, breathing, journaling) before taking new risk.",
+      });
+    } else {
+      items.push({
+        tone: "caution",
+        kind: "overall",
+        priority: 95,
+        title: "Mixed signals — trade smaller and be deliberate",
+        body:
+          "Some aspects of your psychology are supporting trading, while others are pulling you off‑center. This is a good time to stick to your A‑setups, trade smaller size, and lean on checklists instead of impulse.",
+      });
+    }
+
+    const byName = new Map<string, number>();
+    for (const m of scored) byName.set(m.name, m.score);
+
+    const addIfLow = (
+      metricName: string,
+      cautionThreshold: number,
+      warningThreshold: number,
+      basePriority: number,
+      getText: (score: number) => { tone: FeedbackTone; title: string; body: string }
+    ) => {
+      const score = byName.get(metricName);
+      if (score === undefined) return;
+      if (score >= cautionThreshold) return;
+      const tone: FeedbackTone = score < warningThreshold ? "warning" : "caution";
+      const { title, body } = getText(score);
+      const priority = basePriority + (tone === "warning" ? 5 : 0);
+      items.push({ tone, title, body, kind: "risk", priority });
+    };
+
+    addIfLow("FOMO Index", 2.5, 1.8, 70, (score) => ({
+      tone: score < 1.8 ? "warning" : "caution",
+      title: "FOMO may be pushing your trades",
+      body:
+        "Your FOMO Index suggests you may be chasing moves or feeling pressure not to \"miss out.\" Slow down entries, require your full checklist before clicking, and remind yourself that missed trades are cheaper than bad trades.",
+    }));
+
+    addIfLow("Revenge-Trade Risk", 2.5, 1.8, 75, (score) => ({
+      tone: score < 1.8 ? "warning" : "caution",
+      title: "Risk of revenge trading",
+      body:
+        "Recent losses may be pulling you toward \"win it back\" thinking. Before placing another trade, ask whether it actually fits your plan — if the main motivation is to fix P&L, it’s a good moment to step away.",
+    }));
+
+    addIfLow("Overconfidence After Wins", 2.5, 1.8, 70, (score) => ({
+      tone: score < 1.8 ? "warning" : "caution",
+      title: "Wins may be inflating confidence",
+      body:
+        "Your overconfidence metric suggests that recent wins could be loosening your risk boundaries. Consider locking in gains, keeping size unchanged, and committing to the same rules you’d use after a losing day.",
+    }));
+
+    addIfLow("Fear After Losses", 2.5, 1.8, 70, (score) => ({
+      tone: score < 1.8 ? "warning" : "caution",
+      title: "Losses are weighing on you",
+      body:
+        "Fear after losses can lead to hesitation, second‑guessing, or passing on valid setups. It may help to step back, review your journal, and separate \"execution mistakes\" from normal variance before continuing.",
+    }));
+
+    addIfLow("Excitement/Greed Control", 2.5, 1.8, 70, (score) => ({
+      tone: score < 1.8 ? "warning" : "caution",
+      title: "Excitement and greed are elevated",
+      body:
+        "When excitement or greed is high, it’s easy to overstay winners or add risk late in a move. Commit in advance to profit targets, stop‑moves, and position size so emotions don’t expand the trade once you’re in.",
+    }));
+
+    addIfLow("Emotional Stability Index", 2.5, 1.8, 75, (score) => ({
+      tone: score < 1.8 ? "warning" : "caution",
+      title: "Your emotional stability is fragile",
+      body:
+        "Stability during and after trades looks shaky. Consider reducing frequency and size, and add a quick post‑trade reset (notes, breathing, quick walk) before you allow yourself to re‑enter.",
+    }));
+
+    addIfLow("Calm Index", 2.5, 1.8, 75, (score) => ({
+      tone: score < 1.8 ? "warning" : "caution",
+      title: "Baseline arousal is high",
+      body:
+        "Your Calm Index suggests your overall emotional intensity is elevated. This is classic \"tilt\" territory — it’s often better to pause or switch to sim until you feel your baseline come down.",
+    }));
+
+    addIfLow("Negative Emotion Load", 2.5, 1.8, 70, (score) => ({
+      tone: score < 1.8 ? "warning" : "caution",
+      title: "Negative emotions are dominating",
+      body:
+        "Anxious, frustrated, or fearful states are showing up strongly. Before trading live, consider journaling what’s driving those emotions and setting a simple rule like \"no new trades while I feel this activated.\"",
+    }));
+
+    addIfLow("Intensity Trend", 2.5, 1.8, 75, (score) => ({
+      tone: score < 1.8 ? "warning" : "caution",
+      title: "Emotional intensity has been rising",
+      body:
+        "Your recent entries show a climb in emotional intensity. That often precedes tilt. You might cap the number of trades, enforce a daily stop, or close the platform for a set period once that limit is hit.",
+    }));
+
+    const stability = byName.get("Emotional Stability Index") ?? 5;
+    const calm = byName.get("Calm Index") ?? 5;
+    const positivePresenceScore = byName.get("Positive Emotion Presence") ?? 5;
+    const consistency = byName.get("Emotional Consistency") ?? 5;
+    const fomoScore = byName.get("FOMO Index") ?? 5;
+    const revengeScore = byName.get("Revenge-Trade Risk") ?? 5;
+    const fearAfterLossesScore = byName.get("Fear After Losses") ?? 5;
+    const overconfidenceScore = byName.get("Overconfidence After Wins") ?? 5;
+    const excitementGreedScore = byName.get("Excitement/Greed Control") ?? 5;
+    const urgencyScore = byName.get("Urgency Resistance") ?? 5;
+    const interferenceScore = byName.get("Interference Resistance") ?? 5;
+    const trustScore = byName.get("Trust in Process") ?? 5;
+    const stressScore = byName.get("Stress Resistance") ?? 5;
+    const negativeLoadScore = byName.get("Negative Emotion Load") ?? 5;
+    const intensityTrendScore = byName.get("Intensity Trend") ?? 5;
+
+    // Combination patterns — webs of feedback across multiple metrics
+
+    // Impulsive / pressured pattern: high FOMO + low urgency resistance + low pre-trade clarity
+    const preTradeClarityScore = byName.get("Pre-Trade Clarity") ?? 5;
+    if (fomoScore < 2.3 && urgencyScore < 2.3 && preTradeClarityScore < 2.5) {
+      items.push({
+        tone: "warning",
+        kind: "combo",
+        priority: 90,
+        title: "Trading from urgency and FOMO",
+        body:
+          "FOMO, pressure to act, and low pre‑trade clarity are lining up. This is a prime setup for impulsive trades — slow down, tighten your checklist, or step away before adding new risk.",
+      });
+    }
+
+    // Loss-driven tilt: fear after losses + revenge-trade risk + negative emotion load
+    if (fearAfterLossesScore < 2.3 && revengeScore < 2.3 && negativeLoadScore < 2.5) {
+      items.push({
+        tone: "warning",
+        kind: "combo",
+        priority: 92,
+        title: "Losses are driving your decisions",
+        body:
+          "Fear after losses, urge to win it back, and heavy negative emotion load suggest you’re trading from pain, not process. It’s safer to pause, debrief the losses, and only return when you can follow the plan cleanly.",
+      });
+    }
+
+    // Euphoria / overconfidence: wins + excitement + high positive presence but slipping stability
+    if (overconfidenceScore < 2.3 && excitementGreedScore < 2.3 && positivePresenceScore > 3.4 && stability < 3.0) {
+      items.push({
+        tone: "caution",
+        kind: "combo",
+        priority: 88,
+        title: "Euphoria after wins",
+        body:
+          "Confidence and excitement are high while stability is starting to slip. Celebrate the wins, but keep size and rules unchanged so a good streak doesn’t turn into over‑trading.",
+      });
+    }
+
+    // Fragile but still pushing: low stability + low calm + low intensity trend (getting more activated)
+    if (stability < 2.3 && calm < 2.3 && intensityTrendScore < 2.5) {
+      items.push({
+        tone: "warning",
+        kind: "combo",
+        priority: 95,
+        title: "Tilt is building — step away",
+        body:
+          "Stability, calm, and recent intensity trend all point to a very activated state. This is classic tilt — best practice is to stop live trading for the session and only return after a full reset.",
+      });
+    }
+
+    // Plan vs. impulse: strong trust & discipline, but interference / urgency creeping in
+    if (trustScore > 3.5 && disciplineConsistency > 3.5 && (interferenceScore < 2.5 || urgencyScore < 2.5)) {
+      items.push({
+        tone: "caution",
+        kind: "combo",
+        priority: 85,
+        title: "You trust your plan — protect it from impulse",
+        body:
+          "Trust and discipline are usually strengths for you, but recent urgency or interference metrics suggest more second‑guessing. Lean harder on your written rules and automation (alerts, bracket orders) so impulses don’t override your process.",
+      });
+    }
+
+    // Additional nuanced combinations
+    if (stressScore < 2.3 && calm > 3.0 && stability > 3.0) {
+      items.push({
+        tone: "caution",
+        kind: "combo",
+        priority: 82,
+        title: "Calm until the market heats up",
+        body:
+          "Your baseline calm and stability are decent, but stress during trades spikes. Consider adding pre‑defined rules for what to do when tension rises — scaling out, hard stops, or stepping away briefly.",
+      });
+    }
+
+    if (positivePresenceScore < 2.3 && negativeLoadScore > 3.2 && intensityTrendScore > 3.0) {
+      items.push({
+        tone: "caution",
+        kind: "combo",
+        priority: 80,
+        title: "Emotionally flat — check your engagement",
+        body:
+          "Neither positive nor negative emotions are showing up strongly and intensity is low. This can signal fatigue or disengagement — review whether you're trading from boredom instead of clear opportunity.",
+      });
+    }
+
+    if (trustScore > 3.8 && fomoScore > 3.5 && revengeScore > 3.5 && overconfidenceScore > 3.5) {
+      items.push({
+        tone: "positive",
+        kind: "combo",
+        priority: 83,
+        title: "Process first, emotions in check",
+        body:
+          "Trust in your process is high while FOMO, revenge impulses, and overconfidence are all contained. That's a strong foundation for sticking to selective, high‑quality trades.",
+      });
+    }
+
+    // Positive combinations (reinforcing strong states)
+    if (stability > 3.8 && calm > 3.8) {
+      items.push({
+        tone: "positive",
+        kind: "positive",
+        priority: 80,
+        title: "You’re bringing a calm, stable mindset",
+        body:
+          "High stability and calm suggest you’re well‑positioned to execute your plan without overreacting to single trades. This is a good moment to focus on process quality rather than P&L swings.",
+      });
+    }
+
+    if (positivePresenceScore > 3.8 && consistency > 3.4) {
+      items.push({
+        tone: "positive",
+        kind: "positive",
+        priority: 78,
+        title: "Constructive emotions are supporting your trading",
+        body:
+          "Consistent, positive emotional states are showing up in your logs. Use that to your advantage by doing more of what creates this state — preparation, routines, and clear playbooks.",
+      });
+    }
+
+    // Limit how many cards show at once, prioritizing overall + highest‑priority risks/combos/positives
+    const MAX_ITEMS = 5;
+    const uniqueByTitle = new Map<string, FeedbackItem>();
+    for (const item of items) {
+      if (!uniqueByTitle.has(item.title)) uniqueByTitle.set(item.title, item);
+    }
+    let all = Array.from(uniqueByTitle.values()).sort((a, b) => b.priority - a.priority);
+
+    // Resolve obviously contradictory cards by keeping the higher-priority one
+    const CONFLICT_GROUPS: string[][] = [
+      ["Emotionally flat — check your engagement", "Negative emotions are dominating"],
+      ["Emotionally flat — check your engagement", "Emotional intensity has been rising"],
+      ["Emotional state looks trading‑ready", "High risk of trading tilted"],
+    ];
+
+    const resolveConflicts = (itemsToFilter: FeedbackItem[]): FeedbackItem[] => {
+      let result = [...itemsToFilter];
+      for (const group of CONFLICT_GROUPS) {
+        const present = result.filter((i) => group.includes(i.title));
+        if (present.length <= 1) continue;
+        const keep = present.reduce((a, b) => (a.priority >= b.priority ? a : b));
+        result = result.filter((i) => !group.includes(i.title) || i.title === keep.title);
+      }
+      return result;
+    };
+
+    all = resolveConflicts(all);
+
+    const overall = all.filter((i) => i.kind === "overall");
+    const rest = all.filter((i) => i.kind !== "overall");
+
+    const selected: FeedbackItem[] = [];
+    if (overall[0]) selected.push(overall[0]);
+    for (const item of rest) {
+      if (selected.length >= MAX_ITEMS) break;
+      selected.push(item);
+    }
+
+    return selected;
+  };
+
+  const feedbackItems = buildFeedbackItems();
 
   const renderMetricCard = (metric: MetricItem) => {
     const Icon = metric.icon;
@@ -1118,6 +1514,118 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
             </div>
           </>
         )}
+
+        {feedbackItems.length > 0 && (
+          <div
+            style={{
+              marginTop: "22px",
+              paddingTop: "16px",
+              borderTop: "1px solid var(--border-color)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
+              <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-secondary)", margin: 0 }}>
+                Psychological feedback
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowFeedbackHelp(true)}
+                title="How this feedback is generated"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "22px",
+                  height: "22px",
+                  borderRadius: "50%",
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-tertiary)",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                <Info size={12} />
+              </button>
+            </div>
+            <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "10px", lineHeight: 1.5 }}>
+              Based on your current metrics, here’s a short read on your trading mindset — use this to decide whether to keep trading, size down, or step away.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              {feedbackItems.map((item, idx) => {
+                const toneColor =
+                  item.tone === "positive"
+                    ? getGradientColor(0.85)
+                    : item.tone === "warning"
+                    ? getGradientColor(0.2)
+                    : getGradientColor(0.55);
+                const ToneIcon = item.tone === "positive" ? Shield : item.tone === "warning" ? AlertTriangle : Target;
+                const howCalculated = FEEDBACK_CARD_HOW_CALCULATED[item.title];
+                const isInfoOpen = feedbackCatalogInfoOpen === item.title;
+                return (
+                  <div
+                    key={`${item.title}-${idx}`}
+                    style={{
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      background: "var(--bg-tertiary)",
+                      border: `1px solid ${toneColor}33`,
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+                      <ToneIcon size={14} style={{ color: toneColor, marginTop: "2px" }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "2px" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 600, color: toneColor, flex: 1, minWidth: 0 }}>{item.title}</div>
+                          {howCalculated && (
+                            <button
+                              type="button"
+                              onClick={() => setFeedbackCatalogInfoOpen(isInfoOpen ? null : item.title)}
+                              title="How this feedback is calculated"
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                width: "22px",
+                                height: "22px",
+                                borderRadius: "50%",
+                                border: "1px solid var(--border-color)",
+                                background: isInfoOpen ? "var(--accent)" : "var(--bg-secondary)",
+                                color: isInfoOpen ? "var(--bg-primary)" : "var(--text-secondary)",
+                                cursor: "pointer",
+                                padding: 0,
+                                flexShrink: 0,
+                              }}
+                            >
+                              <Info size={12} />
+                            </button>
+                          )}
+                        </div>
+                        <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.4 }}>{item.body}</div>
+                        {howCalculated && isInfoOpen && (
+                          <div
+                            style={{
+                              marginTop: "8px",
+                              padding: "8px 10px",
+                              fontSize: "11px",
+                              color: "var(--text-secondary)",
+                              background: "var(--bg-secondary)",
+                              borderRadius: "6px",
+                              border: "1px solid var(--border-color)",
+                              lineHeight: 1.4,
+                            }}
+                          >
+                            <strong style={{ color: "var(--text-primary)" }}>How it’s calculated:</strong> {howCalculated}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* How metrics are calculated — modal */}
@@ -1225,6 +1733,319 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
                   ))}
                 </div>
               </section>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* How psychological feedback is generated — modal */}
+      {showFeedbackHelp && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="feedback-help-title"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+            backgroundColor: "rgba(0,0,0,0.6)",
+          }}
+          onClick={() => { setShowFeedbackHelp(false); setFeedbackCatalogInfoOpen(null); }}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              maxWidth: "900px",
+              width: "100%",
+              maxHeight: "90vh",
+              overflow: "auto",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                padding: "20px 24px",
+                borderBottom: "1px solid var(--border-color)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <h2 id="feedback-help-title" style={{ margin: 0, fontSize: "18px", fontWeight: "bold" }}>
+                How this feedback is generated
+              </h2>
+              <button
+                type="button"
+                onClick={() => { setShowFeedbackHelp(false); setFeedbackCatalogInfoOpen(null); }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "32px",
+                  height: "32px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-tertiary)",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div style={{ padding: "20px 24px", fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.6 }}>
+              <p style={{ marginBottom: "20px", marginTop: 0 }}>
+                Feedback uses the same 0–5 scale as your metric cards (survey 1–5 → 2.5 = neutral). Treat it as a coach on top of your plan.
+              </p>
+
+              {/* Section: Overall + single-card + positive */}
+              <div
+                style={{
+                  marginBottom: "20px",
+                  padding: "16px 18px",
+                  background: "var(--bg-tertiary)",
+                  borderRadius: "10px",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                <h3 style={{ fontSize: "12px", fontWeight: 600, color: "var(--accent)", margin: "0 0 10px 0", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  Overall & single-metric cards
+                </h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "12px 20px" }}>
+                  <div>
+                    <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>Overall message</div>
+                    <div style={{ fontSize: "12px" }}>Trading‑ready (avg ≥3.8, none &lt;1.8) · High tilt risk (avg ≤2.2 or ≥3 metrics &lt;1.8) · Mixed otherwise.</div>
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>Single-metric cards</div>
+                    <div style={{ fontSize: "12px" }}>Each risk card appears when that metric is &lt;2.5 (caution 1.8–2.5, warning &lt;1.8).</div>
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>Positive reinforcement</div>
+                    <div style={{ fontSize: "12px" }}>Calm + stable (Stability & Calm Index &gt;3.8). Constructive emotions (Positive Presence &gt;3.8, Consistency &gt;3.4).</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Section: Metric formulas — two-column grid of name + formula */}
+              <div
+                style={{
+                  marginBottom: "20px",
+                  padding: "16px 18px",
+                  background: "var(--bg-tertiary)",
+                  borderRadius: "10px",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                <h3 style={{ fontSize: "12px", fontWeight: 600, color: "var(--accent)", margin: "0 0 8px 0", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  Metric values and formulas
+                </h3>
+                <p style={{ margin: "0 0 12px 0", fontSize: "12px" }}>Survey: 1–5 (3 = neutral), flipped with 6 − X when “higher is better”, then shown 0–5 (2.5 = neutral).</p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "10px 24px" }}>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Emotional Stability Index</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>avg(6−during_stable, 6−during_mentally_present, 6−after_accept_outcome)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>FOMO Index</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(before_fomo)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Discipline Consistency</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>mixed: 6−before_patient_detached, 6−during_need_control, after_proud_discipline</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Revenge‑Trade Risk</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(before_recovering_loss, after_tempted_another_trade)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Overconfidence After Wins</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(after_confidence_affected)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Fear After Losses</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(during_fear_loss, after_emotional_reaction)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Trust in Process</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>avg(before_trust_process)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Stress Resistance</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(during_tension_stress)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Pre‑Trade Clarity</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>avg(before_calm_clear)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Urgency Resistance</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(before_urgency_pressure)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Interference Resistance</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(during_tempted_interfere)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Excitement/Greed Control</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(during_excitement_greed)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Calm Index</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>5 − (avgIntensity ÷ 2)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Emotional Consistency</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>5 − std dev (or 5−avg/5 if one entry)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Negative Emotion Load</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>5 − (avgNegative ÷ 2)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Positive Emotion Presence</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>avgPositive ÷ 2</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Intensity Trend</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>5 − trend; trend = clamp(−5,5, (recent−older)×0.5)</div></div>
+                </div>
+              </div>
+
+              {/* Section: Combination patterns — compact cards */}
+              <div
+                style={{
+                  marginBottom: "0",
+                  padding: "16px 18px",
+                  background: "var(--bg-tertiary)",
+                  borderRadius: "10px",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                <h3 style={{ fontSize: "12px", fontWeight: 600, color: "var(--accent)", margin: "0 0 12px 0", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  Combination patterns (multiple metrics)
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  <div style={{ padding: "10px 12px", background: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>Trading from urgency and FOMO</div>
+                    <div style={{ fontSize: "12px" }}>FOMO Index, Urgency Resistance, Pre‑Trade Clarity all weak → high FOMO, high pressure, low clarity.</div>
+                  </div>
+                  <div style={{ padding: "10px 12px", background: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>Losses are driving your decisions</div>
+                    <div style={{ fontSize: "12px" }}>Fear After Losses + Revenge‑Trade Risk + Negative Emotion Load all weak.</div>
+                  </div>
+                  <div style={{ padding: "10px 12px", background: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>Euphoria after wins</div>
+                    <div style={{ fontSize: "12px" }}>Overconfidence + Excitement/Greed weak, Positive Presence strong, Emotional Stability slipping.</div>
+                  </div>
+                  <div style={{ padding: "10px 12px", background: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>Tilt is building — step away</div>
+                    <div style={{ fontSize: "12px" }}>Emotional Stability + Calm Index + Intensity Trend all indicate activated, unstable state.</div>
+                  </div>
+                  <div style={{ padding: "10px 12px", background: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>You trust your plan — protect it from impulse</div>
+                    <div style={{ fontSize: "12px" }}>Trust in Process + Discipline strong; Interference or Urgency Resistance weak.</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* All feedback cards — grouped and displayed as in the main UI */}
+              <div
+                style={{
+                  marginTop: "20px",
+                  marginBottom: "0",
+                  padding: "16px 18px",
+                  background: "var(--bg-tertiary)",
+                  borderRadius: "10px",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                <h3 style={{ fontSize: "12px", fontWeight: 600, color: "var(--accent)", margin: "0 0 12px 0", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  All feedback cards you might see
+                </h3>
+                {(() => {
+                  const overallTitles = new Set<string>([
+                    "Emotional state looks trading‑ready",
+                    "High risk of trading tilted",
+                    "Mixed signals — trade smaller and be deliberate",
+                  ]);
+                  const positiveTitles = new Set<string>([
+                    "You’re bringing a calm, stable mindset",
+                    "Constructive emotions are supporting your trading",
+                    "Process first, emotions in check",
+                  ]);
+                  const comboTitles = new Set<string>([
+                    "Trading from urgency and FOMO",
+                    "Losses are driving your decisions",
+                    "Euphoria after wins",
+                    "Tilt is building — step away",
+                    "You trust your plan — protect it from impulse",
+                    "Calm until the market heats up",
+                    "Emotionally flat — check your engagement",
+                  ]);
+                  const overallCards = FEEDBACK_CARD_CATALOG.filter((c) => overallTitles.has(c.title));
+                  const positiveCards = FEEDBACK_CARD_CATALOG.filter((c) => positiveTitles.has(c.title));
+                  const comboCards = FEEDBACK_CARD_CATALOG.filter((c) => comboTitles.has(c.title));
+                  const riskCards = FEEDBACK_CARD_CATALOG.filter(
+                    (c) => !overallTitles.has(c.title) && !positiveTitles.has(c.title) && !comboTitles.has(c.title)
+                  );
+
+                  const renderCard = (item: { tone: "positive" | "caution" | "warning"; title: string; body: string }, idx: number) => {
+                    const toneColor =
+                      item.tone === "positive"
+                        ? getGradientColor(0.85)
+                        : item.tone === "warning"
+                        ? getGradientColor(0.2)
+                        : getGradientColor(0.55);
+                    const ToneIcon = item.tone === "positive" ? Shield : item.tone === "warning" ? AlertTriangle : Target;
+                    const howCalculated = FEEDBACK_CARD_HOW_CALCULATED[item.title];
+                    const isInfoOpen = feedbackCatalogInfoOpen === item.title;
+                    return (
+                      <div
+                        key={`${item.title}-${idx}`}
+                        style={{
+                          borderRadius: "8px",
+                          padding: "10px 12px",
+                          background: "var(--bg-secondary)",
+                          border: `1px solid ${toneColor}33`,
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+                          <ToneIcon size={14} style={{ color: toneColor, marginTop: "2px" }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: "12px", fontWeight: 600, color: toneColor, marginBottom: "2px" }}>{item.title}</div>
+                            <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.4 }}>{item.body}</div>
+                            {howCalculated && isInfoOpen && (
+                              <div
+                                style={{
+                                  marginTop: "8px",
+                                  padding: "8px 10px",
+                                  fontSize: "11px",
+                                  color: "var(--text-secondary)",
+                                  background: "var(--bg-tertiary)",
+                                  borderRadius: "6px",
+                                  border: "1px solid var(--border-color)",
+                                  lineHeight: 1.4,
+                                }}
+                              >
+                                <strong style={{ color: "var(--text-primary)" }}>How it’s calculated:</strong> {howCalculated}
+                              </div>
+                            )}
+                          </div>
+                          {howCalculated && (
+                            <button
+                              type="button"
+                              onClick={() => setFeedbackCatalogInfoOpen(isInfoOpen ? null : item.title)}
+                              title="How this card is calculated"
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                width: "24px",
+                                height: "24px",
+                                flexShrink: 0,
+                                borderRadius: "50%",
+                                border: "1px solid var(--border-color)",
+                                background: isInfoOpen ? "var(--accent)" : "var(--bg-tertiary)",
+                                color: isInfoOpen ? "var(--bg-primary)" : "var(--text-secondary)",
+                                cursor: "pointer",
+                              }}
+                            >
+                              <Info size={12} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  };
+
+                  return (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      <div>
+                        <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px" }}>
+                          Overall mindset
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>{overallCards.map(renderCard)}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px" }}>
+                          Single‑metric risk
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>{riskCards.map(renderCard)}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px" }}>
+                          Combination patterns
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>{comboCards.map(renderCard)}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px" }}>
+                          Positive reinforcement
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>{positiveCards.map(renderCard)}</div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
           </div>
         </div>
