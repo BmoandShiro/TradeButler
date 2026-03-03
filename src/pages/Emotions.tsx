@@ -586,13 +586,16 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
   const [metricInfoOpen, setMetricInfoOpen] = useState<string | null>(null);
   if (surveys.length === 0 && states.length === 0) return null;
 
-  // —— Survey-based metrics (1–5 scale). Returns null when no data (for "extra" metrics); use fallback 3 for core 6 so they always show.
+  // —— Survey-based metrics (1–5 scale). Survey default is 3 = neutral; formulas preserve it (6−3=3, avg(3)=3).
   const calculateMetric = (values: number[], inverted: boolean = false, fallback: number | null = null) => {
     if (values.length === 0) return fallback;
     const avg = values.reduce((a, b) => a + b, 0) / values.length;
     return inverted ? 6 - avg : avg;
   };
+  /** Neutral midpoint on 1–5 scale; used when there's no data. Displayed as 2.5 on 0–5 (see surveyMetricToDisplay). */
   const DEFAULT_NO_DATA = 3;
+  /** Convert survey metric from 1–5 (internal) to 0–5 (display) so 2.5 = neutral. State metrics are already 0–5. */
+  const surveyMetricToDisplay = (raw: number): number => Math.max(0, Math.min(5, (raw - 1) * (5 / 4)));
 
   const emotionalStabilityValues = surveys.flatMap((s) => [
     6 - s.during_stable,
@@ -839,8 +842,9 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
 
   const renderMetricCard = (metric: MetricItem) => {
     const Icon = metric.icon;
-    const percentage = (parseFloat(metric.value) / metric.max) * 100;
-    const color = getGradientColor(metric.normalizedValue);
+    const displayValue = metric.source === "survey" ? surveyMetricToDisplay(parseFloat(metric.value)) : parseFloat(metric.value);
+    const percentage = (displayValue / 5) * 100;
+    const color = getGradientColor(displayValue / 5);
     return (
       <div
         key={metric.name}
@@ -856,7 +860,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: "12px", fontWeight: "600", marginBottom: "2px" }}>{metric.name}</div>
             <div style={{ fontSize: "20px", fontWeight: "bold", color }}>
-              {metric.value}<span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>/{metric.max}</span>
+              {displayValue.toFixed(2)}<span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>/5</span>
             </div>
           </div>
           <button
@@ -1170,7 +1174,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
             </div>
             <div style={{ padding: "24px" }}>
               <p style={{ fontSize: "14px", color: "var(--text-secondary)", marginBottom: "24px", lineHeight: 1.5 }}>
-                Each metric is built from survey questions or logged emotions. Below, each metric is shown with its inputs and how it's calculated.
+                Each metric is built from survey questions or logged emotions. Survey questions use a 1–5 scale with <strong style={{ color: "var(--text-primary)" }}>3 = neutral</strong> (the default if you don’t change a slider). We display metrics on 0–5 so 2.5 = neutral (no data or neutral answers show as 2.50/5). We use 6 − avg to invert the 1–5 scale when “lower is better” (1→5, 5→1, 3→3). Below, each metric is shown with its inputs and how it’s calculated.
               </p>
               <section style={{ marginBottom: "28px" }}>
                 <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--accent)", marginBottom: "12px" }}>From your before/during/after survey</h3>
@@ -1187,13 +1191,13 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
                     border: "1px solid var(--border-color)",
                   }}
                 >
-                  <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Survey answers (1–5)</span>
+                  <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Survey (1–5, 3 = neutral)</span>
                   <span style={{ color: "var(--text-secondary)", fontSize: "18px" }}>→</span>
-                  <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Average across entries</span>
+                  <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Average</span>
                   <span style={{ color: "var(--text-secondary)", fontSize: "18px" }}>→</span>
-                  <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>If “lower is better”: score = 6 − avg</span>
+                  <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>If invert: 6 − avg</span>
                   <span style={{ color: "var(--text-secondary)", fontSize: "18px" }}>→</span>
-                  <span style={{ padding: "6px 12px", backgroundColor: "var(--accent)", color: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Display as /5</span>
+                  <span style={{ padding: "6px 12px", backgroundColor: "var(--accent)", color: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Display 0–5 (2.5 = neutral)</span>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(380px, 1fr))", gap: "24px" }}>
                   {SURVEY_METRIC_DIAGRAMS.map((d) => (
@@ -1251,8 +1255,9 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
         };
         const surveyKey = surveyKeyByMetric[metricGraphOpen];
         const stateKey = stateKeyByMetric[metricGraphOpen];
+        const toDisplay = (raw: number) => Math.max(0, Math.min(5, (raw - 1) * (5 / 4)));
         const data = surveyKey
-          ? surveyChartDataFull.map((row) => ({ date: row.date, value: row[surveyKey] as number }))
+          ? surveyChartDataFull.map((row) => ({ date: row.date, value: toDisplay(row[surveyKey] as number) }))
           : stateKey === "intensityTrend"
             ? stateIntensityTrendChartData.map((row) => ({ date: row.date, value: row.intensityTrend }))
             : stateMetricChartData.map((row) => ({ date: row.date, value: row[stateKey as keyof typeof stateMetricChartData[0]] }));
