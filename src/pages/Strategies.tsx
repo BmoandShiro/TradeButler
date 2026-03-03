@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, Dispatch, SetStateAction } from "re
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
-import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard } from "lucide-react";
 import { format } from "date-fns";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import RichTextEditor from "../components/RichTextEditor";
@@ -4373,6 +4373,27 @@ export default function Strategies() {
             </div>
                 ) : !isEditing ? (
                   <>
+                    <button
+                      onClick={() => {
+                        setSelectedStrategy(null);
+                        setIsCreating(false);
+                        setEditingFormData({ name: "", description: "", color: "#3b82f6" });
+                        setEditHistory([]);
+                      }}
+                      style={{
+                        background: "var(--bg-tertiary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "6px",
+                        padding: "8px",
+                        color: "var(--text-primary)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                      }}
+                      title="Strategies overview"
+                    >
+                      <LayoutDashboard size={16} />
+                    </button>
                     <button
                       onClick={handleEditClick}
                       style={{
