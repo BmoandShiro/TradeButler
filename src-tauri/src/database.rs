@@ -345,6 +345,37 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         conn.execute("ALTER TABLE journal_checklist_responses ADD COLUMN journal_trade_ids TEXT", [])?;
     }
 
+    // Migration: response_value for survey items (1-5 scale); null = legacy Yes/No (is_checked)
+    let has_response_value: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='response_value'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_response_value {
+        conn.execute("ALTER TABLE journal_checklist_responses ADD COLUMN response_value INTEGER", [])?;
+    }
+
+    // Custom survey metrics per strategy (name, description, formula, which survey items) — like Psychological Metrics but user-defined
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS strategy_survey_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            formula_type TEXT NOT NULL DEFAULT 'avg',
+            item_ids TEXT NOT NULL,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (strategy_id) REFERENCES strategies(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_strategy_survey_metrics_strategy ON strategy_survey_metrics(strategy_id)",
+        [],
+    )?;
+
     // emotional_states: link to journal entry and/or journal trade (implementation)
     let has_je: bool = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_id'",

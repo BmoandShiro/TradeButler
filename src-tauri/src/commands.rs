@@ -2774,30 +2774,43 @@ pub struct JournalChecklistResponse {
     pub is_checked: bool,
     /// JSON array of journal_trade IDs when associated with specific trades, e.g. "[1,2,3]". Null/empty = entry-level (whole journal).
     pub journal_trade_ids: Option<String>,
+    /// For survey items: 1-5 scale value. Null = use is_checked for Yes/No.
+    pub response_value: Option<i32>,
 }
 
 #[tauri::command]
 pub fn save_journal_checklist_responses(
     journal_entry_id: i64,
-    responses: Vec<(i64, bool, Option<String>)>,
+    responses: Vec<(i64, bool, Option<String>, Option<i32>)>,
 ) -> Result<(), String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
-    
-    // Delete existing responses for this journal entry
+
+    let has_response_value = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='response_value'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).map(|c| c > 0).unwrap_or(false);
+
     conn.execute(
         "DELETE FROM journal_checklist_responses WHERE journal_entry_id = ?1",
         params![journal_entry_id],
     ).map_err(|e| e.to_string())?;
-    
-    // Insert new responses: (checklist_item_id, is_checked, journal_trade_ids_json)
-    for (checklist_item_id, is_checked, journal_trade_ids) in responses {
-        conn.execute(
-            "INSERT INTO journal_checklist_responses (journal_entry_id, checklist_item_id, is_checked, journal_trade_ids) VALUES (?1, ?2, ?3, ?4)",
-            params![journal_entry_id, checklist_item_id, if is_checked { 1 } else { 0 }, journal_trade_ids],
-        ).map_err(|e| e.to_string())?;
+
+    for (checklist_item_id, is_checked, journal_trade_ids, response_value) in responses {
+        if has_response_value {
+            conn.execute(
+                "INSERT INTO journal_checklist_responses (journal_entry_id, checklist_item_id, is_checked, journal_trade_ids, response_value) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![journal_entry_id, checklist_item_id, if is_checked { 1 } else { 0 }, journal_trade_ids, response_value],
+            ).map_err(|e| e.to_string())?;
+        } else {
+            conn.execute(
+                "INSERT INTO journal_checklist_responses (journal_entry_id, checklist_item_id, is_checked, journal_trade_ids) VALUES (?1, ?2, ?3, ?4)",
+                params![journal_entry_id, checklist_item_id, if is_checked { 1 } else { 0 }, journal_trade_ids],
+            ).map_err(|e| e.to_string())?;
+        }
     }
-    
+
     Ok(())
 }
 
@@ -2805,44 +2818,48 @@ pub fn save_journal_checklist_responses(
 pub fn get_journal_checklist_responses(journal_entry_id: i64) -> Result<Vec<JournalChecklistResponse>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
-    
-    // Support both schema with and without journal_trade_ids for backward compatibility
+
     let has_trade_ids_col = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='journal_trade_ids'",
         [],
         |row| row.get::<_, i64>(0),
     ).map(|c| c > 0).unwrap_or(false);
-    
-    let mut stmt = if has_trade_ids_col {
-        conn.prepare("SELECT id, journal_entry_id, checklist_item_id, is_checked, journal_trade_ids FROM journal_checklist_responses WHERE journal_entry_id = ?1")
-            .map_err(|e| e.to_string())?
-    } else {
-        conn.prepare("SELECT id, journal_entry_id, checklist_item_id, is_checked FROM journal_checklist_responses WHERE journal_entry_id = ?1")
-            .map_err(|e| e.to_string())?
+
+    let has_response_value_col = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='response_value'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).map(|c| c > 0).unwrap_or(false);
+
+    let sql = match (has_trade_ids_col, has_response_value_col) {
+        (true, true) => "SELECT id, journal_entry_id, checklist_item_id, is_checked, journal_trade_ids, response_value FROM journal_checklist_responses WHERE journal_entry_id = ?1",
+        (true, false) => "SELECT id, journal_entry_id, checklist_item_id, is_checked, journal_trade_ids FROM journal_checklist_responses WHERE journal_entry_id = ?1",
+        (false, true) => "SELECT id, journal_entry_id, checklist_item_id, is_checked, response_value FROM journal_checklist_responses WHERE journal_entry_id = ?1",
+        (false, false) => "SELECT id, journal_entry_id, checklist_item_id, is_checked FROM journal_checklist_responses WHERE journal_entry_id = ?1",
     };
-    
-    let response_iter = stmt
-        .query_map(params![journal_entry_id], move |row| {
-            let journal_trade_ids = if has_trade_ids_col {
-                row.get(4).ok()
-            } else {
-                None
-            };
-            Ok(JournalChecklistResponse {
-                id: Some(row.get(0)?),
-                journal_entry_id: row.get(1)?,
-                checklist_item_id: row.get(2)?,
-                is_checked: row.get::<_, i64>(3)? != 0,
-                journal_trade_ids,
-            })
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+
+    let response_iter = stmt.query_map(params![journal_entry_id], move |row| {
+        let journal_trade_ids = if has_trade_ids_col { row.get(4).ok() } else { None };
+        let response_value = if has_response_value_col {
+            if has_trade_ids_col { row.get::<_, Option<i32>>(5).ok().flatten() } else { row.get::<_, Option<i32>>(4).ok().flatten() }
+        } else {
+            None
+        };
+        Ok(JournalChecklistResponse {
+            id: Some(row.get(0)?),
+            journal_entry_id: row.get(1)?,
+            checklist_item_id: row.get(2)?,
+            is_checked: row.get::<_, i64>(3)? != 0,
+            journal_trade_ids,
+            response_value,
         })
-        .map_err(|e| e.to_string())?;
-    
+    }).map_err(|e| e.to_string())?;
+
     let mut responses = Vec::new();
     for response in response_iter {
         responses.push(response.map_err(|e| e.to_string())?);
     }
-    
     Ok(responses)
 }
 
@@ -3139,6 +3156,8 @@ pub fn clear_all_data() -> Result<(), String> {
     conn.execute("DELETE FROM emotion_surveys", [])
         .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM emotional_states", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM strategy_survey_metrics", [])
         .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM strategy_checklists", [])
         .map_err(|e| e.to_string())?;
@@ -3890,6 +3909,189 @@ pub fn get_strategy_checklist(strategy_id: i64, checklist_type: Option<String>) 
     }
     
     Ok(items)
+}
+
+#[derive(serde::Serialize)]
+pub struct CustomSurveyMetric {
+    pub checklist_item_id: i64,
+    pub item_text: String,
+    pub response_count: i64,
+    pub avg_value: Option<f64>,
+}
+
+#[tauri::command]
+pub fn get_custom_survey_metrics(strategy_id: i64) -> Result<Vec<CustomSurveyMetric>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+
+    let has_response_value = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='response_value'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).map(|c| c > 0).unwrap_or(false);
+
+    if !has_response_value {
+        let mut stmt = conn
+            .prepare("SELECT id, item_text FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = 'survey' ORDER BY item_order ASC, id ASC")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![strategy_id], |row| {
+            Ok(CustomSurveyMetric {
+                checklist_item_id: row.get(0)?,
+                item_text: row.get(1)?,
+                response_count: 0,
+                avg_value: None,
+            })
+        }).map_err(|e| e.to_string())?;
+        return Ok(rows.filter_map(|r| r.ok()).collect());
+    }
+
+    let sql = "SELECT sc.id, sc.item_text,
+        (SELECT COUNT(*) FROM journal_checklist_responses jcr WHERE jcr.checklist_item_id = sc.id AND jcr.response_value IS NOT NULL) AS response_count,
+        (SELECT AVG(jcr.response_value) FROM journal_checklist_responses jcr WHERE jcr.checklist_item_id = sc.id AND jcr.response_value IS NOT NULL) AS avg_value
+        FROM strategy_checklists sc
+        WHERE sc.strategy_id = ?1 AND sc.checklist_type = 'survey'
+        ORDER BY sc.item_order ASC, sc.id ASC";
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let rows = stmt.query_map(params![strategy_id], |row| {
+        Ok(CustomSurveyMetric {
+            checklist_item_id: row.get(0)?,
+            item_text: row.get(1)?,
+            response_count: row.get(2)?,
+            avg_value: row.get(3).ok().flatten(),
+        })
+    }).map_err(|e| e.to_string())?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+// —— Custom survey metrics (user-defined metrics with editable name, description, formula, and which survey items)
+#[derive(serde::Serialize)]
+pub struct StrategySurveyMetric {
+    pub id: i64,
+    pub strategy_id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub formula_type: String,
+    pub item_ids: String,
+    pub display_order: i64,
+}
+
+#[derive(serde::Serialize)]
+pub struct StrategySurveyMetricWithValue {
+    pub id: i64,
+    pub strategy_id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub formula_type: String,
+    pub item_ids: String,
+    pub display_order: i64,
+    pub computed_value: Option<f64>,
+}
+
+#[tauri::command]
+pub fn get_strategy_survey_metrics(strategy_id: i64) -> Result<Vec<StrategySurveyMetric>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, strategy_id, name, description, formula_type, item_ids, display_order FROM strategy_survey_metrics WHERE strategy_id = ?1 ORDER BY display_order ASC, id ASC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map(params![strategy_id], |row| {
+        Ok(StrategySurveyMetric {
+            id: row.get(0)?,
+            strategy_id: row.get(1)?,
+            name: row.get(2)?,
+            description: row.get(3).ok(),
+            formula_type: row.get(4).unwrap_or_else(|_| "avg".to_string()),
+            item_ids: row.get(5).unwrap_or_else(|_| "[]".to_string()),
+            display_order: row.get(6).unwrap_or(0),
+        })
+    }).map_err(|e| e.to_string())?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+fn compute_custom_metric_value(conn: &rusqlite::Connection, item_ids: &[i64], formula_type: &str) -> Result<Option<f64>, String> {
+    let has_response_value = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='response_value'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).map(|c| c > 0).unwrap_or(false);
+    if !has_response_value || item_ids.is_empty() {
+        return Ok(None);
+    }
+    let mut values = Vec::new();
+    for &item_id in item_ids {
+        let mut stmt = conn.prepare("SELECT response_value FROM journal_checklist_responses WHERE checklist_item_id = ?1 AND response_value IS NOT NULL")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<i64> = stmt.query_map(params![item_id], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        values.extend(rows);
+    }
+    if values.is_empty() {
+        return Ok(None);
+    }
+    let avg = values.iter().map(|&v| v as f64).sum::<f64>() / values.len() as f64;
+    let result = if formula_type == "invert" { 6.0 - avg } else { avg };
+    Ok(Some(result))
+}
+
+#[tauri::command]
+pub fn get_strategy_survey_metrics_with_values(strategy_id: i64) -> Result<Vec<StrategySurveyMetricWithValue>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let metrics = get_strategy_survey_metrics(strategy_id)?;
+    let mut out = Vec::with_capacity(metrics.len());
+    for m in metrics {
+        let item_ids: Vec<i64> = serde_json::from_str(&m.item_ids).unwrap_or_default();
+        let computed_value = compute_custom_metric_value(&conn, &item_ids, &m.formula_type)?;
+        out.push(StrategySurveyMetricWithValue {
+            id: m.id,
+            strategy_id: m.strategy_id,
+            name: m.name,
+            description: m.description,
+            formula_type: m.formula_type.clone(),
+            item_ids: m.item_ids,
+            display_order: m.display_order,
+            computed_value,
+        });
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn save_strategy_survey_metric(
+    id: Option<i64>,
+    strategy_id: i64,
+    name: String,
+    description: Option<String>,
+    formula_type: String,
+    item_ids: String,
+    display_order: i64,
+) -> Result<i64, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let formula = if formula_type == "invert" { "invert" } else { "avg" };
+    if let Some(pk) = id {
+        conn.execute(
+            "UPDATE strategy_survey_metrics SET name = ?1, description = ?2, formula_type = ?3, item_ids = ?4, display_order = ?5, updated_at = datetime('now') WHERE id = ?6",
+            params![name, description, formula, item_ids, display_order, pk],
+        ).map_err(|e| e.to_string())?;
+        Ok(pk)
+    } else {
+        conn.execute(
+            "INSERT INTO strategy_survey_metrics (strategy_id, name, description, formula_type, item_ids, display_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))",
+            params![strategy_id, name, description, formula, item_ids, display_order],
+        ).map_err(|e| e.to_string())?;
+        Ok(conn.last_insert_rowid())
+    }
+}
+
+#[tauri::command]
+pub fn delete_strategy_survey_metric(id: i64) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM strategy_survey_metrics WHERE id = ?1", params![id]).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -5575,6 +5777,7 @@ pub fn export_data() -> Result<String, String> {
                     checklist_item_id: row.get(1)?,
                     is_checked: row.get::<_, i64>(2)? != 0,
                     journal_trade_ids: row.get(3).ok(),
+                    response_value: None,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -5592,6 +5795,7 @@ pub fn export_data() -> Result<String, String> {
                     checklist_item_id: row.get(1)?,
                     is_checked: row.get::<_, i64>(2)? != 0,
                     journal_trade_ids: None,
+                    response_value: None,
                 })
             })
             .map_err(|e| e.to_string())?

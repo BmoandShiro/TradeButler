@@ -77,6 +77,7 @@ interface JournalChecklistResponse {
   checklist_item_id: number;
   is_checked: boolean;
   journal_trade_ids?: string | null; // JSON array of trade IDs when associated with specific trades, null = whole entry
+  response_value?: number | null; // For survey items: 1-5 scale
 }
 
 const ENTRY_LEVEL_CHECKLIST_TYPES = ["daily_analysis", "daily_mantra"];
@@ -250,6 +251,7 @@ export default function Journal() {
   // Checklist state (per trade, but checklists come from strategy)
   const [strategyChecklists, setStrategyChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [checklistResponses, setChecklistResponses] = useState<Map<number, Map<number, boolean>>>(new Map()); // trade_index -> checklist_item_id -> is_checked
+  const [surveyScores, setSurveyScores] = useState<Map<number, number>>(new Map()); // checklist_item_id -> 1-5 (for survey type items)
   // Entry-level (Analysis & Mantra): associated with whole journal by default, optionally with specific trades
   const [entryLevelChecklistResponses, setEntryLevelChecklistResponses] = useState<Map<number, boolean>>(new Map()); // item_id -> is_checked
   const [checklistTradeAssociations, setChecklistTradeAssociations] = useState<Map<number, number[] | null>>(new Map()); // item_id -> null (whole entry) or [trade_id, ...]
@@ -826,6 +828,7 @@ export default function Journal() {
       setChecklistResponses(newResponses);
       setEntryLevelChecklistResponses(new Map());
       setChecklistTradeAssociations(new Map());
+      setSurveyScores(new Map());
     } catch (error) {
       console.error("Error loading strategy checklists:", error);
     }
@@ -846,6 +849,7 @@ export default function Journal() {
       const entryLevelChecked = new Map<number, boolean>();
       const entryLevelTradeAssociations = new Map<number, number[] | null>();
       const perTradeResponseMap = new Map<number, boolean>();
+      const loadedSurveyScores = new Map<number, number>();
 
       for (const response of responses) {
         const itemType = itemIdToType.get(response.checklist_item_id);
@@ -863,11 +867,15 @@ export default function Journal() {
           }
         } else {
           perTradeResponseMap.set(response.checklist_item_id, response.is_checked);
+          if (itemType === "survey" && response.response_value != null) {
+            loadedSurveyScores.set(response.checklist_item_id, response.response_value);
+          }
         }
       }
 
       setEntryLevelChecklistResponses(entryLevelChecked);
       setChecklistTradeAssociations(entryLevelTradeAssociations);
+      setSurveyScores(loadedSurveyScores);
 
       const newResponses = new Map<number, Map<number, boolean>>();
       selectedTrades.forEach((_, index) => {
@@ -1249,11 +1257,12 @@ export default function Journal() {
       if (entryFormData.strategy_id) {
         const checklists = strategyChecklists.get(entryFormData.strategy_id);
         if (checklists) {
-          const responses: [number, boolean, string | null][] = [];
+          const responses: [number, boolean, string | null, number | null][] = [];
           const firstTradeResponses = checklistResponses.get(0) || new Map();
           for (const [, items] of checklists.entries()) {
             for (const item of items) {
               const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(item.checklist_type || "");
+              const isSurvey = (item.checklist_type || "") === "survey";
               let isChecked: boolean;
               let journalTradeIds: string | null = null;
               if (isEntryLevel) {
@@ -1268,7 +1277,8 @@ export default function Journal() {
               } else {
                 isChecked = firstTradeResponses.get(item.id) || false;
               }
-              responses.push([item.id, isChecked, journalTradeIds]);
+              const responseValue = isSurvey ? (surveyScores.get(item.id) ?? null) : null;
+              responses.push([item.id, isChecked, journalTradeIds, responseValue]);
             }
           }
           await invoke("save_journal_checklist_responses", {
@@ -1525,11 +1535,12 @@ export default function Journal() {
       if (entryFormData.strategy_id) {
         const checklists = strategyChecklists.get(entryFormData.strategy_id);
         if (checklists) {
-          const responses: [number, boolean, string | null][] = [];
+          const responses: [number, boolean, string | null, number | null][] = [];
           const firstTradeResponses = checklistResponses.get(0) || new Map();
           for (const [, items] of checklists.entries()) {
             for (const item of items) {
               const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(item.checklist_type || "");
+              const isSurvey = (item.checklist_type || "") === "survey";
               let isChecked: boolean;
               let journalTradeIds: string | null = null;
               if (isEntryLevel) {
@@ -1544,7 +1555,8 @@ export default function Journal() {
               } else {
                 isChecked = firstTradeResponses.get(item.id) || false;
               }
-              responses.push([item.id, isChecked, journalTradeIds]);
+              const responseValue = isSurvey ? (surveyScores.get(item.id) ?? null) : null;
+              responses.push([item.id, isChecked, journalTradeIds, responseValue]);
             }
           }
           await invoke("save_journal_checklist_responses", {
@@ -4467,8 +4479,6 @@ export default function Journal() {
                                 }
                               });
 
-                              const tradeResponses = checklistResponses.get(activeTradeIndex) || new Map();
-
                               return (
                                 <div style={{ marginBottom: "24px" }}>
                                   <h4 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>
@@ -4493,9 +4503,7 @@ export default function Journal() {
                                           {group.item_text}
                                         </div>
                                         {children.map((child) => {
-                                          const response = tradeResponses.get(child.id);
-                                          const isYes = response === true;
-                                          const isNo = response === false;
+                                          const score = surveyScores.get(child.id);
                                           return (
                                             <div
                                               key={child.id}
@@ -4520,55 +4528,37 @@ export default function Journal() {
                                               >
                                                 {child.item_text}
                                               </label>
-                                              <div style={{ display: "flex", gap: "8px" }}>
-                                                <button
-                                                  onClick={() => {
-                                                    setChecklistResponses(prev => {
-                                                      const newMap = new Map(prev);
-                                                      const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
-                                                      tradeResponses.set(child.id, true);
-                                                      newMap.set(activeTradeIndex, tradeResponses);
-                                                      return newMap;
-                                                    });
-                                                  }}
-                                                  style={{
-                                                    padding: "6px 16px",
-                                                    backgroundColor: isYes ? "var(--accent)" : "var(--bg-secondary)",
-                                                    border: `1px solid ${isYes ? "var(--accent)" : "var(--border-color)"}`,
-                                                    borderRadius: "6px",
-                                                    color: isYes ? "white" : "var(--text-primary)",
-                                                    cursor: "pointer",
-                                                    fontSize: "13px",
-                                                    fontWeight: "500",
-                                                    transition: "all 0.2s",
-                                                  }}
-                                                >
-                                                  Yes
-                                                </button>
-                                                <button
-                                                  onClick={() => {
-                                                    setChecklistResponses(prev => {
-                                                      const newMap = new Map(prev);
-                                                      const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
-                                                      tradeResponses.set(child.id, false);
-                                                      newMap.set(activeTradeIndex, tradeResponses);
-                                                      return newMap;
-                                                    });
-                                                  }}
-                                                  style={{
-                                                    padding: "6px 16px",
-                                                    backgroundColor: isNo ? "var(--accent)" : "var(--bg-secondary)",
-                                                    border: `1px solid ${isNo ? "var(--accent)" : "var(--border-color)"}`,
-                                                    borderRadius: "6px",
-                                                    color: isNo ? "white" : "var(--text-primary)",
-                                                    cursor: "pointer",
-                                                    fontSize: "13px",
-                                                    fontWeight: "500",
-                                                    transition: "all 0.2s",
-                                                  }}
-                                                >
-                                                  No
-                                                </button>
+                                              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                                                {[1, 2, 3, 4, 5].map((n) => (
+                                                  <button
+                                                    key={n}
+                                                    type="button"
+                                                    onClick={() => {
+                                                      setSurveyScores(prev => new Map(prev).set(child.id, n));
+                                                      setChecklistResponses(prev => {
+                                                        const newMap = new Map(prev);
+                                                        const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
+                                                        tradeResponses.set(child.id, true);
+                                                        newMap.set(activeTradeIndex, tradeResponses);
+                                                        return newMap;
+                                                      });
+                                                    }}
+                                                    style={{
+                                                      width: "32px",
+                                                      height: "32px",
+                                                      padding: 0,
+                                                      borderRadius: "6px",
+                                                      border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`,
+                                                      backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)",
+                                                      color: score === n ? "white" : "var(--text-primary)",
+                                                      cursor: "pointer",
+                                                      fontSize: "13px",
+                                                      fontWeight: "600",
+                                                    }}
+                                                  >
+                                                    {n}
+                                                  </button>
+                                                ))}
                                               </div>
                                             </div>
                                           );
@@ -4578,9 +4568,7 @@ export default function Journal() {
                                   })}
                                   {/* Render regular items */}
                                   {regularItems.map((item) => {
-                                    const response = tradeResponses.get(item.id);
-                                    const isYes = response === true;
-                                    const isNo = response === false;
+                                    const score = surveyScores.get(item.id);
                                     return (
                                       <div
                                         key={item.id}
@@ -4604,55 +4592,37 @@ export default function Journal() {
                                         >
                                           {item.item_text}
                                         </label>
-                                        <div style={{ display: "flex", gap: "8px" }}>
-                                          <button
-                                            onClick={() => {
-                                              setChecklistResponses(prev => {
-                                                const newMap = new Map(prev);
-                                                const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
-                                                tradeResponses.set(item.id, true);
-                                                newMap.set(activeTradeIndex, tradeResponses);
-                                                return newMap;
-                                              });
-                                            }}
-                                            style={{
-                                              padding: "6px 16px",
-                                              backgroundColor: isYes ? "var(--accent)" : "var(--bg-secondary)",
-                                              border: `1px solid ${isYes ? "var(--accent)" : "var(--border-color)"}`,
-                                              borderRadius: "6px",
-                                              color: isYes ? "white" : "var(--text-primary)",
-                                              cursor: "pointer",
-                                              fontSize: "13px",
-                                              fontWeight: "500",
-                                              transition: "all 0.2s",
-                                            }}
-                                          >
-                                            Yes
-                                          </button>
-                                          <button
-                                            onClick={() => {
-                                              setChecklistResponses(prev => {
-                                                const newMap = new Map(prev);
-                                                const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
-                                                tradeResponses.set(item.id, false);
-                                                newMap.set(activeTradeIndex, tradeResponses);
-                                                return newMap;
-                                              });
-                                            }}
-                                            style={{
-                                              padding: "6px 16px",
-                                              backgroundColor: isNo ? "var(--accent)" : "var(--bg-secondary)",
-                                              border: `1px solid ${isNo ? "var(--accent)" : "var(--border-color)"}`,
-                                              borderRadius: "6px",
-                                              color: isNo ? "white" : "var(--text-primary)",
-                                              cursor: "pointer",
-                                              fontSize: "13px",
-                                              fontWeight: "500",
-                                              transition: "all 0.2s",
-                                            }}
-                                          >
-                                            No
-                                          </button>
+                                        <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                                          {[1, 2, 3, 4, 5].map((n) => (
+                                            <button
+                                              key={n}
+                                              type="button"
+                                              onClick={() => {
+                                                setSurveyScores(prev => new Map(prev).set(item.id, n));
+                                                setChecklistResponses(prev => {
+                                                  const newMap = new Map(prev);
+                                                  const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
+                                                  tradeResponses.set(item.id, true);
+                                                  newMap.set(activeTradeIndex, tradeResponses);
+                                                  return newMap;
+                                                });
+                                              }}
+                                              style={{
+                                                width: "32px",
+                                                height: "32px",
+                                                padding: 0,
+                                                borderRadius: "6px",
+                                                border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`,
+                                                backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)",
+                                                color: score === n ? "white" : "var(--text-primary)",
+                                                cursor: "pointer",
+                                                fontSize: "13px",
+                                                fontWeight: "600",
+                                              }}
+                                            >
+                                              {n}
+                                            </button>
+                                          ))}
                                         </div>
                                       </div>
                                     );
