@@ -211,7 +211,18 @@ const SURVEY_QUESTIONS = {
   ],
 };
 
-/** Short labels for diagram nodes (survey question keys). */
+/** Map survey key → full intake question (for diagram labels so "what we ask" is clear). */
+const SURVEY_KEY_QUESTIONS: Record<string, string> = (() => {
+  const out: Record<string, string> = {};
+  for (const phase of ["before", "during", "after"] as const) {
+    for (const item of SURVEY_QUESTIONS[phase]) {
+      out[item.key] = item.question;
+    }
+  }
+  return out;
+})();
+
+/** Short labels for diagram nodes (fallback when question not used). */
 const SURVEY_KEY_LABELS: Record<string, string> = {
   before_calm_clear: "Calm & clear before",
   before_urgency_pressure: "Urgency / pressure",
@@ -235,6 +246,25 @@ const SURVEY_KEY_LABELS: Record<string, string> = {
   after_proud_discipline: "Proud / disciplined",
 };
 
+/** Wrap long label into lines (max chars per line) for diagram pills. */
+function wrapLabel(text: string, maxChars: number): string[] {
+  if (text.length <= maxChars) return [text];
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let current = "";
+  for (const w of words) {
+    const next = current ? `${current} ${w}` : w;
+    if (next.length <= maxChars) {
+      current = next;
+    } else {
+      if (current) lines.push(current);
+      current = w.length <= maxChars ? w : w.slice(0, maxChars);
+    }
+  }
+  if (current) lines.push(current);
+  return lines.slice(0, 4);
+}
+
 /** Metric → survey keys and formula for diagram. */
 const SURVEY_METRIC_DIAGRAMS: { metric: string; keys: string[]; formula: string; phaseColor: string }[] = [
   { metric: "Emotional Stability Index", keys: ["during_stable", "during_mentally_present", "after_accept_outcome"], formula: "6 − avg (inverted)", phaseColor: "#3b82f6" },
@@ -251,35 +281,39 @@ const SURVEY_METRIC_DIAGRAMS: { metric: string; keys: string[]; formula: string;
   { metric: "Excitement/Greed Control", keys: ["during_excitement_greed"], formula: "6 − avg", phaseColor: "#3b82f6" },
 ];
 
-/** Rounded-rect (pill) dimensions. Large bubbles with generous internal padding so text doesn’t sit on edges. */
-const PILL = { outerW: 140, outerH: 36, outerRx: 18, centerW: 200, centerH: 44, centerRx: 22 };
-/** Radius from center to input nodes: smaller for 1–2 inputs so single-node diagrams don't look stretched. */
+/** Rounded-rect (pill) dimensions — sized to fill grid cell without overwhelming. */
+const PILL = { outerW: 200, outerH: 48, outerRx: 24, centerW: 240, centerH: 48, centerRx: 24 };
+/** Radius from center to input nodes; scaled so pills don't overlap. */
 function getDiagramRadius(keysLength: number): number {
-  if (keysLength <= 1) return 72;
-  if (keysLength <= 2) return 95;
-  return 118;
+  if (keysLength <= 1) return 88;
+  if (keysLength <= 2) return 118;
+  return 155;
 }
+
+/** Padding inside viewBox so content has breathing room but uses the space. */
+const DIAGRAM_PADDING = 24;
 
 /** One mind-map style diagram: metric in center, curved branches to question nodes. */
 function MetricDiagram({ metric, keys, formula, phaseColor, diagramId }: { metric: string; keys: string[]; formula: string; phaseColor: string; diagramId: string }) {
   const radius = getDiagramRadius(keys.length);
-  const viewW = 380;
-  const viewH = keys.length <= 1 ? 220 : 320;
-  const cx = viewW / 2;
-  const cy = keys.length <= 1 ? 88 : viewH / 2;
+  const contentW = 480;
+  const contentH = keys.length <= 1 ? 260 : 360;
+  const viewW = contentW + DIAGRAM_PADDING * 2;
+  const viewH = contentH + DIAGRAM_PADDING * 2;
+  const cx = DIAGRAM_PADDING + contentW / 2;
+  const cy = DIAGRAM_PADDING + (keys.length <= 1 ? 100 : contentH / 2);
   const filterId = `metric-diagram-shadow-${diagramId}`;
   const gradientId = `survey-gradient-${diagramId}`;
   const nodes = keys.map((_, i) => {
     const angle = (Math.PI * 2 * i) / keys.length - Math.PI / 2;
-    return { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle), label: SURVEY_KEY_LABELS[keys[i]] ?? keys[i] };
+    const label = SURVEY_KEY_QUESTIONS[keys[i]] ?? SURVEY_KEY_LABELS[keys[i]] ?? keys[i];
+    return { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle), label };
   });
   return (
     <div style={{
       position: "relative",
       width: "100%",
-      maxWidth: "380px",
-      margin: "0 auto",
-      padding: "16px",
+      padding: "24px",
       background: "linear-gradient(145deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%)",
       borderRadius: "12px",
       border: "1px solid var(--border-color)",
@@ -299,24 +333,30 @@ function MetricDiagram({ metric, keys, formula, phaseColor, diagramId }: { metri
           const midX = (cx + n.x) / 2 + (n.y > cy ? 6 : -6);
           const midY = (cy + n.y) / 2 + (n.x > cx ? -5 : 5);
           const pathD = `M ${cx} ${cy} Q ${midX} ${midY} ${n.x} ${n.y}`;
-          const w = PILL.outerW; const h = PILL.outerH; const rx = PILL.outerRx;
+          const lines = wrapLabel(n.label, 28);
+          const lineHeight = 14;
+          const h = Math.max(PILL.outerH, 14 + lines.length * lineHeight);
+          const w = PILL.outerW;
+          const rx = PILL.outerRx;
           return (
             <g key={i}>
               <path d={pathD} fill="none" stroke={phaseColor} strokeWidth="1.6" strokeLinecap="round" opacity={0.6} />
               <rect x={n.x - w / 2} y={n.y - h / 2} width={w} height={h} rx={rx} ry={rx} fill="var(--bg-primary)" stroke={phaseColor} strokeWidth="1" opacity={0.95} />
-              <text x={n.x} y={n.y} textAnchor="middle" dominantBaseline="middle" fontSize="13" fill="var(--text-primary)" style={{ fontWeight: 600 }}>{n.label}</text>
+              {lines.map((line, j) => (
+                <text key={j} x={n.x} y={n.y + (j - (lines.length - 1) / 2) * lineHeight} textAnchor="middle" dominantBaseline="middle" fontSize="13" fill="var(--text-primary)" style={{ fontWeight: 600 }}>{line}</text>
+              ))}
             </g>
           );
         })}
         <rect x={cx - PILL.centerW / 2} y={cy - PILL.centerH / 2} width={PILL.centerW} height={PILL.centerH} rx={PILL.centerRx} ry={PILL.centerRx} fill={`url(#${gradientId})`} stroke="rgba(255,255,255,0.25)" strokeWidth="1.5" filter={`url(#${filterId})`} />
-        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize="14" fill="var(--bg-primary)" style={{ fontWeight: 700 }}>{metric}</text>
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize="15" fill="var(--bg-primary)" style={{ fontWeight: 700 }}>{metric}</text>
       </svg>
       <div style={{
         textAlign: "center",
-        fontSize: "12px",
+        fontSize: "13px",
         color: "var(--text-secondary)",
-        marginTop: "8px",
-        padding: "8px 12px",
+        marginTop: "16px",
+        padding: "10px 14px",
         borderRadius: "8px",
         background: "var(--bg-primary)",
         border: "1px solid var(--border-color)",
@@ -336,12 +376,80 @@ const ENTRY_METRIC_DIAGRAMS: { metric: string; inputs: string[]; formula: string
   { metric: "Intensity Trend", inputs: ["Recent avg", "Older avg"], formula: "5 − trend" },
 ];
 
+/** Look up inputs + formula for a metric name (survey or entry) for Venn diagram. */
+function getMetricVennInfo(metricName: string): { inputs: string[]; formula: string } | null {
+  const survey = SURVEY_METRIC_DIAGRAMS.find((d) => d.metric === metricName);
+  if (survey) {
+    const inputs = survey.keys.map((k) => SURVEY_KEY_QUESTIONS[k] ?? SURVEY_KEY_LABELS[k] ?? k);
+    return { inputs, formula: survey.formula };
+  }
+  const entry = ENTRY_METRIC_DIAGRAMS.find((d) => d.metric === metricName);
+  if (entry) return { inputs: entry.inputs, formula: entry.formula };
+  return null;
+}
+
+/** Single visualization: metric as hero, inputs and formula as context. No diagram flow. */
+function MetricVennDiagram({ metricName, inputs, formula }: { metricName: string; inputs: string[]; formula: string }) {
+  return (
+    <div
+      style={{
+        width: "100%",
+        maxWidth: "480px",
+        margin: "0 auto",
+        padding: "24px",
+        borderRadius: "14px",
+        background: "linear-gradient(160deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%)",
+        border: "1px solid var(--border-color)",
+        boxShadow: "0 4px 20px rgba(0,0,0,0.12)",
+      }}
+    >
+      <div
+        style={{
+          fontSize: "20px",
+          fontWeight: "700",
+          color: "var(--accent)",
+          textAlign: "center",
+          marginBottom: "24px",
+          lineHeight: 1.3,
+        }}
+      >
+        {metricName}
+      </div>
+      <div style={{ marginBottom: "20px" }}>
+        <div style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "8px", letterSpacing: "0.04em" }}>
+          Based on
+        </div>
+        <ul style={{ margin: 0, paddingLeft: "20px", fontSize: "13px", color: "var(--text-primary)", lineHeight: 1.55 }}>
+          {inputs.map((item, i) => (
+            <li key={i} style={{ marginBottom: "6px" }}>{item}</li>
+          ))}
+        </ul>
+      </div>
+      <div
+        style={{
+          padding: "12px 14px",
+          borderRadius: "10px",
+          backgroundColor: "var(--bg-primary)",
+          border: "1px solid var(--border-color)",
+        }}
+      >
+        <div style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px", letterSpacing: "0.04em" }}>
+          Calculated as
+        </div>
+        <div style={{ fontSize: "14px", color: "var(--text-primary)", fontWeight: "500" }}>{formula}</div>
+      </div>
+    </div>
+  );
+}
+
 function EntryMetricDiagram({ metric, inputs, formula, diagramId }: { metric: string; inputs: string[]; formula: string; diagramId: string }) {
   const radius = getDiagramRadius(inputs.length);
-  const viewW = 380;
-  const viewH = inputs.length <= 1 ? 220 : inputs.length <= 2 ? 280 : 320;
-  const cx = viewW / 2;
-  const cy = inputs.length <= 1 ? 88 : viewH / 2;
+  const contentW = 480;
+  const contentH = inputs.length <= 1 ? 260 : inputs.length <= 2 ? 320 : 360;
+  const viewW = contentW + DIAGRAM_PADDING * 2;
+  const viewH = contentH + DIAGRAM_PADDING * 2;
+  const cx = DIAGRAM_PADDING + contentW / 2;
+  const cy = DIAGRAM_PADDING + (inputs.length <= 1 ? 100 : contentH / 2);
   const filterId = `entry-diagram-shadow-${diagramId}`;
   const gradientId = `entry-gradient-${diagramId}`;
   const nodes = inputs.map((_, i) => {
@@ -353,9 +461,7 @@ function EntryMetricDiagram({ metric, inputs, formula, diagramId }: { metric: st
     <div style={{
       position: "relative",
       width: "100%",
-      maxWidth: "380px",
-      margin: "0 auto",
-      padding: "16px",
+      padding: "24px",
       background: "linear-gradient(145deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%)",
       borderRadius: "12px",
       border: "1px solid var(--border-color)",
@@ -378,21 +484,21 @@ function EntryMetricDiagram({ metric, inputs, formula, diagramId }: { metric: st
           const w = PILL.outerW; const h = PILL.outerH; const rx = PILL.outerRx;
           return (
             <g key={i}>
-              <path d={pathD} fill="none" stroke="var(--border-color)" strokeWidth="1.5" strokeLinecap="round" opacity={0.55} />
+              <path d={pathD} fill="none" stroke="var(--border-color)" strokeWidth="1.6" strokeLinecap="round" opacity={0.55} />
               <rect x={n.x - w / 2} y={n.y - h / 2} width={w} height={h} rx={rx} ry={rx} fill="var(--bg-primary)" stroke="var(--border-color)" strokeWidth="1" opacity={0.95} />
-              <text x={n.x} y={n.y} textAnchor="middle" dominantBaseline="middle" fontSize="12" fill="var(--text-primary)" style={{ fontWeight: 600 }}>{n.label}</text>
+              <text x={n.x} y={n.y} textAnchor="middle" dominantBaseline="middle" fontSize="13" fill="var(--text-primary)" style={{ fontWeight: 600 }}>{n.label}</text>
             </g>
           );
         })}
         <rect x={cx - PILL.centerW / 2} y={cy - PILL.centerH / 2} width={PILL.centerW} height={PILL.centerH} rx={PILL.centerRx} ry={PILL.centerRx} fill={`url(#${gradientId})`} stroke="rgba(255,255,255,0.2)" strokeWidth="1.5" filter={`url(#${filterId})`} />
-        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize="14" fill="var(--bg-primary)" style={{ fontWeight: 700 }}>{metricShort}</text>
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize="15" fill="var(--bg-primary)" style={{ fontWeight: 700 }}>{metricShort}</text>
       </svg>
       <div style={{
         textAlign: "center",
-        fontSize: "12px",
+        fontSize: "13px",
         color: "var(--text-secondary)",
-        marginTop: "8px",
-        padding: "8px 12px",
+        marginTop: "16px",
+        padding: "10px 14px",
         borderRadius: "8px",
         background: "var(--bg-primary)",
         border: "1px solid var(--border-color)",
@@ -477,6 +583,7 @@ const POSITIVE_EMOTIONS = new Set(["Confident", "Calm", "Optimistic", "Neutral"]
 function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states: EmotionalState[] }) {
   const [showMetricsHelp, setShowMetricsHelp] = useState(false);
   const [metricGraphOpen, setMetricGraphOpen] = useState<string | null>(null);
+  const [metricInfoOpen, setMetricInfoOpen] = useState<string | null>(null);
   if (surveys.length === 0 && states.length === 0) return null;
 
   // —— Survey-based metrics (1–5 scale). Returns null when no data (for "extra" metrics); use fallback 3 for core 6 so they always show.
@@ -752,6 +859,26 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
               {metric.value}<span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>/{metric.max}</span>
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => setMetricInfoOpen(metric.name)}
+            title={`How ${metric.name} is calculated`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "28px",
+              height: "28px",
+              borderRadius: "6px",
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-secondary)",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <Info size={16} />
+          </button>
           <button
             type="button"
             onClick={() => setMetricGraphOpen(metric.name)}
@@ -1043,7 +1170,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
             </div>
             <div style={{ padding: "24px" }}>
               <p style={{ fontSize: "14px", color: "var(--text-secondary)", marginBottom: "24px", lineHeight: 1.5 }}>
-                Each metric is built from survey questions or logged emotions. The diagrams show which inputs feed into each metric (center node).
+                Each metric is built from survey questions or logged emotions. Below, each metric is shown with its inputs and how it's calculated.
               </p>
               <section style={{ marginBottom: "28px" }}>
                 <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--accent)", marginBottom: "12px" }}>From your before/during/after survey</h3>
@@ -1068,23 +1195,13 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
                   <span style={{ color: "var(--text-secondary)", fontSize: "18px" }}>→</span>
                   <span style={{ padding: "6px 12px", backgroundColor: "var(--accent)", color: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Display as /5</span>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: "24px" }}>
-                  {SURVEY_METRIC_DIAGRAMS.map((d, i) => (
-                    <div
-                      key={d.metric}
-                      style={{
-                        padding: "14px",
-                        backgroundColor: "var(--bg-tertiary)",
-                        borderRadius: "10px",
-                        border: "1px solid var(--border-color)",
-                      }}
-                    >
-                      <MetricDiagram
-                        metric={d.metric}
-                        keys={d.keys}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(380px, 1fr))", gap: "24px" }}>
+                  {SURVEY_METRIC_DIAGRAMS.map((d) => (
+                    <div key={d.metric}>
+                      <MetricVennDiagram
+                        metricName={d.metric}
+                        inputs={d.keys.map((k) => SURVEY_KEY_QUESTIONS[k] ?? SURVEY_KEY_LABELS[k] ?? k)}
                         formula={d.formula}
-                        phaseColor={d.phaseColor}
-                        diagramId={`survey-${i}-${d.metric.replace(/\s+/g, "-")}`}
                       />
                     </div>
                   ))}
@@ -1092,22 +1209,13 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
               </section>
               <section>
                 <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--accent)", marginBottom: "14px" }}>From your emotional state entries</h3>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: "24px" }}>
-                  {ENTRY_METRIC_DIAGRAMS.map((d, i) => (
-                    <div
-                      key={d.metric}
-                      style={{
-                        padding: "14px",
-                        backgroundColor: "var(--bg-tertiary)",
-                        borderRadius: "10px",
-                        border: "1px solid var(--border-color)",
-                      }}
-                    >
-                      <EntryMetricDiagram
-                        metric={d.metric}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(380px, 1fr))", gap: "24px" }}>
+                  {ENTRY_METRIC_DIAGRAMS.map((d) => (
+                    <div key={d.metric}>
+                      <MetricVennDiagram
+                        metricName={d.metric}
                         inputs={d.inputs}
                         formula={d.formula}
-                        diagramId={`entry-${i}-${d.metric.replace(/\s+/g, "-")}`}
                       />
                     </div>
                   ))}
@@ -1261,6 +1369,69 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
                     No time-series data yet. {surveyKey ? "Complete more surveys when adding emotional states." : "Log more emotional state entries to see this metric over time."}
                   </p>
                 )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Metric Venn / info diagram modal */}
+      {metricInfoOpen && (() => {
+        const vennInfo = getMetricVennInfo(metricInfoOpen);
+        if (!vennInfo) return null;
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="metric-venn-title"
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 100,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "20px",
+              backgroundColor: "rgba(0,0,0,0.6)",
+            }}
+            onClick={() => setMetricInfoOpen(null)}
+          >
+            <div
+              style={{
+                backgroundColor: "var(--bg-secondary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "12px",
+                maxWidth: "560px",
+                width: "100%",
+                maxHeight: "90vh",
+                overflow: "auto",
+                boxShadow: "0 20px 60px rgba(0,0,0,0.4)",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <h2 id="metric-venn-title" style={{ margin: 0, fontSize: "18px", fontWeight: "bold" }}>How {metricInfoOpen} is calculated</h2>
+                <button
+                  type="button"
+                  onClick={() => setMetricInfoOpen(null)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: "36px",
+                    height: "36px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-tertiary)",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <div style={{ padding: "24px" }}>
+                <MetricVennDiagram metricName={metricInfoOpen} inputs={vennInfo.inputs} formula={vennInfo.formula} />
               </div>
             </div>
           </div>
