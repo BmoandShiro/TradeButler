@@ -6069,13 +6069,18 @@ enum WindowsInstallerType {
 
 // Detect if running as installer or portable
 fn is_installer_version() -> bool {
-    // On Windows, check if running from Program Files (installer) vs current directory (portable)
+    // On Windows, check if running from Program Files or AppData (installer) vs portable
     #[cfg(windows)]
     {
         if let Ok(exe_path) = std::env::current_exe() {
             let exe_str = exe_path.to_string_lossy().to_lowercase();
-            // If in Program Files, it's likely an installer version
-            return exe_str.contains("program files") || exe_str.contains("programfiles");
+            // Program Files (any variant), or AppData\Local (common for NSIS current-user installs)
+            if exe_str.contains("program files") || exe_str.contains("programfiles") {
+                return true;
+            }
+            if exe_str.contains("\\appdata\\local\\") || exe_str.contains("/appdata/local/") {
+                return true;
+            }
         }
     }
     
@@ -6147,7 +6152,18 @@ fn compare_versions(current: &str, latest: &str) -> std::cmp::Ordering {
 #[tauri::command]
 pub async fn check_version() -> Result<VersionInfo, String> {
     let current_version = get_current_version();
-    let is_installer = is_installer_version();
+    // On Windows: treat as installer if in Program Files OR if NSIS (Uninstall exe in same dir), so custom install paths still get installer updates
+    let is_installer = {
+        let base = is_installer_version();
+        #[cfg(windows)]
+        {
+            base || (windows_installer_type() == WindowsInstallerType::Nsis)
+        }
+        #[cfg(not(windows))]
+        {
+            base
+        }
+    };
     
     // GitHub repository - update this to your actual repo
     // For now, using a placeholder - you'll need to replace with your actual GitHub repo
@@ -6158,6 +6174,8 @@ pub async fn check_version() -> Result<VersionInfo, String> {
     eprintln!("[Version Check] Starting version check...");
     eprintln!("[Version Check] Current version: {}", current_version);
     eprintln!("[Version Check] Is installer: {}", is_installer);
+    #[cfg(windows)]
+    eprintln!("[Version Check] Windows installer type: {:?}", windows_installer_type());
     eprintln!("[Version Check] API URL: {}", api_url);
     
     let client = reqwest::Client::builder()
@@ -6318,6 +6336,7 @@ pub async fn check_version() -> Result<VersionInfo, String> {
                     }
                 }
             }
+            eprintln!("[Version Check] Installer branch: chosen asset = {:?}", download_filename);
         } else {
             // Portable: only the single .exe that is NOT an installer (no "setup", no "installer", not .msi)
             for asset in &release.assets {
@@ -6328,6 +6347,7 @@ pub async fn check_version() -> Result<VersionInfo, String> {
                     break;
                 }
             }
+            eprintln!("[Version Check] Portable branch: chosen asset = {:?}", download_filename);
         }
     }
     
