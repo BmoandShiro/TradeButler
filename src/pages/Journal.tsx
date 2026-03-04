@@ -237,9 +237,27 @@ export default function Journal() {
   const JOURNAL_ENTRIES_PAGE_SIZE = 25;
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [selectedEntry, setSelectedEntry] = useState<JournalEntry | null>(() => {
-    // Try to restore selected entry ID from localStorage
     const savedId = localStorage.getItem('journal_selected_entry_id');
     return savedId ? null : null; // Will be loaded by ID in useEffect
+  });
+  // If we have a saved entry id to restore, don't show overview until load completes (avoids flash)
+  const [pendingRestoreEntryId, setPendingRestoreEntryId] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    const savedId = localStorage.getItem("journal_selected_entry_id");
+    if (savedId) {
+      const id = parseInt(savedId, 10);
+      if (!Number.isNaN(id)) return id;
+    }
+    try {
+      const wip = localStorage.getItem("journal_work_in_progress");
+      if (wip) {
+        const parsed = JSON.parse(wip) as { selectedEntryId?: number | null; isCreating?: boolean };
+        if (parsed.selectedEntryId != null && !parsed.isCreating) return parsed.selectedEntryId;
+      }
+    } catch {
+      /* ignore */
+    }
+    return null;
   });
   const [selectedTrades, setSelectedTrades] = useState<JournalTrade[]>([]);
   const [allJournalTrades, setAllJournalTrades] = useState<JournalTrade[]>([]);
@@ -597,6 +615,11 @@ export default function Journal() {
       }, 200);
     }
   }, [dataMode]);
+
+  // Clear pending restore once an entry is selected (so we don't stay in "loading" state)
+  useEffect(() => {
+    if (selectedEntry != null) setPendingRestoreEntryId(null);
+  }, [selectedEntry]);
 
   // Open specific entry/trade when navigated from Emotions (e.g. "Open in Journal")
   useEffect(() => {
@@ -2205,6 +2228,7 @@ export default function Journal() {
       setTimeout(() => restoreScroll(), 200);
     } catch (error) {
       console.error("Error loading entry:", error);
+      setPendingRestoreEntryId(null);
     }
   };
 
@@ -2645,7 +2669,11 @@ export default function Journal() {
           overflow: "hidden",
         }}
       >
-        {selectedEntry && !isCreating && !isEditing ? (
+        {pendingRestoreEntryId != null && selectedEntry == null ? (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", fontSize: "14px" }}>
+            Loading journal entry…
+          </div>
+        ) : selectedEntry && !isCreating && !isEditing ? (
           <>
             <div style={{ padding: "24px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h2 style={{ fontSize: "24px", fontWeight: "bold", marginBottom: "8px" }}>

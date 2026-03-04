@@ -2369,25 +2369,25 @@ function MetricsDisplay({
               <Line 
                 type="monotone" 
                 dataKey="stability" 
-                stroke={getGradientColor(0.9)}
+                stroke="var(--accent)"
                 strokeWidth={2}
-                dot={surveyShowDots ? { fill: getGradientColor(0.9), r: 4 } : false}
+                dot={surveyShowDots ? { fill: "var(--accent)", r: 4 } : false}
                 name="Emotional Stability"
               />
               <Line 
                 type="monotone" 
                 dataKey="discipline" 
-                stroke={getGradientColor(0.85)}
+                stroke="var(--warning)"
                 strokeWidth={2}
-                dot={surveyShowDots ? { fill: getGradientColor(0.85), r: 4 } : false}
+                dot={surveyShowDots ? { fill: "var(--warning)", r: 4 } : false}
                 name="Discipline"
               />
               <Line 
                 type="monotone" 
                 dataKey="fomo" 
-                stroke={getGradientColor(0.75)}
+                stroke="var(--success)"
                 strokeWidth={2}
-                dot={surveyShowDots ? { fill: getGradientColor(0.75), r: 4 } : false}
+                dot={surveyShowDots ? { fill: "var(--success)", r: 4 } : false}
                 name="FOMO Resistance"
               />
               {surveyUseBrush && (
