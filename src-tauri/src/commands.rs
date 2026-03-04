@@ -31,9 +31,9 @@ pub struct WebullCsvTrade {
     #[serde(rename = "Status")]
     pub status: String,
     #[serde(rename = "Filled")]
-    pub filled: i64,
+    pub filled: f64,
     #[serde(rename = "Total Qty")]
-    pub total_qty: i64,
+    pub total_qty: f64,
     #[serde(rename = "Price")]
     pub price: String, // Can have "@" prefix
     #[serde(rename = "Avg Price")]
@@ -554,8 +554,8 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
         for result in reader.deserialize() {
             let webull_trade: WebullCsvTrade = result.map_err(|e| e.to_string())?;
             
-            // Skip cancelled or unfilled trades
-            if webull_trade.status == "Cancelled" || webull_trade.filled == 0 {
+            // Skip cancelled or unfilled trades (Filled can be fractional, e.g. 0.1)
+            if webull_trade.status == "Cancelled" || webull_trade.filled <= 0.0 {
                 continue;
             }
             
@@ -581,8 +581,8 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
                 continue; // Skip trades with invalid prices
             }
             
-            // Quantity is the filled amount
-            let quantity = webull_trade.filled as f64;
+            // Quantity is the filled amount (may be fractional for fractional shares)
+            let quantity = webull_trade.filled;
             
             // Parse fees from any available fee field
             let fees = webull_trade.commission
