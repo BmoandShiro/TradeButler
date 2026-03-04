@@ -20,8 +20,6 @@ import {
 } from "../data/sandboxDocumentation";
 
 const STORAGE_KEY = "tradebutler_documentation";
-const PAPER_STORAGE_KEY = "tradebutler_documentation_paper";
-const PAPER_ORDER_KEY = "tradebutler_documentation_paper_order";
 
 interface DocPage {
   id: string;
@@ -33,13 +31,13 @@ interface DocPage {
 
 function getStorageKey(mode: DataMode): string {
   if (mode === "sandbox") return SANDBOX_DOCUMENTATION_KEY;
-  if (mode === "paper") return PAPER_STORAGE_KEY;
+  // Paper shares resources with Real
   return STORAGE_KEY;
 }
 
 function getOrderKey(mode: DataMode): string {
   if (mode === "sandbox") return SANDBOX_DOCUMENTATION_ORDER_KEY;
-  if (mode === "paper") return PAPER_ORDER_KEY;
+  // Paper shares resources with Real
   return STORAGE_KEY + "_order";
 }
 
@@ -299,7 +297,7 @@ export default function Documentation() {
         </div>
         {dataMode === "paper" && (
           <div style={{ padding: "10px 14px", margin: "0 12px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "12px", color: "var(--text-secondary)" }}>
-            Paper mode – your resources only. No example data.
+            Paper mode – trades and metrics are paper-only. Resources are shared with Real mode.
           </div>
         )}
         <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>

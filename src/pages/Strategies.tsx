@@ -6718,7 +6718,7 @@ export default function Strategies() {
         >
           {dataMode === "paper" && (
             <div style={{ padding: "10px 14px", marginBottom: "20px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
-              Paper mode – your data only. No example data.
+              Paper mode – performance and trades shown are paper-only. Strategy list and checklists are shared with Real mode.
             </div>
           )}
           <div
