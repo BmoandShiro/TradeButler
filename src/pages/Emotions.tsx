@@ -5,6 +5,7 @@ import { format } from "date-fns";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import {
   getSandboxEmotionalStates,
+  getSandboxEmotionSurveys,
   addSandboxEmotionalState,
   deleteSandboxEmotionalState,
   loadSandboxState,
@@ -15,6 +16,7 @@ import { LineChart, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, R
 import { sampleTimeSeries, CHART_MAX_POINTS, xAxisInterval } from "../utils/chartDataSampling";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import RichTextEditor from "../components/RichTextEditor";
+import { getIntensityColor } from "../utils/intensityColor";
 
 interface EmotionalState {
   id: number;
@@ -612,30 +614,9 @@ function getGradientColor(normalizedValue: number): string {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-// Intensity color for emotional states: 0/10 = green (calm), 10/10 = red (high), yellow → orange in between
+// Wrapper for shared intensity scale (0–10: green → yellow → red)
 function getIntensityColorForEmotion(intensity: number): string {
-  const v = Math.max(0, Math.min(10, intensity)) / 10; // 0–1
-  let r: number, g: number, b: number;
-  if (v <= 0.33) {
-    // Green to Yellow
-    const t = v / 0.33;
-    r = Math.round(34 + (255 - 34) * t);
-    g = 197;
-    b = Math.round(94 * (1 - t));
-  } else if (v <= 0.66) {
-    // Yellow to Orange
-    const t = (v - 0.33) / 0.33;
-    r = 255;
-    g = Math.round(255 - 90 * t);
-    b = 0;
-  } else {
-    // Orange to Red
-    const t = (v - 0.66) / 0.34;
-    r = 255;
-    g = Math.round(165 * (1 - t));
-    b = 0;
-  }
-  return `rgb(${r}, ${g}, ${b})`;
+  return getIntensityColor(intensity);
 }
 
 // Gradient and glow for state overview cards (0–10 intensity)
@@ -2823,7 +2804,7 @@ export default function Emotions() {
   const loadSurveys = async () => {
     try {
       if (dataMode === "sandbox") {
-        setSurveys([]);
+        setSurveys(getSandboxEmotionSurveys() as EmotionSurvey[]);
         return;
       }
       const data = await invoke<EmotionSurvey[]>("get_all_emotion_surveys");

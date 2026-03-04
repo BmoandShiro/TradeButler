@@ -15,8 +15,11 @@ import {
   SANDBOX_STRATEGY_CHECKLIST_ITEMS,
   SANDBOX_STRATEGY_SURVEY_METRICS,
 } from "../data/sandboxStrategySeed";
+import { getDemoEmotionSurveys, type DemoEmotionSurvey } from "../data/sandboxSurveySeed";
 
 const STORAGE_KEY = "tradebutler_sandbox_store_v2";
+const STORAGE_VERSION_KEY = "tradebutler_sandbox_store_version";
+const SANDBOX_STORE_VERSION = 3; // Bump to re-seed when emotional states need journal_entry_id linking
 const LEGACY_KEY = "tradebutler_sandbox_store_v1";
 const EXAMPLE_STORE_KEY = "tradebutler_example_store_v1";
 
@@ -33,6 +36,8 @@ export interface SandboxStoreState {
   journalEntries: ExampleJournalEntry[];
   journalTrades: ExampleJournalTrade[];
   emotionalStates: SandboxEmotionalState[];
+  /** Demo before/during/after survey responses for Psychological Metrics */
+  emotionSurveys: DemoEmotionSurvey[];
   /** journal_entry_id -> array of { entry_trade_id, exit_trade_id } */
   journalEntryPairs: Record<number, { entry_trade_id: number; exit_trade_id: number }[]>;
 }
@@ -43,18 +48,23 @@ function nextId(items: { id: number }[]): number {
 }
 
 function getSeedState(): SandboxStoreState {
+  const emotionalStates = EXAMPLE_EMOTIONAL_STATES.map((s) => {
+    const extended = s as SandboxEmotionalState & { journal_entry_id?: number | null };
+    return {
+      ...s,
+      journal_entry_id: extended.journal_entry_id ?? null,
+      journal_trade_id: null,
+      journal_entry_ids: null,
+      trade_ids: null,
+    } as SandboxEmotionalState;
+  });
   return {
     trades: EXAMPLE_TRADES.map((t) => ({ ...t })),
     strategies: EXAMPLE_STRATEGIES.map((s) => ({ ...s })),
     journalEntries: EXAMPLE_JOURNAL_ENTRIES.map((e) => ({ ...e })),
     journalTrades: EXAMPLE_JOURNAL_TRADES.map((t) => ({ ...t, r_multiple: (t as ExampleJournalTrade).r_multiple ?? null })),
-    emotionalStates: EXAMPLE_EMOTIONAL_STATES.map((s) => ({
-      ...s,
-      journal_entry_id: null,
-      journal_trade_id: null,
-      journal_entry_ids: null,
-      trade_ids: null,
-    })) as SandboxEmotionalState[],
+    emotionalStates,
+    emotionSurveys: getDemoEmotionSurveys(emotionalStates),
     journalEntryPairs: { ...EXAMPLE_JOURNAL_ENTRY_PAIRS },
   };
 }
@@ -67,15 +77,24 @@ export function loadSandboxState(): SandboxStoreState {
     if (!raw && legacyRaw) {
       const seed = getSeedState();
       saveSandboxState(seed);
+      if (typeof window !== "undefined") window.localStorage.setItem(STORAGE_VERSION_KEY, String(SANDBOX_STORE_VERSION));
       return seed;
     }
     if (!raw) return getSeedState();
+    const savedVersion = parseInt(window.localStorage.getItem(STORAGE_VERSION_KEY) || "0", 10);
+    if (savedVersion < SANDBOX_STORE_VERSION) {
+      const seed = getSeedState();
+      saveSandboxState(seed);
+      window.localStorage.setItem(STORAGE_VERSION_KEY, String(SANDBOX_STORE_VERSION));
+      return seed;
+    }
     const parsed = JSON.parse(raw) as SandboxStoreState & { version?: number };
     if (!parsed.trades || !parsed.strategies) return getSeedState();
     if (!Array.isArray(parsed.journalEntries)) parsed.journalEntries = getSeedState().journalEntries;
     if (!Array.isArray(parsed.journalTrades)) parsed.journalTrades = getSeedState().journalTrades;
     if (!Array.isArray(parsed.emotionalStates)) parsed.emotionalStates = getSeedState().emotionalStates;
     if (!parsed.journalEntryPairs || typeof parsed.journalEntryPairs !== "object") parsed.journalEntryPairs = getSeedState().journalEntryPairs;
+    if (!Array.isArray(parsed.emotionSurveys)) parsed.emotionSurveys = getDemoEmotionSurveys(parsed.emotionalStates);
     return parsed;
   } catch {
     return getSeedState();
@@ -85,6 +104,7 @@ export function loadSandboxState(): SandboxStoreState {
 export function saveSandboxState(state: SandboxStoreState) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  window.localStorage.setItem(STORAGE_VERSION_KEY, String(SANDBOX_STORE_VERSION));
   window.dispatchEvent(new CustomEvent("tradeButlerSandboxChanged"));
 }
 
@@ -389,6 +409,10 @@ export function setSandboxJournalEntryPairs(entryId: number, pairs: { entry_trad
 // ---- Emotional states ----
 export function getSandboxEmotionalStates(): SandboxEmotionalState[] {
   return loadSandboxState().emotionalStates;
+}
+
+export function getSandboxEmotionSurveys(): DemoEmotionSurvey[] {
+  return loadSandboxState().emotionSurveys;
 }
 
 export function getSandboxEmotionalStatesForJournal(entryId: number): SandboxEmotionalState[] {

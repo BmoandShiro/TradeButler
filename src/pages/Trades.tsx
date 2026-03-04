@@ -61,6 +61,8 @@ interface Strategy {
 
 const PAIRING_STORAGE_KEY = "tradebutler_pairing_method";
 const VIEW_MODE_STORAGE_KEY = "tradebutler_view_mode";
+const HIDE_PNL_DOLLARS_STORAGE_KEY = "tradebutler_hide_pnl_dollars";
+const HIDE_PNL_PERCENT_STORAGE_KEY = "tradebutler_hide_pnl_percent";
 const STRATEGY_LOCK_STORAGE_KEY = "tradebutler_strategy_lock";
 const DELETE_LOCK_STORAGE_KEY = "tradebutler_delete_lock";
 
@@ -117,6 +119,19 @@ export default function Trades() {
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">(() => {
     const saved = localStorage.getItem('trades_sort_direction');
     return (saved as "asc" | "desc") || "desc";
+  });
+  const [hidePnlDollars, setHidePnlDollars] = useState<boolean>(() => {
+    const dollars = localStorage.getItem(HIDE_PNL_DOLLARS_STORAGE_KEY);
+    if (dollars !== null) return dollars === "true";
+    const legacy = localStorage.getItem("tradebutler_hide_pnl") === "true";
+    if (legacy) localStorage.removeItem("tradebutler_hide_pnl");
+    return legacy;
+  });
+  const [hidePnlPercent, setHidePnlPercent] = useState<boolean>(() => {
+    const percent = localStorage.getItem(HIDE_PNL_PERCENT_STORAGE_KEY);
+    if (percent !== null) return percent === "true";
+    const legacy = localStorage.getItem("tradebutler_hide_pnl") === "true";
+    return legacy;
   });
   const [openJournalPairKey, setOpenJournalPairKey] = useState<string | null>(null);
   const [journalEntriesByPairKey, setJournalEntriesByPairKey] = useState<Record<string, JournalEntrySummary[]>>({});
@@ -310,6 +325,16 @@ export default function Trades() {
     setPairingMethod(method);
     localStorage.setItem(PAIRING_STORAGE_KEY, method);
   };
+
+  useEffect(() => {
+    localStorage.setItem(HIDE_PNL_DOLLARS_STORAGE_KEY, String(hidePnlDollars));
+  }, [hidePnlDollars]);
+  useEffect(() => {
+    localStorage.setItem(HIDE_PNL_PERCENT_STORAGE_KEY, String(hidePnlPercent));
+  }, [hidePnlPercent]);
+  useEffect(() => {
+    if (hidePnlDollars && sortBy === "pnl") setSortBy("date");
+  }, [hidePnlDollars, sortBy]);
 
   const toggleTradeExpansion = (tradeId: number) => {
     setExpandedTrades((prev) => {
@@ -533,6 +558,17 @@ export default function Trades() {
     return filtered;
   }, [positionGroups, searchQuery, sortBy, sortDirection, strategies]);
 
+  const tableSummary = useMemo(() => {
+    const count = viewMode === "Pair" ? filteredAndSortedPositionGroups.length : filteredAndSortedTrades.length;
+    const totalPnl = viewMode === "Pair"
+      ? filteredAndSortedPositionGroups.reduce((sum, g) => sum + g.total_pnl, 0)
+      : null;
+    const symbols = viewMode === "Pair"
+      ? new Set(filteredAndSortedPositionGroups.map((g) => g.entry_trade.symbol))
+      : new Set(filteredAndSortedTrades.map((t) => t.symbol));
+    return { count, totalPnl, symbolCount: symbols.size };
+  }, [viewMode, filteredAndSortedTrades, filteredAndSortedPositionGroups]);
+
   if (loading) {
     return (
       <div style={{ padding: "40px", textAlign: "center" }}>
@@ -641,6 +677,42 @@ export default function Trades() {
               </button>
             </div>
           </div>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              fontSize: "14px",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={hidePnlDollars}
+              onChange={(e) => setHidePnlDollars(e.target.checked)}
+              style={{ cursor: "pointer" }}
+            />
+            <span>Hide P&L ($)</span>
+          </label>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              fontSize: "14px",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={hidePnlPercent}
+              onChange={(e) => setHidePnlPercent(e.target.checked)}
+              style={{ cursor: "pointer" }}
+            />
+            <span>Hide P&L (%)</span>
+          </label>
         </div>
       </div>
       <div style={{ marginBottom: "30px" }}>
@@ -716,7 +788,7 @@ export default function Trades() {
           >
             <option value="date">Entry Date</option>
             <option value="symbol">Symbol</option>
-            <option value="pnl">P&L</option>
+            {!hidePnlDollars && <option value="pnl">P&L</option>}
             <option value="price">Entry Price</option>
             <option value="quantity">Entry Quantity</option>
             {viewMode === "Pair" && <option value="trades">Trades</option>}
@@ -738,6 +810,54 @@ export default function Trades() {
           >
             <ArrowUpDown size={16} />
           </button>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginLeft: "4px", flexWrap: "wrap" }}>
+          <span
+            title={viewMode === "Pair" ? "Position groups in current filters" : "Trades in current filters"}
+            style={{
+              padding: "6px 10px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              fontSize: "12px",
+              color: "var(--text-secondary)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <strong style={{ color: "var(--text-primary)", fontWeight: "600" }}>{tableSummary.count}</strong> {viewMode === "Pair" ? "pairs" : "trades"}
+          </span>
+          <span
+            title="Unique symbols in results"
+            style={{
+              padding: "6px 10px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              fontSize: "12px",
+              color: "var(--text-secondary)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <strong style={{ color: "var(--text-primary)", fontWeight: "600" }}>{tableSummary.symbolCount}</strong> symbols
+          </span>
+          {!hidePnlDollars && viewMode === "Pair" && tableSummary.totalPnl !== null && (
+            <span
+              title="Total P&L of visible pairs"
+              style={{
+                padding: "6px 10px",
+                backgroundColor: "var(--bg-tertiary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                fontSize: "12px",
+                color: "var(--text-secondary)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              P&L: <strong style={{ color: tableSummary.totalPnl >= 0 ? "var(--profit)" : "var(--loss)", fontWeight: "600" }}>
+                {tableSummary.totalPnl >= 0 ? "+" : ""}${formatWithCommas(tableSummary.totalPnl, { decimals: 2 })}
+              </strong>
+            </span>
+          )}
         </div>
       </div>
 
@@ -777,10 +897,12 @@ export default function Trades() {
                     <SortableHeader column="quantity" label="Entry Qty" viewMode={viewMode} />
                     <SortableHeader column="price" label="Entry Price" viewMode={viewMode} />
                     <SortableHeader column="trades" label="Trades" viewMode={viewMode} />
-                    <SortableHeader column="pnl" label="P&L" viewMode={viewMode} />
-                    <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                      %
-                    </th>
+                    {!hidePnlDollars && <SortableHeader column="pnl" label="P&L" viewMode={viewMode} />}
+                    {!hidePnlPercent && (
+                      <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                        %
+                      </th>
+                    )}
                     <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                         <span>Strategy</span>
@@ -871,34 +993,38 @@ export default function Trades() {
                           <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
                             {group.position_trades.length}
                           </td>
-                          <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
-                            <span
-                              style={{
-                                fontWeight: "600",
-                                color: group.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
-                              }}
-                            >
-                              {group.total_pnl >= 0 ? "+" : ""}${formatWithCommas(group.total_pnl, { decimals: 2 })}
-                            </span>
-                          </td>
-                          <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
-                            {group.final_quantity === 0 && group.position_trades.length >= 2 && (() => {
-                              const entryPrice = group.entry_trade.price;
-                              const lastTrade = group.position_trades[group.position_trades.length - 1];
-                              const exitPrice = lastTrade.price;
-                              const percentage = entryPrice > 0 ? ((exitPrice - entryPrice) / entryPrice) * 100 : 0;
-                              return (
-                                <span
-                                  style={{
-                                    fontWeight: "600",
-                                    color: percentage >= 0 ? "var(--profit)" : "var(--loss)",
-                                  }}
-                                >
-                                  {percentage >= 0 ? "+" : ""}{formatWithCommas(percentage, { decimals: 2 })}%
-                                </span>
-                              );
-                            })()}
-                          </td>
+                          {!hidePnlDollars && (
+                            <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
+                              <span
+                                style={{
+                                  fontWeight: "600",
+                                  color: group.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                                }}
+                              >
+                                {group.total_pnl >= 0 ? "+" : ""}${formatWithCommas(group.total_pnl, { decimals: 2 })}
+                              </span>
+                            </td>
+                          )}
+                          {!hidePnlPercent && (
+                            <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
+                              {group.final_quantity === 0 && group.position_trades.length >= 2 && (() => {
+                                const entryPrice = group.entry_trade.price;
+                                const lastTrade = group.position_trades[group.position_trades.length - 1];
+                                const exitPrice = lastTrade.price;
+                                const percentage = entryPrice > 0 ? ((exitPrice - entryPrice) / entryPrice) * 100 : 0;
+                                return (
+                                  <span
+                                    style={{
+                                      fontWeight: "600",
+                                      color: percentage >= 0 ? "var(--profit)" : "var(--loss)",
+                                    }}
+                                  >
+                                    {percentage >= 0 ? "+" : ""}{formatWithCommas(percentage, { decimals: 2 })}%
+                                  </span>
+                                );
+                              })()}
+                            </td>
+                          )}
                           <td style={{ padding: "12px 16px", fontSize: "14px" }}>
                             <select
                               value={group.entry_trade.strategy_id ? String(group.entry_trade.strategy_id) : ""}
@@ -1389,7 +1515,7 @@ export default function Trades() {
                   <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
                     Value
                   </th>
-                  <SortableHeader column="pnl" label="P&L" viewMode={viewMode} />
+                  {!hidePnlDollars && <SortableHeader column="pnl" label="P&L" viewMode={viewMode} />}
                   <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
                     Type
                   </th>
@@ -1507,18 +1633,20 @@ export default function Trades() {
                         <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right", fontWeight: "600" }}>
                           ${formatWithCommas(trade.quantity * trade.price, { decimals: 2 })}
                         </td>
-                        <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
-                          {hasPairs && (
-                            <span
-                              style={{
-                                fontWeight: "600",
-                                color: totalPnL >= 0 ? "var(--profit)" : "var(--loss)",
-                              }}
-                            >
-                              {totalPnL >= 0 ? "+" : ""}${formatWithCommas(totalPnL, { decimals: 2 })}
-                            </span>
-                          )}
-                        </td>
+                        {!hidePnlDollars && (
+                          <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
+                            {hasPairs && (
+                              <span
+                                style={{
+                                  fontWeight: "600",
+                                  color: totalPnL >= 0 ? "var(--profit)" : "var(--loss)",
+                                }}
+                              >
+                                {totalPnL >= 0 ? "+" : ""}${formatWithCommas(totalPnL, { decimals: 2 })}
+                              </span>
+                            )}
+                          </td>
+                        )}
                         <td style={{ padding: "12px 16px", fontSize: "14px", color: "var(--text-secondary)" }}>
                           {trade.order_type}
                         </td>
@@ -1666,42 +1794,48 @@ export default function Trades() {
                                     <div style={{ gridColumn: "1 / -1", paddingTop: "12px", borderTop: "1px solid var(--border-color)" }}>
                                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
                                         <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
-                                          <div>
-                                            <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Net P&L: </span>
-                                            <span
-                                              style={{
-                                                fontSize: "16px",
-                                                fontWeight: "600",
-                                                color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
-                                                display: "flex",
-                                                alignItems: "center",
-                                                gap: "4px",
-                                              }}
-                                            >
-                                              {pair.net_profit_loss >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
-                                              {pair.net_profit_loss >= 0 ? "+" : ""}${formatWithCommas(pair.net_profit_loss, { decimals: 2 })}
-                                            </span>
-                                          </div>
-                                          <div>
-                                            <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Return: </span>
-                                            <span
-                                              style={{
-                                                fontSize: "16px",
-                                                fontWeight: "600",
-                                                color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
-                                              }}
-                                            >
-                                              {(() => {
-                                                const percentage = pair.entry_price > 0 ? ((pair.exit_price - pair.entry_price) / pair.entry_price) * 100 : 0;
-                                                return `${percentage >= 0 ? "+" : ""}${formatWithCommas(percentage, { decimals: 2 })}%`;
-                                              })()}
-                                            </span>
-                                          </div>
+                                          {!hidePnlDollars && (
+                                            <div>
+                                              <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Net P&L: </span>
+                                              <span
+                                                style={{
+                                                  fontSize: "16px",
+                                                  fontWeight: "600",
+                                                  color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
+                                                  display: "flex",
+                                                  alignItems: "center",
+                                                  gap: "4px",
+                                                }}
+                                              >
+                                                {pair.net_profit_loss >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                                                {pair.net_profit_loss >= 0 ? "+" : ""}${formatWithCommas(pair.net_profit_loss, { decimals: 2 })}
+                                              </span>
+                                            </div>
+                                          )}
+                                          {!hidePnlPercent && (
+                                            <div>
+                                              <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Return: </span>
+                                              <span
+                                                style={{
+                                                  fontSize: "16px",
+                                                  fontWeight: "600",
+                                                  color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
+                                                }}
+                                              >
+                                                {(() => {
+                                                  const percentage = pair.entry_price > 0 ? ((pair.exit_price - pair.entry_price) / pair.entry_price) * 100 : 0;
+                                                  return `${percentage >= 0 ? "+" : ""}${formatWithCommas(percentage, { decimals: 2 })}%`;
+                                                })()}
+                                              </span>
+                                            </div>
+                                          )}
                                         </div>
                                         <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-                                          <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                                            Gross: ${formatWithCommas(pair.gross_profit_loss, { decimals: 2 })}
-                                          </div>
+                                          {!hidePnlDollars && (
+                                            <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                                              Gross: ${formatWithCommas(pair.gross_profit_loss, { decimals: 2 })}
+                                            </div>
+                                          )}
                                           <button
                                             onClick={(e) => {
                                               e.stopPropagation();

@@ -6,6 +6,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { format, parse } from "date-fns";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
+import { getSurveyScoreColor, getSurveyScoreBgRgba } from "../utils/intensityColor";
 import RichTextEditor from "../components/RichTextEditor";
 import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
@@ -26,6 +27,7 @@ import {
   setSandboxJournalEntryPairs,
   getSandboxEmotionalStates,
   getSandboxEmotionalStatesForJournal,
+  getSandboxEmotionSurveys,
   addSandboxJournalEntryToEmotionalStates,
   removeSandboxJournalEntryFromEmotionalStates,
   linkSandboxEmotionalStatesToJournal,
@@ -139,35 +141,62 @@ const INTENSITY_LABELS: Record<number, string> = {
   6: "Strong", 7: "Very strong", 8: "Intense", 9: "Severe", 10: "Extreme",
 };
 
-/** Same question groups as Emotions page — unified emotional state entry format */
+/** Same question groups as Emotions page — unified emotional state entry format. highIsGood: true = 5 is desirable, false = 1 is desirable. */
 const JOURNAL_SURVEY_QUESTIONS = {
   before: [
-    { key: "before_calm_clear", question: "How calm and mentally clear did you feel before considering this trade?", scale: "1 = Very anxious/confused, 5 = Very calm/clear" },
-    { key: "before_urgency_pressure", question: "Did you feel any urgency or pressure to \"make something happen\" in the market?", scale: "1 = No urgency, 5 = Extreme pressure" },
-    { key: "before_confidence_vs_validation", question: "Were you feeling confident in yourself, or seeking validation from a win?", scale: "1 = Confident in self, 5 = Seeking validation" },
-    { key: "before_fomo", question: "Did fear of missing out (FOMO) influence your desire to enter?", scale: "1 = No FOMO, 5 = Strong FOMO" },
-    { key: "before_recovering_loss", question: "Were you trying to recover from a previous loss emotionally?", scale: "1 = Not at all, 5 = Strongly trying to recover" },
-    { key: "before_patient_detached", question: "Did you feel patient and detached, or restless and impulsive?", scale: "1 = Patient/detached, 5 = Restless/impulsive" },
-    { key: "before_trust_process", question: "How strong was your trust in your process at that moment?", scale: "1 = No trust, 5 = Complete trust" },
-    { key: "before_emotional_state", question: "Were you feeling bored, excited, anxious, or neutral before entry?", scale: "1 = Neutral/calm, 5 = Extremely emotional (any)" },
+    { key: "before_calm_clear", question: "How calm and mentally clear did you feel before considering this trade?", scale: "1 = Very anxious/confused, 5 = Very calm/clear", highIsGood: true },
+    { key: "before_urgency_pressure", question: "Did you feel any urgency or pressure to \"make something happen\" in the market?", scale: "1 = No urgency, 5 = Extreme pressure", highIsGood: false },
+    { key: "before_confidence_vs_validation", question: "Were you feeling confident in yourself, or seeking validation from a win?", scale: "1 = Confident in self, 5 = Seeking validation", highIsGood: false },
+    { key: "before_fomo", question: "Did fear of missing out (FOMO) influence your desire to enter?", scale: "1 = No FOMO, 5 = Strong FOMO", highIsGood: false },
+    { key: "before_recovering_loss", question: "Were you trying to recover from a previous loss emotionally?", scale: "1 = Not at all, 5 = Strongly trying to recover", highIsGood: false },
+    { key: "before_patient_detached", question: "Did you feel patient and detached, or restless and impulsive?", scale: "1 = Patient/detached, 5 = Restless/impulsive", highIsGood: false },
+    { key: "before_trust_process", question: "How strong was your trust in your process at that moment?", scale: "1 = No trust, 5 = Complete trust", highIsGood: true },
+    { key: "before_emotional_state", question: "Were you feeling bored, excited, anxious, or neutral before entry?", scale: "1 = Neutral/calm, 5 = Extremely emotional (any)", highIsGood: false },
   ],
   during: [
-    { key: "during_stable", question: "How stable were your emotions once the trade was live?", scale: "1 = Very stable, 5 = Very unstable" },
-    { key: "during_tension_stress", question: "Did you feel tension, nervousness, or physical stress while price moved?", scale: "1 = No tension, 5 = Extreme tension/stress" },
-    { key: "during_tempted_interfere", question: "Were you tempted to interfere with the trade out of fear or hope?", scale: "1 = No temptation, 5 = Strong temptation" },
-    { key: "during_need_control", question: "Did you feel a need to \"control\" the outcome instead of letting it play out?", scale: "1 = Let it play, 5 = Strong need to control" },
-    { key: "during_fear_loss", question: "How strong was your fear of loss while in the position?", scale: "1 = No fear, 5 = Extreme fear" },
-    { key: "during_excitement_greed", question: "How strong was your excitement or greed as price moved in your favor?", scale: "1 = Calm, 5 = Extreme excitement/greed" },
-    { key: "during_mentally_present", question: "Did you feel mentally present, or distracted and reactive?", scale: "1 = Very present, 5 = Very distracted/reactive" },
+    { key: "during_stable", question: "How stable were your emotions once the trade was live?", scale: "1 = Very stable, 5 = Very unstable", highIsGood: false },
+    { key: "during_tension_stress", question: "Did you feel tension, nervousness, or physical stress while price moved?", scale: "1 = No tension, 5 = Extreme tension/stress", highIsGood: false },
+    { key: "during_tempted_interfere", question: "Were you tempted to interfere with the trade out of fear or hope?", scale: "1 = No temptation, 5 = Strong temptation", highIsGood: false },
+    { key: "during_need_control", question: "Did you feel a need to \"control\" the outcome instead of letting it play out?", scale: "1 = Let it play, 5 = Strong need to control", highIsGood: false },
+    { key: "during_fear_loss", question: "How strong was your fear of loss while in the position?", scale: "1 = No fear, 5 = Extreme fear", highIsGood: false },
+    { key: "during_excitement_greed", question: "How strong was your excitement or greed as price moved in your favor?", scale: "1 = Calm, 5 = Extreme excitement/greed", highIsGood: false },
+    { key: "during_mentally_present", question: "Did you feel mentally present, or distracted and reactive?", scale: "1 = Very present, 5 = Very distracted/reactive", highIsGood: false },
   ],
   after: [
-    { key: "after_accept_outcome", question: "How well did you accept the outcome emotionally, regardless of win or loss?", scale: "1 = Full acceptance, 5 = Poor acceptance" },
-    { key: "after_emotional_reaction", question: "Did you feel relief, frustration, disappointment, or satisfaction?", scale: "1 = Neutral/balanced, 5 = Strong emotional reaction" },
-    { key: "after_confidence_affected", question: "Did the result affect your confidence in yourself?", scale: "1 = No effect, 5 = Strong effect (positive or negative)" },
-    { key: "after_tempted_another_trade", question: "Did you feel tempted to immediately take another trade to change your emotional state?", scale: "1 = No temptation, 5 = Strong temptation" },
-    { key: "after_proud_discipline", question: "Did you feel proud of your discipline, or focused only on the money outcome?", scale: "1 = Proud of discipline, 5 = Only focused on money" },
+    { key: "after_accept_outcome", question: "How well did you accept the outcome emotionally, regardless of win or loss?", scale: "1 = Full acceptance, 5 = Poor acceptance", highIsGood: false },
+    { key: "after_emotional_reaction", question: "Did you feel relief, frustration, disappointment, or satisfaction?", scale: "1 = Neutral/balanced, 5 = Strong emotional reaction", highIsGood: false },
+    { key: "after_confidence_affected", question: "Did the result affect your confidence in yourself?", scale: "1 = No effect, 5 = Strong effect (positive or negative)", highIsGood: false },
+    { key: "after_tempted_another_trade", question: "Did you feel tempted to immediately take another trade to change your emotional state?", scale: "1 = No temptation, 5 = Strong temptation", highIsGood: false },
+    { key: "after_proud_discipline", question: "Did you feel proud of your discipline, or focused only on the money outcome?", scale: "1 = Proud of discipline, 5 = Only focused on money", highIsGood: false },
   ],
 };
+
+/** Emotion survey linked to an emotional state (before/during/after 1–5 responses). */
+interface JournalEmotionSurvey {
+  id: number;
+  emotional_state_id: number;
+  timestamp: string;
+  before_calm_clear: number;
+  before_urgency_pressure: number;
+  before_confidence_vs_validation: number;
+  before_fomo: number;
+  before_recovering_loss: number;
+  before_patient_detached: number;
+  before_trust_process: number;
+  before_emotional_state: number;
+  during_stable: number;
+  during_tension_stress: number;
+  during_tempted_interfere: number;
+  during_need_control: number;
+  during_fear_loss: number;
+  during_excitement_greed: number;
+  during_mentally_present: number;
+  after_accept_outcome: number;
+  after_emotional_reaction: number;
+  after_confidence_affected: number;
+  after_tempted_another_trade: number;
+  after_proud_discipline: number;
+}
 
 /** Group emotional states by timestamp (same timestamp = one entry with shared notes). */
 function groupEmotionalStatesByTimestamp(states: JournalEmotionalState[]): JournalEmotionalState[][] {
@@ -325,6 +354,7 @@ export default function Journal() {
   const [emotionalStateDeleteTarget, setEmotionalStateDeleteTarget] = useState<null | { type: "saved"; states: JournalEmotionalState[] } | { type: "pending"; tradeIndex: number; idx: number }>(null);
   // View mode: emotional states for the selected entry (when not editing), and whether the section is expanded
   const [viewEntryEmotionalStates, setViewEntryEmotionalStates] = useState<JournalEmotionalState[]>([]);
+  const [viewEntrySurveys, setViewEntrySurveys] = useState<JournalEmotionSurvey[]>([]);
   const [emotionalStatesSectionExpanded, setEmotionalStatesSectionExpanded] = useState(false);
   // For "Link to emotional states" / "Link to real trades" from Journal (entry-level)
   const [allEmotionalStates, setAllEmotionalStates] = useState<JournalEmotionalState[]>([]);
@@ -736,6 +766,31 @@ export default function Journal() {
     })();
     return () => { cancelled = true; };
   }, [selectedEntry?.id, isCreating, isEditing, dataMode]);
+
+  // Load emotion surveys for the emotional states linked to this journal entry (for view mode)
+  useEffect(() => {
+    if (viewEntryEmotionalStates.length === 0) {
+      setViewEntrySurveys([]);
+      return;
+    }
+    const stateIds = new Set(viewEntryEmotionalStates.map((s) => s.id));
+    let cancelled = false;
+    (async () => {
+      try {
+        if (dataMode === "sandbox") {
+          const all = getSandboxEmotionSurveys() as unknown as JournalEmotionSurvey[];
+          const filtered = all.filter((s) => stateIds.has(s.emotional_state_id));
+          if (!cancelled) setViewEntrySurveys(filtered);
+          return;
+        }
+        const all = await invoke<JournalEmotionSurvey[]>("get_all_emotion_surveys");
+        if (!cancelled) setViewEntrySurveys(all.filter((s) => stateIds.has(s.emotional_state_id)));
+      } catch {
+        if (!cancelled) setViewEntrySurveys([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [viewEntryEmotionalStates, dataMode]);
 
   // Load all emotional states and real trades for "Link to" dropdowns when on Emotional State tab
   useEffect(() => {
@@ -2903,6 +2958,7 @@ export default function Journal() {
                         groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).map((group) => {
                           const first = group[0];
                           const notes = first.notes;
+                          const survey = viewEntrySurveys.find((s) => s.emotional_state_id === first.id);
                           return (
                             <div
                               key={first.timestamp}
@@ -2924,7 +2980,52 @@ export default function Journal() {
                                 ))}
                               </div>
                               {notes && (
-                                <div style={{ fontSize: "13px", color: "var(--text-secondary)" }} dangerouslySetInnerHTML={{ __html: notes }} />
+                                <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: survey ? "12px" : 0 }} dangerouslySetInnerHTML={{ __html: notes }} />
+                              )}
+                              {survey && (
+                                <div style={{ marginTop: "14px", paddingTop: "14px", borderTop: "1px solid var(--border-color)" }}>
+                                  <div style={{ fontSize: "11px", color: "var(--accent)", marginBottom: "12px", letterSpacing: "0.03em", fontWeight: "500" }}>Survey</div>
+                                  {(["before", "during", "after"] as const).map((phase) => {
+                                    const phaseStyle = phase === "before"
+                                      ? { borderColor: "var(--accent)", labelColor: "var(--accent)" }
+                                      : phase === "during"
+                                        ? { borderColor: "var(--warning)", labelColor: "var(--warning)" }
+                                        : { borderColor: "var(--success)", labelColor: "var(--success)" };
+                                    return (
+                                      <div key={phase} style={{ marginBottom: "14px", paddingLeft: "12px", borderLeft: `2px solid ${phaseStyle.borderColor}` }}>
+                                        <div style={{ fontSize: "11px", color: phaseStyle.labelColor, marginBottom: "8px", fontWeight: "500" }}>{phase}</div>
+                                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                          {JOURNAL_SURVEY_QUESTIONS[phase].map((q) => {
+                                            const score = (survey as unknown as Record<string, number>)[q.key];
+                                            const scoreNum = typeof score === "number" && score >= 1 && score <= 5 ? score : null;
+                                            const pillColor = scoreNum != null ? getSurveyScoreColor(scoreNum) : "var(--text-secondary)";
+                                            const pillBg = scoreNum != null ? getSurveyScoreBgRgba(scoreNum) : "var(--bg-tertiary)";
+                                            return (
+                                              <div key={q.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", fontSize: "12px" }}>
+                                                <span style={{ color: "var(--text-secondary)", flex: 1, lineHeight: 1.35 }}>{q.question}</span>
+                                                <span
+                                                  style={{
+                                                    flexShrink: 0,
+                                                    minWidth: "28px",
+                                                    padding: "3px 8px",
+                                                    borderRadius: "6px",
+                                                    backgroundColor: pillBg,
+                                                    color: pillColor,
+                                                    fontSize: "12px",
+                                                    fontWeight: "500",
+                                                    textAlign: "center",
+                                                  }}
+                                                >
+                                                  {score != null ? score : "—"}
+                                                </span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               )}
                             </div>
                           );

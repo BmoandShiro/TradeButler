@@ -111,6 +111,7 @@ export interface YearEmotionalState {
   intensity: number;
   notes: string | null;
   trade_id: number | null;
+  journal_entry_id?: number | null;
 }
 
 export function getYearOfSandboxData(): {
@@ -223,6 +224,7 @@ export function getYearOfSandboxData(): {
     }
 
     const firstEntry = trades[trades.length - tradesThisDay.length * 2];
+    const journalEntryIdThisDay = dayIdx % 3 === 0 ? journalEntryId - 1 : null;
     for (let e = 0; e < 2; e++) {
       emotionalStates.push({
         id: emotionalStateId++,
@@ -231,6 +233,7 @@ export function getYearOfSandboxData(): {
         intensity: 3 + (dayIdx + e) % 6,
         notes: `${dateStr} – ${EMOTIONS[(dayIdx + e) % EMOTIONS.length]} (${3 + (dayIdx + e) % 6}/10)`,
         trade_id: e === 0 && firstEntry ? firstEntry.id : null,
+        journal_entry_id: journalEntryIdThisDay,
       });
     }
   }
