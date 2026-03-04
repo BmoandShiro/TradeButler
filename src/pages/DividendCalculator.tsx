@@ -4,6 +4,7 @@ import { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, R
 import { invoke } from "@tauri-apps/api/tauri";
 import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import type { DataMode } from "../utils/dataMode";
+import { formatCompactNumber } from "../utils/formatCompactNumber";
 
 interface DividendYearResult {
   year: number;
@@ -1321,7 +1322,7 @@ export default function DividendCalculator() {
                   <YAxis
                     stroke="var(--text-secondary)"
                     tick={{ fill: "var(--text-secondary)", fontSize: 12 }}
-                    tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`}
+                    tickFormatter={(value) => `$${formatCompactNumber(value, { decimals: 0 }).replace(/k$/, "K")}`}
                     label={{ value: "Total Dividends", angle: -90, position: "insideLeft", fill: "var(--text-secondary)" }}
                   />
                   <Tooltip
@@ -1354,7 +1355,7 @@ export default function DividendCalculator() {
                   <YAxis
                     stroke="var(--text-secondary)"
                     tick={{ fill: "var(--text-secondary)", fontSize: 12 }}
-                    tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`}
+                    tickFormatter={(value) => `$${formatCompactNumber(value, { decimals: 0 }).replace(/k$/, "K")}`}
                     label={{ value: "Total Dividends", angle: -90, position: "insideLeft", fill: "var(--text-secondary)" }}
                   />
                   <Tooltip

@@ -6,6 +6,7 @@ import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, BarChart3, Lock, U
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { TradeChart } from "../components/TradeChart";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import { formatWithCommas } from "../utils/formatCompactNumber";
 import { loadSandboxState, deleteSandboxTrade, updateSandboxTradeStrategy } from "../utils/sandboxStore";
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 
@@ -857,7 +858,7 @@ export default function Trades() {
                             {group.entry_trade.symbol}
                           </td>
                           <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
-                            {group.entry_trade.quantity.toFixed(4)}
+                            {formatWithCommas(group.entry_trade.quantity, { minDecimals: 4, maxDecimals: 4 })}
                             {group.entry_trade.side.toUpperCase() === "SELL" && (
                               <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "4px" }}>
                                 (Short)
@@ -865,7 +866,7 @@ export default function Trades() {
                             )}
                           </td>
                           <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
-                            ${group.entry_trade.price.toFixed(2)}
+                            ${formatWithCommas(group.entry_trade.price, { decimals: 2 })}
                           </td>
                           <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
                             {group.position_trades.length}
@@ -877,7 +878,7 @@ export default function Trades() {
                                 color: group.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
                               }}
                             >
-                              {group.total_pnl >= 0 ? "+" : ""}${group.total_pnl.toFixed(2)}
+                              {group.total_pnl >= 0 ? "+" : ""}${formatWithCommas(group.total_pnl, { decimals: 2 })}
                             </span>
                           </td>
                           <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
@@ -893,7 +894,7 @@ export default function Trades() {
                                     color: percentage >= 0 ? "var(--profit)" : "var(--loss)",
                                   }}
                                 >
-                                  {percentage >= 0 ? "+" : ""}{percentage.toFixed(2)}%
+                                  {percentage >= 0 ? "+" : ""}{formatWithCommas(percentage, { decimals: 2 })}%
                                 </span>
                               );
                             })()}
@@ -1024,13 +1025,13 @@ export default function Trades() {
                                               </span>
                                             </td>
                                             <td style={{ padding: "8px 12px", fontSize: "13px", textAlign: "right" }}>
-                                              {trade.quantity.toFixed(4)}
+                                              {formatWithCommas(trade.quantity, { minDecimals: 4, maxDecimals: 4 })}
                                             </td>
                                             <td style={{ padding: "8px 12px", fontSize: "13px", textAlign: "right" }}>
-                                              ${trade.price.toFixed(2)}
+                                              ${formatWithCommas(trade.price, { decimals: 2 })}
                                             </td>
                                             <td style={{ padding: "8px 12px", fontSize: "13px", textAlign: "right" }}>
-                                              ${(trade.quantity * trade.price).toFixed(2)}
+                                              ${formatWithCommas(trade.quantity * trade.price, { decimals: 2 })}
                                             </td>
                                             <td style={{ 
                                               padding: "8px 12px", 
@@ -1043,7 +1044,7 @@ export default function Trades() {
                                                   : "var(--loss)",
                                               fontWeight: isClosed ? "normal" : "600"
                                             }}>
-                                              {isClosed ? "0.0000" : (positionSize > 0 ? "+" : "") + positionSize.toFixed(4)}
+                                              {isClosed ? "0.0000" : (positionSize > 0 ? "+" : "") + formatWithCommas(positionSize, { minDecimals: 4, maxDecimals: 4 })}
                                             </td>
                                             <td style={{ padding: "8px 12px", textAlign: "center" }}>
                                               <button
@@ -1498,13 +1499,13 @@ export default function Trades() {
                           </span>
                         </td>
                         <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
-                          {trade.quantity.toFixed(4)}
+                          {formatWithCommas(trade.quantity, { minDecimals: 4, maxDecimals: 4 })}
                         </td>
                         <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
-                          ${trade.price.toFixed(2)}
+                          ${formatWithCommas(trade.price, { decimals: 2 })}
                         </td>
                         <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right", fontWeight: "600" }}>
-                          ${(trade.quantity * trade.price).toFixed(2)}
+                          ${formatWithCommas(trade.quantity * trade.price, { decimals: 2 })}
                         </td>
                         <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
                           {hasPairs && (
@@ -1514,7 +1515,7 @@ export default function Trades() {
                                 color: totalPnL >= 0 ? "var(--profit)" : "var(--loss)",
                               }}
                             >
-                              {totalPnL >= 0 ? "+" : ""}${totalPnL.toFixed(2)}
+                              {totalPnL >= 0 ? "+" : ""}${formatWithCommas(totalPnL, { decimals: 2 })}
                             </span>
                           )}
                         </td>
@@ -1627,15 +1628,15 @@ export default function Trades() {
                                         </div>
                                         <div style={{ display: "flex", justifyContent: "space-between" }}>
                                           <span style={{ color: "var(--text-secondary)" }}>Price:</span>
-                                          <span>${(trade.side === "BUY" ? pair.exit_price : pair.entry_price).toFixed(2)}</span>
+                                          <span>${formatWithCommas(trade.side === "BUY" ? pair.exit_price : pair.entry_price, { decimals: 2 })}</span>
                                         </div>
                                         <div style={{ display: "flex", justifyContent: "space-between" }}>
                                           <span style={{ color: "var(--text-secondary)" }}>Quantity:</span>
-                                          <span>{pair.quantity.toFixed(4)}</span>
+                                          <span>{formatWithCommas(pair.quantity, { minDecimals: 4, maxDecimals: 4 })}</span>
                                         </div>
                                         <div style={{ display: "flex", justifyContent: "space-between" }}>
                                           <span style={{ color: "var(--text-secondary)" }}>Fees:</span>
-                                          <span>${(trade.side === "BUY" ? pair.exit_fees : pair.entry_fees).toFixed(2)}</span>
+                                          <span>${formatWithCommas(trade.side === "BUY" ? pair.exit_fees : pair.entry_fees, { decimals: 2 })}</span>
                                         </div>
                                       </div>
                                     </div>
@@ -1650,15 +1651,15 @@ export default function Trades() {
                                         </div>
                                         <div style={{ display: "flex", justifyContent: "space-between" }}>
                                           <span style={{ color: "var(--text-secondary)" }}>Price:</span>
-                                          <span>${(trade.side === "BUY" ? pair.entry_price : pair.exit_price).toFixed(2)}</span>
+                                          <span>${formatWithCommas(trade.side === "BUY" ? pair.entry_price : pair.exit_price, { decimals: 2 })}</span>
                                         </div>
                                         <div style={{ display: "flex", justifyContent: "space-between" }}>
                                           <span style={{ color: "var(--text-secondary)" }}>Quantity:</span>
-                                          <span>{pair.quantity.toFixed(4)}</span>
+                                          <span>{formatWithCommas(pair.quantity, { minDecimals: 4, maxDecimals: 4 })}</span>
                                         </div>
                                         <div style={{ display: "flex", justifyContent: "space-between" }}>
                                           <span style={{ color: "var(--text-secondary)" }}>Fees:</span>
-                                          <span>${(trade.side === "BUY" ? pair.entry_fees : pair.exit_fees).toFixed(2)}</span>
+                                          <span>${formatWithCommas(trade.side === "BUY" ? pair.entry_fees : pair.exit_fees, { decimals: 2 })}</span>
                                         </div>
                                       </div>
                                     </div>
@@ -1678,7 +1679,7 @@ export default function Trades() {
                                               }}
                                             >
                                               {pair.net_profit_loss >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
-                                              {pair.net_profit_loss >= 0 ? "+" : ""}${pair.net_profit_loss.toFixed(2)}
+                                              {pair.net_profit_loss >= 0 ? "+" : ""}${formatWithCommas(pair.net_profit_loss, { decimals: 2 })}
                                             </span>
                                           </div>
                                           <div>
@@ -1692,14 +1693,14 @@ export default function Trades() {
                                             >
                                               {(() => {
                                                 const percentage = pair.entry_price > 0 ? ((pair.exit_price - pair.entry_price) / pair.entry_price) * 100 : 0;
-                                                return `${percentage >= 0 ? "+" : ""}${percentage.toFixed(2)}%`;
+                                                return `${percentage >= 0 ? "+" : ""}${formatWithCommas(percentage, { decimals: 2 })}%`;
                                               })()}
                                             </span>
                                           </div>
                                         </div>
                                         <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
                                           <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                                            Gross: ${pair.gross_profit_loss.toFixed(2)}
+                                            Gross: ${formatWithCommas(pair.gross_profit_loss, { decimals: 2 })}
                                           </div>
                                           <button
                                             onClick={(e) => {

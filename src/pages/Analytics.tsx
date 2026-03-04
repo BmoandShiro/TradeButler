@@ -5,6 +5,7 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, R
 import { TrendingUp, TrendingDown, Settings } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import { formatWithCommas } from "../utils/formatCompactNumber";
 import { loadSandboxState } from "../utils/sandboxStore";
 import {
   EXAMPLE_SYMBOL_PNL,
@@ -604,16 +605,16 @@ export default function Analytics() {
                 <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                   <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Max Drawdown</div>
                   <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--loss)" }}>
-                    ${equityCurve.drawdown_metrics.max_drawdown.toFixed(2)}
+                    ${formatWithCommas(equityCurve.drawdown_metrics.max_drawdown, { decimals: 2 })}
                   </div>
                   <div style={{ fontSize: "14px", color: "var(--loss)" }}>
-                    {equityCurve.drawdown_metrics.max_drawdown_pct.toFixed(2)}%
+                    {formatWithCommas(equityCurve.drawdown_metrics.max_drawdown_pct, { decimals: 2 })}%
                   </div>
                 </div>
                 <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                   <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Avg Drawdown</div>
                   <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>
-                    ${equityCurve.drawdown_metrics.avg_drawdown.toFixed(2)}
+                    ${formatWithCommas(equityCurve.drawdown_metrics.avg_drawdown, { decimals: 2 })}
                   </div>
                 </div>
                 <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
@@ -631,7 +632,7 @@ export default function Analytics() {
                   <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                     <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Best Surge</div>
                     <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--profit)" }}>
-                      ${equityCurve.best_surge_value.toFixed(2)}
+                      ${formatWithCommas(equityCurve.best_surge_value, { decimals: 2 })}
                     </div>
                     <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
                       {equityCurve.best_surge_start} - {equityCurve.best_surge_end || "Ongoing"}
@@ -664,7 +665,7 @@ export default function Analytics() {
                   <YAxis 
                     stroke="var(--text-secondary)"
                     tick={{ fill: "var(--text-secondary)", fontSize: 12 }}
-                    tickFormatter={(value) => `$${value.toFixed(0)}`}
+                    tickFormatter={(value) => `$${formatWithCommas(value, { decimals: 0 })}`}
                   />
                   <Tooltip
                     contentStyle={{
@@ -672,7 +673,7 @@ export default function Analytics() {
                       border: "1px solid var(--border-color)",
                       color: "var(--text-primary)",
                     }}
-                    formatter={(value: any) => [`$${Number(value).toFixed(2)}`, "Cumulative P&L"]}
+                    formatter={(value: any) => [`$${formatWithCommas(Number(value), { decimals: 2 })}`, "Cumulative P&L"]}
                     labelFormatter={(label) => `Date: ${label}`}
                   />
                   
@@ -763,12 +764,12 @@ export default function Analytics() {
                         <td style={{ padding: "12px", fontWeight: "600" }}>{pnl.symbol}</td>
                         <td style={{ padding: "12px", textAlign: "right" }}>{pnl.closed_positions}</td>
                         <td style={{ padding: "12px", textAlign: "right", color: pnl.open_position_qty > 0 ? "var(--accent)" : "var(--text-secondary)" }}>
-                          {pnl.open_position_qty > 0 ? pnl.open_position_qty.toFixed(4) : "—"}
+                          {pnl.open_position_qty > 0 ? formatWithCommas(pnl.open_position_qty, { minDecimals: 4, maxDecimals: 4 }) : "—"}
                         </td>
                         <td style={{ padding: "12px", textAlign: "right" }}>
                           {pnl.closed_positions > 0 ? (
                             <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "4px" }}>
-                              {(pnl.win_rate * 100).toFixed(1)}%
+                              {formatWithCommas(pnl.win_rate * 100, { decimals: 1 })}%
                               {pnl.win_rate >= 0.5 ? (
                                 <TrendingUp size={14} color="var(--profit)" />
                               ) : (
@@ -787,10 +788,10 @@ export default function Analytics() {
                             color: pnl.total_gross_pnl >= 0 ? "var(--profit)" : "var(--loss)",
                           }}
                         >
-                          ${pnl.total_gross_pnl.toFixed(2)}
+                          ${formatWithCommas(pnl.total_gross_pnl, { decimals: 2 })}
                         </td>
                         <td style={{ padding: "12px", textAlign: "right", color: "var(--text-secondary)" }}>
-                          ${pnl.total_fees.toFixed(2)}
+                          ${formatWithCommas(pnl.total_fees, { decimals: 2 })}
                         </td>
                         <td
                           style={{
@@ -801,7 +802,7 @@ export default function Analytics() {
                             color: pnl.total_net_pnl >= 0 ? "var(--profit)" : "var(--loss)",
                           }}
                         >
-                          ${pnl.total_net_pnl.toFixed(2)}
+                          ${formatWithCommas(pnl.total_net_pnl, { decimals: 2 })}
                         </td>
                       </tr>
                     ))}

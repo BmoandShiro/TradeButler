@@ -288,11 +288,12 @@ function getYearAggregates() {
     else if (p.net < 0) cur.losses += 1;
     bySymbol.set(sym, cur);
   }
-  const byStrategy = new Map<number, { count: number; pnl: number }>();
+  const byStrategy = new Map<number, { count: number; pnl: number; volume: number }>();
   for (const p of pairs) {
-    const cur = byStrategy.get(p.strategyId) ?? { count: 0, pnl: 0 };
+    const cur = byStrategy.get(p.strategyId) ?? { count: 0, pnl: 0, volume: 0 };
     cur.count += 1;
     cur.pnl += p.net;
+    cur.volume += p.entry.quantity * p.entry.price;
     byStrategy.set(p.strategyId, cur);
   }
   const strategyNames: Record<number, string> = {
@@ -396,8 +397,8 @@ function getYearAggregates() {
       largest_loss_pct: Math.round(largestLossPct * 100) / 100,
     },
     strategyPerformance: [1, 2, 3, 4, 5, 6].map((id) => {
-      const v = byStrategy.get(id) ?? { count: 0, pnl: 0 };
-      return { strategy_id: id, strategy_name: strategyNames[id], trade_count: v.count, total_volume: 0, estimated_pnl: v.pnl };
+      const v = byStrategy.get(id) ?? { count: 0, pnl: 0, volume: 0 };
+      return { strategy_id: id, strategy_name: strategyNames[id], trade_count: v.count, total_volume: Math.round(v.volume * 100) / 100, estimated_pnl: v.pnl };
     }),
     recentTrades,
     symbolPnL: Array.from(bySymbol.entries()).map(([symbol, v]) => ({

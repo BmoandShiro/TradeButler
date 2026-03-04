@@ -38,6 +38,7 @@ import { MetricsConfigPanel, useMetricsConfig } from "../components/MetricsConfi
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { format } from "date-fns";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import { formatCompactNumber, formatWithCommas } from "../utils/formatCompactNumber";
 import { loadSandboxState } from "../utils/sandboxStore";
 import {
   EXAMPLE_METRICS,
@@ -186,9 +187,9 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
 
   switch (id) {
     case "total_trades":
-      return value.toString();
+      return formatWithCommas(Math.round(value));
     case "total_volume":
-      return `$${((value || 0) / 1000).toFixed(1)}k`;
+      return formatCompactNumber(value || 0, { prefix: "$", suffix: "" });
     case "total_profit_loss":
     case "average_profit":
     case "average_loss":
@@ -200,16 +201,15 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
     case "max_drawdown":
     case "best_day":
     case "worst_day":
-      // largest_loss is stored as negative, so display it as-is
-      return `$${(value || 0).toFixed(2)}`;
+      return `$${formatWithCommas(value || 0, { decimals: 2 })}`;
     case "win_rate":
-      return `${((value || 0) * 100).toFixed(1)}%`;
+      return `${formatWithCommas((value || 0) * 100, { minDecimals: 1, maxDecimals: 1 })}%`;
     case "expectancy":
     case "profit_factor":
     case "sharpe_ratio":
     case "risk_reward_ratio":
     case "trades_per_day":
-      return (value || 0).toFixed(2);
+      return formatWithCommas(value || 0, { minDecimals: 2, maxDecimals: 2 });
     case "winning_trades":
     case "losing_trades":
     case "consecutive_wins":
@@ -220,20 +220,20 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
     case "strategy_losing_trades":
     case "strategy_consecutive_wins":
     case "strategy_consecutive_losses":
-      return value.toString();
+      return formatWithCommas(Math.round(value));
     case "strategy_win_rate":
-      return `${((value || 0) * 100).toFixed(1)}%`;
+      return `${formatWithCommas((value || 0) * 100, { minDecimals: 1, maxDecimals: 1 })}%`;
     case "strategy_profit_loss":
-      return `$${(value || 0).toFixed(2)}`;
+      return `$${formatWithCommas(value || 0, { decimals: 2 })}`;
     case "average_holding_time_seconds":
       return formatHoldingTime(value || 0);
     case "average_gain_pct":
     case "average_loss_pct":
     case "largest_win_pct":
     case "largest_loss_pct":
-      return `${(value || 0) >= 0 ? "+" : ""}${(value || 0).toFixed(2)}%`;
+      return `${(value || 0) >= 0 ? "+" : ""}${formatWithCommas(value || 0, { decimals: 2 })}%`;
     default:
-      return value.toFixed(2);
+      return formatWithCommas(value, { minDecimals: 2, maxDecimals: 2 });
   }
 };
 
@@ -2210,10 +2210,10 @@ export default function Dashboard() {
                             color: symbol.estimated_pnl >= 0 ? "var(--profit)" : "var(--loss)",
                           }}
                         >
-                          ${symbol.estimated_pnl.toFixed(2)}
+                          ${formatWithCommas(symbol.estimated_pnl, { decimals: 2 })}
                         </p>
                         <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                          {symbol.trade_count} {symbol.trade_count === 1 ? "trade" : "trades"}
+                          {formatWithCommas(symbol.trade_count)} {symbol.trade_count === 1 ? "trade" : "trades"}
                         </p>
                       </div>
                     </div>
@@ -2476,14 +2476,14 @@ export default function Dashboard() {
                     {!isExpanded && (
                       <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
                     <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                          {totalTrades} trades
+                          {formatWithCommas(totalTrades)} trades
                     </p>
                         <p style={{ 
                           fontSize: "12px", 
                           color: totalPnL >= 0 ? "var(--profit)" : "var(--loss)",
                           fontWeight: "500"
                         }}>
-                          ${totalPnL >= 0 ? "+" : ""}{totalPnL.toFixed(2)} P&L
+                          ${totalPnL >= 0 ? "+" : ""}{formatWithCommas(totalPnL, { decimals: 2 })} P&L
                         </p>
                         {pairs.length > 0 && (
                           <p style={{ 
@@ -2491,7 +2491,7 @@ export default function Dashboard() {
                             color: winPercentage >= 50 ? "var(--profit)" : winPercentage > 0 ? "var(--text-secondary)" : "var(--loss)",
                             fontWeight: "500"
                           }}>
-                            {winPercentage.toFixed(1)}% win
+                            {formatWithCommas(winPercentage, { decimals: 1 })}% win
                           </p>
                         )}
                       </div>
@@ -2505,10 +2505,10 @@ export default function Dashboard() {
                         color: totalPnL >= 0 ? "var(--profit)" : "var(--loss)",
                       }}
                     >
-                      ${totalPnL.toFixed(2)}
+                      ${formatWithCommas(totalPnL, { decimals: 2 })}
                     </p>
                     <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                      ${(strategy.total_volume / 1000).toFixed(1)}k vol
+                      ${formatCompactNumber(strategy.total_volume, { prefix: "$" })} vol
                     </p>
                   </div>
                 </div>
@@ -2572,13 +2572,13 @@ export default function Dashboard() {
                                           {format(new Date(pair.exit_timestamp), "MMM dd, yyyy HH:mm")}
                                         </td>
                                         <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
-                                          {pair.quantity.toFixed(4)}
+                                          {formatWithCommas(pair.quantity, { minDecimals: 4, maxDecimals: 4 })}
                                         </td>
                                         <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
-                                          ${pair.entry_price.toFixed(2)}
+                                          ${formatWithCommas(pair.entry_price, { decimals: 2 })}
                                         </td>
                                         <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
-                                          ${pair.exit_price.toFixed(2)}
+                                          ${formatWithCommas(pair.exit_price, { decimals: 2 })}
                                         </td>
                                         <td
                                           style={{
@@ -2589,7 +2589,7 @@ export default function Dashboard() {
                                             color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
                                           }}
                                         >
-                                          ${pair.net_profit_loss.toFixed(2)}
+                                          ${formatWithCommas(pair.net_profit_loss, { decimals: 2 })}
                                         </td>
                                       </tr>
                                     ))}
@@ -2838,7 +2838,7 @@ export default function Dashboard() {
                             color: trade.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
                           }}
                         >
-                          {trade.net_profit_loss >= 0 ? "+" : ""}${trade.net_profit_loss.toFixed(2)}
+                          {trade.net_profit_loss >= 0 ? "+" : ""}${formatWithCommas(trade.net_profit_loss, { decimals: 2 })}
                         </p>
                       </div>
                     </div>
@@ -2857,13 +2857,13 @@ export default function Dashboard() {
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
                             <span style={{ color: "var(--text-secondary)" }}>Entry:</span>
                             <span style={{ color: "var(--text-primary)" }}>
-                              {trade.quantity} @ ${trade.entry_price.toFixed(2)}
+                              {formatWithCommas(trade.quantity)} @ ${formatWithCommas(trade.entry_price, { decimals: 2 })}
                             </span>
                           </div>
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
                             <span style={{ color: "var(--text-secondary)" }}>Exit:</span>
                             <span style={{ color: "var(--text-primary)" }}>
-                              {trade.quantity} @ ${trade.exit_price.toFixed(2)}
+                              {formatWithCommas(trade.quantity)} @ ${formatWithCommas(trade.exit_price, { decimals: 2 })}
                             </span>
                           </div>
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
@@ -3111,7 +3111,7 @@ export default function Dashboard() {
                             color: trade.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
                           }}
                         >
-                          {trade.net_profit_loss >= 0 ? "+" : ""}${trade.net_profit_loss.toFixed(2)}
+                          {trade.net_profit_loss >= 0 ? "+" : ""}${formatWithCommas(trade.net_profit_loss, { decimals: 2 })}
                         </p>
                       </div>
                     </div>
@@ -3130,13 +3130,13 @@ export default function Dashboard() {
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
                             <span style={{ color: "var(--text-secondary)" }}>Entry:</span>
                             <span style={{ color: "var(--text-primary)" }}>
-                              {trade.quantity} @ ${trade.entry_price.toFixed(2)}
+                              {formatWithCommas(trade.quantity)} @ ${formatWithCommas(trade.entry_price, { decimals: 2 })}
                             </span>
                           </div>
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
                             <span style={{ color: "var(--text-secondary)" }}>Exit:</span>
                             <span style={{ color: "var(--text-primary)" }}>
-                              {trade.quantity} @ ${trade.exit_price.toFixed(2)}
+                              {formatWithCommas(trade.quantity)} @ ${formatWithCommas(trade.exit_price, { decimals: 2 })}
                             </span>
                           </div>
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
@@ -3335,7 +3335,7 @@ export default function Dashboard() {
                     color: selectedPositionGroup.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
                   }}
                 >
-                  ${selectedPositionGroup.total_pnl.toFixed(2)}
+                  ${formatWithCommas(selectedPositionGroup.total_pnl, { decimals: 2 })}
                 </p>
               </div>
               
@@ -3362,7 +3362,7 @@ export default function Dashboard() {
                     </div>
                     <div>
                       <span style={{ color: "var(--text-secondary)" }}>Price: </span>
-                      <span>${selectedPositionGroup.entry_trade.price.toFixed(2)}</span>
+                      <span>${formatWithCommas(selectedPositionGroup.entry_trade.price, { decimals: 2 })}</span>
                     </div>
                     <div>
                       <span style={{ color: "var(--text-secondary)" }}>Date: </span>
@@ -3399,7 +3399,7 @@ export default function Dashboard() {
                         </div>
                         <div>
                           <span style={{ color: "var(--text-secondary)" }}>Price: </span>
-                          <span>${trade.price.toFixed(2)}</span>
+                          <span>${formatWithCommas(trade.price, { decimals: 2 })}</span>
                         </div>
                         <div>
                           <span style={{ color: "var(--text-secondary)" }}>Date: </span>
