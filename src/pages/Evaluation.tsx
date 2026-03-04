@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { Settings } from "lucide-react";
 import { createPortal } from "react-dom";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
+import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import {
   SANDBOX_EVALUATION_METRICS,
@@ -157,6 +158,8 @@ export default function Evaluation() {
     return saved ? parseFloat(saved) : 10;
   });
   const [showConcentrationSettings, setShowConcentrationSettings] = useState(false);
+  const [histogramBrushStart, setHistogramBrushStart] = useState(0);
+  const [histogramBrushEnd, setHistogramBrushEnd] = useState(0);
   const concentrationSettingsButtonRef = useRef<HTMLButtonElement>(null);
   const concentrationSettingsRef = useRef<HTMLDivElement>(null);
 
@@ -164,6 +167,10 @@ export default function Evaluation() {
     const unsub = subscribeToDataMode(setDataMode);
     return unsub;
   }, []);
+
+  useEffect(() => {
+    setHistogramBrushEnd(0);
+  }, [timeframe, customStartDate, customEndDate, concentrationData]);
 
   const loadEvaluationData = async () => {
     try {
@@ -1043,17 +1050,22 @@ export default function Evaluation() {
           </div>
 
           {/* Histogram */}
-          {concentrationData.histogram.length > 0 && (
+          {concentrationData.histogram.length > 0 && (() => {
+            const histData = concentrationData.histogram.map(bin => ({
+              range: `$${bin.bin_start.toFixed(0)} - $${bin.bin_end.toFixed(0)}`,
+              count: bin.count,
+              total_pnl: bin.total_pnl,
+            }));
+            const useBrush = histData.length > BRUSH_MIN_POINTS;
+            const start = useBrush && histogramBrushEnd > 0 ? Math.min(histogramBrushStart, histData.length - 1) : 0;
+            const end = useBrush && histogramBrushEnd > 0 ? Math.min(histData.length - 1, Math.max(start, histogramBrushEnd)) : Math.max(0, histData.length - 1);
+            return (
             <div style={{ marginBottom: "30px" }}>
               <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px" }}>
                 Distribution of Returns
               </h3>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={concentrationData.histogram.map(bin => ({
-                  range: `$${bin.bin_start.toFixed(0)} - $${bin.bin_end.toFixed(0)}`,
-                  count: bin.count,
-                  total_pnl: bin.total_pnl,
-                }))}>
+              <ResponsiveContainer width="100%" height={useBrush ? 340 : 300}>
+                <BarChart data={histData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                   <XAxis 
                     dataKey="range" 
@@ -1072,10 +1084,14 @@ export default function Evaluation() {
                     }}
                   />
                   <Bar dataKey="count" fill="var(--text-primary)" />
+                  {useBrush && (
+                    <Brush dataKey="range" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setHistogramBrushStart(r.startIndex); setHistogramBrushEnd(r.endIndex); } }} />
+                  )}
                 </BarChart>
               </ResponsiveContainer>
             </div>
-          )}
+            );
+          })()}
 
           {/* Concentration Summary */}
           <div style={{ marginBottom: "30px" }}>

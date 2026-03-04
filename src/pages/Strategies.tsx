@@ -4,7 +4,8 @@ import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
 import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard, BarChart2 } from "lucide-react";
 import { format } from "date-fns";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
+import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
 import RichTextEditor from "../components/RichTextEditor";
 import { ColorPicker } from "../components/ColorPicker";
 import { TradeChart } from "../components/TradeChart";
@@ -1578,6 +1579,8 @@ export default function Strategies() {
   const [loadingPairs, setLoadingPairs] = useState<Set<number>>(new Set());
   const [strategyStats, setStrategyStats] = useState<Map<number, { totalTrades: number; totalPnL: number; winRate: number }>>(new Map());
   const [strategyOverviewTab, setStrategyOverviewTab] = useState<"pnl" | "win_rate" | "trades">("pnl");
+  const [strategyOverviewBrushStart, setStrategyOverviewBrushStart] = useState(0);
+  const [strategyOverviewBrushEnd, setStrategyOverviewBrushEnd] = useState(0);
   const [strategyFilterText, setStrategyFilterText] = useState("");
   const [strategyOverviewOnlyWithTrades, setStrategyOverviewOnlyWithTrades] = useState(false);
   /** When non-empty, overview stats/chart show only these strategies. Empty = all strategies. */
@@ -6938,82 +6941,30 @@ export default function Strategies() {
               </div>
             )}
             <div style={{ height: 260 }}>
-              {strategiesOverviewChartData.length === 0 ? (
-                <div
-                  style={{
-                    height: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "var(--text-secondary)",
-                    fontSize: "13px",
-                    textAlign: "center",
-                  }}
-                >
-                  {strategies.length === 0
-                    ? "Create a strategy to see overview stats."
-                    : "No trade stats yet. Link trades to strategies to see distributions."}
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={strategiesOverviewChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis
-                      dataKey="name"
-                      stroke="var(--text-secondary)"
-                      tick={{ fontSize: 11, fill: "var(--text-secondary)" }}
-                      interval={0}
-                      height={36}
-                    />
-                    <YAxis
-                      stroke="var(--text-secondary)"
-                      tick={{ fontSize: 11, fill: "var(--text-secondary)" }}
-                      tickFormatter={(v: number) =>
-                        strategyOverviewTab === "win_rate"
-                          ? `${v.toFixed(0)}%`
-                          : strategyOverviewTab === "trades"
-                          ? v.toString()
-                          : `$${v.toFixed(0)}`
-                      }
-                    />
-                    <Tooltip
-                      cursor={{ fill: "rgba(255,255,255,0.02)" }}
-                      contentStyle={{
-                        backgroundColor: "var(--bg-tertiary)",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: "6px",
-                        fontSize: "11px",
-                        color: "var(--text-primary)",
-                      }}
-                      formatter={(value: any) => {
-                        if (strategyOverviewTab === "win_rate") return [`${value.toFixed(1)}%`, "Win rate"];
-                        if (strategyOverviewTab === "trades") return [value, "Trades"];
-                        return [`$${value.toFixed(2)}`, "P&L"];
-                      }}
-                    />
-                    <Bar
-                      dataKey={
-                        strategyOverviewTab === "pnl"
-                          ? "pnl"
-                          : strategyOverviewTab === "win_rate"
-                          ? "win_rate"
-                          : "trades"
-                      }
-                      fill="var(--accent)"
-                      fillOpacity={0.5}
-                      stroke="var(--accent)"
-                      strokeWidth={1.6}
-                      activeBar={{
-                        fill: "var(--accent)",
-                        fillOpacity: 0.8,
-                        stroke: "var(--accent)",
-                        strokeWidth: 2,
-                      }}
-                      radius={[4, 4, 0, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
+              {(() => {
+                if (strategiesOverviewChartData.length === 0) {
+                  return (
+                    <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", fontSize: "13px", textAlign: "center" }}>
+                      {strategies.length === 0 ? "Create a strategy to see overview stats." : "No trade stats yet. Link trades to strategies to see distributions."}
+                    </div>
+                  );
+                }
+                const useBrush = strategiesOverviewChartData.length > BRUSH_MIN_POINTS;
+                const start = useBrush && strategyOverviewBrushEnd > 0 ? Math.min(strategyOverviewBrushStart, strategiesOverviewChartData.length - 1) : 0;
+                const end = useBrush && strategyOverviewBrushEnd > 0 ? Math.min(strategiesOverviewChartData.length - 1, Math.max(start, strategyOverviewBrushEnd)) : Math.max(0, strategiesOverviewChartData.length - 1);
+                return (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={strategiesOverviewChartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                      <XAxis dataKey="name" stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} interval={strategiesOverviewChartData.length > 20 ? Math.floor(strategiesOverviewChartData.length / 10) : 0} height={36} />
+                      <YAxis stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} tickFormatter={(v: number) => strategyOverviewTab === "win_rate" ? `${v.toFixed(0)}%` : strategyOverviewTab === "trades" ? v.toString() : `$${v.toFixed(0)}`} />
+                      <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", fontSize: "11px", color: "var(--text-primary)" }} formatter={(value: any) => { if (strategyOverviewTab === "win_rate") return [`${value.toFixed(1)}%`, "Win rate"]; if (strategyOverviewTab === "trades") return [value, "Trades"]; return [`$${value.toFixed(2)}`, "P&L"]; }} />
+                      <Bar dataKey={strategyOverviewTab === "pnl" ? "pnl" : strategyOverviewTab === "win_rate" ? "win_rate" : "trades"} fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} radius={[4, 4, 0, 0]} />
+                      {useBrush && <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setStrategyOverviewBrushStart(r.startIndex); setStrategyOverviewBrushEnd(r.endIndex); } }} />}
+                    </BarChart>
+                  </ResponsiveContainer>
+                );
+              })()}
             </div>
             <div
               style={{

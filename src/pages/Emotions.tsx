@@ -11,7 +11,9 @@ import {
   getSandboxJournalEntries,
 } from "../utils/sandboxStore";
 import { Plus, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Maximize2, Minimize2, Edit2, Trash2, ArrowLeft, RotateCcw, ExternalLink, ChevronDown, Info, X, BarChart2 } from "lucide-react";
-import { LineChart, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { LineChart, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Brush } from "recharts";
+import { sampleTimeSeries, CHART_MAX_POINTS, xAxisInterval } from "../utils/chartDataSampling";
+import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import RichTextEditor from "../components/RichTextEditor";
 
 interface EmotionalState {
@@ -302,7 +304,7 @@ function getDiagramRadius(keysLength: number): number {
 const DIAGRAM_PADDING = 24;
 
 /** One mind-map style diagram: metric in center, curved branches to question nodes. */
-function MetricDiagram({ metric, keys, formula, phaseColor, diagramId }: { metric: string; keys: string[]; formula: string; phaseColor: string; diagramId: string }) {
+export function MetricDiagram({ metric, keys, formula, phaseColor, diagramId }: { metric: string; keys: string[]; formula: string; phaseColor: string; diagramId: string }) {
   const radius = getDiagramRadius(keys.length);
   const contentW = 480;
   const contentH = keys.length <= 1 ? 260 : 360;
@@ -524,7 +526,7 @@ function MetricVennDiagram({ metricName, inputs, formula }: { metricName: string
   );
 }
 
-function EntryMetricDiagram({ metric, inputs, formula, diagramId }: { metric: string; inputs: string[]; formula: string; diagramId: string }) {
+export function EntryMetricDiagram({ metric, inputs, formula, diagramId }: { metric: string; inputs: string[]; formula: string; diagramId: string }) {
   const radius = getDiagramRadius(inputs.length);
   const contentW = 480;
   const contentH = inputs.length <= 1 ? 260 : inputs.length <= 2 ? 320 : 360;
@@ -662,13 +664,56 @@ const NEGATIVE_EMOTIONS = new Set(["Anxious", "Frustrated", "Fearful", "Greedy",
 /** Emotions that support clear-headed trading. Higher is better in moderation. */
 const POSITIVE_EMOTIONS = new Set(["Confident", "Calm", "Optimistic", "Neutral"]);
 
-function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states: EmotionalState[] }) {
+function MetricsDisplay({
+  surveys,
+  states,
+  chartTimeframe = "1y",
+  chartCustomStart,
+  chartCustomEnd,
+  onChartTimeframeChange,
+  onChartCustomDatesChange,
+}: {
+  surveys: EmotionSurvey[];
+  states: EmotionalState[];
+  chartTimeframe?: Timeframe;
+  chartCustomStart?: string;
+  chartCustomEnd?: string;
+  onChartTimeframeChange?: (tf: Timeframe) => void;
+  onChartCustomDatesChange?: (start: string, end: string) => void;
+}) {
   const [showMetricsHelp, setShowMetricsHelp] = useState(false);
   const [showFeedbackHelp, setShowFeedbackHelp] = useState(false);
   const [feedbackCatalogInfoOpen, setFeedbackCatalogInfoOpen] = useState<string | null>(null);
   const [metricGraphOpen, setMetricGraphOpen] = useState<string | null>(null);
   const [metricInfoOpen, setMetricInfoOpen] = useState<string | null>(null);
+  const [surveyChartBrushStart, setSurveyChartBrushStart] = useState(0);
+  const [surveyChartBrushEnd, setSurveyChartBrushEnd] = useState(0);
+  const [metricModalBrushStart, setMetricModalBrushStart] = useState(0);
+  const [metricModalBrushEnd, setMetricModalBrushEnd] = useState(0);
+  useEffect(() => {
+    setSurveyChartBrushEnd(0);
+  }, [chartTimeframe, chartCustomStart, chartCustomEnd]);
+  useEffect(() => {
+    setMetricModalBrushEnd(0);
+  }, [metricGraphOpen]);
   if (surveys.length === 0 && states.length === 0) return null;
+
+  const filteredSurveysForChart = useMemo(() => {
+    const { start, end } = getTimeframeDates(chartTimeframe, chartCustomStart, chartCustomEnd);
+    if (!start || !end) return surveys;
+    return surveys.filter((s) => {
+      const t = new Date(s.timestamp).getTime();
+      return t >= start.getTime() && t <= end.getTime();
+    });
+  }, [surveys, chartTimeframe, chartCustomStart, chartCustomEnd]);
+  const filteredStatesForChart = useMemo(() => {
+    const { start, end } = getTimeframeDates(chartTimeframe, chartCustomStart, chartCustomEnd);
+    if (!start || !end) return states;
+    return states.filter((s) => {
+      const t = new Date(s.timestamp).getTime();
+      return t >= start.getTime() && t <= end.getTime();
+    });
+  }, [states, chartTimeframe, chartCustomStart, chartCustomEnd]);
 
   // —— Survey-based metrics (1–5 scale). Survey default is 3 = neutral; formulas preserve it (6−3=3, avg(3)=3).
   const calculateMetric = (values: number[], inverted: boolean = false, fallback: number | null = null) => {
@@ -1359,8 +1404,8 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
 
   // Full survey time-series: one row per survey with all metric values (for metric graph modal)
   const surveyChartDataFull = useMemo(() => {
-    if (surveys.length === 0) return [];
-    return surveys
+    if (filteredSurveysForChart.length === 0) return [];
+    return filteredSurveysForChart
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
       .map((survey) => {
         const emotionalStability = (6 - survey.during_stable + 6 - survey.during_mentally_present + 6 - survey.after_accept_outcome) / 3;
@@ -1393,11 +1438,11 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
           stress: parseFloat(stress.toFixed(2)),
         };
       });
-  }, [surveys]);
+  }, [filteredSurveysForChart]);
 
   // State metrics time-series: one row per day (for metric graph modal)
   const stateMetricChartData = useMemo(() => {
-    if (states.length === 0) return [];
+    if (filteredStatesForChart.length === 0) return [];
     const byDay = new Map<
       string,
       {
@@ -1407,7 +1452,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
         positive: number[];
       }
     >();
-    for (const state of states) {
+    for (const state of filteredStatesForChart) {
       const d = new Date(state.timestamp);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       const t = d.getTime();
@@ -1421,7 +1466,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
       if (POSITIVE_EMOTIONS.has(state.emotion)) row.positive.push(state.intensity);
     }
     const sorted = Array.from(byDay.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-    return sorted.map(([key, row]) => {
+    return sorted.map(([_key, row]) => {
       const n = row.intensities.length;
       const avg = n ? row.intensities.reduce((a, b) => a + b, 0) / n : 0;
       const variance = n > 1 ? row.intensities.reduce((s, v) => s + (v - avg) ** 2, 0) / (n - 1) : 0;
@@ -1441,7 +1486,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
         avgIntensity: parseFloat(avg.toFixed(2)),
       };
     });
-  }, [states]);
+  }, [filteredStatesForChart]);
 
   // Intensity trend over time: per-day avg then "trend score" as 5 - (recent - older) scaled
   const stateIntensityTrendChartData = useMemo(() => {
@@ -1459,6 +1504,32 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
     });
     return withTrend;
   }, [stateMetricChartData]);
+
+  // Survey trends chart: stability, discipline, fomo (keys expected by Line dataKey)
+  const surveyChartData = useMemo(
+    () =>
+      sampleTimeSeries(
+        surveyChartDataFull.map((r) => ({
+          date: r.date,
+          stability: r.emotionalStability,
+          discipline: r.discipline,
+          fomo: r.fomo,
+        })),
+        CHART_MAX_POINTS
+      ),
+    [surveyChartDataFull]
+  );
+  const surveyUseBrush = surveyChartData.length > 24;
+  const surveyBrushStart =
+    surveyUseBrush && surveyChartBrushEnd > 0
+      ? Math.min(surveyChartBrushStart, surveyChartData.length - 1)
+      : 0;
+  const surveyBrushEnd =
+    surveyUseBrush && surveyChartBrushEnd > 0
+      ? Math.min(surveyChartData.length - 1, Math.max(surveyBrushStart, surveyChartBrushEnd))
+      : Math.max(0, surveyChartData.length - 1);
+  const surveyXInterval = xAxisInterval(Math.max(1, surveyBrushEnd - surveyBrushStart + 1));
+  const surveyShowDots = surveyBrushEnd - surveyBrushStart + 1 <= 50;
 
   return (
     <div style={{ marginBottom: "30px" }}>
@@ -2090,8 +2161,20 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
           : stateKey === "intensityTrend"
             ? stateIntensityTrendChartData.map((row) => ({ date: row.date, value: row.intensityTrend }))
             : stateMetricChartData.map((row) => ({ date: row.date, value: row[stateKey as keyof typeof stateMetricChartData[0]] }));
-        const chartData = data.filter((d) => d.value != null) as { date: string; value: number }[];
+        const filtered = data.filter((d) => d.value != null) as { date: string; value: number }[];
+        const chartData = sampleTimeSeries(filtered, CHART_MAX_POINTS);
         const hasData = chartData.length > 0;
+        const metricUseBrush = chartData.length > 24;
+        const metricBrushStart =
+          metricUseBrush && metricModalBrushEnd > 0
+            ? Math.min(metricModalBrushStart, chartData.length - 1)
+            : 0;
+        const metricBrushEnd =
+          metricUseBrush && metricModalBrushEnd > 0
+            ? Math.min(chartData.length - 1, Math.max(metricBrushStart, metricModalBrushEnd))
+            : Math.max(0, chartData.length - 1);
+        const metricXInterval = xAxisInterval(Math.max(1, metricBrushEnd - metricBrushStart + 1));
+        const metricShowDots = metricBrushEnd - metricBrushStart + 1 <= 50;
         return (
           <div
             role="dialog"
@@ -2146,11 +2229,12 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
               </div>
               <div style={{ padding: "24px" }}>
                 {hasData ? (
-                  <ResponsiveContainer width="100%" height={280}>
+                  <ResponsiveContainer width="100%" height={metricUseBrush ? 320 : 280}>
                     <LineChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
                       <CartesianGrid strokeDasharray="2 2" stroke="var(--border-color)" strokeOpacity={0.5} vertical={false} />
                       <XAxis
                         dataKey="date"
+                        interval={metricXInterval}
                         axisLine={{ stroke: "var(--border-color)", strokeOpacity: 0.6 }}
                         tickLine={false}
                         tick={{ fill: "var(--text-secondary)", fontSize: 11, fontWeight: 500 }}
@@ -2192,10 +2276,27 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
                         dataKey="value"
                         stroke="var(--accent)"
                         strokeWidth={2}
-                        dot={{ fill: "var(--accent)", strokeWidth: 2, r: 4 }}
+                        dot={metricShowDots ? { fill: "var(--accent)", strokeWidth: 2, r: 4 } : false}
                         activeDot={{ r: 6, strokeWidth: 2 }}
                         name={metricGraphOpen}
                       />
+                      {metricUseBrush && (
+                        <Brush
+                          data={chartData}
+                          dataKey="date"
+                          height={36}
+                          stroke="var(--border-color)"
+                          fill="var(--bg-tertiary)"
+                          startIndex={metricBrushStart}
+                          endIndex={metricBrushEnd}
+                          onDragEnd={(range: { startIndex?: number; endIndex?: number }) => {
+                            if (range.startIndex != null && range.endIndex != null) {
+                              setMetricModalBrushStart(range.startIndex);
+                              setMetricModalBrushEnd(range.endIndex);
+                            }
+                          }}
+                        />
+                      )}
                     </LineChart>
                   </ResponsiveContainer>
                 ) : (
@@ -2283,12 +2384,27 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
             marginBottom: "30px",
           }}
         >
-          <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "20px" }}>Emotional Metrics Trends</h2>
-          <ResponsiveContainer width="100%" height={300}>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "16px", marginBottom: "16px" }}>
+            <h2 style={{ fontSize: "20px", fontWeight: "600", margin: 0 }}>Emotional Metrics Trends</h2>
+            {onChartTimeframeChange && (
+              <TimeframeSelector
+                value={chartTimeframe}
+                onChange={(tf) => {
+                  onChartTimeframeChange(tf);
+                  setSurveyChartBrushEnd(0);
+                }}
+                customStartDate={chartCustomStart || undefined}
+                customEndDate={chartCustomEnd || undefined}
+                onCustomDatesChange={onChartCustomDatesChange}
+              />
+            )}
+          </div>
+          <ResponsiveContainer width="100%" height={surveyUseBrush ? 340 : 300}>
             <LineChart data={surveyChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-              <XAxis 
-                dataKey="date" 
+              <XAxis
+                dataKey="date"
+                interval={surveyXInterval}
                 stroke="var(--text-secondary)"
                 style={{ fontSize: "12px" }}
               />
@@ -2311,7 +2427,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
                 dataKey="stability" 
                 stroke={getGradientColor(0.9)}
                 strokeWidth={2}
-                dot={{ fill: getGradientColor(0.9), r: 4 }}
+                dot={surveyShowDots ? { fill: getGradientColor(0.9), r: 4 } : false}
                 name="Emotional Stability"
               />
               <Line 
@@ -2319,7 +2435,7 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
                 dataKey="discipline" 
                 stroke={getGradientColor(0.85)}
                 strokeWidth={2}
-                dot={{ fill: getGradientColor(0.85), r: 4 }}
+                dot={surveyShowDots ? { fill: getGradientColor(0.85), r: 4 } : false}
                 name="Discipline"
               />
               <Line 
@@ -2327,9 +2443,26 @@ function MetricsDisplay({ surveys, states }: { surveys: EmotionSurvey[]; states:
                 dataKey="fomo" 
                 stroke={getGradientColor(0.75)}
                 strokeWidth={2}
-                dot={{ fill: getGradientColor(0.75), r: 4 }}
+                dot={surveyShowDots ? { fill: getGradientColor(0.75), r: 4 } : false}
                 name="FOMO Resistance"
               />
+              {surveyUseBrush && (
+                <Brush
+                  data={surveyChartData}
+                  dataKey="date"
+                  height={36}
+                  stroke="var(--border-color)"
+                  fill="var(--bg-tertiary)"
+                  startIndex={surveyBrushStart}
+                  endIndex={surveyBrushEnd}
+                  onDragEnd={(range: { startIndex?: number; endIndex?: number }) => {
+                    if (range.startIndex != null && range.endIndex != null) {
+                      setSurveyChartBrushStart(range.startIndex);
+                      setSurveyChartBrushEnd(range.endIndex);
+                    }
+                  }}
+                />
+              )}
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -2401,6 +2534,11 @@ export default function Emotions() {
   const [surveyResponses, setSurveyResponses] = useState<Record<string, number>>({});
   const [deleteTarget, setDeleteTarget] = useState<EmotionalState | null>(null);
   const [emotionChartTab, setEmotionChartTab] = useState<string>("Overall");
+  const [chartTimeframe, setChartTimeframe] = useState<Timeframe>("1y");
+  const [chartCustomStart, setChartCustomStart] = useState<string>("");
+  const [chartCustomEnd, setChartCustomEnd] = useState<string>("");
+  const [emotionChartBrushStart, setEmotionChartBrushStart] = useState<number>(0);
+  const [emotionChartBrushEnd, setEmotionChartBrushEnd] = useState<number>(0);
   const [showAllEmotionalStates, setShowAllEmotionalStates] = useState(false);
   const [emotionalStatesPage, setEmotionalStatesPage] = useState(1);
   const EMOTIONAL_STATES_PAGE_SIZE = 24;
@@ -2960,10 +3098,20 @@ export default function Emotions() {
   };
   void getIntensityColorForDisplay;
 
+  // Filter states by chart timeframe for all time-series charts
+  const filteredStatesForChart = useMemo(() => {
+    const { start, end } = getTimeframeDates(chartTimeframe, chartCustomStart, chartCustomEnd);
+    if (!start || !end) return states;
+    return states.filter((s) => {
+      const t = new Date(s.timestamp).getTime();
+      return t >= start.getTime() && t <= end.getTime();
+    });
+  }, [states, chartTimeframe, chartCustomStart, chartCustomEnd]);
+
   // One data point per day for Emotional Intensity Over Time chart (in Emotional States section)
   const chartData = useMemo(() => {
     const byDay = new Map<string, { sum: number; count: number; t: number }>();
-    for (const state of states) {
+    for (const state of filteredStatesForChart) {
       const d = new Date(state.timestamp);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       const t = d.getTime();
@@ -2983,14 +3131,14 @@ export default function Emotions() {
       }))
       .sort((a, b) => (a._sortKey as string).localeCompare(b._sortKey as string))
       .map(({ _sortKey, ...rest }) => rest);
-  }, [states]);
+  }, [filteredStatesForChart]);
 
   // Per-emotion chart data: one data point per day per emotion
   const chartDataByEmotion = useMemo(() => {
     const out: Record<string, { date: string; intensity: number }[]> = {};
     for (const emotion of EMOTIONS) {
       const byDay = new Map<string, { sum: number; count: number; t: number }>();
-      for (const state of states) {
+      for (const state of filteredStatesForChart) {
         if (state.emotion !== emotion) continue;
         const d = new Date(state.timestamp);
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -3013,7 +3161,7 @@ export default function Emotions() {
         .map(({ _sortKey, ...rest }) => rest);
     }
     return out;
-  }, [states]);
+  }, [filteredStatesForChart]);
 
   if (loading) {
     return (
@@ -3032,7 +3180,18 @@ export default function Emotions() {
         </div>
       )}
       {/* Psychological Metrics – at top */}
-      <MetricsDisplay surveys={surveys} states={states} />
+      <MetricsDisplay
+        surveys={surveys}
+        states={states}
+        chartTimeframe={chartTimeframe}
+        chartCustomStart={chartCustomStart}
+        chartCustomEnd={chartCustomEnd}
+        onChartTimeframeChange={setChartTimeframe}
+        onChartCustomDatesChange={(start, end) => {
+          setChartCustomStart(start);
+          setChartCustomEnd(end);
+        }}
+      />
 
       {/* Emotional States – dedicated section with + Add State */}
       <section
@@ -4373,8 +4532,20 @@ export default function Emotions() {
             );
           };
           const tabOptions = ["Overall", ...EMOTIONS];
-          const currentData = emotionChartTab === "Overall" ? chartData : (chartDataByEmotion[emotionChartTab] ?? []);
+          const rawData = emotionChartTab === "Overall" ? chartData : (chartDataByEmotion[emotionChartTab] ?? []);
+          const currentData = sampleTimeSeries(rawData, CHART_MAX_POINTS);
           const hasData = currentData.length > 0;
+          const useBrush = currentData.length > 24;
+          // Recharts Brush filters the chart's data by startIndex/endIndex (inclusive end).
+          // Pass FULL data to the chart and let the chart slice; use 0 and length-1 for "show all".
+          const brushStart =
+            useBrush && emotionChartBrushEnd > 0
+              ? Math.min(emotionChartBrushStart, currentData.length - 1)
+              : 0;
+          const brushEnd =
+            useBrush && emotionChartBrushEnd > 0
+              ? Math.min(currentData.length - 1, Math.max(brushStart, emotionChartBrushEnd))
+              : Math.max(0, currentData.length - 1);
           const segments = Math.max(0, currentData.length - 1);
           const segmentData: Record<string, number | string | null>[] = currentData.map((row) => {
             const out: Record<string, number | string | null> = { date: row.date, intensity: row.intensity };
@@ -4385,6 +4556,8 @@ export default function Emotions() {
             segmentData[j][`seg${j}`] = currentData[j].intensity;
             segmentData[j + 1][`seg${j}`] = currentData[j + 1].intensity;
           }
+          const xTickInterval = xAxisInterval(Math.max(1, brushEnd - brushStart + 1));
+          const showDots = brushEnd - brushStart + 1 <= 50;
           const chartTitle = emotionChartTab === "Overall" ? "Emotional Intensity Over Time" : `${EMOTION_DISPLAY_NAMES[emotionChartTab] ?? emotionChartTab} Over Time`;
           return (
             <div
@@ -4415,7 +4588,10 @@ export default function Emotions() {
                     <button
                       key={tab}
                       type="button"
-                      onClick={() => setEmotionChartTab(tab)}
+                      onClick={() => {
+                        setEmotionChartTab(tab);
+                        setEmotionChartBrushEnd(0);
+                      }}
                       style={{
                         padding: "8px 14px",
                         borderRadius: "8px",
@@ -4433,15 +4609,32 @@ export default function Emotions() {
                 })}
               </div>
               <div style={{ padding: "0 24px" }}>
-                <h3 style={{ fontSize: "15px", fontWeight: "600", marginBottom: "20px", color: "var(--text-primary)", letterSpacing: "0.02em" }}>
-                  {chartTitle}
-                </h3>
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "16px", marginBottom: "16px" }}>
+                  <h3 style={{ fontSize: "15px", fontWeight: "600", margin: 0, color: "var(--text-primary)", letterSpacing: "0.02em" }}>
+                    {chartTitle}
+                  </h3>
+                  <TimeframeSelector
+                    value={chartTimeframe}
+                    onChange={(tf) => {
+                      setChartTimeframe(tf);
+                      setEmotionChartBrushEnd(0);
+                    }}
+                    customStartDate={chartCustomStart || undefined}
+                    customEndDate={chartCustomEnd || undefined}
+                    onCustomDatesChange={(start, end) => {
+                      setChartCustomStart(start);
+                      setChartCustomEnd(end);
+                      setEmotionChartBrushEnd(0);
+                    }}
+                  />
+                </div>
                 {hasData ? (
-                  <ResponsiveContainer width="100%" height={280}>
+                  <ResponsiveContainer width="100%" height={useBrush ? 320 : 280}>
                     <ComposedChart data={segmentData} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
                       <CartesianGrid strokeDasharray="2 2" stroke="var(--border-color)" strokeOpacity={0.5} vertical={false} />
                       <XAxis
                         dataKey="date"
+                        interval={xTickInterval}
                         axisLine={{ stroke: "var(--border-color)", strokeOpacity: 0.6 }}
                         tickLine={false}
                         tick={{ fill: "var(--text-secondary)", fontSize: 11, fontWeight: 500 }}
@@ -4502,11 +4695,28 @@ export default function Emotions() {
                         dataKey="intensity"
                         stroke="transparent"
                         strokeWidth={0}
-                        dot={<IntensityDot />}
-                        activeDot={<ActiveIntensityDot />}
+                        dot={showDots ? <IntensityDot /> : false}
+                        activeDot={showDots ? <ActiveIntensityDot /> : { r: 6 }}
                         legendType="none"
                         isAnimationActive={false}
                       />
+                      {useBrush && (
+                        <Brush
+                          data={currentData}
+                          dataKey="date"
+                          height={36}
+                          stroke="var(--border-color)"
+                          fill="var(--bg-tertiary)"
+                          startIndex={brushStart}
+                          endIndex={brushEnd}
+                          onDragEnd={(range: { startIndex?: number; endIndex?: number }) => {
+                            if (range.startIndex != null && range.endIndex != null) {
+                              setEmotionChartBrushStart(range.startIndex);
+                              setEmotionChartBrushEnd(range.endIndex);
+                            }
+                          }}
+                        />
+                      )}
                     </ComposedChart>
                   </ResponsiveContainer>
                 ) : (

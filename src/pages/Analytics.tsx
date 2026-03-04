@@ -1,11 +1,12 @@
 import { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/tauri";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea } from "recharts";
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Brush } from "recharts";
 import { TrendingUp, TrendingDown, Settings } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { formatWithCommas } from "../utils/formatCompactNumber";
+import { sampleTimeSeries, CHART_MAX_POINTS, xAxisInterval, BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
 import { loadSandboxState } from "../utils/sandboxStore";
 import {
   EXAMPLE_SYMBOL_PNL,
@@ -124,6 +125,18 @@ export default function Analytics() {
     return saved !== "false"; // Default to true
   });
   const [showEquitySettings, setShowEquitySettings] = useState(false);
+  const [equityBrushStart, setEquityBrushStart] = useState(0);
+  const [equityBrushEnd, setEquityBrushEnd] = useState(0);
+  const [symbolChartBrushStart, setSymbolChartBrushStart] = useState(0);
+  const [symbolChartBrushEnd, setSymbolChartBrushEnd] = useState(0);
+  const [sideChartBrushStart, setSideChartBrushStart] = useState(0);
+  const [sideChartBrushEnd, setSideChartBrushEnd] = useState(0);
+  const [entriesChartBrushStart, setEntriesChartBrushStart] = useState(0);
+  const [entriesChartBrushEnd, setEntriesChartBrushEnd] = useState(0);
+  const [positionsChartBrushStart, setPositionsChartBrushStart] = useState(0);
+  const [positionsChartBrushEnd, setPositionsChartBrushEnd] = useState(0);
+  const [outcomeChartBrushStart, setOutcomeChartBrushStart] = useState(0);
+  const [outcomeChartBrushEnd, setOutcomeChartBrushEnd] = useState(0);
   const equitySettingsRef = useRef<HTMLDivElement>(null);
   const equitySettingsButtonRef = useRef<HTMLButtonElement>(null);
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
@@ -132,6 +145,15 @@ export default function Analytics() {
   useEffect(() => {
     loadData();
   }, [timeframe, customStartDate, customEndDate, dataMode]);
+
+  useEffect(() => {
+    setEquityBrushEnd(0);
+    setSymbolChartBrushEnd(0);
+    setSideChartBrushEnd(0);
+    setEntriesChartBrushEnd(0);
+    setPositionsChartBrushEnd(0);
+    setOutcomeChartBrushEnd(0);
+  }, [timeframe, customStartDate, customEndDate]);
 
   useEffect(() => {
     const unsubscribe = subscribeToDataMode((mode) => {
@@ -642,32 +664,53 @@ export default function Analytics() {
               </div>
               
               {/* Equity Curve Chart */}
-              <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={
-                  // Always fill dates when a specific timeframe is selected (not "all")
-                  // This ensures the chart shows the full date range on the X-axis
-                  // For "All Time", only fill if scaleEvenly is enabled
-                  timeframe !== "all" 
-                    ? fillMissingDates(equityCurve.equity_points)
-                    : scaleEvenly 
-                      ? fillMissingDates(equityCurve.equity_points)
-                      : equityCurve.equity_points
-                }>
+              {(() => {
+                // Always fill to one point per calendar day so the curve changes daily (flat on no-trade days, move on trade days)
+                const rawEquityData = fillMissingDates(equityCurve.equity_points);
+                // Keep daily granularity when feasible (e.g. up to ~1 year); otherwise sample for performance
+                const equityChartData = rawEquityData.length <= 400
+                  ? rawEquityData
+                  : sampleTimeSeries(rawEquityData, CHART_MAX_POINTS);
+                const equityUseBrush = equityChartData.length > 24;
+                const equityBrushStartClamped =
+                  equityUseBrush && equityBrushEnd > 0
+                    ? Math.min(equityBrushStart, equityChartData.length - 1)
+                    : 0;
+                const equityBrushEndClamped =
+                  equityUseBrush && equityBrushEnd > 0
+                    ? Math.min(equityChartData.length - 1, Math.max(equityBrushStartClamped, equityBrushEnd))
+                    : Math.max(0, equityChartData.length - 1);
+                const equityXInterval = xAxisInterval(Math.max(1, equityBrushEndClamped - equityBrushStartClamped + 1));
+                // Use visible (brushed) segment for Y domain so the line isn't flat when viewing a narrow range
+                const visibleSlice = equityChartData.slice(equityBrushStartClamped, equityBrushEndClamped + 1);
+                const visiblePnls = visibleSlice.map((d: { cumulative_pnl?: number }) => d.cumulative_pnl ?? 0).filter((v: number) => typeof v === "number" && !Number.isNaN(v));
+                const minPnl = visiblePnls.length ? Math.min(...visiblePnls) : 0;
+                const maxPnl = visiblePnls.length ? Math.max(...visiblePnls) : 0;
+                const range = Math.max(maxPnl - minPnl, Math.abs(minPnl) * 0.1, 100);
+                const padding = range * 0.08;
+                const domainMin = minPnl - padding;
+                const domainMax = maxPnl + padding;
+                return (
+              <ResponsiveContainer width="100%" height={equityUseBrush ? 440 : 400}>
+                <LineChart data={equityChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                  <XAxis 
-                    dataKey="date" 
+                  <XAxis
+                    dataKey="date"
+                    interval={equityXInterval}
                     stroke="var(--text-secondary)"
                     tick={{ fill: "var(--text-secondary)", fontSize: 12 }}
                     angle={-45}
                     textAnchor="end"
                     height={80}
                   />
-                  <YAxis 
+                  <YAxis
+                    domain={[domainMin, domainMax]}
                     stroke="var(--text-secondary)"
                     tick={{ fill: "var(--text-secondary)", fontSize: 12 }}
                     tickFormatter={(value) => `$${formatWithCommas(value, { decimals: 0 })}`}
                   />
                   <Tooltip
+                    cursor={{ fill: "rgba(255,255,255,0.02)" }}
                     contentStyle={{
                       backgroundColor: "var(--bg-tertiary)",
                       border: "1px solid var(--border-color)",
@@ -705,11 +748,32 @@ export default function Analytics() {
                     dataKey="cumulative_pnl"
                     stroke="var(--accent)"
                     strokeWidth={2}
+                    strokeOpacity={0.9}
                     dot={false}
+                    activeDot={{ r: 6, fill: "var(--accent)", stroke: "var(--bg-secondary)", strokeWidth: 2 }}
                     name="Cumulative P&L"
                   />
+                  {equityUseBrush && (
+                    <Brush
+                      data={equityChartData}
+                      dataKey="date"
+                      height={36}
+                      stroke="var(--border-color)"
+                      fill="var(--bg-tertiary)"
+                      startIndex={equityBrushStartClamped}
+                      endIndex={equityBrushEndClamped}
+                      onDragEnd={(range: { startIndex?: number; endIndex?: number }) => {
+                        if (range.startIndex != null && range.endIndex != null) {
+                          setEquityBrushStart(range.startIndex);
+                          setEquityBrushEnd(range.endIndex);
+                        }
+                      }}
+                    />
+                  )}
                 </LineChart>
               </ResponsiveContainer>
+                );
+              })()}
             </div>
           )}
 
@@ -823,21 +887,32 @@ export default function Analytics() {
             <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "20px" }}>
               Trades by Symbol
             </h2>
-            <ResponsiveContainer width="100%" height={300}>
+            {(() => {
+              const useBrush = symbolData.length > BRUSH_MIN_POINTS;
+              const start = useBrush && symbolChartBrushEnd > 0 ? Math.min(symbolChartBrushStart, symbolData.length - 1) : 0;
+              const end = useBrush && symbolChartBrushEnd > 0 ? Math.min(symbolData.length - 1, Math.max(start, symbolChartBrushEnd)) : Math.max(0, symbolData.length - 1);
+              return (
+            <ResponsiveContainer width="100%" height={useBrush ? 340 : 300}>
               <BarChart data={symbolData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                <XAxis dataKey="symbol" stroke="var(--text-secondary)" />
+                <XAxis dataKey="symbol" stroke="var(--text-secondary)" interval={symbolData.length > 20 ? Math.floor(symbolData.length / 10) : 0} />
                 <YAxis stroke="var(--text-secondary)" />
                 <Tooltip
+                  cursor={{ fill: "rgba(255,255,255,0.02)" }}
                   contentStyle={{
                     backgroundColor: "var(--bg-tertiary)",
                     border: "1px solid var(--border-color)",
                     color: "var(--text-primary)",
                   }}
                 />
-                <Bar dataKey="count" fill="var(--accent)" />
+                <Bar dataKey="count" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                {useBrush && (
+                  <Brush dataKey="symbol" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setSymbolChartBrushStart(r.startIndex); setSymbolChartBrushEnd(r.endIndex); } }} />
+                )}
               </BarChart>
             </ResponsiveContainer>
+              );
+            })()}
           </div>
 
           <div
@@ -851,21 +926,32 @@ export default function Analytics() {
             <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "20px" }}>
               Buy vs Sell
             </h2>
-            <ResponsiveContainer width="100%" height={300}>
+            {(() => {
+              const useBrush = sideData.length > BRUSH_MIN_POINTS;
+              const start = useBrush && sideChartBrushEnd > 0 ? Math.min(sideChartBrushStart, sideData.length - 1) : 0;
+              const end = useBrush && sideChartBrushEnd > 0 ? Math.min(sideData.length - 1, Math.max(start, sideChartBrushEnd)) : Math.max(0, sideData.length - 1);
+              return (
+            <ResponsiveContainer width="100%" height={useBrush ? 340 : 300}>
               <BarChart data={sideData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                 <XAxis dataKey="name" stroke="var(--text-secondary)" />
                 <YAxis stroke="var(--text-secondary)" />
                 <Tooltip
+                  cursor={{ fill: "rgba(255,255,255,0.02)" }}
                   contentStyle={{
                     backgroundColor: "var(--bg-tertiary)",
                     border: "1px solid var(--border-color)",
                     color: "var(--text-primary)",
                   }}
                 />
-                <Bar dataKey="value" fill="var(--accent)" />
+                <Bar dataKey="value" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                {useBrush && (
+                  <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setSideChartBrushStart(r.startIndex); setSideChartBrushEnd(r.endIndex); } }} />
+                )}
               </BarChart>
             </ResponsiveContainer>
+              );
+            })()}
           </div>
 
           <div
@@ -894,12 +980,18 @@ export default function Analytics() {
                       No entries in the selected timeframe.
                     </p>
                   ) : (
-                    <ResponsiveContainer width="100%" height={260}>
+                    (() => {
+                      const useBrush = entriesByMonth.length > BRUSH_MIN_POINTS;
+                      const start = useBrush && entriesChartBrushEnd > 0 ? Math.min(entriesChartBrushStart, entriesByMonth.length - 1) : 0;
+                      const end = useBrush && entriesChartBrushEnd > 0 ? Math.min(entriesByMonth.length - 1, Math.max(start, entriesChartBrushEnd)) : Math.max(0, entriesByMonth.length - 1);
+                      return (
+                    <ResponsiveContainer width="100%" height={useBrush ? 300 : 260}>
                       <BarChart data={entriesByMonth}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                         <XAxis dataKey="month" stroke="var(--text-secondary)" />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                         <Tooltip
+                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
                           contentStyle={{
                             backgroundColor: "var(--bg-tertiary)",
                             border: "1px solid var(--border-color)",
@@ -907,9 +999,14 @@ export default function Analytics() {
                           }}
                           formatter={(value: any) => [value, "Entries"]}
                         />
-                        <Bar dataKey="count" fill="var(--accent)" />
+                        <Bar dataKey="count" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                        {useBrush && (
+                          <Brush dataKey="month" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setEntriesChartBrushStart(r.startIndex); setEntriesChartBrushEnd(r.endIndex); } }} />
+                        )}
                       </BarChart>
                     </ResponsiveContainer>
+                      );
+                    })()
                   )}
                 </div>
 
@@ -922,12 +1019,18 @@ export default function Analytics() {
                       No implementation trades recorded in your journals for this timeframe.
                     </p>
                   ) : (
-                    <ResponsiveContainer width="100%" height={260}>
+                    (() => {
+                      const useBrush = positionsData.length > BRUSH_MIN_POINTS;
+                      const start = useBrush && positionsChartBrushEnd > 0 ? Math.min(positionsChartBrushStart, positionsData.length - 1) : 0;
+                      const end = useBrush && positionsChartBrushEnd > 0 ? Math.min(positionsData.length - 1, Math.max(start, positionsChartBrushEnd)) : Math.max(0, positionsData.length - 1);
+                      return (
+                    <ResponsiveContainer width="100%" height={useBrush ? 300 : 260}>
                       <BarChart data={positionsData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                         <XAxis dataKey="position" stroke="var(--text-secondary)" />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                         <Tooltip
+                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
                           contentStyle={{
                             backgroundColor: "var(--bg-tertiary)",
                             border: "1px solid var(--border-color)",
@@ -935,9 +1038,14 @@ export default function Analytics() {
                           }}
                           formatter={(value: any) => [value, "Trades"]}
                         />
-                        <Bar dataKey="count" fill="var(--accent)" />
+                        <Bar dataKey="count" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                        {useBrush && (
+                          <Brush dataKey="position" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setPositionsChartBrushStart(r.startIndex); setPositionsChartBrushEnd(r.endIndex); } }} />
+                        )}
                       </BarChart>
                     </ResponsiveContainer>
+                      );
+                    })()
                   )}
                 </div>
 
@@ -950,12 +1058,18 @@ export default function Analytics() {
                       No outcomes recorded in your journals for this timeframe.
                     </p>
                   ) : (
-                    <ResponsiveContainer width="100%" height={260}>
+                    (() => {
+                      const useBrush = outcomeData.length > BRUSH_MIN_POINTS;
+                      const start = useBrush && outcomeChartBrushEnd > 0 ? Math.min(outcomeChartBrushStart, outcomeData.length - 1) : 0;
+                      const end = useBrush && outcomeChartBrushEnd > 0 ? Math.min(outcomeData.length - 1, Math.max(start, outcomeChartBrushEnd)) : Math.max(0, outcomeData.length - 1);
+                      return (
+                    <ResponsiveContainer width="100%" height={useBrush ? 300 : 260}>
                       <BarChart data={outcomeData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                         <XAxis dataKey="outcome" stroke="var(--text-secondary)" />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                         <Tooltip
+                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
                           contentStyle={{
                             backgroundColor: "var(--bg-tertiary)",
                             border: "1px solid var(--border-color)",
@@ -963,9 +1077,14 @@ export default function Analytics() {
                           }}
                           formatter={(value: any) => [value, "Trades"]}
                         />
-                        <Bar dataKey="count" fill="var(--accent)" />
+                        <Bar dataKey="count" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                        {useBrush && (
+                          <Brush dataKey="outcome" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setOutcomeChartBrushStart(r.startIndex); setOutcomeChartBrushEnd(r.endIndex); } }} />
+                        )}
                       </BarChart>
                     </ResponsiveContainer>
+                      );
+                    })()
                   )}
                 </div>
               </div>

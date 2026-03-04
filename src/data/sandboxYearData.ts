@@ -315,32 +315,47 @@ function getYearAggregates() {
     net_profit_loss: p.net,
     strategy_name: strategyNames[p.strategyId] ?? "",
   }));
-  const pnlByMonth = new Map<string, number>();
+  // Daily P&L: one equity point per calendar day from first to last exit (trades every day → curve moves daily)
+  const pnlByDay = new Map<string, number>();
   for (const p of pairs) {
-    const month = p.exit.timestamp.slice(0, 7);
-    pnlByMonth.set(month, (pnlByMonth.get(month) ?? 0) + p.net);
+    const day = p.exit.timestamp.slice(0, 10);
+    pnlByDay.set(day, (pnlByDay.get(day) ?? 0) + p.net);
   }
-  const months = Array.from(pnlByMonth.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  let cum = 0;
-  let peak = 0;
-  const equityPoints = months.map(([date, monthlyPnl]) => {
-    cum += monthlyPnl;
-    peak = Math.max(peak, cum);
-    const drawdown = peak - cum;
-    return {
-      date: date + "-01",
-      cumulative_pnl: cum,
-      daily_pnl: monthlyPnl,
-      peak_equity: peak,
-      drawdown,
-      drawdown_pct: peak > 0 ? drawdown / peak : 0,
-      is_winning_streak: monthlyPnl > 0,
-      is_losing_streak: monthlyPnl < 0,
-      is_max_drawdown: false,
-      is_best_surge: false,
-    };
-  });
-  const maxDd = equityPoints.length ? Math.max(...equityPoints.map((e) => e.drawdown)) : 0;
+  const sortedPairsByExit = [...pairs].sort((a, b) => new Date(a.exit.timestamp).getTime() - new Date(b.exit.timestamp).getTime());
+  const firstExit = sortedPairsByExit[0]?.exit.timestamp.slice(0, 10);
+  const lastExit = sortedPairsByExit[sortedPairsByExit.length - 1]?.exit.timestamp.slice(0, 10);
+  let equityPoints: { date: string; cumulative_pnl: number; daily_pnl: number; peak_equity: number; drawdown: number; drawdown_pct: number; is_winning_streak: boolean; is_losing_streak: boolean; is_max_drawdown: boolean; is_best_surge: boolean }[] = [];
+  let maxDd = 0;
+  if (firstExit && lastExit) {
+    const allDays: string[] = [];
+    const d = new Date(firstExit);
+    const end = new Date(lastExit);
+    while (d <= end) {
+      allDays.push(d.toISOString().slice(0, 10));
+      d.setDate(d.getDate() + 1);
+    }
+    let cum = 0;
+    let peak = 0;
+    for (const date of allDays) {
+      const dailyPnl = pnlByDay.get(date) ?? 0;
+      cum += dailyPnl;
+      peak = Math.max(peak, cum);
+      const drawdown = peak - cum;
+      if (drawdown > maxDd) maxDd = drawdown;
+      equityPoints.push({
+        date,
+        cumulative_pnl: cum,
+        daily_pnl: dailyPnl,
+        peak_equity: peak,
+        drawdown,
+        drawdown_pct: peak > 0 ? drawdown / peak : 0,
+        is_winning_streak: dailyPnl > 0,
+        is_losing_streak: dailyPnl < 0,
+        is_max_drawdown: false,
+        is_best_surge: false,
+      });
+    }
+  }
   const consec = (arr: { net: number }[]) => {
     let max = 0;
     let cur = 0;
@@ -416,7 +431,7 @@ function getYearAggregates() {
       equity_points: equityPoints,
       drawdown_metrics: {
         max_drawdown: maxDd,
-        max_drawdown_pct: peak > 0 ? maxDd / peak : 0,
+        max_drawdown_pct: equityPoints.length ? (() => { const peakEquity = Math.max(...equityPoints.map((e) => e.peak_equity)); return peakEquity > 0 ? maxDd / peakEquity : 0; })() : 0,
         max_drawdown_start: null,
         max_drawdown_end: null,
         avg_drawdown: maxDd / 2,

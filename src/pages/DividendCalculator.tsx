@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Calculator, X, BarChart3, TrendingUp, ChevronUp, ChevronDown, Loader } from "lucide-react";
-import { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
+import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
 import { invoke } from "@tauri-apps/api/tauri";
 import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import type { DataMode } from "../utils/dataMode";
@@ -65,6 +66,8 @@ export default function DividendCalculator() {
 
   const [results, setResults] = useState<DividendYearResult[]>([]);
   const [chartType, setChartType] = useState<"line" | "bar">("line");
+  const [dividendChartBrushStart, setDividendChartBrushStart] = useState(0);
+  const [dividendChartBrushEnd, setDividendChartBrushEnd] = useState(0);
   const [ticker, setTicker] = useState("");
   const [loadingTicker, setLoadingTicker] = useState(false);
 
@@ -1309,7 +1312,13 @@ export default function DividendCalculator() {
                 </button>
               </div>
             </div>
-            <ResponsiveContainer width="100%" height={400}>
+            {(() => {
+              const useBrush = results.length > BRUSH_MIN_POINTS;
+              const start = useBrush && dividendChartBrushEnd > 0 ? Math.min(dividendChartBrushStart, results.length - 1) : 0;
+              const end = useBrush && dividendChartBrushEnd > 0 ? Math.min(results.length - 1, Math.max(start, dividendChartBrushEnd)) : Math.max(0, results.length - 1);
+              const brushProps = useBrush ? { startIndex: start, endIndex: end, onDragEnd: (r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setDividendChartBrushStart(r.startIndex); setDividendChartBrushEnd(r.endIndex); } } } : {};
+              return (
+            <ResponsiveContainer width="100%" height={useBrush ? 440 : 400}>
               {chartType === "line" ? (
                 <LineChart data={results}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
@@ -1339,9 +1348,10 @@ export default function DividendCalculator() {
                     dataKey="totalDividends"
                     stroke="var(--accent)"
                     strokeWidth={2}
-                    dot={{ fill: "var(--accent)", r: 4 }}
+                    dot={results.length > 50 ? false : { fill: "var(--accent)", r: 4 }}
                     activeDot={{ r: 6 }}
                   />
+                  {useBrush && <Brush dataKey="year" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" {...brushProps} />}
                 </LineChart>
               ) : (
                 <BarChart data={results}>
@@ -1368,9 +1378,12 @@ export default function DividendCalculator() {
                     labelFormatter={(label) => `Year ${label}`}
                   />
                   <Bar dataKey="totalDividends" fill="var(--accent)" />
+                  {useBrush && <Brush dataKey="year" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" {...brushProps} />}
                 </BarChart>
               )}
             </ResponsiveContainer>
+              );
+            })()}
           </div>
         )}
 

@@ -2,8 +2,10 @@ import { useEffect, useState, useRef, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, BarChart3, Search, LayoutDashboard } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
 import { format, parse } from "date-fns";
+import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
+import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
 import RichTextEditor from "../components/RichTextEditor";
 import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
@@ -2499,9 +2501,32 @@ export default function Journal() {
     });
   }, [entries, journalTradesByEntry, journalFilters]);
 
-  const entriesByMonth = useMemo(() => {
+  const [overviewChartTab, setOverviewChartTab] = useState<
+    "entries_over_time" | "symbol" | "position" | "timeframe" | "entry_type" | "exit_type" | "outcome"
+  >("entries_over_time");
+  const [chartTimeframe, setChartTimeframe] = useState<Timeframe>("1y");
+  const [chartCustomStart, setChartCustomStart] = useState("");
+  const [chartCustomEnd, setChartCustomEnd] = useState("");
+  const [overviewEntriesBrushStart, setOverviewEntriesBrushStart] = useState(0);
+  const [overviewEntriesBrushEnd, setOverviewEntriesBrushEnd] = useState(0);
+  const [overviewDimBrushStart, setOverviewDimBrushStart] = useState(0);
+  const [overviewDimBrushEnd, setOverviewDimBrushEnd] = useState(0);
+
+  const overviewEntriesFiltered = useMemo(() => {
+    const { start, end } = getTimeframeDates(chartTimeframe, chartCustomStart || undefined, chartCustomEnd || undefined);
+    if (!start || !end) return filteredEntries;
+    return filteredEntries.filter((entry) => {
+      if (!entry.date) return false;
+      const d = parse(entry.date, "yyyy-MM-dd", new Date());
+      if (isNaN(d.getTime())) return false;
+      const t = d.getTime();
+      return t >= start.getTime() && t <= end.getTime();
+    });
+  }, [filteredEntries, chartTimeframe, chartCustomStart, chartCustomEnd]);
+
+  const overviewEntriesByMonth = useMemo(() => {
     const counts = new Map<string, number>();
-    filteredEntries.forEach((entry) => {
+    overviewEntriesFiltered.forEach((entry) => {
       if (!entry.date) return;
       const parsedDate = parse(entry.date, "yyyy-MM-dd", new Date());
       if (isNaN(parsedDate.getTime())) return;
@@ -2511,21 +2536,17 @@ export default function Journal() {
     return Array.from(counts.entries())
       .map(([month, count]) => ({ month, count }))
       .sort((a, b) => a.month.localeCompare(b.month));
-  }, [filteredEntries]);
+  }, [overviewEntriesFiltered]);
 
-  const [overviewChartTab, setOverviewChartTab] = useState<
-    "entries_over_time" | "symbol" | "position" | "timeframe" | "entry_type" | "exit_type" | "outcome"
-  >("entries_over_time");
-
-  const filteredTradesForCharts = useMemo(() => {
-    const ids = new Set(filteredEntries.map((e) => e.id));
+  const overviewFilteredTradesForCharts = useMemo(() => {
+    const ids = new Set(overviewEntriesFiltered.map((e) => e.id));
     return allJournalTrades.filter((t) => ids.has(t.journal_entry_id));
-  }, [filteredEntries, allJournalTrades]);
+  }, [overviewEntriesFiltered, allJournalTrades]);
 
-  const journalChartData = useMemo(() => {
+  const overviewJournalChartData = useMemo(() => {
     const aggregate = (key: "symbol" | "position" | "timeframe" | "entry_type" | "exit_type" | "outcome") => {
       const counts = new Map<string, number>();
-      filteredTradesForCharts.forEach((t) => {
+      overviewFilteredTradesForCharts.forEach((t) => {
         const raw = (t as any)[key] as string | null | undefined;
         const value = (raw || "Unspecified").trim();
         counts.set(value, (counts.get(value) || 0) + 1);
@@ -2534,7 +2555,6 @@ export default function Journal() {
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count);
     };
-
     return {
       symbol: aggregate("symbol"),
       position: aggregate("position"),
@@ -2543,7 +2563,7 @@ export default function Journal() {
       exit_type: aggregate("exit_type"),
       outcome: aggregate("outcome"),
     };
-  }, [filteredTradesForCharts]);
+  }, [overviewFilteredTradesForCharts]);
 
   const [showAllRecent, setShowAllRecent] = useState(false);
 
@@ -5249,174 +5269,151 @@ export default function Journal() {
                   </div>
                 </div>
               </div>
-              <div style={{ height: 260 }}>
-                <div
+              <div
+                style={{
+                  marginBottom: "12px",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "8px",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <span
                   style={{
-                    marginBottom: "12px",
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: "8px",
-                    alignItems: "center",
-                    justifyContent: "space-between",
+                    fontSize: "12px",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    color: "var(--text-secondary)",
                   }}
                 >
-                  <span
-                    style={{
-                      fontSize: "12px",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    Journal Distributions
-                  </span>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: "4px",
-                      padding: "4px",
-                      borderRadius: "999px",
-                      background:
-                        "linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))",
-                      border: "1px solid rgba(255,255,255,0.06)",
-                    }}
-                  >
-                    {[
-                    { id: "entries_over_time" as const, label: "Entries Over Time" },
-                    { id: "symbol" as const, label: "Symbols" },
-                    { id: "position" as const, label: "Positions" },
-                    { id: "timeframe" as const, label: "Timeframes" },
-                    { id: "entry_type" as const, label: "Entry Types" },
-                    { id: "exit_type" as const, label: "Exit Types" },
-                    { id: "outcome" as const, label: "Outcomes" },
-                  ].map((tab) => {
-                    const isActive = overviewChartTab === tab.id;
-                    return (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => setOverviewChartTab(tab.id)}
-                        style={{
-                          padding: "6px 12px",
-                          fontSize: "12px",
-                          borderRadius: "999px",
-                          border: "none",
-                          backgroundColor: isActive ? "var(--accent)" : "transparent",
-                          color: isActive ? "#ffffff" : "var(--text-secondary)",
-                          cursor: "pointer",
-                          boxShadow: isActive ? "0 0 0 1px rgba(255,255,255,0.08)" : "none",
-                          transition: "background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease",
-                          whiteSpace: "nowrap",
-                        }}
-                        onMouseEnter={(e) => {
-                          if (!isActive) {
-                            (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.02)");
-                            e.currentTarget.style.color = "var(--text-primary)";
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (!isActive) {
-                            e.currentTarget.style.backgroundColor = "transparent";
-                            e.currentTarget.style.color = "var(--text-secondary)";
-                          }
-                        }}
-                      >
-                        {tab.label}
-                      </button>
-                    );
-                  })}
-                  </div>
-                </div>
-                {overviewChartTab === "entries_over_time" ? (
-                  entriesByMonth.length === 0 ? (
-                    <div
+                  Journal Distributions
+                </span>
+                <TimeframeSelector
+                  value={chartTimeframe}
+                  onChange={(tf) => {
+                    setChartTimeframe(tf);
+                    setOverviewEntriesBrushEnd(0);
+                    setOverviewDimBrushEnd(0);
+                  }}
+                  customStartDate={chartCustomStart || undefined}
+                  customEndDate={chartCustomEnd || undefined}
+                  onCustomDatesChange={(start, end) => {
+                    setChartCustomStart(start);
+                    setChartCustomEnd(end);
+                    setOverviewEntriesBrushEnd(0);
+                    setOverviewDimBrushEnd(0);
+                  }}
+                />
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "4px",
+                    padding: "4px",
+                    borderRadius: "999px",
+                    background:
+                      "linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))",
+                    border: "1px solid rgba(255,255,255,0.06)",
+                  }}
+                >
+                  {[
+                  { id: "entries_over_time" as const, label: "Entries Over Time" },
+                  { id: "symbol" as const, label: "Symbols" },
+                  { id: "position" as const, label: "Positions" },
+                  { id: "timeframe" as const, label: "Timeframes" },
+                  { id: "entry_type" as const, label: "Entry Types" },
+                  { id: "exit_type" as const, label: "Exit Types" },
+                  { id: "outcome" as const, label: "Outcomes" },
+                ].map((tab) => {
+                  const isActive = overviewChartTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setOverviewChartTab(tab.id)}
                       style={{
-                        height: "100%",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        color: "var(--text-secondary)",
-                        fontSize: "13px",
+                        padding: "6px 12px",
+                        fontSize: "12px",
+                        borderRadius: "999px",
+                        border: "none",
+                        backgroundColor: isActive ? "var(--accent)" : "transparent",
+                        color: isActive ? "#ffffff" : "var(--text-secondary)",
+                        cursor: "pointer",
+                        boxShadow: isActive ? "0 0 0 1px rgba(255,255,255,0.08)" : "none",
+                        transition: "background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease",
+                        whiteSpace: "nowrap",
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isActive) {
+                          (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.02)");
+                          e.currentTarget.style.color = "var(--text-primary)";
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isActive) {
+                          e.currentTarget.style.backgroundColor = "transparent";
+                          e.currentTarget.style.color = "var(--text-secondary)";
+                        }
                       }}
                     >
-                      No entries match the current filters.
-                    </div>
-                  ) : (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={entriesByMonth}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis
-                          dataKey="month"
-                          stroke="var(--text-secondary)"
-                          tick={{ fontSize: 12, fill: "var(--text-secondary)" }}
-                        />
-                        <YAxis
-                          stroke="var(--text-secondary)"
-                          tick={{ fontSize: 12, fill: "var(--text-secondary)" }}
-                          allowDecimals={false}
-                        />
-                        <Tooltip
-                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
-                          contentStyle={{
-                            backgroundColor: "var(--bg-tertiary)",
-                            border: "1px solid var(--border-color)",
-                            color: "var(--text-primary)",
-                          }}
-                        />
-                        <Bar
-                          dataKey="count"
-                          fill="var(--accent)"
-                          fillOpacity={0.5}
-                          stroke="var(--accent)"
-                          strokeWidth={1.6}
-                          activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }}
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  )
-                ) : (() => {
+                      {tab.label}
+                    </button>
+                  );
+                })}
+                </div>
+              </div>
+              <div style={{ height: 260, minHeight: 260, overflow: "hidden" }}>
+                {(() => {
+                  if (overviewChartTab === "entries_over_time") {
+                    if (overviewEntriesByMonth.length === 0) {
+                      return (
+                        <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", fontSize: "13px" }}>
+                          No entries match the current filters.
+                        </div>
+                      );
+                    }
+                    const useBrush = overviewEntriesByMonth.length > BRUSH_MIN_POINTS;
+                    const start = useBrush && overviewEntriesBrushEnd > 0 ? Math.min(overviewEntriesBrushStart, overviewEntriesByMonth.length - 1) : 0;
+                    const end = useBrush && overviewEntriesBrushEnd > 0 ? Math.min(overviewEntriesByMonth.length - 1, Math.max(start, overviewEntriesBrushEnd)) : Math.max(0, overviewEntriesByMonth.length - 1);
+                    return (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={overviewEntriesByMonth}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                          <XAxis dataKey="month" stroke="var(--text-secondary)" tick={{ fontSize: 12, fill: "var(--text-secondary)" }} />
+                          <YAxis stroke="var(--text-secondary)" tick={{ fontSize: 12, fill: "var(--text-secondary)" }} allowDecimals={false} />
+                          <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} />
+                          <Bar dataKey="count" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                          {useBrush && (
+                            <Brush dataKey="month" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setOverviewEntriesBrushStart(r.startIndex); setOverviewEntriesBrushEnd(r.endIndex); } }} />
+                          )}
+                        </BarChart>
+                      </ResponsiveContainer>
+                    );
+                  }
                   const key = overviewChartTab;
-                  const data = journalChartData[key];
+                  const data = overviewJournalChartData[key];
                   if (!data || data.length === 0) {
                     return (
-                      <div
-                        style={{
-                          height: "100%",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          color: "var(--text-secondary)",
-                          fontSize: "13px",
-                        }}
-                      >
+                      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", fontSize: "13px" }}>
                         No journal trades match the current filters for this dimension.
                       </div>
                     );
                   }
+                  const useBrush = data.length > BRUSH_MIN_POINTS;
+                  const start = useBrush && overviewDimBrushEnd > 0 ? Math.min(overviewDimBrushStart, data.length - 1) : 0;
+                  const end = useBrush && overviewDimBrushEnd > 0 ? Math.min(data.length - 1, Math.max(start, overviewDimBrushEnd)) : Math.max(0, data.length - 1);
                   return (
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={data}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                         <XAxis dataKey="name" stroke="var(--text-secondary)" />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                        <Tooltip
-                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
-                          contentStyle={{
-                            backgroundColor: "var(--bg-tertiary)",
-                            border: "1px solid var(--border-color)",
-                            color: "var(--text-primary)",
-                          }}
-                          formatter={(value: any) => [value, "Entries"]}
-                        />
-                        <Bar
-                          dataKey="count"
-                          fill="var(--accent)"
-                          fillOpacity={0.5}
-                          stroke="var(--accent)"
-                          strokeWidth={1.6}
-                          activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }}
-                        />
+                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: any) => [value, "Entries"]} />
+                        <Bar dataKey="count" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                        {useBrush && (
+                          <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setOverviewDimBrushStart(r.startIndex); setOverviewDimBrushEnd(r.endIndex); } }} />
+                        )}
                       </BarChart>
                     </ResponsiveContainer>
                   );

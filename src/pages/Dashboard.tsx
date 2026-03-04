@@ -526,6 +526,7 @@ function SortableMetricCard({
   duplicateMetricInstance,
   removeMetricInstance,
   setMetricInstances,
+  dataMode,
 }: {
   id: string;
   metric: any;
@@ -553,6 +554,7 @@ function SortableMetricCard({
   duplicateMetricInstance: (instanceId: string) => void;
   removeMetricInstance: (instanceId: string) => void;
   setMetricInstances: React.Dispatch<React.SetStateAction<MetricInstance[]>>;
+  dataMode: DataMode;
 }) {
   const {
     attributes,
@@ -2015,6 +2017,7 @@ export default function Dashboard() {
               duplicateMetricInstance={duplicateMetricInstance}
               removeMetricInstance={removeMetricInstance}
               setMetricInstances={setMetricInstances}
+              dataMode={dataMode}
             />
           );
         })}
