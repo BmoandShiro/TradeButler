@@ -494,7 +494,7 @@ export default function Settings() {
               color: "var(--text-secondary)",
             }}
           >
-            Sandbox mode – app settings, theme, and version check use your connection. Switch to Real or Paper for live trade data.
+            Demo mode – app settings, theme, and version check use your connection. Switch to Real or Paper for live trade data.
           </div>
         )}
         {dataMode === "paper" && (

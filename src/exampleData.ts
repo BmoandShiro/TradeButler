@@ -191,7 +191,7 @@ export const EXAMPLE_RECENT_TRADES = EXAMPLE_RECENT_TRADES_YEAR;
 
 // Convenience map per mode where needed
 export const EXAMPLE_MODE_LABELS: Record<DataMode, string> = {
-  sandbox: "Sandbox",
+  sandbox: "Demo",
   real: "Real",
   paper: "Paper",
 };

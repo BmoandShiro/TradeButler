@@ -709,7 +709,7 @@ export default function Layout({ children }: LayoutProps) {
               </span>
               <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
                 {dataMode === "sandbox"
-                  ? "Demo sandbox (separate from real data)"
+                  ? "Demonstration Data"
                   : dataMode === "real"
                   ? "Your real trades"
                   : "Paper / simulated"}
@@ -723,7 +723,7 @@ export default function Layout({ children }: LayoutProps) {
               }}
             >
               {([
-                { key: "sandbox" as DataMode, label: "Sandbox" },
+                { key: "sandbox" as DataMode, label: "Demo" },
                 { key: "real" as DataMode, label: "Real" },
                 { key: "paper" as DataMode, label: "Paper" },
               ] as const).map((mode) => {
@@ -753,12 +753,12 @@ export default function Layout({ children }: LayoutProps) {
             {dataMode === "sandbox" && (
               <button
                 onClick={() => {
-                  if (!window.confirm("Reset sandbox data to the default demo set? This will remove all sandbox changes.")) {
+                  if (!window.confirm("Reset demo data to the default set? This will remove all demo changes.")) {
                     return;
                   }
                   resetSandboxState();
                   resetSandboxDocumentation();
-                  window.alert("Sandbox data has been reset.");
+                  window.alert("Demo data has been reset.");
                   window.location.reload();
                 }}
                 style={{
@@ -773,7 +773,7 @@ export default function Layout({ children }: LayoutProps) {
                   cursor: "pointer",
                 }}
               >
-                Reset Sandbox Data
+                Reset Demo Data
               </button>
             )}
           </div>

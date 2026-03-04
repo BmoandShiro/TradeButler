@@ -391,7 +391,7 @@ export default function DividendCalculator() {
               onClick={async () => {
                 if (!ticker.trim() || loadingTicker) return;
                 if (dataMode === "sandbox") {
-                  alert("Live stock quotes are available in Real or Paper mode. In Sandbox you can enter share price and dividend manually.");
+                  alert("Live stock quotes are available in Real or Paper mode. In Demo you can enter share price and dividend manually.");
                   return;
                 }
                 setLoadingTicker(true);

@@ -163,7 +163,7 @@ export default function AverageDownCalculator() {
             }}
           >
             {dataMode === "sandbox"
-              ? "Sandbox mode – this calculator works the same in all modes. Enter your own numbers to try it."
+              ? "Demo mode – this calculator works the same in all modes. Enter your own numbers to try it."
               : "Paper mode – your data only. No example data."}
           </div>
         )}
