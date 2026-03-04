@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Brush } from "recharts";
@@ -378,6 +378,115 @@ export default function Analytics() {
     return result;
   };
 
+  // Compute drawdown metrics and best surge from a slice of equity points (for visible/filtered range)
+  const computeDrawdownFromPoints = (points: { date: string; cumulative_pnl: number }[]): { metrics: DrawdownMetrics; best_surge_start: string | null; best_surge_end: string | null; best_surge_value: number } => {
+    if (points.length === 0) {
+      return {
+        metrics: { max_drawdown: 0, max_drawdown_pct: 0, max_drawdown_start: null, max_drawdown_end: null, avg_drawdown: 0, longest_drawdown_days: 0, longest_drawdown_start: null, longest_drawdown_end: null },
+        best_surge_start: null,
+        best_surge_end: null,
+        best_surge_value: 0,
+      };
+    }
+    let peak = points[0].cumulative_pnl;
+    let peakDate = points[0].date; // date of the high-water mark (peak before drawdown)
+    let maxDd = 0;
+    let maxDdStart: string | null = null;
+    let maxDdEnd: string | null = null;
+    let drawdownSum = 0;
+    let drawdownCount = 0;
+    let currentDrawdownDays = 0;
+    let longestDays = 0;
+    let longestStart: string | null = null;
+    let longestEnd: string | null = null;
+    let surgeStartDate: string | null = points[0].date;
+    let surgeStartEquity = points[0].cumulative_pnl;
+    let bestSurgeValue = 0;
+    let bestSurgeStart: string | null = null;
+    let bestSurgeEnd: string | null = null;
+    let inDrawdown = false;
+    let drawdownStartDate: string | null = null;
+
+    for (let i = 0; i < points.length; i++) {
+      const { date, cumulative_pnl } = points[i];
+      if (cumulative_pnl > peak) {
+        peak = cumulative_pnl;
+        peakDate = date;
+        surgeStartDate = date;
+        surgeStartEquity = cumulative_pnl;
+      }
+      const drawdown = peak - cumulative_pnl;
+
+      if (drawdown > maxDd) {
+        maxDd = drawdown;
+        maxDdStart = peakDate; // start at the high-water mark (peak)
+        maxDdEnd = date;       // end at the trough
+      }
+      if (drawdown > 0) {
+        drawdownSum += drawdown;
+        drawdownCount++;
+        if (!inDrawdown) {
+          inDrawdown = true;
+          drawdownStartDate = date;
+          currentDrawdownDays = 1;
+        } else {
+          currentDrawdownDays++;
+        }
+      } else {
+        if (inDrawdown && currentDrawdownDays > longestDays) {
+          longestDays = currentDrawdownDays;
+          longestStart = drawdownStartDate;
+          longestEnd = date;
+        }
+        inDrawdown = false;
+        currentDrawdownDays = 0;
+        drawdownStartDate = null;
+      }
+      if (surgeStartDate && cumulative_pnl > surgeStartEquity) {
+        const surgeValue = cumulative_pnl - surgeStartEquity;
+        if (surgeValue > bestSurgeValue) {
+          bestSurgeValue = surgeValue;
+          bestSurgeStart = surgeStartDate;
+          bestSurgeEnd = date;
+        }
+      }
+    }
+    if (inDrawdown && currentDrawdownDays > longestDays) {
+      longestDays = currentDrawdownDays;
+      longestStart = drawdownStartDate;
+      longestEnd = points[points.length - 1]?.date ?? null;
+    }
+    const avgDrawdown = drawdownCount > 0 ? drawdownSum / drawdownCount : 0;
+    const maxDdPct = peak > 0 ? (maxDd / peak) * 100 : 0;
+    return {
+      metrics: {
+        max_drawdown: maxDd,
+        max_drawdown_pct: maxDdPct,
+        max_drawdown_start: maxDdStart,
+        max_drawdown_end: maxDdEnd,
+        avg_drawdown: avgDrawdown,
+        longest_drawdown_days: longestDays,
+        longest_drawdown_start: longestStart,
+        longest_drawdown_end: longestEnd,
+      },
+      best_surge_start: bestSurgeStart,
+      best_surge_end: bestSurgeEnd,
+      best_surge_value: bestSurgeValue,
+    };
+  };
+
+  // Visible drawdown/surge: from brushed or full chart range (updates with timeframe + brush)
+  const visibleDrawdown = useMemo(() => {
+    if (!equityCurve || !Array.isArray(equityCurve.equity_points) || equityCurve.equity_points.length === 0) return null;
+    const raw = fillMissingDates(equityCurve.equity_points);
+    const chartData = raw.length <= 400 ? raw : sampleTimeSeries(raw, CHART_MAX_POINTS);
+    const useBrush = chartData.length > 24 && equityBrushEnd > 0;
+    const start = useBrush ? Math.min(equityBrushStart, chartData.length - 1) : 0;
+    const end = useBrush ? Math.min(chartData.length - 1, Math.max(start, equityBrushEnd)) : chartData.length - 1;
+    const slice = chartData.slice(start, end + 1).map((p) => ({ date: p.date, cumulative_pnl: p.cumulative_pnl }));
+    return computeDrawdownFromPoints(slice);
+  }, [equityCurve, equityBrushStart, equityBrushEnd, timeframe, customStartDate, customEndDate]);
+
   // Process trades for charts
   const processChartData = () => {
     const symbolCounts: Record<string, number> = {};
@@ -622,46 +731,52 @@ export default function Analytics() {
                 </div>
               </div>
               
-              {/* Drawdown Metrics */}
+              {/* Drawdown Metrics (reflect timeframe + brush/scroll) */}
+              {(() => {
+                const dd = visibleDrawdown ?? { metrics: equityCurve.drawdown_metrics, best_surge_start: equityCurve.best_surge_start, best_surge_end: equityCurve.best_surge_end, best_surge_value: equityCurve.best_surge_value };
+                const m = dd.metrics;
+                return (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px", marginBottom: "20px" }}>
                 <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                   <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Max Drawdown</div>
                   <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--loss)" }}>
-                    ${formatWithCommas(equityCurve.drawdown_metrics.max_drawdown, { decimals: 2 })}
+                    ${formatWithCommas(m.max_drawdown, { decimals: 2 })}
                   </div>
                   <div style={{ fontSize: "14px", color: "var(--loss)" }}>
-                    {formatWithCommas(equityCurve.drawdown_metrics.max_drawdown_pct, { decimals: 2 })}%
+                    {formatWithCommas(m.max_drawdown_pct, { decimals: 2 })}%
                   </div>
                 </div>
                 <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                   <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Avg Drawdown</div>
                   <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>
-                    ${formatWithCommas(equityCurve.drawdown_metrics.avg_drawdown, { decimals: 2 })}
+                    ${formatWithCommas(m.avg_drawdown, { decimals: 2 })}
                   </div>
                 </div>
                 <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                   <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Longest Drawdown</div>
                   <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>
-                    {equityCurve.drawdown_metrics.longest_drawdown_days} days
+                    {m.longest_drawdown_days} days
                   </div>
-                  {equityCurve.drawdown_metrics.longest_drawdown_start && (
+                  {m.longest_drawdown_start && (
                     <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
-                      {equityCurve.drawdown_metrics.longest_drawdown_start} - {equityCurve.drawdown_metrics.longest_drawdown_end || "Ongoing"}
+                      {m.longest_drawdown_start} - {m.longest_drawdown_end || "Ongoing"}
                     </div>
                   )}
                 </div>
-                {equityCurve.best_surge_start && (
+                {dd.best_surge_start && dd.best_surge_value > 0 && (
                   <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                     <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Best Surge</div>
                     <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--profit)" }}>
-                      ${formatWithCommas(equityCurve.best_surge_value, { decimals: 2 })}
+                      ${formatWithCommas(dd.best_surge_value, { decimals: 2 })}
                     </div>
                     <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
-                      {equityCurve.best_surge_start} - {equityCurve.best_surge_end || "Ongoing"}
+                      {dd.best_surge_start} - {dd.best_surge_end || "Ongoing"}
                     </div>
                   </div>
                 )}
               </div>
+                );
+              })()}
               
               {/* Equity Curve Chart */}
               {(() => {
@@ -690,6 +805,19 @@ export default function Analytics() {
                 const padding = range * 0.08;
                 const domainMin = minPnl - padding;
                 const domainMax = maxPnl + padding;
+                // Snap a date range to chart data so ReferenceArea boundaries align with data points (fixes jagged edges)
+                const snapToChartData = (startDate: string, endDate: string): { x1: string; x2: string } | null => {
+                  const dates = equityChartData.map((d: { date: string }) => d.date);
+                  const firstIdx = dates.findIndex((d) => d >= startDate);
+                  const lastIdx = dates.reduce((acc, d, i) => (d <= endDate ? i : acc), -1);
+                  if (firstIdx < 0 || lastIdx < 0 || firstIdx > lastIdx) return null;
+                  return { x1: dates[firstIdx], x2: dates[lastIdx] };
+                };
+                const m = visibleDrawdown ? visibleDrawdown.metrics : equityCurve.drawdown_metrics;
+                const surge = visibleDrawdown ? { start: visibleDrawdown.best_surge_start, end: visibleDrawdown.best_surge_end } : { start: equityCurve.best_surge_start, end: equityCurve.best_surge_end };
+                const maxDdRange = m.max_drawdown_start && m.max_drawdown_end ? snapToChartData(m.max_drawdown_start, m.max_drawdown_end) : null;
+                const surgeRange = surge.start && surge.end ? snapToChartData(surge.start, surge.end) : null;
+                const longestDdRange = m.longest_drawdown_start && m.longest_drawdown_end ? snapToChartData(m.longest_drawdown_start, m.longest_drawdown_end) : null;
                 return (
               <ResponsiveContainer width="100%" height={equityUseBrush ? 440 : 400}>
                 <LineChart data={equityChartData}>
@@ -720,25 +848,42 @@ export default function Analytics() {
                     labelFormatter={(label) => `Date: ${label}`}
                   />
                   
-                  {/* Highlight max drawdown zone */}
-                  {showMaxDrawdown && equityCurve.drawdown_metrics.max_drawdown_start && equityCurve.drawdown_metrics.max_drawdown_end && (
+                  {/* Longest drawdown zone (aligns to chart data for clean edges) */}
+                  {longestDdRange && (
                     <ReferenceArea
-                      x1={equityCurve.drawdown_metrics.max_drawdown_start}
-                      x2={equityCurve.drawdown_metrics.max_drawdown_end}
-                      stroke="rgba(239, 68, 68, 0.3)"
-                      fill="rgba(239, 68, 68, 0.1)"
-                      label="Max Drawdown"
+                      x1={longestDdRange.x1}
+                      x2={longestDdRange.x2}
+                      stroke="rgba(245, 158, 11, 0.5)"
+                      strokeWidth={1}
+                      fill="rgba(245, 158, 11, 0.12)"
+                      label="Longest Drawdown"
+                      isAnimationActive={false}
                     />
                   )}
                   
-                  {/* Highlight best surge zone */}
-                  {equityCurve.best_surge_start && equityCurve.best_surge_end && (
+                  {/* Highlight max drawdown zone (snapped to chart data for clean left/right edges) */}
+                  {showMaxDrawdown && maxDdRange && (
                     <ReferenceArea
-                      x1={equityCurve.best_surge_start}
-                      x2={equityCurve.best_surge_end}
-                      stroke="rgba(34, 197, 94, 0.3)"
+                      x1={maxDdRange.x1}
+                      x2={maxDdRange.x2}
+                      stroke="rgba(239, 68, 68, 0.5)"
+                      strokeWidth={1}
+                      fill="rgba(239, 68, 68, 0.1)"
+                      label="Max Drawdown"
+                      isAnimationActive={false}
+                    />
+                  )}
+                  
+                  {/* Highlight best surge zone (snapped to chart data) */}
+                  {surgeRange && (
+                    <ReferenceArea
+                      x1={surgeRange.x1}
+                      x2={surgeRange.x2}
+                      stroke="rgba(34, 197, 94, 0.5)"
+                      strokeWidth={1}
                       fill="rgba(34, 197, 94, 0.1)"
                       label="Best Surge"
+                      isAnimationActive={false}
                     />
                   )}
                   
