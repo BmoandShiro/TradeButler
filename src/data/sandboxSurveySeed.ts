@@ -37,13 +37,14 @@ function s(v: number): number {
 
 /**
  * Deterministic but varied 1–5 value. seed and key identify the question;
- * bias shifts average (e.g. -0.5 = slightly lower, +0.5 = slightly higher).
+ * bias shifts average. Uses wider spread so metrics show clear reds and greens (1–2 and 4–5).
  */
 function varied(seed: number, key: string, bias: number = 0): number {
   const k = key.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
   const t = (seed * 31 + k * 17) % 100;
   const u = t / 100;
-  const base = 2.5 + (u - 0.5) * 1.2 + bias;
+  const spread = 2.2;
+  const base = 2.5 + (u - 0.5) * spread + bias;
   return s(base);
 }
 
@@ -64,26 +65,26 @@ export function getDemoEmotionSurveys(
       id: surveyId++,
       emotional_state_id: state.id,
       timestamp: state.timestamp,
-      before_calm_clear: varied(seed, "before_calm_clear", i % 5 === 0 ? 0.4 : -0.2),
-      before_urgency_pressure: varied(seed, "before_urgency", -0.3),
-      before_confidence_vs_validation: varied(seed, "before_conf", 0.2),
-      before_fomo: varied(seed, "before_fomo", i % 4 === 0 ? 0.5 : -0.2),
-      before_recovering_loss: varied(seed, "before_recover", -0.4),
-      before_patient_detached: varied(seed, "before_patient", 0.3),
-      before_trust_process: varied(seed, "before_trust", 0.1),
-      before_emotional_state: varied(seed, "before_emotional", -0.1),
-      during_stable: varied(seed, "during_stable", -0.25),
-      during_tension_stress: varied(seed, "during_tension", -0.35),
-      during_tempted_interfere: varied(seed, "during_tempted", -0.3),
-      during_need_control: varied(seed, "during_control", -0.2),
-      during_fear_loss: varied(seed, "during_fear", i % 3 === 0 ? 0.3 : -0.2),
-      during_excitement_greed: varied(seed, "during_excitement", 0.1),
-      during_mentally_present: varied(seed, "during_present", 0.2),
-      after_accept_outcome: varied(seed, "after_accept", 0.15),
-      after_emotional_reaction: varied(seed, "after_reaction", -0.2),
-      after_confidence_affected: varied(seed, "after_confidence", -0.15),
-      after_tempted_another_trade: varied(seed, "after_tempted", -0.4),
-      after_proud_discipline: varied(seed, "after_proud", 0.25),
+      before_calm_clear: varied(seed, "before_calm_clear", i % 5 === 0 ? 1.2 : i % 5 === 2 ? -1.1 : 0.2),
+      before_urgency_pressure: varied(seed, "before_urgency", i % 4 === 0 ? 0.9 : i % 4 === 2 ? -0.9 : -0.3),
+      before_confidence_vs_validation: varied(seed, "before_conf", i % 6 === 0 ? -1 : i % 6 === 3 ? 0.8 : 0.2),
+      before_fomo: varied(seed, "before_fomo", i % 4 === 0 ? 1.0 : i % 4 === 1 ? -0.8 : -0.2),
+      before_recovering_loss: varied(seed, "before_recover", i % 3 === 0 ? 0.7 : -0.9),
+      before_patient_detached: varied(seed, "before_patient", i % 5 === 1 ? -0.8 : i % 5 === 4 ? 0.9 : 0.3),
+      before_trust_process: varied(seed, "before_trust", i % 4 === 0 ? 0.8 : -0.2),
+      before_emotional_state: varied(seed, "before_emotional", i % 5 === 2 ? 0.9 : -0.4),
+      during_stable: varied(seed, "during_stable", i % 4 === 0 ? -0.9 : i % 4 === 2 ? 0.7 : -0.25),
+      during_tension_stress: varied(seed, "during_tension", i % 3 === 0 ? 0.8 : -0.7),
+      during_tempted_interfere: varied(seed, "during_tempted", i % 5 === 0 ? 0.6 : -0.5),
+      during_need_control: varied(seed, "during_control", i % 4 === 1 ? 0.7 : -0.3),
+      during_fear_loss: varied(seed, "during_fear", i % 3 === 0 ? 1.0 : i % 3 === 1 ? -0.8 : -0.2),
+      during_excitement_greed: varied(seed, "during_excitement", i % 4 === 0 ? 0.8 : i % 4 === 2 ? -0.6 : 0.1),
+      during_mentally_present: varied(seed, "during_present", i % 5 === 0 ? -0.7 : i % 5 === 3 ? 0.8 : 0.2),
+      after_accept_outcome: varied(seed, "after_accept", i % 4 === 0 ? 0.9 : i % 4 === 2 ? -0.6 : 0.15),
+      after_emotional_reaction: varied(seed, "after_reaction", i % 3 === 0 ? 0.7 : -0.5),
+      after_confidence_affected: varied(seed, "after_confidence", i % 5 === 0 ? 0.8 : -0.4),
+      after_tempted_another_trade: varied(seed, "after_tempted", i % 4 === 0 ? 0.9 : -0.8),
+      after_proud_discipline: varied(seed, "after_proud", i % 5 === 0 ? -0.6 : i % 5 === 2 ? 0.9 : 0.25),
     };
     out.push(survey);
   }

@@ -19,7 +19,7 @@ import { getDemoEmotionSurveys, type DemoEmotionSurvey } from "../data/sandboxSu
 
 const STORAGE_KEY = "tradebutler_sandbox_store_v2";
 const STORAGE_VERSION_KEY = "tradebutler_sandbox_store_version";
-const SANDBOX_STORE_VERSION = 3; // Bump to re-seed when emotional states need journal_entry_id linking
+const SANDBOX_STORE_VERSION = 4; // Bump to re-seed with more extreme demo metrics (reds/greens, 0-10 scale)
 const LEGACY_KEY = "tradebutler_sandbox_store_v1";
 const EXAMPLE_STORE_KEY = "tradebutler_example_store_v1";
 

@@ -226,12 +226,13 @@ export function getYearOfSandboxData(): {
     const firstEntry = trades[trades.length - tradesThisDay.length * 2];
     const journalEntryIdThisDay = dayIdx % 3 === 0 ? journalEntryId - 1 : null;
     for (let e = 0; e < 2; e++) {
+      const intensity = [1, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10][(dayIdx * 7 + e * 5 + emotionalStateId) % 12];
       emotionalStates.push({
         id: emotionalStateId++,
         timestamp: toISO(new Date(d.getTime() + (10 + e * 4) * 60 * 60 * 1000)),
         emotion: EMOTIONS[(dayIdx + e) % EMOTIONS.length],
-        intensity: 3 + (dayIdx + e) % 6,
-        notes: `${dateStr} – ${EMOTIONS[(dayIdx + e) % EMOTIONS.length]} (${3 + (dayIdx + e) % 6}/10)`,
+        intensity,
+        notes: `${dateStr} – ${EMOTIONS[(dayIdx + e) % EMOTIONS.length]} (${intensity}/10)`,
         trade_id: e === 0 && firstEntry ? firstEntry.id : null,
         journal_entry_id: journalEntryIdThisDay,
       });
