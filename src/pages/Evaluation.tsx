@@ -4,6 +4,12 @@ import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/T
 import { Settings } from "lucide-react";
 import { createPortal } from "react-dom";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import {
+  SANDBOX_EVALUATION_METRICS,
+  SANDBOX_DISTRIBUTION_CONCENTRATION,
+  SANDBOX_TILT_STATS,
+} from "../data/sandboxEvaluation";
 
 interface WeekdayPerformance {
   weekday: number;
@@ -131,6 +137,7 @@ interface TiltStats {
 }
 
 export default function Evaluation() {
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [metrics, setMetrics] = useState<EvaluationMetrics | null>(null);
   const [concentrationData, setConcentrationData] = useState<DistributionConcentrationData | null>(null);
   const [tiltData, setTiltData] = useState<TiltStats | null>(null);
@@ -153,9 +160,21 @@ export default function Evaluation() {
   const concentrationSettingsButtonRef = useRef<HTMLButtonElement>(null);
   const concentrationSettingsRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return unsub;
+  }, []);
+
   const loadEvaluationData = async () => {
     try {
       setLoading(true);
+      if (dataMode === "sandbox") {
+        setMetrics(SANDBOX_EVALUATION_METRICS as unknown as EvaluationMetrics);
+        setConcentrationData(SANDBOX_DISTRIBUTION_CONCENTRATION as unknown as DistributionConcentrationData);
+        setTiltData(SANDBOX_TILT_STATS as unknown as TiltStats);
+        setLoading(false);
+        return;
+      }
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
       const { start, end } = getTimeframeDates(timeframe, customStartDate, customEndDate);
       
@@ -191,7 +210,7 @@ export default function Evaluation() {
 
   useEffect(() => {
     loadEvaluationData();
-  }, [timeframe, customStartDate, customEndDate, concentrationPercent]);
+  }, [timeframe, customStartDate, customEndDate, concentrationPercent, dataMode]);
 
   // Click outside handler for concentration settings
   useEffect(() => {

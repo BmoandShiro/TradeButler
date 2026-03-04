@@ -9,6 +9,20 @@ import RichTextEditor from "../components/RichTextEditor";
 import { ColorPicker } from "../components/ColorPicker";
 import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
+import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import {
+  getSandboxStrategies,
+  addSandboxStrategy,
+  updateSandboxStrategy,
+  deleteSandboxStrategy,
+  updateSandboxTradeStrategy,
+  loadSandboxState,
+  getSandboxStrategyChecklist,
+  getSandboxStrategySurveyMetricsWithValues,
+  getSandboxStrategyChecklistItemMetrics,
+  getSandboxCustomSurveyMetrics,
+} from "../utils/sandboxStore";
+import { buildPositionGroupsAndPairs, filterPairsByStrategy } from "../utils/sandboxPairing";
 import {
   DndContext,
   closestCenter,
@@ -1530,9 +1544,15 @@ function ChecklistSection({
 
 export default function Strategies() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [loading, setLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return () => unsub();
+  }, []);
   const [editingFormData, setEditingFormData] = useState({
     name: "",
     description: "",
@@ -1984,7 +2004,7 @@ export default function Strategies() {
 
   useEffect(() => {
     loadStrategies();
-  }, []);
+  }, [dataMode]);
 
   // Restore state after strategies are loaded (but not during save/cancel operations)
   useEffect(() => {
@@ -2055,31 +2075,41 @@ export default function Strategies() {
 
   useEffect(() => {
     if ((activeTab === "survey" || activeTab === "surveys") && selectedStrategy != null && !isCreating) {
-      Promise.all([
-        invoke<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null }>>("get_custom_survey_metrics", { strategyId: selectedStrategy }),
-        invoke<Array<{ id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null; color_scale: string | null }>>("get_strategy_survey_metrics_with_values", { strategyId: selectedStrategy }),
-        invoke<Array<{ id: number; strategy_id: number; name: string; formula_type: string; formula_expression?: string | null; display_order: number }>>("get_strategy_calculation_presets", { strategyId: selectedStrategy }),
-        invoke<Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>("get_strategy_checklist_item_metrics", { strategyId: selectedStrategy }),
-      ])
-        .then(([raw, defs, presets, itemMetrics]) => {
-          setCustomSurveyMetrics(raw);
-          setCustomSurveyMetricDefinitions(defs);
-          setCalculationPresets(presets);
-          setChecklistItemMetrics(itemMetrics);
-        })
-        .catch(() => {
-          setCustomSurveyMetrics([]);
-          setCustomSurveyMetricDefinitions([]);
-          setCalculationPresets([]);
-          setChecklistItemMetrics([]);
-        });
+      if (dataMode === "sandbox") {
+        const raw = getSandboxCustomSurveyMetrics(selectedStrategy);
+        const defs = getSandboxStrategySurveyMetricsWithValues(selectedStrategy) as unknown as Array<{ id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null; color_scale: string | null }>;
+        const itemMetrics = getSandboxStrategyChecklistItemMetrics(selectedStrategy);
+        setCustomSurveyMetrics(raw);
+        setCustomSurveyMetricDefinitions(defs);
+        setCalculationPresets([]);
+        setChecklistItemMetrics(itemMetrics);
+      } else {
+        Promise.all([
+          invoke<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null }>>("get_custom_survey_metrics", { strategyId: selectedStrategy }),
+          invoke<Array<{ id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null; color_scale: string | null }>>("get_strategy_survey_metrics_with_values", { strategyId: selectedStrategy }),
+          invoke<Array<{ id: number; strategy_id: number; name: string; formula_type: string; formula_expression?: string | null; display_order: number }>>("get_strategy_calculation_presets", { strategyId: selectedStrategy }),
+          invoke<Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>("get_strategy_checklist_item_metrics", { strategyId: selectedStrategy }),
+        ])
+          .then(([raw, defs, presets, itemMetrics]) => {
+            setCustomSurveyMetrics(raw);
+            setCustomSurveyMetricDefinitions(defs);
+            setCalculationPresets(presets);
+            setChecklistItemMetrics(itemMetrics);
+          })
+          .catch(() => {
+            setCustomSurveyMetrics([]);
+            setCustomSurveyMetricDefinitions([]);
+            setCalculationPresets([]);
+            setChecklistItemMetrics([]);
+          });
+      }
     } else {
       setCustomSurveyMetrics([]);
       setCustomSurveyMetricDefinitions([]);
       setCalculationPresets([]);
       setChecklistItemMetrics([]);
     }
-  }, [activeTab, selectedStrategy, isCreating]);
+  }, [activeTab, selectedStrategy, isCreating, dataMode]);
 
   // Load custom metrics and checklist item metrics for all strategies when overview is visible (no strategy selected)
   useEffect(() => {
@@ -2091,6 +2121,18 @@ export default function Strategies() {
     const load = async () => {
       const next = new Map<number, Array<{ id: number; name: string; description: string | null; formula_type: string; computed_value: number | null; color_scale?: string | null }>>();
       const nextItemMetrics = new Map<number, Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>();
+      if (dataMode === "sandbox") {
+        for (const s of strategies) {
+          if (s.id == null) continue;
+          const defs = getSandboxStrategySurveyMetricsWithValues(s.id) as unknown as Array<{ id: number; name: string; description: string | null; formula_type: string; computed_value: number | null; color_scale: string | null }>;
+          const itemMetrics = getSandboxStrategyChecklistItemMetrics(s.id);
+          if (defs.length > 0) next.set(s.id, defs);
+          if (itemMetrics.length > 0) nextItemMetrics.set(s.id, itemMetrics);
+        }
+        setOverviewCustomMetricsByStrategy(next);
+        setOverviewChecklistItemMetricsByStrategy(nextItemMetrics);
+        return;
+      }
       for (const s of strategies) {
         if (s.id == null) continue;
         try {
@@ -2108,7 +2150,7 @@ export default function Strategies() {
       setOverviewChecklistItemMetricsByStrategy(nextItemMetrics);
     };
     load();
-  }, [strategies, selectedStrategy, isCreating]);
+  }, [strategies, selectedStrategy, isCreating, dataMode]);
 
   useEffect(() => {
     if (!overviewFilterDropdownOpen) return;
@@ -2131,6 +2173,29 @@ export default function Strategies() {
 
   const loadStrategyStats = async (strategyId: number) => {
     try {
+      if (dataMode === "sandbox") {
+        const state = loadSandboxState();
+        const pairingMethod = (localStorage.getItem("tradebutler_pairing_method") || "FIFO") as "FIFO" | "LIFO";
+        const { pairs } = buildPositionGroupsAndPairs(
+          state.trades.map((t) => ({
+            id: t.id,
+            symbol: t.symbol,
+            side: t.side,
+            quantity: t.quantity,
+            price: t.price,
+            timestamp: t.timestamp,
+            fees: t.fees,
+            notes: t.notes,
+            strategy_id: t.strategy_id,
+          })),
+          pairingMethod
+        );
+        const tradeById = new Map(state.trades.map((t) => [t.id, t]));
+        const strategyPairs = filterPairsByStrategy(pairs, tradeById, strategyId);
+        const stats = calculateStrategyStats(strategyPairs as unknown as PairedTrade[]);
+        setStrategyStats(new Map(strategyStats.set(strategyId, stats)));
+        return;
+      }
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
       const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
         strategyId: strategyId,
@@ -2243,6 +2308,44 @@ export default function Strategies() {
 
   const loadStrategies = async (preserveEditingState = false) => {
     try {
+      if (dataMode === "sandbox") {
+        const data = getSandboxStrategies().map((s) => ({
+          id: s.id,
+          name: s.name,
+          description: s.description,
+          notes: s.notes,
+          created_at: s.created_at,
+          color: s.color,
+          display_order: null as number | null,
+        }));
+        setStrategies(data);
+        const state = loadSandboxState();
+        const pairingMethod = (localStorage.getItem("tradebutler_pairing_method") || "FIFO") as "FIFO" | "LIFO";
+        const { pairs } = buildPositionGroupsAndPairs(
+          state.trades.map((t) => ({
+            id: t.id,
+            symbol: t.symbol,
+            side: t.side,
+            quantity: t.quantity,
+            price: t.price,
+            timestamp: t.timestamp,
+            fees: t.fees,
+            notes: t.notes,
+            strategy_id: t.strategy_id,
+          })),
+          pairingMethod
+        );
+        const tradeById = new Map(state.trades.map((t) => [t.id, t]));
+        const newStats = new Map<number, { totalTrades: number; totalPnL: number; winRate: number }>();
+        for (const s of data) {
+          if (s.id == null) continue;
+          const strategyPairs = filterPairsByStrategy(pairs, tradeById, s.id);
+          newStats.set(s.id, calculateStrategyStats(strategyPairs as unknown as PairedTrade[]));
+        }
+        setStrategyStats(newStats);
+        setLoading(false);
+        return;
+      }
       const data = await invoke<Strategy[]>("get_strategies");
       setStrategies(data);
       // Initialize notes content
@@ -2288,17 +2391,40 @@ export default function Strategies() {
     if (activeTab === "trades" && !strategyPairs.has(strategyId)) {
       setLoadingPairs(new Set([...loadingPairs, strategyId]));
       try {
-        const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-        const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
-          strategyId: strategyId,
-          pairingMethod: pairingMethod,
-          startDate: null,
-          endDate: null,
-        });
-        setStrategyPairs(new Map(strategyPairs.set(strategyId, pairs)));
-        // Update stats when pairs are loaded
-        const stats = calculateStrategyStats(pairs);
-        setStrategyStats(new Map(strategyStats.set(strategyId, stats)));
+        if (dataMode === "sandbox") {
+          const state = loadSandboxState();
+          const pairingMethod = (localStorage.getItem("tradebutler_pairing_method") || "FIFO") as "FIFO" | "LIFO";
+          const { pairs } = buildPositionGroupsAndPairs(
+            state.trades.map((t) => ({
+              id: t.id,
+              symbol: t.symbol,
+              side: t.side,
+              quantity: t.quantity,
+              price: t.price,
+              timestamp: t.timestamp,
+              fees: t.fees,
+              notes: t.notes,
+              strategy_id: t.strategy_id,
+            })),
+            pairingMethod
+          );
+          const tradeById = new Map(state.trades.map((t) => [t.id, t]));
+          const filtered = filterPairsByStrategy(pairs, tradeById, strategyId);
+          setStrategyPairs(new Map(strategyPairs.set(strategyId, filtered as unknown as PairedTrade[])));
+          const stats = calculateStrategyStats(filtered as unknown as PairedTrade[]);
+          setStrategyStats(new Map(strategyStats.set(strategyId, stats)));
+        } else {
+          const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+          const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
+            strategyId: strategyId,
+            pairingMethod: pairingMethod,
+            startDate: null,
+            endDate: null,
+          });
+          setStrategyPairs(new Map(strategyPairs.set(strategyId, pairs)));
+          const stats = calculateStrategyStats(pairs);
+          setStrategyStats(new Map(strategyStats.set(strategyId, stats)));
+        }
       } catch (error) {
         console.error("Error loading strategy pairs:", error);
       } finally {
@@ -2356,11 +2482,15 @@ export default function Strategies() {
 
   const loadChecklists = async (strategyId: number) => {
     try {
-      // Load all checklist items for this strategy (pass null to get all types)
-      const allItems = await invoke<ChecklistItem[]>("get_strategy_checklist", {
-        strategyId: strategyId,
-        checklistType: null,
-      });
+      let allItems: ChecklistItem[];
+      if (dataMode === "sandbox") {
+        allItems = getSandboxStrategyChecklist(strategyId) as unknown as ChecklistItem[];
+      } else {
+        allItems = await invoke<ChecklistItem[]>("get_strategy_checklist", {
+          strategyId: strategyId,
+          checklistType: null,
+        });
+      }
       
       // Default checklist types - always include these even if empty
       const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
@@ -3509,8 +3639,32 @@ export default function Strategies() {
     try {
       isSavingOrCancelingRef.current = true; // Prevent state restoration during save
       clearWorkInProgress(); // Clear work in progress when saving
+      let newStrategyId: number;
+      if (dataMode === "sandbox") {
+        const newStrategy = addSandboxStrategy({
+          name: editingFormData.name,
+          description: editingFormData.description ?? null,
+          notes: newStrategyNotes || null,
+          color: editingFormData.color ?? null,
+        });
+        newStrategyId = newStrategy.id;
+        if (pendingTradeIds.length > 0) {
+          for (const tradeId of pendingTradeIds) {
+            updateSandboxTradeStrategy(tradeId, newStrategyId);
+          }
+        }
+        await loadStrategies();
+        setSelectedStrategy(newStrategyId);
+        setActiveTab("notes");
+        setIsCreating(false);
+        setPendingTradeIds([]);
+        setTempChecklists(new Map());
+        setEditingFormData({ name: "", description: "", color: "#3b82f6" });
+        setNewStrategyNotes("");
+        return;
+      }
       // Create the strategy - returns just the ID
-      const newStrategyId = await invoke<number>("create_strategy", {
+      newStrategyId = await invoke<number>("create_strategy", {
         name: editingFormData.name,
         description: editingFormData.description || null,
         notes: newStrategyNotes || null,
@@ -3896,6 +4050,41 @@ export default function Strategies() {
     if (!selectedStrategyData) return;
     try {
       const currentNotes = notesContent.get(selectedStrategyData.id) || selectedStrategyData.notes || "";
+      if (dataMode === "sandbox") {
+        updateSandboxStrategy(selectedStrategyData.id, {
+          name: editingFormData.name,
+          description: editingFormData.description ?? null,
+          notes: currentNotes || null,
+          color: editingFormData.color ?? null,
+        });
+        setIsEditing(false);
+        setEditHistory([]);
+        if (selectedStrategyData.id) {
+          const updatedEditing = new Map(editingChecklists);
+          updatedEditing.delete(selectedStrategyData.id);
+          setEditingChecklists(updatedEditing);
+          const updatedOriginal = new Map(originalChecklists);
+          updatedOriginal.delete(selectedStrategyData.id);
+          setOriginalChecklists(updatedOriginal);
+          const updatedHistory = new Map(checklistEditHistory);
+          updatedHistory.delete(selectedStrategyData.id);
+          setChecklistEditHistory(updatedHistory);
+        }
+        const savedStrategyId = selectedStrategyData.id;
+        await loadStrategies(true);
+        clearWorkInProgress();
+        if (savedStrategyId) {
+          setSelectedStrategy(savedStrategyId);
+          setNotesContent(prev => {
+            const updated = new Map(prev);
+            updated.set(savedStrategyId, currentNotes || "");
+            return updated;
+          });
+          await loadStrategyData(savedStrategyId);
+          await loadChecklists(savedStrategyId);
+        }
+        return;
+      }
       await invoke("update_strategy", {
         id: selectedStrategyData.id,
         name: editingFormData.name,
@@ -4090,6 +4279,17 @@ export default function Strategies() {
     if (!strategyToDelete) return;
     
     try {
+      if (dataMode === "sandbox") {
+        deleteSandboxStrategy(strategyToDelete);
+        if (selectedStrategy === strategyToDelete) {
+          setSelectedStrategy(null);
+        }
+        await loadStrategies();
+        setShowDeleteConfirmModal(false);
+        setStrategyToDelete(null);
+        setAssociatedRecords(null);
+        return;
+      }
       await invoke("delete_strategy", { id: strategyToDelete });
       if (selectedStrategy === strategyToDelete) {
         setSelectedStrategy(null);
@@ -4162,6 +4362,19 @@ export default function Strategies() {
       while (strategies.some(s => s.name === newName)) {
         newName = `${strategy.name} (Copy ${counter})`;
         counter++;
+      }
+
+      if (dataMode === "sandbox") {
+        const newStrategy = addSandboxStrategy({
+          name: newName,
+          description: strategy.description ?? null,
+          notes: strategy.notes ?? null,
+          color: strategy.color ?? null,
+        });
+        await loadStrategies();
+        setSelectedStrategy(newStrategy.id);
+        setActiveTab("notes");
+        return;
       }
 
       // Create the new strategy

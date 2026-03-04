@@ -7,6 +7,29 @@ import { format, parse } from "date-fns";
 import RichTextEditor from "../components/RichTextEditor";
 import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
+import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import {
+  getSandboxJournalEntries,
+  getSandboxJournalEntry,
+  getSandboxAllJournalTrades,
+  getSandboxJournalTrades,
+  getSandboxJournalEntryPairsAsPairedTrades,
+  getSandboxStrategies,
+  createSandboxJournalEntry,
+  updateSandboxJournalEntry,
+  deleteSandboxJournalEntry,
+  createSandboxJournalTrade,
+  updateSandboxJournalTrade,
+  deleteSandboxJournalTrade,
+  setSandboxJournalEntryPairs,
+  getSandboxEmotionalStates,
+  getSandboxEmotionalStatesForJournal,
+  addSandboxJournalEntryToEmotionalStates,
+  removeSandboxJournalEntryFromEmotionalStates,
+  linkSandboxEmotionalStatesToJournal,
+  deleteSandboxEmotionalState,
+  loadSandboxState,
+} from "../utils/sandboxStore";
 
 interface JournalEntry {
   id: number;
@@ -313,7 +336,13 @@ export default function Journal() {
   const titleInputRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
   const navigate = useNavigate();
-  
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
+
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return () => unsub();
+  }, []);
+
   // Edit history for undo functionality
   const [editHistory, setEditHistory] = useState<Array<{
     entry: { date: string; title: string; strategy_id: number | null };
@@ -535,7 +564,7 @@ export default function Journal() {
         restoreWorkInProgress();
       }, 200);
     }
-  }, []);
+  }, [dataMode]);
 
   // Open specific entry/trade when navigated from Emotions (e.g. "Open in Journal")
   useEffect(() => {
@@ -601,6 +630,11 @@ export default function Journal() {
     let cancelled = false;
     (async () => {
       try {
+        if (dataMode === "sandbox") {
+          const state = loadSandboxState();
+          if (!cancelled) setActualTrades(state.trades as unknown as ActualTrade[]);
+          return;
+        }
         const trades = await invoke<ActualTrade[]>("get_trades");
         if (!cancelled) setActualTrades(trades);
       } catch (e) {
@@ -608,7 +642,7 @@ export default function Journal() {
       }
     })();
     return () => { cancelled = true; };
-  }, [linkActualTradesModalJournalTradeId]);
+  }, [linkActualTradesModalJournalTradeId, dataMode]);
 
   // Load emotional states linked to this journal entry/implementation when on Emotional State or Links tab
   useEffect(() => {
@@ -620,6 +654,27 @@ export default function Journal() {
     let cancelled = false;
     (async () => {
       try {
+        if (dataMode === "sandbox") {
+          const states = getSandboxEmotionalStatesForJournal(selectedEntry.id) as unknown as JournalEmotionalState[];
+          if (!cancelled) {
+            setJournalEmotionalStates(states);
+            const groups = groupEmotionalStatesByTimestamp(states);
+            const ids = groups.map((g) => g[0].id);
+            const scopes: Record<number, { scope: "entry" | "trades"; tradeIndex: number | null }> = {};
+            for (const g of groups) {
+              const first = g[0];
+              const jtIdVal = first.journal_trade_id ?? null;
+              if (jtIdVal == null) {
+                scopes[first.id] = { scope: "entry", tradeIndex: null };
+              } else {
+                const idx = tradesFormData.findIndex((t) => t.id === jtIdVal);
+                scopes[first.id] = { scope: "trades", tradeIndex: idx >= 0 ? idx : null };
+              }
+            }
+            setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: ids, linked_emotional_state_link_scopes: scopes }));
+          }
+          return;
+        }
         const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
           journalEntryId: selectedEntry.id,
           journalTradeId: jtId ?? undefined,
@@ -631,11 +686,11 @@ export default function Journal() {
           const scopes: Record<number, { scope: "entry" | "trades"; tradeIndex: number | null }> = {};
           for (const g of groups) {
             const first = g[0];
-            const jtId = first.journal_trade_id ?? null;
-            if (jtId == null) {
+            const jtIdVal = first.journal_trade_id ?? null;
+            if (jtIdVal == null) {
               scopes[first.id] = { scope: "entry", tradeIndex: null };
             } else {
-              const idx = tradesFormData.findIndex((t) => t.id === jtId);
+              const idx = tradesFormData.findIndex((t) => t.id === jtIdVal);
               scopes[first.id] = { scope: "trades", tradeIndex: idx >= 0 ? idx : null };
             }
           }
@@ -649,7 +704,7 @@ export default function Journal() {
       }
     })();
     return () => { cancelled = true; };
-  }, [activeTab, selectedEntry?.id, activeTradeIndex, tradesFormData]);
+  }, [activeTab, selectedEntry?.id, activeTradeIndex, tradesFormData, dataMode]);
 
   // Load emotional states for view mode (when viewing an entry, not editing)
   useEffect(() => {
@@ -660,6 +715,11 @@ export default function Journal() {
     let cancelled = false;
     (async () => {
       try {
+        if (dataMode === "sandbox") {
+          const states = getSandboxEmotionalStatesForJournal(selectedEntry.id) as unknown as JournalEmotionalState[];
+          if (!cancelled) setViewEntryEmotionalStates(states);
+          return;
+        }
         const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
           journalEntryId: selectedEntry.id,
         });
@@ -669,13 +729,27 @@ export default function Journal() {
       }
     })();
     return () => { cancelled = true; };
-  }, [selectedEntry?.id, isCreating, isEditing]);
+  }, [selectedEntry?.id, isCreating, isEditing, dataMode]);
 
   // Load all emotional states and real trades for "Link to" dropdowns when on Emotional State tab
   useEffect(() => {
     if (activeTab !== "emotional_state" && activeTab !== "links") return;
     (async () => {
       try {
+        if (dataMode === "sandbox") {
+          const states = getSandboxEmotionalStates() as unknown as JournalEmotionalState[];
+          const state = loadSandboxState();
+          setAllEmotionalStates(states);
+          setRealTradesForLink(state.trades.map((t) => ({
+            id: t.id,
+            symbol: t.symbol,
+            side: t.side,
+            timestamp: t.timestamp,
+            quantity: t.quantity ?? 0,
+            pnl: undefined,
+          })));
+          return;
+        }
         const [states, trades] = await Promise.all([
           invoke<JournalEmotionalState[]>("get_emotional_states"),
           invoke<{ id: number; symbol: string; side: string; timestamp: string; quantity: number; price: number }[]>("get_trades"),
@@ -707,7 +781,7 @@ export default function Journal() {
         setRealTradesForLink([]);
       }
     })();
-  }, [activeTab, selectedEntry?.id]);
+  }, [activeTab, selectedEntry?.id, dataMode]);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
@@ -720,6 +794,12 @@ export default function Journal() {
 
   const loadEntries = async () => {
     try {
+      if (dataMode === "sandbox") {
+        const data = getSandboxJournalEntries() as unknown as JournalEntry[];
+        setEntries(data);
+        setLoading(false);
+        return;
+      }
       const data = await invoke<JournalEntry[]>("get_journal_entries");
       setEntries(data);
     } catch (error) {
@@ -731,6 +811,11 @@ export default function Journal() {
 
   const loadAllJournalTrades = async () => {
     try {
+      if (dataMode === "sandbox") {
+        const trades = getSandboxAllJournalTrades() as unknown as JournalTrade[];
+        setAllJournalTrades(trades);
+        return;
+      }
       const trades = await invoke<JournalTrade[]>("get_all_journal_trades");
       setAllJournalTrades(trades);
     } catch (error) {
@@ -761,6 +846,11 @@ export default function Journal() {
 
   const loadStrategies = async () => {
     try {
+      if (dataMode === "sandbox") {
+        const data = getSandboxStrategies() as unknown as Strategy[];
+        setStrategies(data);
+        return;
+      }
       const data = await invoke<Strategy[]>("get_strategies");
       setStrategies(data);
     } catch (error) {
@@ -770,6 +860,13 @@ export default function Journal() {
 
   const loadAvailableSymbols = async () => {
     try {
+      if (dataMode === "sandbox") {
+        const state = loadSandboxState();
+        const symSet = new Set<string>();
+        state.trades.forEach((t) => symSet.add(t.symbol));
+        setAvailableSymbols(Array.from(symSet).sort());
+        return;
+      }
       const symbols = await invoke<string[]>("get_all_symbols");
       setAvailableSymbols(symbols);
     } catch (error) {
@@ -779,6 +876,11 @@ export default function Journal() {
 
   const loadTrades = async (entryId: number): Promise<JournalTrade[]> => {
     try {
+      if (dataMode === "sandbox") {
+        const trades = getSandboxJournalTrades(entryId) as unknown as JournalTrade[];
+        setSelectedTrades(trades);
+        return trades;
+      }
       const trades = await invoke<JournalTrade[]>("get_journal_trades", { journalEntryId: entryId });
       setSelectedTrades(trades);
       return trades;
@@ -790,6 +892,11 @@ export default function Journal() {
 
   const loadLinkedPairs = async (entryId: number) => {
     try {
+      if (dataMode === "sandbox") {
+        const pairs = getSandboxJournalEntryPairsAsPairedTrades(entryId) as unknown as PairedTrade[];
+        setLinkedPairs(pairs);
+        return;
+      }
       const pairs = await invoke<PairedTrade[]>("get_journal_entry_pairs", { journalEntryId: entryId });
       setLinkedPairs(pairs);
     } catch (error) {
@@ -1052,6 +1159,15 @@ export default function Journal() {
     if (!selectedEntry) return;
     
     try {
+      if (dataMode === "sandbox") {
+        deleteSandboxJournalEntry(selectedEntry.id);
+        await loadEntries();
+        setSelectedEntry(null);
+        localStorage.removeItem('journal_selected_entry_id');
+        setSelectedTrades([]);
+        setShowDeleteConfirmModal(false);
+        return;
+      }
       await invoke("delete_journal_entry", { id: selectedEntry.id });
       await loadEntries();
       setSelectedEntry(null);
@@ -1077,16 +1193,26 @@ export default function Journal() {
     if (!emotionalStateDeleteTarget) return;
     if (emotionalStateDeleteTarget.type === "saved") {
       try {
-        for (const state of emotionalStateDeleteTarget.states) {
-          await invoke("delete_emotional_state", { id: state.id });
-        }
-        const jtId = tradesFormData[activeTradeIndex]?.id ?? null;
-        if (selectedEntry?.id != null) {
-          const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
-            journalEntryId: selectedEntry.id,
-            journalTradeId: jtId ?? undefined,
-          });
-          setJournalEmotionalStates(states);
+        if (dataMode === "sandbox") {
+          for (const state of emotionalStateDeleteTarget.states) {
+            deleteSandboxEmotionalState(state.id);
+          }
+          if (selectedEntry?.id != null) {
+            const states = getSandboxEmotionalStatesForJournal(selectedEntry.id) as unknown as JournalEmotionalState[];
+            setJournalEmotionalStates(states);
+          }
+        } else {
+          for (const state of emotionalStateDeleteTarget.states) {
+            await invoke("delete_emotional_state", { id: state.id });
+          }
+          const jtId = tradesFormData[activeTradeIndex]?.id ?? null;
+          if (selectedEntry?.id != null) {
+            const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
+              journalEntryId: selectedEntry.id,
+              journalTradeId: jtId ?? undefined,
+            });
+            setJournalEmotionalStates(states);
+          }
         }
       } catch (e) {
         console.error(e);
@@ -1173,6 +1299,75 @@ export default function Journal() {
       let entryId: number;
       let toAdd: number[] = [];
 
+      if (dataMode === "sandbox") {
+        if (isCreating) {
+          entryId = createSandboxJournalEntry({
+            date: entryFormData.date,
+            title: entryFormData.title,
+            strategy_id: entryFormData.strategy_id,
+            linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null,
+          });
+          updateSandboxJournalEntry(entryId, { linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null });
+          setIsCreating(false);
+          setIsEditing(true);
+          const savedEntry = getSandboxJournalEntry(entryId) as unknown as JournalEntry;
+          setSelectedEntry(savedEntry);
+        } else if (selectedEntry) {
+          entryId = selectedEntry.id;
+          updateSandboxJournalEntry(entryId, {
+            date: entryFormData.date,
+            title: entryFormData.title,
+            strategy_id: entryFormData.strategy_id,
+            linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null,
+          });
+          const formStateIds = entryFormData.linked_emotional_state_ids ?? [];
+          const currentGroupIds = groupEmotionalStatesByTimestamp(journalEmotionalStates).map((g) => g[0].id);
+          const toRemove = currentGroupIds.filter((id) => !formStateIds.includes(id));
+          toAdd = formStateIds.filter((id) => !currentGroupIds.includes(id));
+          if (toRemove.length > 0) removeSandboxJournalEntryFromEmotionalStates(entryId, toRemove);
+          if (toAdd.length > 0) addSandboxJournalEntryToEmotionalStates(entryId, toAdd);
+        } else {
+          return;
+        }
+        const tradeIdsInOrder: number[] = [];
+        for (let i = 0; i < tradesFormData.length; i++) {
+          const tradeData = tradesFormData[i];
+          const payload = {
+            symbol: tradeData.symbol || null,
+            position: tradeData.position || null,
+            timeframe: tradeData.timeframe || null,
+            entry_type: tradeData.entry_type || null,
+            exit_type: tradeData.exit_type || null,
+            trade: tradeData.trade || null,
+            what_went_well: tradeData.what_went_well || null,
+            what_could_be_improved: tradeData.what_could_be_improved || null,
+            emotional_state: tradeData.emotional_state || null,
+            notes: tradeData.notes || null,
+            outcome: tradeData.outcome || null,
+            trade_order: i,
+          };
+          if (tradeData.id) {
+            tradeIdsInOrder.push(tradeData.id);
+            updateSandboxJournalTrade(tradeData.id, payload);
+          } else {
+            const newTradeId = createSandboxJournalTrade(entryId, payload);
+            tradeIdsInOrder.push(newTradeId);
+          }
+        }
+        const stateIdsToLinkAfterTrades = isCreating ? (entryFormData.linked_emotional_state_ids ?? []) : toAdd;
+        if (stateIdsToLinkAfterTrades.length > 0) {
+          if (isCreating) addSandboxJournalEntryToEmotionalStates(entryId, stateIdsToLinkAfterTrades);
+          for (const stateId of stateIdsToLinkAfterTrades) {
+            const scope = entryFormData.linked_emotional_state_link_scopes?.[stateId];
+            const jtId = scope?.scope === "trades" && scope.tradeIndex != null ? tradeIdsInOrder[scope.tradeIndex] ?? null : null;
+            linkSandboxEmotionalStatesToJournal([stateId], entryId, jtId ?? undefined);
+          }
+        }
+        await loadTrades(entryId);
+        await loadLinkedPairs(entryId);
+        return;
+      }
+
       if (isCreating) {
         entryId = await invoke<number>("create_journal_entry", {
           date: entryFormData.date,
@@ -1232,7 +1427,7 @@ export default function Journal() {
             emotionalState: tradeData.emotional_state || null,
             notes: tradeData.notes || null,
             outcome: tradeData.outcome || null,
-            rMultiple: tradeData.r_multiple.trim() ? Number(tradeData.r_multiple) : null,
+            rMultiple: (tradeData as { r_multiple?: string }).r_multiple?.trim() ? Number((tradeData as { r_multiple?: string }).r_multiple) : null,
             tradeOrder: i,
           });
         } else {
@@ -1249,7 +1444,7 @@ export default function Journal() {
             emotionalState: tradeData.emotional_state || null,
             notes: tradeData.notes || null,
             outcome: tradeData.outcome || null,
-            rMultiple: tradeData.r_multiple.trim() ? Number(tradeData.r_multiple) : null,
+            rMultiple: (tradeData as { r_multiple?: string }).r_multiple?.trim() ? Number((tradeData as { r_multiple?: string }).r_multiple) : null,
             tradeOrder: i,
           });
           tradeIdsInOrder.push(newTradeId);
@@ -1446,6 +1641,24 @@ export default function Journal() {
     }
 
     try {
+      if (dataMode === "sandbox") {
+        if (!isCreating && selectedEntry) {
+          const keptTradeIds = new Set(tradesFormData.filter((t) => t.id !== null).map((t) => t.id!));
+          for (const trade of selectedTrades) {
+            if (trade.id && !keptTradeIds.has(trade.id)) deleteSandboxJournalTrade(trade.id);
+          }
+        }
+        await autoSave();
+        if (selectedEntry) {
+          await loadTrades(selectedEntry.id);
+          await loadLinkedPairs(selectedEntry.id);
+        }
+        setIsEditing(false);
+        setShowAddEmotionalStateForm(false);
+        setPendingEmotionalStates([]);
+        return;
+      }
+
       let entryId: number;
       let toAdd: number[] = [];
 
@@ -1512,7 +1725,7 @@ export default function Journal() {
             emotionalState: tradeData.emotional_state || null,
             notes: tradeData.notes || null,
             outcome: tradeData.outcome || null,
-            rMultiple: tradeData.r_multiple.trim() ? Number(tradeData.r_multiple) : null,
+            rMultiple: (tradeData as { r_multiple?: string }).r_multiple?.trim() ? Number((tradeData as { r_multiple?: string }).r_multiple) : null,
             tradeOrder: i,
           });
         } else {
@@ -1529,7 +1742,7 @@ export default function Journal() {
             emotionalState: tradeData.emotional_state || null,
             notes: tradeData.notes || null,
             outcome: tradeData.outcome || null,
-            rMultiple: tradeData.r_multiple.trim() ? Number(tradeData.r_multiple) : null,
+            rMultiple: (tradeData as { r_multiple?: string }).r_multiple?.trim() ? Number((tradeData as { r_multiple?: string }).r_multiple) : null,
             tradeOrder: i,
           });
           tradeIdsInOrder.push(newTradeId);
@@ -1766,6 +1979,45 @@ export default function Journal() {
 
   const loadEntry = async (id: number, options?: { skipTradesFormDataSync?: boolean; restoredTradesCount?: number; openTradeId?: number }) => {
     try {
+      if (dataMode === "sandbox") {
+        const entry = getSandboxJournalEntry(id) as unknown as JournalEntry | null;
+        if (!entry) return;
+        setSelectedEntry(entry);
+        let linkedTradeIds: number[] = [];
+        if (entry.linked_trade_ids) {
+          try {
+            const parsed = JSON.parse(entry.linked_trade_ids) as number[];
+            if (Array.isArray(parsed)) linkedTradeIds = parsed;
+          } catch { /* ignore */ }
+        }
+        setEntryFormData((prev) => ({ ...prev, date: entry.date, title: entry.title, strategy_id: entry.strategy_id, linked_trade_ids: linkedTradeIds }));
+        localStorage.setItem('journal_selected_entry_id', id.toString());
+        const loadedTrades = await loadTrades(id);
+        if (options?.openTradeId != null && loadedTrades.length > 0) {
+          const idx = loadedTrades.findIndex((t) => t.id === options.openTradeId);
+          if (idx >= 0) setActiveTradeIndex(idx);
+        }
+        await loadLinkedPairs(id);
+        const shouldSyncTrades = !options?.skipTradesFormDataSync || (options?.restoredTradesCount != null && loadedTrades.length < options.restoredTradesCount);
+        if (shouldSyncTrades) {
+          setTradesFormData(loadedTrades.map((t, i) => ({
+            id: t.id,
+            symbol: t.symbol ?? "",
+            position: t.position ?? "",
+            timeframe: t.timeframe ?? "",
+            entry_type: t.entry_type ?? "",
+            exit_type: t.exit_type ?? "",
+            trade: t.trade ?? "",
+            what_went_well: t.what_went_well ?? "",
+            what_could_be_improved: t.what_could_be_improved ?? "",
+            emotional_state: t.emotional_state ?? "",
+            notes: t.notes ?? "",
+            outcome: t.outcome ?? "Positive",
+            trade_order: i,
+          })));
+        }
+        return;
+      }
       const entry = await invoke<JournalEntry>("get_journal_entry", { id });
       setSelectedEntry(entry);
       let linkedTradeIds: number[] = [];
@@ -3120,7 +3372,7 @@ export default function Journal() {
                         <input
                           type="text"
                           inputMode="decimal"
-                          value={currentTrade.r_multiple}
+                          value={(currentTrade as { r_multiple?: string }).r_multiple ?? ""}
                           onChange={(e) => updateTradeFormData(activeTradeIndex, "r_multiple", e.target.value)}
                           placeholder="e.g. 1.5 or -0.5"
                           style={{
@@ -3281,11 +3533,16 @@ export default function Journal() {
                                     (p) => !(p.entry_trade_id === pair.entry_trade_id && p.exit_trade_id === pair.exit_trade_id)
                                   );
                                   try {
-                                    await invoke("set_journal_entry_pairs", {
-                                      journalEntryId: selectedEntry.id,
-                                      pairs: remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })),
-                                    });
-                                    setLinkedPairs(remaining);
+                                    if (dataMode === "sandbox") {
+                                      setSandboxJournalEntryPairs(selectedEntry.id, remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })));
+                                      setLinkedPairs(remaining);
+                                    } else {
+                                      await invoke("set_journal_entry_pairs", {
+                                        journalEntryId: selectedEntry.id,
+                                        pairs: remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })),
+                                      });
+                                      setLinkedPairs(remaining);
+                                    }
                                   } catch (err) {
                                     console.error("Failed to unlink pair:", err);
                                     alert("Failed to unlink pair.");
@@ -6202,9 +6459,15 @@ export default function Journal() {
                       const [e, x] = key.split("_").map(Number);
                       return { entry_trade_id: e, exit_trade_id: x };
                     });
-                    await invoke("set_journal_entry_pairs", { journalEntryId: selectedEntry.id, pairs });
-                    const updated = await invoke<PairedTrade[]>("get_journal_entry_pairs", { journalEntryId: selectedEntry.id });
-                    setLinkedPairs(updated);
+                    if (dataMode === "sandbox") {
+                      setSandboxJournalEntryPairs(selectedEntry.id, pairs);
+                      const updated = getSandboxJournalEntryPairsAsPairedTrades(selectedEntry.id) as unknown as PairedTrade[];
+                      setLinkedPairs(updated);
+                    } else {
+                      await invoke("set_journal_entry_pairs", { journalEntryId: selectedEntry.id, pairs });
+                      const updated = await invoke<PairedTrade[]>("get_journal_entry_pairs", { journalEntryId: selectedEntry.id });
+                      setLinkedPairs(updated);
+                    }
                     setShowLinkPairsModal(false);
                   } catch (e) {
                     console.error("Failed to save linked pairs:", e);

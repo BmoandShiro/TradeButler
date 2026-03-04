@@ -2,6 +2,14 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
+import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import {
+  getSandboxEmotionalStates,
+  addSandboxEmotionalState,
+  deleteSandboxEmotionalState,
+  loadSandboxState,
+  getSandboxJournalEntries,
+} from "../utils/sandboxStore";
 import { Plus, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Maximize2, Minimize2, Edit2, Trash2, ArrowLeft, RotateCcw, ExternalLink, ChevronDown, Info, X, BarChart2 } from "lucide-react";
 import { LineChart, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import RichTextEditor from "../components/RichTextEditor";
@@ -2398,6 +2406,13 @@ export default function Emotions() {
   const EMOTIONAL_STATES_PAGE_SIZE = 24;
   const navigate = useNavigate();
   const location = useLocation();
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
+
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return () => unsub();
+  }, []);
+
   type FormDataSnapshot = {
     timestamp: string;
     selectedEmotions: Record<string, number>;
@@ -2477,7 +2492,7 @@ export default function Emotions() {
   useEffect(() => {
     loadStates();
     loadSurveys();
-  }, []);
+  }, [dataMode]);
 
   // When navigating from Journal via "Open in Emotions", open that entry in read-only mode
   useEffect(() => {
@@ -2550,18 +2565,36 @@ export default function Emotions() {
     if (!showForm) return;
     (async () => {
       try {
+        if (dataMode === "sandbox") {
+          const entries = getSandboxJournalEntries().map((e) => ({ id: e.id, date: e.date, title: e.title }));
+          setJournalEntries(entries);
+          return;
+        }
         const entries = await invoke<{ id: number; date: string; title: string }[]>("get_journal_entries");
         setJournalEntries(entries);
       } catch {
         setJournalEntries([]);
       }
     })();
-  }, [showForm]);
+  }, [showForm, dataMode]);
 
   useEffect(() => {
     if (!showForm) return;
     (async () => {
       try {
+        if (dataMode === "sandbox") {
+          const state = loadSandboxState();
+          setRealTrades(state.trades.map((t) => ({
+            id: t.id,
+            symbol: t.symbol,
+            timestamp: t.timestamp,
+            side: t.side,
+            quantity: t.quantity ?? 0,
+            price: t.price ?? 0,
+            pnl: undefined,
+          })));
+          return;
+        }
         const trades = await invoke<{ id: number; symbol: string; timestamp: string; side: string; quantity: number; price: number }[]>("get_trades");
         let pnlMap: Record<number, number> = {};
         try {
@@ -2590,7 +2623,7 @@ export default function Emotions() {
         setRealTrades([]);
       }
     })();
-  }, [showForm]);
+  }, [showForm, dataMode]);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
@@ -2633,6 +2666,12 @@ export default function Emotions() {
 
   const loadStates = async () => {
     try {
+      if (dataMode === "sandbox") {
+        const data = getSandboxEmotionalStates() as unknown as EmotionalState[];
+        setStates(data);
+        setLoading(false);
+        return;
+      }
       const data = await invoke<EmotionalState[]>("get_emotional_states");
       setStates(data);
     } catch (error) {
@@ -2644,6 +2683,10 @@ export default function Emotions() {
 
   const loadSurveys = async () => {
     try {
+      if (dataMode === "sandbox") {
+        setSurveys([]);
+        return;
+      }
       const data = await invoke<EmotionSurvey[]>("get_all_emotion_surveys");
       setSurveys(data);
     } catch (error) {
@@ -2664,6 +2707,62 @@ export default function Emotions() {
     const tradeIdLegacy = tradeIds[0] ?? null;
 
     try {
+      if (dataMode === "sandbox") {
+        if (editingStateGroup?.length) {
+          if (!isEditingSelectedState) return;
+          if (emotionKeys.length === 0) {
+            alert("Select at least one emotion.");
+            return;
+          }
+          for (const s of editingStateGroup) {
+            deleteSandboxEmotionalState(s.id);
+          }
+          for (const emotion of emotionKeys) {
+            addSandboxEmotionalState({
+              timestamp,
+              emotion,
+              intensity: selected[emotion],
+              notes: notes ?? undefined,
+              trade_id: tradeIdLegacy ?? undefined,
+              journal_entry_id: journalEntryIdLegacy ?? undefined,
+              journal_trade_id: journalTradeId ?? undefined,
+              journal_entry_ids: journalEntryIds.length > 0 ? JSON.stringify(journalEntryIds) : undefined,
+              trade_ids: tradeIds.length > 0 ? JSON.stringify(tradeIds) : undefined,
+            });
+          }
+        } else {
+          if (emotionKeys.length === 0) {
+            alert("Select at least one emotion.");
+            return;
+          }
+          for (const emotion of emotionKeys) {
+            addSandboxEmotionalState({
+              timestamp,
+              emotion,
+              intensity: selected[emotion],
+              notes: notes ?? undefined,
+              trade_id: tradeIdLegacy ?? undefined,
+              journal_entry_id: journalEntryIdLegacy ?? undefined,
+              journal_trade_id: journalTradeId ?? undefined,
+              journal_entry_ids: journalEntryIds.length > 0 ? JSON.stringify(journalEntryIds) : undefined,
+              trade_ids: tradeIds.length > 0 ? JSON.stringify(tradeIds) : undefined,
+            });
+          }
+        }
+        await loadStates();
+        await loadSurveys();
+        saveScrollPosition();
+        setShowForm(false);
+        setEditingState(null);
+        setEditingStateGroup(null);
+        setIsEditingSelectedState(false);
+        setEmotionalStateEditHistory([]);
+        setIsMaximized(false);
+        setFormTab("basic");
+        setFormData({ timestamp: new Date().toISOString(), selectedEmotions: {}, notes: "", journalEntryIds: [], journalTradeIds: [], tradeIds: [] });
+        return;
+      }
+
       if (editingStateGroup?.length) {
         if (!isEditingSelectedState) return;
         if (emotionKeys.length === 0) {
@@ -2805,6 +2904,23 @@ export default function Emotions() {
     if (!deleteTarget) return;
     try {
       const toDelete = editingStateGroup?.length ? editingStateGroup : [deleteTarget];
+      if (dataMode === "sandbox") {
+        for (const s of toDelete) {
+          deleteSandboxEmotionalState(s.id);
+        }
+        await loadStates();
+        await loadSurveys();
+        if (editingStateGroup?.some((s) => s.id === deleteTarget.id) || editingState?.id === deleteTarget.id) {
+          saveScrollPosition();
+          setShowForm(false);
+          setEditingState(null);
+          setEditingStateGroup(null);
+          setIsEditingSelectedState(false);
+          setIsMaximized(false);
+        }
+        setDeleteTarget(null);
+        return;
+      }
       for (const s of toDelete) {
         await invoke("delete_emotional_state", { id: s.id });
       }

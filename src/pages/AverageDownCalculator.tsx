@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { Plus, Trash2, Calculator, X, ChevronUp, ChevronDown } from "lucide-react";
+import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import type { DataMode } from "../utils/dataMode";
 
 interface PurchaseRow {
   id: string;
@@ -17,6 +19,7 @@ const DEFAULT_ROWS: PurchaseRow[] = [
 ];
 
 export default function AverageDownCalculator() {
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [rows, setRows] = useState<PurchaseRow[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
@@ -36,6 +39,11 @@ export default function AverageDownCalculator() {
   const [averagePrice, setAveragePrice] = useState<number | null>(null);
   const [totalShares, setTotalShares] = useState<number>(0);
   const [totalCost, setTotalCost] = useState<number>(0);
+
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return unsub;
+  }, []);
 
   // Save to localStorage whenever rows change
   useEffect(() => {
@@ -142,6 +150,21 @@ export default function AverageDownCalculator() {
           marginBottom: "24px",
         }}
       >
+        {dataMode === "sandbox" && (
+          <div
+            style={{
+              padding: "10px 14px",
+              marginBottom: "16px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              fontSize: "13px",
+              color: "var(--text-secondary)",
+            }}
+          >
+            Sandbox mode – this calculator works the same in all modes. Enter your own numbers to try it.
+          </div>
+        )}
         <div
           style={{
             display: "flex",

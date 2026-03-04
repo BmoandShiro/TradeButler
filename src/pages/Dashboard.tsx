@@ -37,6 +37,14 @@ import {
 import { MetricsConfigPanel, useMetricsConfig } from "../components/MetricsConfig";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { format } from "date-fns";
+import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import { loadSandboxState } from "../utils/sandboxStore";
+import {
+  EXAMPLE_METRICS,
+  EXAMPLE_STRATEGY_PERFORMANCE,
+  EXAMPLE_RECENT_TRADES,
+  EXAMPLE_SYMBOL_PNL,
+} from "../exampleData";
 
 interface Metrics {
   total_trades: number;
@@ -1005,6 +1013,13 @@ export default function Dashboard() {
   const [recentTrades, setRecentTrades] = useState<RecentTrade[]>([]);
   const [trades, setTrades] = useState<RecentTrade[]>([]);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
+
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return () => unsub();
+  }, []);
+
   const [strategyFilterForMetrics, setStrategyFilterForMetrics] = useState<Record<string, number | null>>(() => {
     const saved = localStorage.getItem("tradebutler_strategy_filter_for_metrics");
     return saved ? JSON.parse(saved) : {};
@@ -1580,7 +1595,7 @@ export default function Dashboard() {
     loadDashboardData();
     // Reset to first page when timeframe changes
     setCurrentTradesPage(1);
-  }, [timeframe, customStartDate, customEndDate]);
+  }, [timeframe, customStartDate, customEndDate, dataMode]);
   
   useEffect(() => {
     localStorage.setItem("tradebutler_dashboard_timeframe", timeframe);
@@ -1635,6 +1650,24 @@ export default function Dashboard() {
   const loadDashboardData = async () => {
     setLoading(true);
     try {
+      if (dataMode === "sandbox") {
+        const state = loadSandboxState();
+        setMetrics(EXAMPLE_METRICS as unknown as Metrics);
+        setStrategies(state.strategies.map((s) => ({ id: s.id, name: s.name, description: s.description, notes: s.notes, color: s.color })) as unknown as Strategy[]);
+        const topSymbolsData = EXAMPLE_SYMBOL_PNL.slice(0, 5).map((pnl) => ({
+          symbol: pnl.symbol,
+          trade_count: pnl.closed_positions,
+          total_volume: 0,
+          estimated_pnl: pnl.total_net_pnl,
+        }));
+        setTopSymbols(topSymbolsData);
+        setStrategyPerformance(EXAMPLE_STRATEGY_PERFORMANCE as unknown as StrategyPerformance[]);
+        setRecentTrades(EXAMPLE_RECENT_TRADES.slice(0, 5) as unknown as RecentTrade[]);
+        setTrades(EXAMPLE_RECENT_TRADES as unknown as RecentTrade[]);
+        setLoading(false);
+        return;
+      }
+
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
       const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
       const startDate = dateRange.start ? dateRange.start.toISOString() : null;

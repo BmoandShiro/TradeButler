@@ -3,6 +3,10 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { useNavigate } from "react-router-dom";
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isToday } from "date-fns";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import type { DataMode } from "../utils/dataMode";
+import { loadSandboxState } from "../utils/sandboxStore";
+import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 
 interface DailyPnL {
   date: string;
@@ -17,6 +21,7 @@ interface CalendarJournalEntry {
 }
 
 export default function Calendar() {
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [currentDate, setCurrentDate] = useState(new Date());
   const [dailyPnL, setDailyPnL] = useState<Record<string, DailyPnL>>({});
   const [loading, setLoading] = useState(true);
@@ -26,30 +31,72 @@ export default function Calendar() {
   const navigate = useNavigate();
 
   useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return unsub;
+  }, []);
+
+  useEffect(() => {
     loadCalendarData();
-  }, [currentDate]);
+  }, [currentDate, dataMode]);
 
   const loadCalendarData = async () => {
     try {
-      const [pnlData, journalData] = await Promise.all([
-        invoke<DailyPnL[]>("get_daily_pnl"),
-        invoke<CalendarJournalEntry[]>("get_journal_entries"),
-      ]);
-
-      const pnlMap: Record<string, DailyPnL> = {};
-      pnlData.forEach((day) => {
-        pnlMap[day.date] = day;
-      });
-      setDailyPnL(pnlMap);
-
-      const journalMap: Record<string, CalendarJournalEntry[]> = {};
-      journalData.forEach((entry) => {
-        if (!journalMap[entry.date]) {
-          journalMap[entry.date] = [];
+      if (dataMode === "sandbox") {
+        const state = loadSandboxState();
+        const pairingMethod = (localStorage.getItem("tradebutler_pairing_method") || "FIFO") as "FIFO" | "LIFO";
+        const { pairs } = buildPositionGroupsAndPairs(
+          state.trades.map((t) => ({
+            id: t.id,
+            symbol: t.symbol,
+            side: t.side,
+            quantity: t.quantity,
+            price: t.price,
+            timestamp: t.timestamp,
+            fees: t.fees,
+            notes: t.notes,
+            strategy_id: t.strategy_id,
+          })),
+          pairingMethod
+        );
+        const pnlMap: Record<string, DailyPnL> = {};
+        for (const p of pairs) {
+          const dateStr = p.exit_timestamp.slice(0, 10);
+          if (!pnlMap[dateStr]) {
+            pnlMap[dateStr] = { date: dateStr, profit_loss: 0, trade_count: 0 };
+          }
+          pnlMap[dateStr].profit_loss += p.net_profit_loss;
+          pnlMap[dateStr].trade_count += 1;
         }
-        journalMap[entry.date].push(entry);
-      });
-      setJournalEntriesByDate(journalMap);
+        setDailyPnL(pnlMap);
+
+        const journalMap: Record<string, CalendarJournalEntry[]> = {};
+        state.journalEntries.forEach((entry) => {
+          const dateStr = entry.date;
+          if (!journalMap[dateStr]) journalMap[dateStr] = [];
+          journalMap[dateStr].push({ id: entry.id, date: entry.date, title: entry.title || "Untitled" });
+        });
+        setJournalEntriesByDate(journalMap);
+      } else {
+        const [pnlData, journalData] = await Promise.all([
+          invoke<DailyPnL[]>("get_daily_pnl"),
+          invoke<CalendarJournalEntry[]>("get_journal_entries"),
+        ]);
+
+        const pnlMap: Record<string, DailyPnL> = {};
+        pnlData.forEach((day) => {
+          pnlMap[day.date] = day;
+        });
+        setDailyPnL(pnlMap);
+
+        const journalMap: Record<string, CalendarJournalEntry[]> = {};
+        journalData.forEach((entry) => {
+          if (!journalMap[entry.date]) {
+            journalMap[entry.date] = [];
+          }
+          journalMap[entry.date].push(entry);
+        });
+        setJournalEntriesByDate(journalMap);
+      }
     } catch (error) {
       console.error("Error loading calendar data:", error);
     } finally {

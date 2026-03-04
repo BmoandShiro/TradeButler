@@ -5,6 +5,9 @@ import { format } from "date-fns";
 import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, BarChart3, Lock, Unlock, Search, ArrowUpDown, ArrowUp, ArrowDown, Trash2 } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { TradeChart } from "../components/TradeChart";
+import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import { loadSandboxState, deleteSandboxTrade, updateSandboxTradeStrategy } from "../utils/sandboxStore";
+import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 
 interface JournalEntrySummary {
   id: number;
@@ -118,6 +121,7 @@ export default function Trades() {
   const [journalEntriesByPairKey, setJournalEntriesByPairKey] = useState<Record<string, JournalEntrySummary[]>>({});
   const [journalPairPage, setJournalPairPage] = useState<number>(0);
   const navigate = useNavigate();
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
 
   const JOURNAL_ENTRIES_PER_PAGE = 10;
 
@@ -145,12 +149,22 @@ export default function Trades() {
 
   useEffect(() => {
     loadData();
-  }, [pairingMethod, viewMode, timeframe, customStartDate, customEndDate]);
+  }, [pairingMethod, viewMode, timeframe, customStartDate, customEndDate, dataMode]);
 
   useEffect(() => {
     const onTradeAdded = () => loadData();
     window.addEventListener("tradeButlerTradeAdded", onTradeAdded);
     return () => window.removeEventListener("tradeButlerTradeAdded", onTradeAdded);
+  }, []);
+
+  // Keep data mode in sync with global setting
+  useEffect(() => {
+    const unsubscribe = subscribeToDataMode((mode) => {
+      setDataMode(mode);
+    });
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -172,6 +186,69 @@ export default function Trades() {
 
   const loadData = async () => {
     try {
+      if (dataMode === "sandbox") {
+        // Use sandbox store data and build position groups + pairs client-side
+        const state = loadSandboxState();
+        const { positionGroups: groups, pairs } = buildPositionGroupsAndPairs(
+          state.trades.map((t) => ({
+            id: t.id,
+            symbol: t.symbol,
+            side: t.side,
+            quantity: t.quantity,
+            price: t.price,
+            timestamp: t.timestamp,
+            fees: t.fees,
+            notes: t.notes,
+            strategy_id: t.strategy_id,
+          })),
+          pairingMethod
+        );
+        const entryPairsByTrade = new Map<number, PairedTrade[]>();
+        const exitPairsByTrade = new Map<number, PairedTrade[]>();
+        for (const p of pairs) {
+          const pair: PairedTrade = { ...p };
+          if (!entryPairsByTrade.has(p.entry_trade_id)) entryPairsByTrade.set(p.entry_trade_id, []);
+          entryPairsByTrade.get(p.entry_trade_id)!.push(pair);
+          if (!exitPairsByTrade.has(p.exit_trade_id)) exitPairsByTrade.set(p.exit_trade_id, []);
+          exitPairsByTrade.get(p.exit_trade_id)!.push(pair);
+        }
+        const mappedTrades: TradeWithPairing[] = state.trades.map((t) => ({
+          trade: {
+            id: t.id,
+            symbol: t.symbol,
+            side: t.side,
+            quantity: t.quantity,
+            price: t.price,
+            timestamp: t.timestamp,
+            order_type: t.order_type,
+            status: t.status,
+            fees: t.fees,
+            notes: t.notes,
+            strategy_id: t.strategy_id,
+          },
+          entry_pairs: entryPairsByTrade.get(t.id) ?? [],
+          exit_pairs: exitPairsByTrade.get(t.id) ?? [],
+        }));
+        setTradesWithPairing(mappedTrades);
+        setPositionGroups(
+          groups.map((g) => ({
+            entry_trade: g.entry_trade as Trade,
+            position_trades: g.position_trades as Trade[],
+            total_pnl: g.total_pnl,
+            final_quantity: g.final_quantity,
+          }))
+        );
+        setStrategies(
+          state.strategies.map((s) => ({
+            id: s.id,
+            name: s.name,
+            color: s.color,
+          }))
+        );
+        setPositionGroupNotes(new Map());
+        return;
+      }
+
       const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
       const startDate = dateRange.start ? dateRange.start.toISOString() : null;
       const endDate = dateRange.end ? dateRange.end.toISOString() : null;
@@ -181,7 +258,21 @@ export default function Trades() {
         invoke<PositionGroup[]>("get_position_groups", { pairing_method: pairingMethod, startDate, endDate }),
         invoke<Strategy[]>("get_strategies"),
       ]);
-      setTradesWithPairing(tradesData);
+
+      // For paper mode, show only trades tagged as [PAPER] in notes
+      if (dataMode === "paper") {
+        const paperOnly = tradesData.filter((item) =>
+          (item.trade.notes || "").toUpperCase().includes("[PAPER]")
+        );
+        setTradesWithPairing(paperOnly);
+      } else {
+        // Real mode: hide trades explicitly tagged as [PAPER]
+        const realOnly = tradesData.filter(
+          (item) => !(item.trade.notes || "").toUpperCase().includes("[PAPER]")
+        );
+        setTradesWithPairing(realOnly);
+      }
+
       setPositionGroups(positionsData);
       setStrategies(strategiesData);
       
@@ -236,6 +327,11 @@ export default function Trades() {
 
   const handleStrategyChange = async (tradeId: number, strategyId: number | null) => {
     try {
+      if (dataMode === "sandbox") {
+        updateSandboxTradeStrategy(tradeId, strategyId);
+        await loadData();
+        return;
+      }
       await invoke("update_trade_strategy", { tradeId, strategyId });
       // Update tradesWithPairing
       setTradesWithPairing((prev) =>
@@ -274,6 +370,11 @@ export default function Trades() {
     if (deleteLocked) return;
     if (!window.confirm("Delete this trade? This cannot be undone.")) return;
     try {
+      if (dataMode === "sandbox") {
+        deleteSandboxTrade(tradeId);
+        await loadData();
+        return;
+      }
       await invoke("delete_trade", { id: tradeId });
       await loadData();
     } catch (error) {

@@ -4,6 +4,12 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea } from "recharts";
 import { TrendingUp, TrendingDown, Settings } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
+import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import { loadSandboxState } from "../utils/sandboxStore";
+import {
+  EXAMPLE_SYMBOL_PNL,
+  EXAMPLE_EQUITY_CURVE,
+} from "../exampleData";
 
 interface Trade {
   id: number;
@@ -119,11 +125,21 @@ export default function Analytics() {
   const [showEquitySettings, setShowEquitySettings] = useState(false);
   const equitySettingsRef = useRef<HTMLDivElement>(null);
   const equitySettingsButtonRef = useRef<HTMLButtonElement>(null);
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
 
 
   useEffect(() => {
     loadData();
-  }, [timeframe, customStartDate, customEndDate]);
+  }, [timeframe, customStartDate, customEndDate, dataMode]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToDataMode((mode) => {
+      setDataMode(mode);
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   // Close settings menu when clicking outside
   useEffect(() => {
@@ -174,6 +190,16 @@ export default function Analytics() {
 
   const loadData = async () => {
     try {
+      if (dataMode === "sandbox") {
+        const state = loadSandboxState();
+        setTrades(state.trades as unknown as Trade[]);
+        setSymbolPnL(EXAMPLE_SYMBOL_PNL as unknown as SymbolPnL[]);
+        setEquityCurve(EXAMPLE_EQUITY_CURVE as unknown as EquityCurveData);
+        setJournalEntries(state.journalEntries as unknown as JournalEntry[]);
+        setJournalTrades(state.journalTrades as unknown as JournalTrade[]);
+        return;
+      }
+
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
       const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
       const startDate = dateRange.start ? dateRange.start.toISOString() : null;

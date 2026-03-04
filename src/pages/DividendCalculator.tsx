@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { Calculator, X, BarChart3, TrendingUp, ChevronUp, ChevronDown, Loader } from "lucide-react";
 import { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { invoke } from "@tauri-apps/api/tauri";
+import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import type { DataMode } from "../utils/dataMode";
 
 interface DividendYearResult {
   year: number;
@@ -46,6 +48,7 @@ const DEFAULT_INPUTS: DividendInputs = {
 };
 
 export default function DividendCalculator() {
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [inputs, setInputs] = useState<DividendInputs>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
@@ -63,6 +66,11 @@ export default function DividendCalculator() {
   const [chartType, setChartType] = useState<"line" | "bar">("line");
   const [ticker, setTicker] = useState("");
   const [loadingTicker, setLoadingTicker] = useState(false);
+
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return unsub;
+  }, []);
 
   // Save to localStorage whenever inputs change
   useEffect(() => {
@@ -377,7 +385,10 @@ export default function DividendCalculator() {
               }}
               onClick={async () => {
                 if (!ticker.trim() || loadingTicker) return;
-                
+                if (dataMode === "sandbox") {
+                  alert("Live stock quotes are available in Real or Paper mode. In Sandbox you can enter share price and dividend manually.");
+                  return;
+                }
                 setLoadingTicker(true);
                 try {
                   const quote = await invoke<{
@@ -432,13 +443,16 @@ export default function DividendCalculator() {
                   setLoadingTicker(false);
                 }
               }}
-              disabled={loadingTicker || !ticker.trim()}
+              disabled={loadingTicker || !ticker.trim() || dataMode === "sandbox"}
+              title={dataMode === "sandbox" ? "Switch to Real or Paper for live stock quotes" : undefined}
             >
               {loadingTicker ? (
                 <>
                   <Loader size={16} style={{ animation: "spin 1s linear infinite" }} />
                   Loading...
                 </>
+              ) : dataMode === "sandbox" ? (
+                "Load (Real/Paper)"
               ) : (
                 "Load"
               )}

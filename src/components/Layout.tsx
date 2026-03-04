@@ -36,6 +36,9 @@ import { isLocked, hasPassword, lockApp } from "../utils/passwordManager";
 import { getLockScreenStyle } from "../utils/lockScreenManager";
 import { getGalaxyThemeSettings } from "../utils/galaxyThemeManager";
 import { applyGalaxyBackgroundStyles } from "../utils/galaxyBackgroundStyles";
+import { DataMode, getCurrentDataMode, setCurrentDataMode } from "../utils/dataMode";
+import { addSandboxTrade, resetSandboxState } from "../utils/sandboxStore";
+import { resetSandboxDocumentation } from "../data/sandboxDocumentation";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -72,11 +75,17 @@ export default function Layout({ children }: LayoutProps) {
   const mainContentRef = useRef<HTMLElement>(null);
   const scrollPositions = useRef<Map<string, number>>(new Map());
   const previousPathRef = useRef<string>(location.pathname);
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   
   // Load app version from backend (single source: Cargo.toml)
   useEffect(() => {
     invoke<string>("get_app_version").then(setAppVersion).catch(() => setAppVersion(""));
   }, []);
+
+  // Persist data mode and notify listeners
+  useEffect(() => {
+    setCurrentDataMode(dataMode);
+  }, [dataMode]);
 
   // Initialize: Load saved scroll positions from localStorage
   useEffect(() => {
@@ -395,17 +404,41 @@ export default function Layout({ children }: LayoutProps) {
     const timestamp = `${addTradeForm.tradeDate}T${addTradeForm.tradeTime}:00Z`;
     try {
       setIsAddingTrade(true);
-      await invoke<number>("add_trade_manual", {
-        symbol: addTradeForm.symbol.trim(),
-        side: addTradeForm.side,
-        quantity: qty,
-        price: pr,
-        timestamp,
-        order_type: addTradeForm.orderType || null,
-        fees: feeVal,
-        notes: addTradeForm.notes.trim() || null,
-        strategy_id: null,
-      });
+      const baseNotes = addTradeForm.notes.trim();
+
+      if (dataMode === "sandbox") {
+        // In Sandbox mode, write to the local sandbox store instead of the real database
+        addSandboxTrade({
+          symbol: addTradeForm.symbol.trim(),
+          side: addTradeForm.side,
+          quantity: qty,
+          price: pr,
+          timestamp,
+          order_type: addTradeForm.orderType || "MARKET",
+          fees: feeVal,
+          notes: baseNotes || null,
+          strategy_id: null,
+        });
+      } else {
+        // In Paper mode, tag the trade in notes so pages can treat it as simulated
+        const isPaper = dataMode === "paper";
+        const notesWithMode =
+          isPaper
+            ? `${baseNotes ? baseNotes + " " : ""}[PAPER]`
+            : baseNotes || null;
+
+        await invoke<number>("add_trade_manual", {
+          symbol: addTradeForm.symbol.trim(),
+          side: addTradeForm.side,
+          quantity: qty,
+          price: pr,
+          timestamp,
+          order_type: addTradeForm.orderType || null,
+          fees: feeVal,
+          notes: notesWithMode,
+          strategy_id: null,
+        });
+      }
       setShowAddTradeModal(false);
       setAddTradeForm({
         symbol: "",
@@ -656,6 +689,93 @@ export default function Layout({ children }: LayoutProps) {
             >
               TradeButler
             </h1>
+          </div>
+          {/* Data Mode Switch */}
+          <div
+            style={{
+              marginTop: "12px",
+              padding: "10px",
+              borderRadius: "8px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)" }}>
+                Data Mode
+              </span>
+              <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                {dataMode === "sandbox"
+                  ? "Demo sandbox (separate from real data)"
+                  : dataMode === "real"
+                  ? "Your real trades"
+                  : "Paper / simulated"}
+              </span>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: "6px",
+              }}
+            >
+              {([
+                { key: "sandbox" as DataMode, label: "Sandbox" },
+                { key: "real" as DataMode, label: "Real" },
+                { key: "paper" as DataMode, label: "Paper" },
+              ] as const).map((mode) => {
+                const isActive = dataMode === mode.key;
+                return (
+                  <button
+                    key={mode.key}
+                    onClick={() => setDataMode(mode.key)}
+                    style={{
+                      padding: "6px 4px",
+                      borderRadius: "999px",
+                      border: isActive ? "1px solid var(--accent)" : "1px solid var(--border-color)",
+                      backgroundColor: isActive ? "var(--accent)" : "var(--bg-secondary)",
+                      color: isActive ? "#ffffff" : "var(--text-secondary)",
+                      fontSize: "11px",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      textAlign: "center",
+                      transition: "all 0.15s ease-in-out",
+                    }}
+                  >
+                    {mode.label}
+                  </button>
+                );
+              })}
+            </div>
+            {dataMode === "sandbox" && (
+              <button
+                onClick={() => {
+                  if (!window.confirm("Reset sandbox data to the default demo set? This will remove all sandbox changes.")) {
+                    return;
+                  }
+                  resetSandboxState();
+                  resetSandboxDocumentation();
+                  window.alert("Sandbox data has been reset.");
+                  window.location.reload();
+                }}
+                style={{
+                  marginTop: "8px",
+                  width: "100%",
+                  padding: "6px 8px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                  backgroundColor: "var(--bg-secondary)",
+                  color: "var(--text-secondary)",
+                  fontSize: "11px",
+                  cursor: "pointer",
+                }}
+              >
+                Reset Sandbox Data
+              </button>
+            )}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             <button
