@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use chrono::{Timelike, Datelike};
 use std::fs;
 use std::process::Command;
+use evalexpr::{eval_float_with_context, HashMapContext, Value, ContextWithMutableVariables, DefaultNumericTypes};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CsvTrade {
@@ -2969,14 +2970,15 @@ pub fn create_journal_trade(
     emotional_state: Option<String>,
     notes: Option<String>,
     outcome: Option<String>,
+    r_multiple: Option<f64>,
     trade_order: i64,
 ) -> Result<i64, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     conn.execute(
-        "INSERT INTO journal_trades (journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        params![journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order],
+        "INSERT INTO journal_trades (journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, r_multiple, trade_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, r_multiple, trade_order],
     ).map_err(|e| e.to_string())?;
     
     Ok(conn.last_insert_rowid())
@@ -2988,7 +2990,7 @@ pub fn get_journal_trades(journal_entry_id: i64) -> Result<Vec<JournalTrade>, St
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     let mut stmt = conn
-        .prepare("SELECT id, journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, created_at, updated_at FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order ASC")
+        .prepare("SELECT id, journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, r_multiple, trade_order, created_at, updated_at FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order ASC")
         .map_err(|e| e.to_string())?;
     
     let trade_iter = stmt
@@ -3007,9 +3009,10 @@ pub fn get_journal_trades(journal_entry_id: i64) -> Result<Vec<JournalTrade>, St
                 emotional_state: row.get(10)?,
                 notes: row.get(11)?,
                 outcome: row.get(12)?,
-                trade_order: row.get(13)?,
-                created_at: row.get(14)?,
-                updated_at: row.get(15)?,
+                r_multiple: row.get(13).ok(),
+                trade_order: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -3028,7 +3031,7 @@ pub fn get_all_journal_trades() -> Result<Vec<JournalTrade>, String> {
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
 
     let mut stmt = conn
-        .prepare("SELECT id, journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, created_at, updated_at FROM journal_trades ORDER BY journal_entry_id ASC, trade_order ASC")
+        .prepare("SELECT id, journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, r_multiple, trade_order, created_at, updated_at FROM journal_trades ORDER BY journal_entry_id ASC, trade_order ASC")
         .map_err(|e| e.to_string())?;
 
     let trade_iter = stmt
@@ -3047,9 +3050,10 @@ pub fn get_all_journal_trades() -> Result<Vec<JournalTrade>, String> {
                 emotional_state: row.get(10)?,
                 notes: row.get(11)?,
                 outcome: row.get(12)?,
-                trade_order: row.get(13)?,
-                created_at: row.get(14)?,
-                updated_at: row.get(15)?,
+                r_multiple: row.get(13).ok(),
+                trade_order: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -3076,14 +3080,15 @@ pub fn update_journal_trade(
     emotional_state: Option<String>,
     notes: Option<String>,
     outcome: Option<String>,
+    r_multiple: Option<f64>,
     trade_order: i64,
 ) -> Result<(), String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     conn.execute(
-        "UPDATE journal_trades SET symbol = ?1, position = ?2, timeframe = ?3, entry_type = ?4, exit_type = ?5, trade = ?6, what_went_well = ?7, what_could_be_improved = ?8, emotional_state = ?9, notes = ?10, outcome = ?11, trade_order = ?12, updated_at = CURRENT_TIMESTAMP WHERE id = ?13",
-        params![symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, id],
+        "UPDATE journal_trades SET symbol = ?1, position = ?2, timeframe = ?3, entry_type = ?4, exit_type = ?5, trade = ?6, what_went_well = ?7, what_could_be_improved = ?8, emotional_state = ?9, notes = ?10, outcome = ?11, r_multiple = ?12, trade_order = ?13, updated_at = CURRENT_TIMESTAMP WHERE id = ?14",
+        params![symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, r_multiple, trade_order, id],
     ).map_err(|e| e.to_string())?;
     
     Ok(())
@@ -3098,6 +3103,66 @@ pub fn delete_journal_trade(id: i64) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     
     Ok(())
+}
+
+/// Performance of a journal trade: prefer R-multiple, else % return from linked pairs, else net P&L (price).
+fn get_journal_trade_performance_raw(conn: &rusqlite::Connection, journal_trade_id: i64) -> Result<(Option<f64>, String), String> {
+    let (r_multiple, journal_entry_id): (Option<f64>, i64) = conn.query_row(
+        "SELECT r_multiple, journal_entry_id FROM journal_trades WHERE id = ?1",
+        params![journal_trade_id],
+        |row| Ok((row.get(0).ok(), row.get(1)?)),
+    ).map_err(|e| e.to_string())?;
+    if let Some(r) = r_multiple {
+        return Ok((Some(r), "r".to_string()));
+    }
+    let linked_ids: Vec<i64> = conn.prepare("SELECT trade_id FROM journal_trade_actual_trades WHERE journal_trade_id = ?1")
+        .map_err(|e| e.to_string())?
+        .query_map(params![journal_trade_id], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    if linked_ids.is_empty() {
+        return Ok((None, "none".to_string()));
+    }
+    let linked_set: std::collections::HashSet<i64> = linked_ids.into_iter().collect();
+    let pair_ids: Vec<(i64, i64)> = conn.prepare("SELECT entry_trade_id, exit_trade_id FROM journal_entry_pairs WHERE journal_entry_id = ?1")
+        .map_err(|e| e.to_string())?
+        .query_map(params![journal_entry_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    if pair_ids.is_empty() {
+        return Ok((None, "none".to_string()));
+    }
+    let all_pairs = get_paired_trades(None).map_err(|e| e.to_string())?;
+    let mut total_pnl = 0.0_f64;
+    let mut total_cost = 0.0_f64;
+    for p in &all_pairs {
+        if !linked_set.contains(&p.entry_trade_id) && !linked_set.contains(&p.exit_trade_id) {
+            continue;
+        }
+        if !pair_ids.iter().any(|(e, x)| *e == p.entry_trade_id && *x == p.exit_trade_id) {
+            continue;
+        }
+        total_pnl += p.net_profit_loss;
+        let cost = p.entry_price * p.quantity;
+        if cost > 0.0 {
+            total_cost += cost;
+        }
+    }
+    if total_cost > 0.0 {
+        let pct = 100.0 * total_pnl / total_cost;
+        return Ok((Some(pct), "pct".to_string()));
+    }
+    Ok((Some(total_pnl), "price".to_string()))
+}
+
+#[tauri::command]
+pub fn get_journal_trade_performance(journal_trade_id: i64) -> Result<serde_json::Value, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let (value, kind) = get_journal_trade_performance_raw(&conn, journal_trade_id)?;
+    Ok(serde_json::json!({ "value": value, "kind": kind }))
 }
 
 #[tauri::command]
@@ -3137,6 +3202,102 @@ pub fn save_journal_trade_actual_trades(journal_trade_id: i64, trade_ids: Vec<i6
     }
     
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct ChecklistItemMetricRow {
+    pub checklist_item_id: i64,
+    pub item_text: String,
+    pub checklist_type: String,
+    pub times_checked: i64,
+    pub avg_performance: Option<f64>,
+    pub performance_kind: String,
+}
+
+#[tauri::command]
+pub fn get_strategy_checklist_item_metrics(strategy_id: i64) -> Result<Vec<ChecklistItemMetricRow>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let has_jt_ids = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='journal_trade_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let items: Vec<(i64, String, String)> = conn.prepare(
+        "SELECT id, item_text, checklist_type FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id"
+    ).map_err(|e| e.to_string())?
+        .query_map(params![strategy_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    let mut out = Vec::new();
+    for (item_id, item_text, checklist_type) in items {
+        let sql = if has_jt_ids {
+            "SELECT jcr.journal_entry_id, jcr.journal_trade_ids FROM journal_checklist_responses jcr
+             INNER JOIN journal_entries je ON je.id = jcr.journal_entry_id AND je.strategy_id = ?1
+             WHERE jcr.checklist_item_id = ?2 AND jcr.is_checked = 1"
+        } else {
+            "SELECT jcr.journal_entry_id, NULL FROM journal_checklist_responses jcr
+             INNER JOIN journal_entries je ON je.id = jcr.journal_entry_id AND je.strategy_id = ?1
+             WHERE jcr.checklist_item_id = ?2 AND jcr.is_checked = 1"
+        };
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, Option<String>)> = stmt.query_map(params![strategy_id, item_id], |row| {
+            Ok((row.get(0)?, row.get(1).ok()))
+        }).map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        let times_checked = rows.len() as i64;
+        let mut values: Vec<f64> = Vec::new();
+        let mut kinds: Vec<String> = Vec::new();
+        for (journal_entry_id, journal_trade_ids) in rows {
+            let jt_ids: Vec<i64> = if let Some(ref s) = journal_trade_ids {
+                serde_json::from_str(s.as_str()).unwrap_or_default()
+            } else {
+                conn.prepare("SELECT id FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order")
+                    .map_err(|e| e.to_string())?
+                    .query_map(params![journal_entry_id], |row| row.get(0))
+                    .map_err(|e| e.to_string())?
+                    .filter_map(|r| r.ok())
+                    .collect()
+            };
+            if jt_ids.is_empty() {
+                continue;
+            }
+            let mut sum = 0.0_f64;
+            let mut n = 0;
+            let mut kind = String::from("none");
+            for jt_id in jt_ids {
+                if let Ok((v, k)) = get_journal_trade_performance_raw(&conn, jt_id) {
+                    if let Some(val) = v {
+                        sum += val;
+                        n += 1;
+                        kind = k;
+                    }
+                }
+            }
+            if n > 0 {
+                values.push(sum / n as f64);
+                kinds.push(kind);
+            }
+        }
+        let (avg_performance, performance_kind) = if values.is_empty() {
+            (None, "none".to_string())
+        } else {
+            let avg = values.iter().sum::<f64>() / values.len() as f64;
+            let kind = if kinds.iter().any(|k| k == "r") { "r" } else if kinds.iter().any(|k| k == "pct") { "pct" } else if kinds.iter().any(|k| k == "price") { "price" } else { "none" };
+            (Some(avg), kind.to_string())
+        };
+        out.push(ChecklistItemMetricRow {
+            checklist_item_id: item_id,
+            item_text,
+            checklist_type,
+            times_checked,
+            avg_performance,
+            performance_kind,
+        });
+    }
+    Ok(out)
 }
 
 #[tauri::command]
@@ -3973,6 +4134,7 @@ pub struct StrategySurveyMetric {
     pub formula_type: String,
     pub item_ids: String,
     pub display_order: i64,
+    pub color_scale: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -3985,6 +4147,7 @@ pub struct StrategySurveyMetricWithValue {
     pub item_ids: String,
     pub display_order: i64,
     pub computed_value: Option<f64>,
+    pub color_scale: Option<String>,
 }
 
 #[tauri::command]
@@ -3992,7 +4155,7 @@ pub fn get_strategy_survey_metrics(strategy_id: i64) -> Result<Vec<StrategySurve
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, strategy_id, name, description, formula_type, item_ids, display_order FROM strategy_survey_metrics WHERE strategy_id = ?1 ORDER BY display_order ASC, id ASC")
+        .prepare("SELECT id, strategy_id, name, description, formula_type, item_ids, display_order, color_scale FROM strategy_survey_metrics WHERE strategy_id = ?1 ORDER BY display_order ASC, id ASC")
         .map_err(|e| e.to_string())?;
     let rows = stmt.query_map(params![strategy_id], |row| {
         Ok(StrategySurveyMetric {
@@ -4003,9 +4166,41 @@ pub fn get_strategy_survey_metrics(strategy_id: i64) -> Result<Vec<StrategySurve
             formula_type: row.get(4).unwrap_or_else(|_| "avg".to_string()),
             item_ids: row.get(5).unwrap_or_else(|_| "[]".to_string()),
             display_order: row.get(6).unwrap_or(0),
+            color_scale: row.get(7).ok(),
         })
     }).map_err(|e| e.to_string())?;
     Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Evaluate a custom formula string with v1, v2, v3, ... bound to the given values (survey item responses in order).
+fn evaluate_custom_formula(values: &[f64], formula: &str) -> Result<f64, String> {
+    let formula = formula.trim();
+    if formula.is_empty() {
+        return Err("Empty formula".to_string());
+    }
+    let mut context: HashMapContext<DefaultNumericTypes> = HashMapContext::new();
+    for (i, &v) in values.iter().enumerate() {
+        if i >= 20 {
+            break;
+        }
+        let key = format!("v{}", i + 1);
+        context.set_value(key.into(), Value::from_float(v)).map_err(|e| format!("{:?}", e))?;
+    }
+    let result = eval_float_with_context(formula, &context).map_err(|e| e.to_string())?;
+    Ok(result)
+}
+
+fn get_preset_formula(conn: &rusqlite::Connection, preset_id: i64) -> Result<(String, Option<String>), String> {
+    let (formula_type, formula_expression): (String, Option<String>) = conn.query_row(
+        "SELECT formula_type, formula_expression FROM strategy_calculation_presets WHERE id = ?1",
+        params![preset_id],
+        |row| {
+            let expr: Option<String> = row.get(1).ok();
+            Ok((row.get(0).unwrap_or_else(|_| "avg".to_string()), expr))
+        },
+    ).map_err(|e| e.to_string())?;
+    let expr = formula_expression.and_then(|s| if s.is_empty() { None } else { Some(s) });
+    Ok((formula_type, expr))
 }
 
 fn compute_custom_metric_value(conn: &rusqlite::Connection, item_ids: &[i64], formula_type: &str) -> Result<Option<f64>, String> {
@@ -4030,8 +4225,35 @@ fn compute_custom_metric_value(conn: &rusqlite::Connection, item_ids: &[i64], fo
     if values.is_empty() {
         return Ok(None);
     }
-    let avg = values.iter().map(|&v| v as f64).sum::<f64>() / values.len() as f64;
-    let result = if formula_type == "invert" { 6.0 - avg } else { avg };
+    let values_f: Vec<f64> = values.iter().map(|&v| v as f64).collect();
+
+    let effective_type: String = if formula_type.starts_with("preset:") {
+        let preset_id: i64 = formula_type["preset:".len()..].trim().parse().unwrap_or(0);
+        if preset_id == 0 {
+            "avg".to_string()
+        } else {
+            match get_preset_formula(conn, preset_id) {
+                Ok((_, Some(expr))) => {
+                    let result = evaluate_custom_formula(&values_f, &expr)?;
+                    return Ok(Some(result));
+                }
+                Ok((ft, None)) => ft,
+                Err(_) => "avg".to_string(),
+            }
+        }
+    } else {
+        formula_type.to_string()
+    };
+
+    let result = match effective_type.as_str() {
+        "invert" => {
+            let avg = values_f.iter().sum::<f64>() / values_f.len() as f64;
+            6.0 - avg
+        }
+        "min" => values_f.iter().cloned().fold(f64::INFINITY, f64::min),
+        "max" => values_f.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+        _ => values_f.iter().sum::<f64>() / values_f.len() as f64, // avg
+    };
     Ok(Some(result))
 }
 
@@ -4050,9 +4272,10 @@ pub fn get_strategy_survey_metrics_with_values(strategy_id: i64) -> Result<Vec<S
             name: m.name,
             description: m.description,
             formula_type: m.formula_type.clone(),
-            item_ids: m.item_ids,
+            item_ids: m.item_ids.clone(),
             display_order: m.display_order,
             computed_value,
+            color_scale: m.color_scale.clone(),
         });
     }
     Ok(out)
@@ -4067,20 +4290,21 @@ pub fn save_strategy_survey_metric(
     formula_type: String,
     item_ids: String,
     display_order: i64,
+    color_scale: Option<String>,
 ) -> Result<i64, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
-    let formula = if formula_type == "invert" { "invert" } else { "avg" };
+    let formula = normalize_formula_type(&formula_type);
     if let Some(pk) = id {
         conn.execute(
-            "UPDATE strategy_survey_metrics SET name = ?1, description = ?2, formula_type = ?3, item_ids = ?4, display_order = ?5, updated_at = datetime('now') WHERE id = ?6",
-            params![name, description, formula, item_ids, display_order, pk],
+            "UPDATE strategy_survey_metrics SET name = ?1, description = ?2, formula_type = ?3, item_ids = ?4, display_order = ?5, color_scale = ?6, updated_at = datetime('now') WHERE id = ?7",
+            params![name, description, formula, item_ids, display_order, color_scale, pk],
         ).map_err(|e| e.to_string())?;
         Ok(pk)
     } else {
         conn.execute(
-            "INSERT INTO strategy_survey_metrics (strategy_id, name, description, formula_type, item_ids, display_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))",
-            params![strategy_id, name, description, formula, item_ids, display_order],
+            "INSERT INTO strategy_survey_metrics (strategy_id, name, description, formula_type, item_ids, display_order, color_scale, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'), datetime('now'))",
+            params![strategy_id, name, description, formula, item_ids, display_order, color_scale],
         ).map_err(|e| e.to_string())?;
         Ok(conn.last_insert_rowid())
     }
@@ -4092,6 +4316,86 @@ pub fn delete_strategy_survey_metric(id: i64) -> Result<(), String> {
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM strategy_survey_metrics WHERE id = ?1", params![id]).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// —— Calculation presets (saved custom formulas: v1, v2, … = survey item values in order)
+#[derive(serde::Serialize)]
+pub struct StrategyCalculationPreset {
+    pub id: i64,
+    pub strategy_id: i64,
+    pub name: String,
+    pub formula_type: String,
+    pub formula_expression: Option<String>,
+    pub display_order: i64,
+}
+
+#[tauri::command]
+pub fn get_strategy_calculation_presets(strategy_id: i64) -> Result<Vec<StrategyCalculationPreset>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, strategy_id, name, formula_type, display_order, formula_expression FROM strategy_calculation_presets WHERE strategy_id = ?1 ORDER BY display_order ASC, id ASC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map(params![strategy_id], |row| {
+        Ok(StrategyCalculationPreset {
+            id: row.get(0)?,
+            strategy_id: row.get(1)?,
+            name: row.get(2)?,
+            formula_type: row.get(3).unwrap_or_else(|_| "avg".to_string()),
+            display_order: row.get(4).unwrap_or(0),
+            formula_expression: row.get(5).ok().and_then(|s: String| if s.is_empty() { None } else { Some(s) }),
+        })
+    }).map_err(|e| e.to_string())?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+#[tauri::command]
+pub fn save_strategy_calculation_preset(
+    id: Option<i64>,
+    strategy_id: i64,
+    name: String,
+    formula_type: String,
+    formula_expression: Option<String>,
+    display_order: i64,
+) -> Result<i64, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let formula = if formula_expression.as_deref().map_or(true, |s| s.is_empty()) {
+        normalize_formula_type(&formula_type).to_string()
+    } else {
+        "custom".to_string()
+    };
+    let expr = formula_expression.unwrap_or_default();
+    if let Some(pk) = id {
+        conn.execute(
+            "UPDATE strategy_calculation_presets SET name = ?1, formula_type = ?2, formula_expression = ?3, display_order = ?4, updated_at = datetime('now') WHERE id = ?5",
+            params![name, formula, expr, display_order, pk],
+        ).map_err(|e| e.to_string())?;
+        Ok(pk)
+    } else {
+        conn.execute(
+            "INSERT INTO strategy_calculation_presets (strategy_id, name, formula_type, formula_expression, display_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), datetime('now'))",
+            params![strategy_id, name, formula, expr, display_order],
+        ).map_err(|e| e.to_string())?;
+        Ok(conn.last_insert_rowid())
+    }
+}
+
+#[tauri::command]
+pub fn delete_strategy_calculation_preset(id: i64) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM strategy_calculation_presets WHERE id = ?1", params![id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn normalize_formula_type(s: &str) -> &str {
+    match s {
+        "invert" => "invert",
+        "min" => "min",
+        "max" => "max",
+        _ => "avg",
+    }
 }
 
 #[tauri::command]
@@ -5709,7 +6013,7 @@ pub fn export_data() -> Result<String, String> {
     
     // Export journal trades
     let mut stmt = conn
-        .prepare("SELECT id, journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, trade_order, created_at, updated_at FROM journal_trades ORDER BY journal_entry_id, trade_order")
+        .prepare("SELECT id, journal_entry_id, symbol, position, timeframe, entry_type, exit_type, trade, what_went_well, what_could_be_improved, emotional_state, notes, outcome, r_multiple, trade_order, created_at, updated_at FROM journal_trades ORDER BY journal_entry_id, trade_order")
         .map_err(|e| e.to_string())?;
     let journal_trade_iter = stmt
         .query_map([], |row| {
@@ -5727,9 +6031,10 @@ pub fn export_data() -> Result<String, String> {
                 emotional_state: row.get(10)?,
                 notes: row.get(11)?,
                 outcome: row.get(12)?,
-                trade_order: row.get(13)?,
-                created_at: row.get(14)?,
-                updated_at: row.get(15)?,
+                r_multiple: row.get(13).ok(),
+                trade_order: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
             })
         })
         .map_err(|e| e.to_string())?;

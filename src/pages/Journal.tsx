@@ -32,6 +32,7 @@ interface JournalTrade {
   emotional_state: string | null;
   notes: string | null;
   outcome: string | null;
+  r_multiple: number | null;
   trade_order: number;
   created_at: string | null;
   updated_at: string | null;
@@ -1231,6 +1232,7 @@ export default function Journal() {
             emotionalState: tradeData.emotional_state || null,
             notes: tradeData.notes || null,
             outcome: tradeData.outcome || null,
+            rMultiple: tradeData.r_multiple.trim() ? Number(tradeData.r_multiple) : null,
             tradeOrder: i,
           });
         } else {
@@ -1247,6 +1249,7 @@ export default function Journal() {
             emotionalState: tradeData.emotional_state || null,
             notes: tradeData.notes || null,
             outcome: tradeData.outcome || null,
+            rMultiple: tradeData.r_multiple.trim() ? Number(tradeData.r_multiple) : null,
             tradeOrder: i,
           });
           tradeIdsInOrder.push(newTradeId);
@@ -1509,6 +1512,7 @@ export default function Journal() {
             emotionalState: tradeData.emotional_state || null,
             notes: tradeData.notes || null,
             outcome: tradeData.outcome || null,
+            rMultiple: tradeData.r_multiple.trim() ? Number(tradeData.r_multiple) : null,
             tradeOrder: i,
           });
         } else {
@@ -1525,6 +1529,7 @@ export default function Journal() {
             emotionalState: tradeData.emotional_state || null,
             notes: tradeData.notes || null,
             outcome: tradeData.outcome || null,
+            rMultiple: tradeData.r_multiple.trim() ? Number(tradeData.r_multiple) : null,
             tradeOrder: i,
           });
           tradeIdsInOrder.push(newTradeId);
@@ -1797,7 +1802,7 @@ export default function Journal() {
         if (loadedTrades.length > MAX_TRADES_PER_ENTRY) {
           setTimeout(() => alert(`This entry had ${loadedTrades.length} trades (max ${MAX_TRADES_PER_ENTRY}). Showing first ${MAX_TRADES_PER_ENTRY}. Save to remove the extra ${loadedTrades.length - MAX_TRADES_PER_ENTRY} from the database.`), 100);
         }
-        type TradeFormItem = { id: number | null; symbol: string; position: string; timeframe: string; entry_type: string; exit_type: string; trade: string; what_went_well: string; what_could_be_improved: string; emotional_state: string; notes: string; outcome: string; trade_order: number };
+        type TradeFormItem = { id: number | null; symbol: string; position: string; timeframe: string; entry_type: string; exit_type: string; trade: string; what_went_well: string; what_could_be_improved: string; emotional_state: string; notes: string; outcome: string; r_multiple: string; trade_order: number };
         const tradesData: TradeFormItem[] = tradesToUse.map((trade: JournalTrade) => ({
           id: trade.id,
           symbol: trade.symbol || "",
@@ -1811,6 +1816,7 @@ export default function Journal() {
           emotional_state: trade.emotional_state || "",
           notes: trade.notes || "",
           outcome: trade.outcome || "None",
+          r_multiple: trade.r_multiple != null ? String(trade.r_multiple) : "",
           trade_order: trade.trade_order ?? 0,
         }));
         if (tradesData.length === 0) {
@@ -1827,6 +1833,7 @@ export default function Journal() {
             emotional_state: "",
             notes: "",
             outcome: "None",
+            r_multiple: "",
             trade_order: 0,
           });
         }
@@ -3105,6 +3112,28 @@ export default function Journal() {
                           <option value="Negative">Negative</option>
                           <option value="Breakeven">Breakeven</option>
                         </select>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                          R-multiple
+                        </label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={currentTrade.r_multiple}
+                          onChange={(e) => updateTradeFormData(activeTradeIndex, "r_multiple", e.target.value)}
+                          placeholder="e.g. 1.5 or -0.5"
+                          style={{
+                            width: "100%",
+                            padding: "8px",
+                            backgroundColor: "var(--bg-primary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "4px",
+                            color: "var(--text-primary)",
+                            fontSize: "14px",
+                          }}
+                        />
+                        <p style={{ margin: "2px 0 0", fontSize: "10px", color: "var(--text-secondary)" }}>Used for metrics; if blank, % or P&L from linked trades is used.</p>
                       </div>
                     </div>
                     {/* Link this journal trade to actual trades (from Trades table) - only when editing and journal trade has id */}

@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, Dispatch, SetStateAction } from "re
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
-import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard, BarChart2 } from "lucide-react";
 import { format } from "date-fns";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import RichTextEditor from "../components/RichTextEditor";
@@ -53,7 +53,7 @@ interface PairedTrade {
   strategy_id: number | null;
 }
 
-type TabType = "notes" | "trades" | "checklists" | "survey";
+type TabType = "notes" | "trades" | "checklists" | "survey" | "surveys";
 
 interface ChecklistItem {
   id: number;
@@ -67,6 +67,95 @@ interface ChecklistItem {
 
 /** Placeholder item text used to persist empty custom checklist types. Filtered out when displaying. */
 const EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER = "__empty_custom_checklist_placeholder__";
+
+/** Gradient presets for metric color scale: [position 0–1, hex]. */
+const METRIC_COLOR_GRADIENTS: Record<string, [number, string][]> = {
+  ryg: [[0, "#ef4444"], [0.5, "#eab308"], [1, "#22c55e"]],
+  gyr: [[0, "#22c55e"], [0.5, "#eab308"], [1, "#ef4444"]],
+  bluegreen: [[0, "#3b82f6"], [1, "#22c55e"]],
+  purplepink: [[0, "#a855f7"], [1, "#ec4899"]],
+  cool: [[0, "#0ea5e9"], [0.5, "#06b6d4"], [1, "#22c55e"]],
+  warm: [[0, "#ef4444"], [0.5, "#f97316"], [1, "#eab308"]],
+  rwg: [[0, "#ef4444"], [0.5, "#fef3c7"], [1, "#22c55e"]],
+  viridis: [[0, "#440154"], [0.35, "#3b528b"], [0.65, "#21918c"], [1, "#fde725"]],
+  ocean: [[0, "#0c4a6e"], [0.5, "#0e7490"], [1, "#5eead4"]],
+  sunset: [[0, "#f97316"], [0.5, "#ec4899"], [1, "#7c3aed"]],
+  teal: [[0, "#134e4a"], [0.5, "#0d9488"], [1, "#99f6e4"]],
+  amber: [[0, "#78350f"], [0.5, "#d97706"], [1, "#fef08a"]],
+  slate: [[0, "#1e293b"], [0.5, "#64748b"], [1, "#cbd5e1"]],
+  plum: [[0, "#581c87"], [0.5, "#a855f7"], [1, "#e9d5ff"]],
+  fire: [[0, "#7f1d1d"], [0.4, "#dc2626"], [0.7, "#f59e0b"], [1, "#fef3c7"]],
+};
+const METRIC_COLOR_PRESET_LABELS: Record<string, string> = {
+  ryg: "Red → Yellow → Green",
+  gyr: "Green → Yellow → Red",
+  bluegreen: "Blue → Green",
+  purplepink: "Purple → Pink",
+  cool: "Blue → Cyan → Green",
+  warm: "Red → Orange → Yellow",
+  rwg: "Red → White → Green",
+  viridis: "Viridis",
+  ocean: "Ocean",
+  sunset: "Sunset",
+  teal: "Teal",
+  amber: "Amber",
+  slate: "Slate",
+  plum: "Plum",
+  fire: "Fire",
+};
+
+/** Build CSS linear-gradient string from gradient stops for preview. */
+function metricGradientCss(presetKey: string): string {
+  const stops = METRIC_COLOR_GRADIENTS[presetKey];
+  if (!stops || stops.length === 0) return "linear-gradient(to right, #888, #ccc)";
+  const parts = stops.map(([p, hex]) => `${hex} ${Math.round(p * 100)}%`).join(", ");
+  return `linear-gradient(to right, ${parts})`;
+}
+
+function getMetricColorFromScale(pct01: number, colorScaleJson: string | null | undefined): string {
+  const pct = Math.max(0, Math.min(1, Number(pct01) || 0));
+  try {
+    if (!colorScaleJson || !colorScaleJson.trim()) {
+      const stops = METRIC_COLOR_GRADIENTS.ryg;
+      const [a, b, t] = interpolateStops(stops, pct);
+      return a && b ? lerpHex(a, b, t) : "var(--accent)";
+    }
+    const data = JSON.parse(colorScaleJson) as { type?: string; preset?: string; hex?: string };
+    if (data.type === "static" && data.hex) return data.hex;
+    if (data.type === "gradient" && data.preset && METRIC_COLOR_GRADIENTS[data.preset]) {
+      const stops = METRIC_COLOR_GRADIENTS[data.preset];
+      const [a, b, t] = interpolateStops(stops, pct);
+      return a && b ? lerpHex(a, b, t) : "var(--accent)";
+    }
+  } catch {
+    // ignore
+  }
+  const stops = METRIC_COLOR_GRADIENTS.ryg;
+  const [a, b, t] = interpolateStops(stops, pct);
+  return a && b ? lerpHex(a, b, t) : "var(--accent)";
+}
+function interpolateStops(stops: [number, string][], pct: number): [string | null, string | null, number] {
+  if (stops.length === 0) return [null, null, 0];
+  if (stops.length === 1) return [stops[0][1], stops[0][1], 0];
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [p0, c0] = stops[i];
+    const [p1, c1] = stops[i + 1];
+    if (pct <= p1) {
+      const t = p0 === p1 ? 1 : (pct - p0) / (p1 - p0);
+      return [c0, c1, Math.max(0, Math.min(1, t))];
+    }
+  }
+  const [_, c1] = stops[stops.length - 1];
+  return [c1, c1, 0];
+}
+function lerpHex(a: string, b: string, t: number): string {
+  const r1 = parseInt(a.slice(1, 3), 16), g1 = parseInt(a.slice(3, 5), 16), b1 = parseInt(a.slice(5, 7), 16);
+  const r2 = parseInt(b.slice(1, 3), 16), g2 = parseInt(b.slice(3, 5), 16), b2 = parseInt(b.slice(5, 7), 16);
+  const r = Math.round(r1 + (r2 - r1) * t);
+  const g = Math.round(g1 + (g2 - g1) * t);
+  const bl = Math.round(b1 + (b2 - b1) * t);
+  return "#" + [r, g, bl].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
 
 // Sortable Strategy Component
 function SortableStrategy({
@@ -1475,22 +1564,12 @@ export default function Strategies() {
   const [overviewFilterStrategyIds, setOverviewFilterStrategyIds] = useState<number[]>([]);
   const [overviewFilterDropdownOpen, setOverviewFilterDropdownOpen] = useState(false);
   const overviewFilterDropdownRef = useRef<HTMLDivElement>(null);
-  /** Which strategies' custom metrics to show in overview when not using "one per strategy". From localStorage. */
-  const [overviewMetricsStrategyIds, setOverviewMetricsStrategyIds] = useState<number[]>(() => {
-    try {
-      const v = localStorage.getItem("tradebutler_default_metrics_strategy_ids");
-      if (!v) return [];
-      const parsed = JSON.parse(v) as unknown;
-      return Array.isArray(parsed) ? parsed.filter((x): x is number => typeof x === "number") : [];
-    } catch { return []; }
-  });
-  const [overviewMetricsDropdownOpen, setOverviewMetricsDropdownOpen] = useState(false);
-  const overviewMetricsDropdownRef = useRef<HTMLDivElement>(null);
-  /** When true, show one custom metrics section per strategy in the overview. */
+  /** When true, show one Survey metrics + Checklist item metrics section per strategy in the overview. */
   const [overviewMetricsPerStrategy, setOverviewMetricsPerStrategy] = useState(false);
   /** Custom metrics with values per strategy, loaded when overview is visible. */
+  const [overviewChecklistItemMetricsByStrategy, setOverviewChecklistItemMetricsByStrategy] = useState<Map<number, Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>>(new Map());
   const [overviewCustomMetricsByStrategy, setOverviewCustomMetricsByStrategy] = useState<Map<number, Array<{
-    id: number; name: string; description: string | null; formula_type: string; computed_value: number | null;
+    id: number; name: string; description: string | null; formula_type: string; computed_value: number | null; color_scale?: string | null;
   }>>>(new Map());
   
   // Sensors for strategy drag-and-drop
@@ -1547,10 +1626,40 @@ export default function Strategies() {
   } | null>(null);
   const [customSurveyMetrics, setCustomSurveyMetrics] = useState<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null }>>([]);
   const [customSurveyMetricDefinitions, setCustomSurveyMetricDefinitions] = useState<Array<{
-    id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null;
+    id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null; color_scale: string | null;
   }>>([]);
+  const [calculationPresets, setCalculationPresets] = useState<Array<{ id: number; strategy_id: number; name: string; formula_type: string; formula_expression?: string | null; display_order: number }>>([]);
+  /** When creating a strategy, presets are held here until save. */
+  const [tempCalculationPresets, setTempCalculationPresets] = useState<Array<{ name: string; formula_expression: string; display_order: number }>>([]);
+  /** When creating a strategy, metrics are held here until save. item_ids are temp checklist item ids. */
+  const [tempSurveyMetrics, setTempSurveyMetrics] = useState<Array<{
+    name: string; description: string | null; formula_type: string; item_ids: number[]; display_order: number; color_scale: string | null;
+  }>>([]);
+  const [presetModal, setPresetModal] = useState<null | "add" | number>(null);
+  const [presetForm, setPresetForm] = useState<{ name: string; formula_expression: string }>({ name: "", formula_expression: "" });
+  /** When true, preset modal was opened from Add/Edit metric; after saving new preset we select it in the metric form. */
+  const [openPresetFromMetricModal, setOpenPresetFromMetricModal] = useState(false);
   const [surveyMetricModal, setSurveyMetricModal] = useState<null | "add" | number>(null);
-  const [surveyMetricForm, setSurveyMetricForm] = useState<{ name: string; description: string; formula_type: string; item_ids: number[] }>({ name: "", description: "", formula_type: "avg", item_ids: [] });
+  const [colorPresetDropdownOpen, setColorPresetDropdownOpen] = useState(false);
+  /** Checklist/survey item metrics: when checked, avg performance (R → % → price). */
+  const [checklistItemMetrics, setChecklistItemMetrics] = useState<Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>([]);
+  const [surveyMetricForm, setSurveyMetricForm] = useState<{
+    name: string;
+    description: string;
+    formula_type: string;
+    item_ids: number[];
+    color_scale_type: "gradient" | "static";
+    color_scale_preset: string;
+    color_scale_static: string;
+  }>({
+    name: "",
+    description: "",
+    formula_type: "avg",
+    item_ids: [],
+    color_scale_type: "gradient",
+    color_scale_preset: "ryg",
+    color_scale_static: "#3b82f6",
+  });
   const [showAddTradeModal, setShowAddTradeModal] = useState(false);
   const [addTradeForm, setAddTradeForm] = useState({
     symbol: "",
@@ -1945,54 +2054,61 @@ export default function Strategies() {
   }, [selectedStrategy, activeTab]);
 
   useEffect(() => {
-    if (activeTab === "survey" && selectedStrategy != null && !isCreating) {
+    if ((activeTab === "survey" || activeTab === "surveys") && selectedStrategy != null && !isCreating) {
       Promise.all([
         invoke<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null }>>("get_custom_survey_metrics", { strategyId: selectedStrategy }),
-        invoke<Array<{ id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null }>>("get_strategy_survey_metrics_with_values", { strategyId: selectedStrategy }),
+        invoke<Array<{ id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null; color_scale: string | null }>>("get_strategy_survey_metrics_with_values", { strategyId: selectedStrategy }),
+        invoke<Array<{ id: number; strategy_id: number; name: string; formula_type: string; formula_expression?: string | null; display_order: number }>>("get_strategy_calculation_presets", { strategyId: selectedStrategy }),
+        invoke<Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>("get_strategy_checklist_item_metrics", { strategyId: selectedStrategy }),
       ])
-        .then(([raw, defs]) => {
+        .then(([raw, defs, presets, itemMetrics]) => {
           setCustomSurveyMetrics(raw);
           setCustomSurveyMetricDefinitions(defs);
+          setCalculationPresets(presets);
+          setChecklistItemMetrics(itemMetrics);
         })
         .catch(() => {
           setCustomSurveyMetrics([]);
           setCustomSurveyMetricDefinitions([]);
+          setCalculationPresets([]);
+          setChecklistItemMetrics([]);
         });
     } else {
       setCustomSurveyMetrics([]);
       setCustomSurveyMetricDefinitions([]);
+      setCalculationPresets([]);
+      setChecklistItemMetrics([]);
     }
   }, [activeTab, selectedStrategy, isCreating]);
 
-  // Load custom metrics for all strategies when overview is visible (no strategy selected)
+  // Load custom metrics and checklist item metrics for all strategies when overview is visible (no strategy selected)
   useEffect(() => {
     if (selectedStrategy != null || isCreating || strategies.length === 0) {
       setOverviewCustomMetricsByStrategy(new Map());
+      setOverviewChecklistItemMetricsByStrategy(new Map());
       return;
     }
     const load = async () => {
-      const next = new Map<number, Array<{ id: number; name: string; description: string | null; formula_type: string; computed_value: number | null }>>();
+      const next = new Map<number, Array<{ id: number; name: string; description: string | null; formula_type: string; computed_value: number | null; color_scale?: string | null }>>();
+      const nextItemMetrics = new Map<number, Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>();
       for (const s of strategies) {
         if (s.id == null) continue;
         try {
-          const defs = await invoke<Array<{ id: number; name: string; description: string | null; formula_type: string; computed_value: number | null }>>("get_strategy_survey_metrics_with_values", { strategyId: s.id });
+          const [defs, itemMetrics] = await Promise.all([
+            invoke<Array<{ id: number; name: string; description: string | null; formula_type: string; computed_value: number | null; color_scale: string | null }>>("get_strategy_survey_metrics_with_values", { strategyId: s.id }),
+            invoke<Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>("get_strategy_checklist_item_metrics", { strategyId: s.id }),
+          ]);
           if (defs.length > 0) next.set(s.id, defs);
+          if (itemMetrics.length > 0) nextItemMetrics.set(s.id, itemMetrics);
         } catch {
           // ignore
         }
       }
       setOverviewCustomMetricsByStrategy(next);
+      setOverviewChecklistItemMetricsByStrategy(nextItemMetrics);
     };
     load();
   }, [strategies, selectedStrategy, isCreating]);
-
-  useEffect(() => {
-    if (overviewMetricsStrategyIds.length > 0) {
-      localStorage.setItem("tradebutler_default_metrics_strategy_ids", JSON.stringify(overviewMetricsStrategyIds));
-    } else {
-      localStorage.removeItem("tradebutler_default_metrics_strategy_ids");
-    }
-  }, [overviewMetricsStrategyIds]);
 
   useEffect(() => {
     if (!overviewFilterDropdownOpen) return;
@@ -2004,17 +2120,6 @@ export default function Strategies() {
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [overviewFilterDropdownOpen]);
-
-  useEffect(() => {
-    if (!overviewMetricsDropdownOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      if (overviewMetricsDropdownRef.current && !overviewMetricsDropdownRef.current.contains(e.target as Node)) {
-        setOverviewMetricsDropdownOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [overviewMetricsDropdownOpen]);
 
   const calculateStrategyStats = (pairs: PairedTrade[]) => {
     const totalTrades = pairs.length;
@@ -3420,9 +3525,9 @@ export default function Strategies() {
         }
       }
 
-      // Save temporary checklist items (preserve parent relationships)
+      // Save temporary checklist items (preserve parent relationships); idMap used later for temp metrics
+      const idMap = new Map<number, number>();
       if (tempChecklists.size > 0) {
-        const idMap = new Map<number, number>(); // Maps temp ID to new database ID
         
         // First pass: Save all items without parents (groups and regular items)
         for (const [type, items] of tempChecklists.entries()) {
@@ -3447,7 +3552,7 @@ export default function Strategies() {
           for (const item of itemsWithParents) {
             const newParentId = idMap.get(item.parent_id!);
             if (newParentId) {
-              await invoke<number>("save_strategy_checklist_item", {
+              const newId = await invoke<number>("save_strategy_checklist_item", {
                 id: null,
                 strategyId: newStrategyId,
                 itemText: item.item_text,
@@ -3456,6 +3561,7 @@ export default function Strategies() {
                 checklistType: type,
                 parentId: newParentId,
               });
+              idMap.set(item.id, newId);
             }
           }
         }
@@ -3477,6 +3583,41 @@ export default function Strategies() {
         }
       }
 
+      // Save temp calculation presets and collect their new ids (for mapping preset:0 → preset:id in metrics)
+      const presetIds: number[] = [];
+      for (let i = 0; i < tempCalculationPresets.length; i++) {
+        const id = await invoke<number>("save_strategy_calculation_preset", {
+          id: null,
+          strategyId: newStrategyId,
+          name: tempCalculationPresets[i].name,
+          formulaType: "custom",
+          formulaExpression: tempCalculationPresets[i].formula_expression || null,
+          displayOrder: i,
+        });
+        presetIds.push(id);
+      }
+
+      // Save temp custom metrics (map temp item_ids to new ids via idMap; map preset:idx to preset:id)
+      for (const m of tempSurveyMetrics) {
+        const mappedIds = m.item_ids.map((id) => idMap.get(id)).filter((id): id is number => id != null);
+        if (mappedIds.length === 0) continue;
+        let formulaType = m.formula_type;
+        if (formulaType.startsWith("preset:")) {
+          const idx = parseInt(formulaType.slice(7), 10);
+          if (!Number.isNaN(idx) && presetIds[idx] != null) formulaType = "preset:" + presetIds[idx];
+        }
+        await invoke("save_strategy_survey_metric", {
+          id: null,
+          strategyId: newStrategyId,
+          name: m.name,
+          description: m.description || null,
+          formulaType,
+          itemIds: JSON.stringify(mappedIds),
+          displayOrder: m.display_order,
+          colorScale: m.color_scale,
+        });
+      }
+
       // Reset and reload
       setIsCreating(false);
       setIsEditing(false); // Ensure we're in view mode, not edit mode
@@ -3484,6 +3625,8 @@ export default function Strategies() {
       setEditingFormData({ name: "", description: "", color: "#3b82f6" });
       setPendingTradeIds([]);
       setTempChecklists(new Map());
+      setTempCalculationPresets([]);
+      setTempSurveyMetrics([]);
       setImportResults(null); // Clear any import results
       
       // Clear work-in-progress AFTER setting isCreating to false to prevent restoration
@@ -3569,6 +3712,8 @@ export default function Strategies() {
     setSelectedStrategy(null);
     setPendingTradeIds([]);
     setTempChecklists(new Map());
+    setTempCalculationPresets([]);
+    setTempSurveyMetrics([]);
   };
 
   const handleEditClick = () => {
@@ -4607,7 +4752,8 @@ export default function Strategies() {
                 { id: "notes" as TabType, label: "Details", icon: FileText },
                 { id: "trades" as TabType, label: "Trades", icon: TrendingUp },
                 { id: "checklists" as TabType, label: "Checklists", icon: ListChecks },
-                { id: "survey" as TabType, label: "Metrics", icon: ClipboardList },
+                { id: "surveys" as TabType, label: "Surveys", icon: ClipboardList },
+                { id: "survey" as TabType, label: "Metrics", icon: BarChart2 },
               ].map((tab) => {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
@@ -5364,7 +5510,7 @@ export default function Strategies() {
                 );
               })()}
 
-              {activeTab === "survey" && (selectedStrategy || isCreating) && (() => {
+              {(activeTab === "survey" || activeTab === "surveys") && (selectedStrategy || isCreating) && (() => {
                 // Use editingChecklists when editing, tempChecklists when creating, or regular checklists otherwise
                 const currentChecklist = isCreating 
                   ? tempChecklists 
@@ -5440,6 +5586,8 @@ export default function Strategies() {
                 }
 
                 return (
+                  <>
+                  {activeTab === "survey" && (
                   <div 
                     ref={(el) => { tabContentRefs.current.set("survey", el); }}
                     style={{ padding: "24px", overflowY: "auto" }}
@@ -5449,24 +5597,122 @@ export default function Strategies() {
                       }
                     }}
                   >
-                    {/* Custom metrics at top */}
-                    {!isCreating && selectedStrategy != null && (
-                      <div style={{ marginBottom: "24px", paddingBottom: "20px", borderBottom: "1px solid var(--border-color)" }}>
-                        <h2 style={{ fontSize: "20px", fontWeight: "700", color: "var(--text-primary)", margin: "0 0 4px 0" }}>
-                          Custom metrics
-                        </h2>
-                        <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px", maxWidth: "560px" }}>
-                          Define your own metrics from survey items (like Psychological Metrics on the Emotions page). Edit the name, description, and how the score is calculated.
-                        </p>
+                    {/* Survey metrics – calculation presets and metrics together */}
+                    <div style={{ marginBottom: "24px", paddingBottom: "20px", borderBottom: "1px solid var(--border-color)" }}>
+                      <h2 style={{ fontSize: "20px", fontWeight: "700", color: "var(--text-primary)", margin: "0 0 4px 0" }}>
+                        Survey metrics
+                      </h2>
+                      <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px", maxWidth: "560px" }}>
+                        Tie metrics to survey items (add items in the Surveys tab). Use calculation presets or inline formulas. Choose which items feed each metric and how the score is calculated (average, min, max, or a saved preset).
+                      </p>
+                      {/* Calculation presets – grouped with survey metrics */}
+                      <div style={{ marginBottom: "16px" }}>
+                        <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-secondary)", margin: "0 0 8px 0", textTransform: "uppercase", letterSpacing: "0.02em" }}>
+                          Calculation presets
+                        </h3>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "8px" }}>
+                          {(isCreating ? tempCalculationPresets : calculationPresets).map((p, idx) => (
+                            <div
+                              key={isCreating ? `temp-${idx}` : (p as unknown as { id: number }).id}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "8px",
+                                padding: "8px 12px",
+                                borderRadius: "8px",
+                                border: "1px solid var(--border-color)",
+                                backgroundColor: "var(--bg-tertiary)",
+                                fontSize: "13px",
+                              }}
+                            >
+                              <span style={{ color: "var(--text-primary)", fontWeight: "500" }}>{p.name}</span>
+                              <span style={{ color: "var(--text-secondary)", fontSize: "11px" }}>
+                                {(() => {
+                                  const expr = (p as { formula_expression?: string | null }).formula_expression?.trim();
+                                  if (expr) return expr;
+                                  const ft = (p as { formula_type?: string }).formula_type;
+                                  return ft === "invert" ? "6 − avg" : ft === "min" ? "min" : ft === "max" ? "max" : "avg";
+                                })()}
+                              </span>
+                              {canEditMetrics && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setPresetForm({ name: p.name, formula_expression: (p as { formula_expression?: string }).formula_expression ?? "" });
+                                      setPresetModal(isCreating ? idx : (p as unknown as { id: number }).id);
+                                    }}
+                                    style={{ padding: "4px", border: "1px solid var(--border-color)", borderRadius: "6px", background: "var(--bg-secondary)", color: "var(--text-primary)", cursor: "pointer" }}
+                                    title="Edit preset"
+                                  >
+                                    <Edit2 size={12} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (!confirm("Delete this preset?")) return;
+                                      if (isCreating) {
+                                        setTempCalculationPresets((prev) => prev.filter((_, i) => i !== idx));
+                                      } else {
+                                        invoke("delete_strategy_calculation_preset", { id: (p as unknown as { id: number }).id })
+                                          .then(() => invoke<Array<{ id: number; strategy_id: number; name: string; formula_type: string; formula_expression?: string | null; display_order: number }>>("get_strategy_calculation_presets", { strategyId: selectedStrategy! }))
+                                          .then(setCalculationPresets)
+                                          .catch((e) => console.error(e));
+                                      }
+                                    }}
+                                    style={{ padding: "4px", border: "1px solid var(--border-color)", borderRadius: "6px", background: "var(--bg-secondary)", color: "var(--danger)", cursor: "pointer" }}
+                                    title="Delete preset"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                        {canEditMetrics && (
+                          <button
+                            type="button"
+                            onClick={() => { setPresetForm({ name: "", formula_expression: "" }); setPresetModal("add"); }}
+                            style={{
+                              padding: "6px 12px",
+                              borderRadius: "6px",
+                              border: "1px solid var(--border-color)",
+                              background: "var(--bg-secondary)",
+                              color: "var(--text-primary)",
+                              fontSize: "12px",
+                              cursor: "pointer",
+                            }}
+                          >
+                            + Add preset
+                          </button>
+                        )}
+                      </div>
+                      {/* Metric cards and Add metric */}
+                      {(() => {
+                        const surveyItemsForMetrics = (currentChecklist.get("survey") || []).filter((i) => i.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
+                        const hasSurveyItems = surveyItemsForMetrics.length > 0;
+                        const metricsToShow = isCreating ? tempSurveyMetrics : customSurveyMetricDefinitions;
+                        return (
+                        <>
+                        {!hasSurveyItems && (
+                          <div style={{ padding: "14px 16px", borderRadius: "8px", border: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "12px" }}>
+                            Add survey items under the Surveys section below before creating a metric. Metrics are calculated from your survey questions.
+                          </div>
+                        )}
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", marginBottom: "12px" }}>
-                          {customSurveyMetricDefinitions.map((m) => {
-                            const raw = m.computed_value != null ? m.computed_value : 3;
+                          {metricsToShow.map((m, idx) => {
+                            const isTemp = isCreating;
+                            const mId = isTemp ? undefined : (m as { id: number }).id;
+                            const mItemIds = isTemp ? (m as { item_ids: number[] }).item_ids : (JSON.parse((m as { item_ids: string }).item_ids || "[]") as number[]);
+                            const mColorScale = isTemp ? (m as { color_scale: string | null }).color_scale : (m as { color_scale: string | null }).color_scale;
+                            const raw = !isTemp && (m as { computed_value: number | null }).computed_value != null ? (m as { computed_value: number }).computed_value : 3;
                             const displayVal = Math.max(0, Math.min(5, (raw - 1) * (5 / 4)));
-                            const pct = (displayVal / 5) * 100;
-                            const barColor = pct >= 60 ? "var(--success)" : pct >= 40 ? "var(--accent)" : "var(--text-secondary)";
+                            const pct = displayVal / 5;
+                            const barColor = getMetricColorFromScale(pct, mColorScale ?? undefined);
                             return (
                               <div
-                                key={m.id}
+                                key={isTemp ? `temp-${idx}` : mId}
                                 style={{
                                   backgroundColor: "var(--bg-tertiary)",
                                   border: "1px solid var(--border-color)",
@@ -5480,7 +5726,7 @@ export default function Strategies() {
                                   <div style={{ flex: 1, minWidth: 0 }}>
                                     <div style={{ fontSize: "12px", fontWeight: "600", marginBottom: "2px" }}>{m.name}</div>
                                     <div style={{ fontSize: "18px", fontWeight: "bold", color: barColor }}>
-                                      {m.computed_value != null ? displayVal.toFixed(2) : "—"}
+                                      {!isTemp && (m as { computed_value: number | null }).computed_value != null ? displayVal.toFixed(2) : "—"}
                                       <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>/5</span>
                                     </div>
                                   </div>
@@ -5489,10 +5735,30 @@ export default function Strategies() {
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          let itemIds: number[] = [];
-                                          try { itemIds = JSON.parse(m.item_ids) || []; } catch { itemIds = []; }
-                                          setSurveyMetricForm({ name: m.name, description: m.description || "", formula_type: m.formula_type || "avg", item_ids: itemIds });
-                                          setSurveyMetricModal(m.id);
+                                          let colorScaleType: "gradient" | "static" = "gradient";
+                                          let colorScalePreset = "ryg";
+                                          let colorScaleStatic = "#3b82f6";
+                                          try {
+                                            if (mColorScale) {
+                                              const cs = JSON.parse(mColorScale) as { type?: string; preset?: string; hex?: string };
+                                              if (cs.type === "static" && cs.hex) {
+                                                colorScaleType = "static";
+                                                colorScaleStatic = cs.hex;
+                                              } else if (cs.type === "gradient" && cs.preset && METRIC_COLOR_GRADIENTS[cs.preset]) {
+                                                colorScalePreset = cs.preset;
+                                              }
+                                            }
+                                          } catch { /* use defaults */ }
+                                          setSurveyMetricForm({
+                                            name: m.name,
+                                            description: (m as { description: string | null }).description || "",
+                                            formula_type: m.formula_type || "avg",
+                                            item_ids: mItemIds,
+                                            color_scale_type: colorScaleType,
+                                            color_scale_preset: colorScalePreset,
+                                            color_scale_static: colorScaleStatic,
+                                          });
+                                          setSurveyMetricModal(isTemp ? idx : mId!);
                                         }}
                                         style={{ padding: "4px", border: "1px solid var(--border-color)", borderRadius: "6px", background: "var(--bg-secondary)", color: "var(--text-primary)", cursor: "pointer" }}
                                         title="Edit metric"
@@ -5503,11 +5769,15 @@ export default function Strategies() {
                                         type="button"
                                         onClick={async () => {
                                           if (!confirm("Delete this metric? This cannot be undone.")) return;
+                                          if (isTemp) {
+                                            setTempSurveyMetrics((prev) => prev.filter((_, i) => i !== idx));
+                                            return;
+                                          }
                                           try {
-                                            await invoke("delete_strategy_survey_metric", { id: m.id });
+                                            await invoke("delete_strategy_survey_metric", { id: mId });
                                             const [rawData, defs] = await Promise.all([
-                                              invoke<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null }>>("get_custom_survey_metrics", { strategyId: selectedStrategy }),
-                                              invoke<Array<{ id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null }>>("get_strategy_survey_metrics_with_values", { strategyId: selectedStrategy }),
+                                              invoke<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null }>>("get_custom_survey_metrics", { strategyId: selectedStrategy! }),
+                                              invoke<Array<{ id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null; color_scale: string | null }>>("get_strategy_survey_metrics_with_values", { strategyId: selectedStrategy! }),
                                             ]);
                                             setCustomSurveyMetrics(rawData);
                                             setCustomSurveyMetricDefinitions(defs);
@@ -5522,11 +5792,19 @@ export default function Strategies() {
                                   )}
                                 </div>
                                 <div style={{ height: "4px", backgroundColor: "var(--bg-secondary)", borderRadius: "2px", overflow: "hidden", marginBottom: "6px" }}>
-                                  <div style={{ height: "100%", width: `${pct}%`, backgroundColor: barColor, transition: "width 0.2s" }} />
+                                  <div style={{ height: "100%", width: `${pct * 100}%`, backgroundColor: barColor, transition: "width 0.2s" }} />
                                 </div>
                                 {m.description && <p style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: "1.35", margin: 0 }}>{m.description}</p>}
                                 <div style={{ fontSize: "10px", color: "var(--text-secondary)", marginTop: "4px" }}>
-                                  {m.formula_type === "invert" ? "6 − avg (lower raw = better)" : "avg (higher = better)"}
+                                  {m.formula_type.startsWith("preset:")
+                                    ? "Preset formula"
+                                    : m.formula_type === "invert"
+                                      ? "6 − avg (lower raw = better)"
+                                      : m.formula_type === "min"
+                                        ? "min (higher = better)"
+                                        : m.formula_type === "max"
+                                          ? "max (higher = better)"
+                                          : "avg (higher = better)"}
                                 </div>
                               </div>
                             );
@@ -5535,12 +5813,562 @@ export default function Strategies() {
                         {canEditMetrics && (
                           <button
                             type="button"
-                            onClick={() => { setSurveyMetricForm({ name: "", description: "", formula_type: "avg", item_ids: [] }); setSurveyMetricModal("add"); }}
+                            onClick={() => {
+                              if (!hasSurveyItems) {
+                                return; // prompt is already shown above
+                              }
+                              setSurveyMetricForm({
+                                name: "",
+                                description: "",
+                                formula_type: "avg",
+                                item_ids: [],
+                                color_scale_type: "gradient",
+                                color_scale_preset: "ryg",
+                                color_scale_static: "#3b82f6",
+                              });
+                              setSurveyMetricModal("add");
+                            }}
                             style={{
                               padding: "8px 14px",
                               borderRadius: "6px",
                               border: "1px solid var(--border-color)",
-                              background: "var(--bg-secondary)",
+                              background: hasSurveyItems ? "var(--bg-secondary)" : "var(--bg-tertiary)",
+                              color: "var(--text-primary)",
+                              fontSize: "13px",
+                              fontWeight: "500",
+                              cursor: hasSurveyItems ? "pointer" : "not-allowed",
+                              opacity: hasSurveyItems ? 1 : 0.7,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "6px",
+                            }}
+                            title={!hasSurveyItems ? "Create a survey item above first" : undefined}
+                          >
+                            <Plus size={16} /> Add metric
+                          </button>
+                        )}
+                        </>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Checklist & survey item metrics: when each item was checked, avg performance (R → % → price) */}
+                    {checklistItemMetrics.length > 0 && (
+                      <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: "1px solid var(--border-color)" }}>
+                        <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-secondary)", margin: "0 0 8px 0", textTransform: "uppercase", letterSpacing: "0.02em" }}>
+                          Checklist & survey item metrics
+                        </h3>
+                        <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "12px", maxWidth: "560px" }}>
+                          When each item was checked in Journal, performance uses R-multiple if set; otherwise % return or P&L from linked trades.
+                        </p>
+                        <div style={{ overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+                            <thead>
+                              <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                <th style={{ textAlign: "left", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Item</th>
+                                <th style={{ textAlign: "left", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Type</th>
+                                <th style={{ textAlign: "right", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Times checked</th>
+                                <th style={{ textAlign: "right", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Avg performance</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {checklistItemMetrics.map((row) => (
+                                <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                  <td style={{ padding: "8px", color: "var(--text-primary)" }}>{row.item_text}</td>
+                                  <td style={{ padding: "8px", color: "var(--text-secondary)" }}>{row.checklist_type === "survey" ? "Post-Trade Survey" : row.checklist_type === "entry" ? "Entry" : row.checklist_type === "exit" ? "Exit" : row.checklist_type.replace(/^survey_/, "").replace(/_/g, " ")}</td>
+                                  <td style={{ padding: "8px", textAlign: "right", color: "var(--text-primary)" }}>{row.times_checked}</td>
+                                  <td style={{ padding: "8px", textAlign: "right", color: row.avg_performance != null && row.avg_performance < 0 ? "var(--loss)" : "var(--text-primary)" }}>
+                                    {row.avg_performance != null
+                                      ? row.performance_kind === "r"
+                                        ? row.avg_performance.toFixed(2) + " R"
+                                        : row.performance_kind === "pct"
+                                          ? row.avg_performance.toFixed(1) + "%"
+                                          : "$" + row.avg_performance.toFixed(0)
+                                      : "—"}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {surveyMetricModal !== null && (() => {
+                      const surveyItemsForMetric = surveyTypesOrdered.flatMap((t) => (currentChecklist.get(t) || []).filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER));
+                      return (
+                        <div
+                          style={{
+                            position: "fixed",
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            backgroundColor: "rgba(0,0,0,0.6)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            zIndex: 1000,
+                          }}
+                          onClick={() => { setSurveyMetricModal(null); setColorPresetDropdownOpen(false); }}
+                        >
+                          <div
+                            style={{
+                              backgroundColor: "var(--bg-secondary)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "12px",
+                              padding: "16px 20px",
+                              width: "90%",
+                              maxWidth: "440px",
+                              maxHeight: "85vh",
+                              overflowY: "auto",
+                              boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>
+                              {surveyMetricModal === "add" ? "Add metric" : "Edit metric"}
+                            </h3>
+                            <div style={{ marginBottom: "10px" }}>
+                              <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px" }}>Name</label>
+                              <input
+                                type="text"
+                                value={surveyMetricForm.name}
+                                onChange={(e) => setSurveyMetricForm((f) => ({ ...f, name: e.target.value }))}
+                                placeholder="e.g. Discipline score"
+                                style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)" }}
+                              />
+                            </div>
+                            <div style={{ marginBottom: "10px" }}>
+                              <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px" }}>Description (optional)</label>
+                              <textarea
+                                value={surveyMetricForm.description}
+                                onChange={(e) => setSurveyMetricForm((f) => ({ ...f, description: e.target.value }))}
+                                placeholder="What this metric means"
+                                rows={1}
+                                style={{ width: "100%", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", resize: "vertical", minHeight: "32px" }}
+                              />
+                            </div>
+                            <div style={{ marginBottom: "12px" }}>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
+                                <label style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)" }}>Calculation</label>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPresetForm({ name: "", formula_expression: "" });
+                                    setPresetModal("add");
+                                    setOpenPresetFromMetricModal(true);
+                                  }}
+                                  style={{ fontSize: "11px", padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border-color)", background: "var(--bg-tertiary)", color: "var(--text-secondary)", cursor: "pointer" }}
+                                >
+                                  + Create preset
+                                </button>
+                              </div>
+                              <select
+                                value={surveyMetricForm.formula_type}
+                                onChange={(e) => setSurveyMetricForm((f) => ({ ...f, formula_type: e.target.value }))}
+                                style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)" }}
+                              >
+                                {(isCreating ? tempCalculationPresets : calculationPresets).map((p, idx) => {
+                                  const preset = p as { name: string; formula_type?: string; formula_expression?: string | null };
+                                  const formulaLabel = (preset.formula_expression && preset.formula_expression.trim()) ? preset.formula_expression.trim() : (preset.formula_type === "invert" ? "6 − avg" : preset.formula_type === "min" ? "min" : preset.formula_type === "max" ? "max" : "avg");
+                                  return (
+                                    <option key={isCreating ? `temp-${idx}` : (p as unknown as { id: number }).id} value={isCreating ? `preset:${idx}` : `preset:${(p as unknown as { id: number }).id}`}>
+                                      Preset: {preset.name} ({formulaLabel})
+                                    </option>
+                                  );
+                                })}
+                                {(isCreating ? tempCalculationPresets : calculationPresets).length > 0 && <option disabled>— Inline —</option>}
+                                <option value="avg">Average (higher = better)</option>
+                                <option value="invert">Inverted (6 − avg; lower raw = better)</option>
+                                <option value="min">Min of items (higher = better)</option>
+                                <option value="max">Max of items (higher = better)</option>
+                              </select>
+                            </div>
+                            <div style={{ marginBottom: "12px" }}>
+                              <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px" }}>Color scale</label>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => setSurveyMetricForm((f) => ({ ...f, color_scale_type: "gradient" }))}
+                                  style={{
+                                    padding: "4px 10px",
+                                    borderRadius: "4px",
+                                    border: `1px solid ${surveyMetricForm.color_scale_type === "gradient" ? "var(--accent)" : "var(--border-color)"}`,
+                                    background: surveyMetricForm.color_scale_type === "gradient" ? "var(--bg-tertiary)" : "var(--bg-secondary)",
+                                    color: "var(--text-primary)",
+                                    fontSize: "11px",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  Gradient
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setSurveyMetricForm((f) => ({ ...f, color_scale_type: "static" }))}
+                                  style={{
+                                    padding: "4px 10px",
+                                    borderRadius: "4px",
+                                    border: `1px solid ${surveyMetricForm.color_scale_type === "static" ? "var(--accent)" : "var(--border-color)"}`,
+                                    background: surveyMetricForm.color_scale_type === "static" ? "var(--bg-tertiary)" : "var(--bg-secondary)",
+                                    color: "var(--text-primary)",
+                                    fontSize: "11px",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  Solid
+                                </button>
+                                {surveyMetricForm.color_scale_type === "gradient" ? (
+                                  <div style={{ position: "relative" }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => setColorPresetDropdownOpen((o) => !o)}
+                                      style={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: "8px",
+                                        padding: "4px 8px 4px 10px",
+                                        borderRadius: "4px",
+                                        border: "1px solid var(--border-color)",
+                                        background: "var(--bg-primary)",
+                                        color: "var(--text-primary)",
+                                        fontSize: "12px",
+                                        minWidth: "180px",
+                                        cursor: "pointer",
+                                        textAlign: "left",
+                                      }}
+                                    >
+                                      <div
+                                        style={{
+                                          width: "64px",
+                                          height: "14px",
+                                          borderRadius: "3px",
+                                          background: metricGradientCss(surveyMetricForm.color_scale_preset),
+                                          border: "1px solid var(--border-color)",
+                                          flexShrink: 0,
+                                        }}
+                                      />
+                                      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                        {METRIC_COLOR_PRESET_LABELS[surveyMetricForm.color_scale_preset]}
+                                      </span>
+                                      <ChevronDown size={14} style={{ flexShrink: 0, opacity: colorPresetDropdownOpen ? 0.8 : 0.5 }} />
+                                    </button>
+                                    {colorPresetDropdownOpen && (
+                                      <div
+                                        style={{
+                                          position: "absolute",
+                                          bottom: "100%",
+                                          left: 0,
+                                          marginBottom: "2px",
+                                          minWidth: "100%",
+                                          maxHeight: "220px",
+                                          overflowY: "auto",
+                                          borderRadius: "6px",
+                                          border: "1px solid var(--border-color)",
+                                          background: "var(--bg-primary)",
+                                          boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+                                          zIndex: 10,
+                                          display: "flex",
+                                          flexDirection: "column-reverse",
+                                        }}
+                                      >
+                                        {Object.entries(METRIC_COLOR_PRESET_LABELS).map(([key, label]) => (
+                                          <button
+                                            key={key}
+                                            type="button"
+                                            onClick={() => {
+                                              setSurveyMetricForm((f) => ({ ...f, color_scale_preset: key }));
+                                              setColorPresetDropdownOpen(false);
+                                            }}
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "center",
+                                              gap: "8px",
+                                              width: "100%",
+                                              padding: "6px 10px",
+                                              border: "none",
+                                              background: surveyMetricForm.color_scale_preset === key ? "var(--bg-tertiary)" : "transparent",
+                                              color: "var(--text-primary)",
+                                              fontSize: "12px",
+                                              cursor: "pointer",
+                                              textAlign: "left",
+                                            }}
+                                          >
+                                            <div
+                                              style={{
+                                                width: "56px",
+                                                height: "12px",
+                                                borderRadius: "2px",
+                                                background: metricGradientCss(key),
+                                                border: "1px solid var(--border-color)",
+                                                flexShrink: 0,
+                                              }}
+                                            />
+                                            <span>{label}</span>
+                                          </button>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <>
+                                    <ColorPicker
+                                      value={surveyMetricForm.color_scale_static}
+                                      onChange={(hex) => setSurveyMetricForm((f) => ({ ...f, color_scale_static: hex }))}
+                                    />
+                                    <div style={{ width: "24px", height: "18px", borderRadius: "3px", background: surveyMetricForm.color_scale_static, border: "1px solid var(--border-color)" }} />
+                                    <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{surveyMetricForm.color_scale_static}</span>
+                                  </>
+                                )}
+                              </div>
+                              <p style={{ fontSize: "10px", color: "var(--text-secondary)", margin: "4px 0 0 0" }}>
+                                Applied to score and progress bar (low → high).
+                              </p>
+                            </div>
+                            <div style={{ marginBottom: "12px" }}>
+                              <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px" }}>Survey items (select which questions feed this metric)</label>
+                              <div style={{ maxHeight: "120px", overflowY: "auto", border: "1px solid var(--border-color)", borderRadius: "6px", padding: "6px 8px", background: "var(--bg-tertiary)" }}>
+                                {surveyItemsForMetric.length === 0 ? (
+                                  <div style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Add survey items above first.</div>
+                                ) : (
+                                  surveyItemsForMetric.map((item) => (
+                                    <label key={item.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "4px 0", cursor: "pointer", fontSize: "13px" }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={surveyMetricForm.item_ids.includes(item.id)}
+                                        onChange={(e) => {
+                                          setSurveyMetricForm((f) => ({
+                                            ...f,
+                                            item_ids: e.target.checked ? [...f.item_ids, item.id] : f.item_ids.filter((id) => id !== item.id),
+                                          }));
+                                        }}
+                                      />
+                                      <span style={{ color: "var(--text-primary)" }}>{item.item_text}</span>
+                                    </label>
+                                  ))
+                                )}
+                              </div>
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+                              <button
+                                type="button"
+                                onClick={() => { setSurveyMetricModal(null); setColorPresetDropdownOpen(false); }}
+                                style={{ padding: "8px 16px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", cursor: "pointer" }}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!surveyMetricForm.name.trim()) return;
+                                  const colorScale =
+                                    surveyMetricForm.color_scale_type === "static"
+                                      ? JSON.stringify({ type: "static", hex: surveyMetricForm.color_scale_static })
+                                      : JSON.stringify({ type: "gradient", preset: surveyMetricForm.color_scale_preset });
+                                  const formulaType = surveyMetricForm.formula_type;
+                                  if (isCreating) {
+                                    const entry = {
+                                      name: surveyMetricForm.name.trim(),
+                                      description: surveyMetricForm.description.trim() || null,
+                                      formula_type: formulaType,
+                                      item_ids: surveyMetricForm.item_ids,
+                                      display_order: surveyMetricModal === "add" ? tempSurveyMetrics.length : (surveyMetricModal as number),
+                                      color_scale: colorScale as string | null,
+                                    };
+                                    if (surveyMetricModal === "add") {
+                                      setTempSurveyMetrics((prev) => [...prev, { ...entry, display_order: prev.length }]);
+                                    } else {
+                                      const idx = surveyMetricModal as number;
+                                      setTempSurveyMetrics((prev) => prev.map((m, i) => i === idx ? { ...entry, display_order: idx } : m));
+                                    }
+                                    setSurveyMetricModal(null);
+                                    setColorPresetDropdownOpen(false);
+                                    return;
+                                  }
+                                  if (selectedStrategy == null) return;
+                                  try {
+                                    const displayOrder = surveyMetricModal === "add" ? customSurveyMetricDefinitions.length : customSurveyMetricDefinitions.find((d) => d.id === surveyMetricModal)?.display_order ?? 0;
+                                    await invoke("save_strategy_survey_metric", {
+                                      id: surveyMetricModal === "add" ? null : surveyMetricModal,
+                                      strategyId: selectedStrategy,
+                                      name: surveyMetricForm.name.trim(),
+                                      description: surveyMetricForm.description.trim() || null,
+                                      formulaType,
+                                      itemIds: JSON.stringify(surveyMetricForm.item_ids),
+                                      displayOrder,
+                                      colorScale,
+                                    });
+                                    const [raw, defs] = await Promise.all([
+                                      invoke<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null }>>("get_custom_survey_metrics", { strategyId: selectedStrategy }),
+                                      invoke<Array<{ id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null; color_scale: string | null }>>("get_strategy_survey_metrics_with_values", { strategyId: selectedStrategy }),
+                                    ]);
+                                    setCustomSurveyMetrics(raw);
+                                    setCustomSurveyMetricDefinitions(defs);
+                                    setSurveyMetricModal(null);
+                                    setColorPresetDropdownOpen(false);
+                                  } catch (e) {
+                                    console.error(e);
+                                  }
+                                }}
+                                style={{ padding: "8px 16px", borderRadius: "6px", border: "none", background: "var(--accent)", color: "white", cursor: "pointer", fontWeight: "500" }}
+                              >
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                    {presetModal !== null && (
+                      <div
+                        style={{
+                          position: "fixed",
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          backgroundColor: "rgba(0,0,0,0.6)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          zIndex: 1000,
+                        }}
+                        onClick={() => { setPresetModal(null); setOpenPresetFromMetricModal(false); }}
+                      >
+                        <div
+                          style={{
+                            backgroundColor: "var(--bg-secondary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "12px",
+                            padding: "24px",
+                            width: "90%",
+                            maxWidth: "360px",
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
+                            {presetModal === "add" ? "Add calculation preset" : "Edit preset"}
+                          </h3>
+                          <div style={{ marginBottom: "12px" }}>
+                            <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px" }}>Name</label>
+                            <input
+                              type="text"
+                              value={presetForm.name}
+                              onChange={(e) => setPresetForm((f) => ({ ...f, name: e.target.value }))}
+                              placeholder="e.g. Discipline score"
+                              style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)" }}
+                            />
+                          </div>
+                          <div style={{ marginBottom: "16px" }}>
+                            <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px" }}>Formula</label>
+                            <input
+                              type="text"
+                              value={presetForm.formula_expression}
+                              onChange={(e) => setPresetForm((f) => ({ ...f, formula_expression: e.target.value }))}
+                              placeholder="e.g. (v1 + v2) / 2 or 6 - (v1 + v2 + v3) / 3"
+                              style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontFamily: "monospace" }}
+                            />
+                            <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "6px 0 0 0" }}>
+                              Use v1, v2, v3, … for the 1st, 2nd, 3rd … survey item you select in the metric. Math: + - * / ( ). Example: (v1 + v2) / 2 for average of two items.
+                            </p>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+                            <button
+                              type="button"
+                              onClick={() => { setPresetModal(null); setOpenPresetFromMetricModal(false); }}
+                              style={{ padding: "8px 16px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", cursor: "pointer" }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!presetForm.name.trim()) return;
+                                const expr = presetForm.formula_expression.trim();
+                                if (!expr) return;
+                                if (isCreating) {
+                                  if (presetModal === "add") {
+                                    setTempCalculationPresets((prev) => {
+                                      const next = [...prev, { name: presetForm.name.trim(), formula_expression: expr, display_order: prev.length }];
+                                      if (openPresetFromMetricModal) {
+                                        setSurveyMetricForm((f) => ({ ...f, formula_type: "preset:" + (next.length - 1) }));
+                                        setOpenPresetFromMetricModal(false);
+                                      }
+                                      return next;
+                                    });
+                                  } else {
+                                    const idx = presetModal as number;
+                                    setTempCalculationPresets((prev) => prev.map((p, i) => i === idx ? { ...p, name: presetForm.name.trim(), formula_expression: expr } : p));
+                                  }
+                                  setPresetModal(null);
+                                  return;
+                                }
+                                if (selectedStrategy == null) return;
+                                try {
+                                  const displayOrder = presetModal === "add" ? calculationPresets.length : calculationPresets.find((p) => p.id === presetModal)?.display_order ?? 0;
+                                  const id = await invoke<number>("save_strategy_calculation_preset", {
+                                    id: presetModal === "add" ? null : presetModal,
+                                    strategyId: selectedStrategy,
+                                    name: presetForm.name.trim(),
+                                    formulaType: "custom",
+                                    formulaExpression: expr,
+                                    displayOrder,
+                                  });
+                                  const presets = await invoke<Array<{ id: number; strategy_id: number; name: string; formula_type: string; formula_expression?: string | null; display_order: number }>>("get_strategy_calculation_presets", { strategyId: selectedStrategy });
+                                  setCalculationPresets(presets);
+                                  if (openPresetFromMetricModal && presetModal === "add") {
+                                    setSurveyMetricForm((f) => ({ ...f, formula_type: "preset:" + id }));
+                                    setOpenPresetFromMetricModal(false);
+                                  }
+                                  setPresetModal(null);
+                                } catch (e) { console.error(e); }
+                              }}
+                              style={{ padding: "8px 16px", borderRadius: "6px", border: "none", background: "var(--accent)", color: "white", cursor: "pointer", fontWeight: "500" }}
+                            >
+                              Save
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  )}
+                  {activeTab === "surveys" && (
+                  <div
+                    ref={(el) => { tabContentRefs.current.set("surveys", el); }}
+                    style={{ padding: "24px", overflowY: "auto" }}
+                    onScroll={(e) => {
+                      if (activeTab === "surveys") {
+                        tabScrollPositions.current.set("surveys", e.currentTarget.scrollTop);
+                      }
+                    }}
+                  >
+                    <div
+                      style={{
+                        padding: "20px",
+                        borderRadius: "12px",
+                        border: "1px solid var(--border-color)",
+                        backgroundColor: "var(--bg-secondary)",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px", marginBottom: "8px" }}>
+                        <div>
+                          <h2 style={{ fontSize: "20px", fontWeight: "700", color: "var(--text-primary)", margin: "0 0 4px 0" }}>
+                            Surveys
+                          </h2>
+                          <p style={{ fontSize: "14px", color: "var(--text-secondary)", margin: 0, maxWidth: "560px" }}>
+                            Add survey questions (1–5 scale) under each survey. Post-Trade Survey is used in Journal when logging trades. Survey items can be tied to survey metrics in the Metrics tab.
+                          </p>
+                        </div>
+                        {canEditMetrics && (
+                          <button
+                            type="button"
+                            onClick={() => setShowAddSurveyModal(true)}
+                            style={{
+                              padding: "8px 14px",
+                              borderRadius: "6px",
+                              border: "1px solid var(--border-color)",
+                              background: "var(--bg-tertiary)",
                               color: "var(--text-primary)",
                               fontSize: "13px",
                               fontWeight: "500",
@@ -5548,23 +6376,13 @@ export default function Strategies() {
                               display: "inline-flex",
                               alignItems: "center",
                               gap: "6px",
+                              flexShrink: 0,
                             }}
                           >
-                            <Plus size={16} /> Add metric
+                            <Plus size={16} /> Add survey
                           </button>
                         )}
                       </div>
-                    )}
-
-                    {/* Surveys section */}
-                    <div style={{ marginBottom: "16px" }}>
-                      <h2 style={{ fontSize: "20px", fontWeight: "700", color: "var(--text-primary)", margin: "0 0 4px 0" }}>
-                        Surveys
-                      </h2>
-                      <p style={{ fontSize: "14px", color: "var(--text-secondary)", marginBottom: "16px", maxWidth: "560px" }}>
-                        Post-Trade Survey is used in Journal when logging trades. You can add more surveys and reorder items when editing.
-                      </p>
-                    </div>
                     {surveyTypesOrdered.map((surveyType) => {
                       const items = currentChecklist.get(surveyType) || [];
                       const isCustomSurvey = surveyType.startsWith("survey_");
@@ -5592,58 +6410,37 @@ export default function Strategies() {
                             )}
                           </div>
                           <ChecklistSection
-                            type={surveyType}
-                            title={getSurveyTypeTitle(surveyType)}
-                            items={items}
-                            selectedStrategy={virtualStrategyId}
-                            isEditing={canEditMetrics}
-                            newChecklistItem={newChecklistItem}
-                            setNewChecklistItem={setNewChecklistItem}
-                            selectedChecklistItems={selectedChecklistItems}
-                            setSelectedChecklistItems={setSelectedChecklistItems}
-                            editingItemId={editingItemId}
-                            editingItemText={editingItemText}
-                            setEditingItemText={setEditingItemText}
-                            sensors={sensors}
-                            onDragEnd={handleDragEnd}
-                            deleteChecklistItem={deleteChecklistItem}
-                            startEditingItem={startEditingItem}
-                            saveEditedItem={saveEditedItem}
-                            cancelEditingItem={cancelEditingItem}
-                            addChecklistItem={addChecklistItem}
-                            setPendingGroupAction={setPendingGroupAction}
-                            setGroupName={setGroupName}
-                            setShowGroupModal={setShowGroupModal}
-                            ungroupChecklistItems={ungroupChecklistItems}
-                            isCustom={isCustomSurvey}
-                            onDeleteChecklist={undefined}
-                            moveItemsToGroup={moveItemsToGroup}
-                          />
+                              type={surveyType}
+                              title={getSurveyTypeTitle(surveyType)}
+                              items={items}
+                              selectedStrategy={virtualStrategyId}
+                              isEditing={canEditMetrics}
+                              newChecklistItem={newChecklistItem}
+                              setNewChecklistItem={setNewChecklistItem}
+                              selectedChecklistItems={selectedChecklistItems}
+                              setSelectedChecklistItems={setSelectedChecklistItems}
+                              editingItemId={editingItemId}
+                              editingItemText={editingItemText}
+                              setEditingItemText={setEditingItemText}
+                              sensors={sensors}
+                              onDragEnd={handleDragEnd}
+                              deleteChecklistItem={deleteChecklistItem}
+                              startEditingItem={startEditingItem}
+                              saveEditedItem={saveEditedItem}
+                              cancelEditingItem={cancelEditingItem}
+                              addChecklistItem={addChecklistItem}
+                              setPendingGroupAction={setPendingGroupAction}
+                              setGroupName={setGroupName}
+                              setShowGroupModal={setShowGroupModal}
+                              ungroupChecklistItems={ungroupChecklistItems}
+                              isCustom={isCustomSurvey}
+                              onDeleteChecklist={undefined}
+                              moveItemsToGroup={moveItemsToGroup}
+                            />
                         </div>
                       );
                     })}
-                    {canEditMetrics && (
-                      <button
-                        type="button"
-                        onClick={() => setShowAddSurveyModal(true)}
-                        style={{
-                          padding: "8px 14px",
-                          marginTop: "8px",
-                          borderRadius: "6px",
-                          border: "1px solid var(--border-color)",
-                          background: "var(--bg-secondary)",
-                          color: "var(--text-primary)",
-                          fontSize: "13px",
-                          fontWeight: "500",
-                          cursor: "pointer",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "6px",
-                        }}
-                      >
-                        <Plus size={16} /> Add survey
-                      </button>
-                    )}
+                    </div>
                     {!isCreating && selectedStrategy != null && customSurveyMetrics.length > 0 && (
                       <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: "1px solid var(--border-color)" }}>
                         <h4 style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "12px" }}>
@@ -5675,141 +6472,9 @@ export default function Strategies() {
                         </div>
                       </div>
                     )}
-                    {surveyMetricModal !== null && (() => {
-                      const surveyItemsForMetric = surveyTypesOrdered.flatMap((t) => (currentChecklist.get(t) || []).filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER));
-                      return (
-                        <div
-                          style={{
-                            position: "fixed",
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            bottom: 0,
-                            backgroundColor: "rgba(0,0,0,0.6)",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            zIndex: 1000,
-                          }}
-                          onClick={() => setSurveyMetricModal(null)}
-                        >
-                          <div
-                            style={{
-                              backgroundColor: "var(--bg-secondary)",
-                              border: "1px solid var(--border-color)",
-                              borderRadius: "12px",
-                              padding: "24px",
-                              width: "90%",
-                              maxWidth: "440px",
-                              maxHeight: "85vh",
-                              overflowY: "auto",
-                              boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
-                              {surveyMetricModal === "add" ? "Add metric" : "Edit metric"}
-                            </h3>
-                            <div style={{ marginBottom: "12px" }}>
-                              <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px" }}>Name</label>
-                              <input
-                                type="text"
-                                value={surveyMetricForm.name}
-                                onChange={(e) => setSurveyMetricForm((f) => ({ ...f, name: e.target.value }))}
-                                placeholder="e.g. Discipline score"
-                                style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)" }}
-                              />
-                            </div>
-                            <div style={{ marginBottom: "12px" }}>
-                              <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px" }}>Description (optional)</label>
-                              <textarea
-                                value={surveyMetricForm.description}
-                                onChange={(e) => setSurveyMetricForm((f) => ({ ...f, description: e.target.value }))}
-                                placeholder="What this metric means"
-                                rows={2}
-                                style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", resize: "vertical" }}
-                              />
-                            </div>
-                            <div style={{ marginBottom: "12px" }}>
-                              <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px" }}>Calculation</label>
-                              <select
-                                value={surveyMetricForm.formula_type}
-                                onChange={(e) => setSurveyMetricForm((f) => ({ ...f, formula_type: e.target.value }))}
-                                style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)" }}
-                              >
-                                <option value="avg">Average (higher raw = better)</option>
-                                <option value="invert">Inverted (6 − avg; lower raw = better)</option>
-                              </select>
-                            </div>
-                            <div style={{ marginBottom: "16px" }}>
-                              <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "6px" }}>Survey items (select which questions feed this metric)</label>
-                              <div style={{ maxHeight: "160px", overflowY: "auto", border: "1px solid var(--border-color)", borderRadius: "6px", padding: "8px", background: "var(--bg-tertiary)" }}>
-                                {surveyItemsForMetric.length === 0 ? (
-                                  <div style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Add survey items above first.</div>
-                                ) : (
-                                  surveyItemsForMetric.map((item) => (
-                                    <label key={item.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "4px 0", cursor: "pointer", fontSize: "13px" }}>
-                                      <input
-                                        type="checkbox"
-                                        checked={surveyMetricForm.item_ids.includes(item.id)}
-                                        onChange={(e) => {
-                                          setSurveyMetricForm((f) => ({
-                                            ...f,
-                                            item_ids: e.target.checked ? [...f.item_ids, item.id] : f.item_ids.filter((id) => id !== item.id),
-                                          }));
-                                        }}
-                                      />
-                                      <span style={{ color: "var(--text-primary)" }}>{item.item_text}</span>
-                                    </label>
-                                  ))
-                                )}
-                              </div>
-                            </div>
-                            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-                              <button
-                                type="button"
-                                onClick={() => setSurveyMetricModal(null)}
-                                style={{ padding: "8px 16px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", cursor: "pointer" }}
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  if (!surveyMetricForm.name.trim()) return;
-                                  if (selectedStrategy == null) return;
-                                  try {
-                                    const displayOrder = surveyMetricModal === "add" ? customSurveyMetricDefinitions.length : customSurveyMetricDefinitions.find((d) => d.id === surveyMetricModal)?.display_order ?? 0;
-                                    await invoke("save_strategy_survey_metric", {
-                                      id: surveyMetricModal === "add" ? null : surveyMetricModal,
-                                      strategyId: selectedStrategy,
-                                      name: surveyMetricForm.name.trim(),
-                                      description: surveyMetricForm.description.trim() || null,
-                                      formulaType: surveyMetricForm.formula_type,
-                                      itemIds: JSON.stringify(surveyMetricForm.item_ids),
-                                      displayOrder,
-                                    });
-                                    const [raw, defs] = await Promise.all([
-                                      invoke<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null }>>("get_custom_survey_metrics", { strategyId: selectedStrategy }),
-                                      invoke<Array<{ id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null }>>("get_strategy_survey_metrics_with_values", { strategyId: selectedStrategy }),
-                                    ]);
-                                    setCustomSurveyMetrics(raw);
-                                    setCustomSurveyMetricDefinitions(defs);
-                                    setSurveyMetricModal(null);
-                                  } catch (e) {
-                                    console.error(e);
-                                  }
-                                }}
-                                style={{ padding: "8px 16px", borderRadius: "6px", border: "none", background: "var(--accent)", color: "white", cursor: "pointer", fontWeight: "500" }}
-                              >
-                                Save
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })()}
                   </div>
+                  )}
+                  </>
                 );
               })()}
             </div>
@@ -5977,30 +6642,29 @@ export default function Strategies() {
                         </label>
                       );
                     })}
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        padding: "8px 8px 4px 8px",
+                        marginTop: "8px",
+                        borderTop: "1px solid var(--border-color)",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={strategyOverviewOnlyWithTrades}
+                        onChange={(e) => setStrategyOverviewOnlyWithTrades(e.target.checked)}
+                      />
+                      Only show strategies with trades
+                    </label>
                   </div>
                 )}
               </div>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  fontSize: "12px",
-                  color: "var(--text-secondary)",
-                  padding: "6px 8px",
-                  borderRadius: "6px",
-                  border: "1px solid var(--border-color)",
-                  backgroundColor: "var(--bg-primary)",
-                  flex: "0 0 auto",
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={strategyOverviewOnlyWithTrades}
-                  onChange={(e) => setStrategyOverviewOnlyWithTrades(e.target.checked)}
-                />
-                Only show strategies with trades
-              </label>
             </div>
             <div
               style={{
@@ -6158,9 +6822,19 @@ export default function Strategies() {
               })}
             </div>
 
-            {/* Custom metrics in overview */}
-            {(overviewCustomMetricsByStrategy.size > 0 || strategies.some((s) => s.id != null)) && (
+            {/* Specific Strategy Metrics: Survey metrics + Checklist item metrics, both follow "Show metrics for..." */}
+            {(overviewCustomMetricsByStrategy.size > 0 || overviewChecklistItemMetricsByStrategy.size > 0 || strategies.some((s) => s.id != null)) && (
               <div style={{ marginTop: "20px" }}>
+                <h2
+                  style={{
+                    fontSize: "16px",
+                    fontWeight: "700",
+                    margin: "0 0 12px 0",
+                    color: "var(--text-primary)",
+                  }}
+                >
+                  Specific Strategy Metrics
+                </h2>
                 <div
                   style={{
                     display: "flex",
@@ -6178,7 +6852,7 @@ export default function Strategies() {
                       color: "var(--text-primary)",
                     }}
                   >
-                    Custom metrics
+                    Survey metrics
                   </h3>
                   <label
                     style={{
@@ -6196,133 +6870,17 @@ export default function Strategies() {
                     />
                     One section per strategy
                   </label>
-                  {!overviewMetricsPerStrategy && (
-                    <div ref={overviewMetricsDropdownRef} style={{ position: "relative" }}>
-                      <button
-                        type="button"
-                        onClick={() => setOverviewMetricsDropdownOpen((o) => !o)}
-                        style={{
-                          padding: "6px 10px",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "6px",
-                          minWidth: "180px",
-                          justifyContent: "space-between",
-                          backgroundColor: "var(--bg-primary)",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "6px",
-                          color: "var(--text-primary)",
-                          fontSize: "12px",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {overviewMetricsStrategyIds.length === 0
-                            ? "Show metrics for…"
-                            : overviewMetricsStrategyIds.length === 1
-                              ? strategies.find((s) => s.id === overviewMetricsStrategyIds[0])?.name ?? "1 strategy"
-                              : `${overviewMetricsStrategyIds.length} strategies`}
-                        </span>
-                        <ChevronDown size={14} style={{ flexShrink: 0, opacity: overviewMetricsDropdownOpen ? 0.7 : 0.5 }} />
-                      </button>
-                      {overviewMetricsDropdownOpen && (
-                        <div
-                          style={{
-                            position: "absolute",
-                            top: "100%",
-                            left: 0,
-                            marginTop: "4px",
-                            minWidth: "220px",
-                            maxHeight: "280px",
-                            overflowY: "auto",
-                            backgroundColor: "var(--bg-secondary)",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: "8px",
-                            boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
-                            zIndex: 100,
-                            padding: "8px",
-                          }}
-                        >
-                          <div style={{ display: "flex", gap: "8px", marginBottom: "8px", flexWrap: "wrap" }}>
-                            <button
-                              type="button"
-                              onClick={() => setOverviewMetricsStrategyIds([])}
-                              style={{
-                                fontSize: "11px",
-                                padding: "4px 8px",
-                                color: "var(--text-secondary)",
-                                background: "transparent",
-                                border: "1px solid var(--border-color)",
-                                borderRadius: "4px",
-                                cursor: "pointer",
-                              }}
-                            >
-                              Clear
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setOverviewMetricsStrategyIds(
-                                  strategies.filter((s) => s.id != null && overviewCustomMetricsByStrategy.has(s.id)).map((s) => s.id!)
-                                )
-                              }
-                              style={{
-                                fontSize: "11px",
-                                padding: "4px 8px",
-                                color: "var(--text-secondary)",
-                                background: "transparent",
-                                border: "1px solid var(--border-color)",
-                                borderRadius: "4px",
-                                cursor: "pointer",
-                              }}
-                            >
-                              Select all with metrics
-                            </button>
-                          </div>
-                          {strategies
-                            .filter((s) => s.id != null && overviewCustomMetricsByStrategy.has(s.id))
-                            .map((s) => {
-                              const checked = overviewMetricsStrategyIds.includes(s.id!);
-                              return (
-                                <label
-                                  key={s.id}
-                                  style={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    gap: "8px",
-                                    padding: "6px 8px",
-                                    borderRadius: "6px",
-                                    cursor: "pointer",
-                                    fontSize: "12px",
-                                    color: "var(--text-primary)",
-                                  }}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() => {
-                                      setOverviewMetricsStrategyIds((prev) =>
-                                        prev.includes(s.id!)
-                                          ? prev.filter((id) => id !== s.id)
-                                          : [...prev, s.id!]
-                                      );
-                                    }}
-                                  />
-                                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{s.name}</span>
-                                </label>
-                              );
-                            })}
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
+                <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "4px 0 0 0" }}>
+                  Survey metrics and checklist item metrics are filtered by the Strategies dropdown at the top of the page.
+                </p>
                 {overviewMetricsPerStrategy ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                     {strategies
-                      .filter((s) => s.id != null && overviewCustomMetricsByStrategy.has(s.id))
+                      .filter((s) => s.id != null && (overviewCustomMetricsByStrategy.has(s.id) || overviewChecklistItemMetricsByStrategy.has(s.id)))
                       .map((s) => {
                         const metrics = overviewCustomMetricsByStrategy.get(s.id!) ?? [];
+                        const itemMetrics = overviewChecklistItemMetricsByStrategy.get(s.id!) ?? [];
                         return (
                           <div
                             key={s.id}
@@ -6343,45 +6901,87 @@ export default function Strategies() {
                             >
                               {s.name}
                             </div>
-                            <div
-                              style={{
-                                display: "grid",
-                                gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-                                gap: "8px",
-                              }}
-                            >
-                              {metrics.map((m) => (
-                                <div
-                                  key={m.id}
-                                  style={{
-                                    padding: "8px 10px",
-                                    borderRadius: "6px",
-                                    backgroundColor: "var(--bg-primary)",
-                                    border: "1px solid var(--border-color)",
-                                  }}
-                                >
-                                  <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "2px" }}>
-                                    {m.name}
-                                  </div>
-                                  <div style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)" }}>
-                                    {m.computed_value != null ? m.computed_value.toFixed(2) : "—"}
-                                  </div>
-                                  {m.description && (
-                                    <div style={{ fontSize: "10px", color: "var(--text-secondary)", marginTop: "4px" }}>
-                                      {m.description}
+                            {metrics.length > 0 && (
+                              <div
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+                                  gap: "8px",
+                                  marginBottom: itemMetrics.length > 0 ? "12px" : 0,
+                                }}
+                              >
+                                {metrics.map((m) => (
+                                  <div
+                                    key={m.id}
+                                    style={{
+                                      padding: "8px 10px",
+                                      borderRadius: "6px",
+                                      backgroundColor: "var(--bg-primary)",
+                                      border: "1px solid var(--border-color)",
+                                    }}
+                                  >
+                                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "2px" }}>
+                                      {m.name}
                                     </div>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
+                                    <div
+                                      style={{
+                                        fontSize: "16px",
+                                        fontWeight: "600",
+                                        color: m.computed_value != null ? getMetricColorFromScale((m.computed_value - 1) / 4, m.color_scale) : "var(--text-primary)",
+                                      }}
+                                    >
+                                      {m.computed_value != null ? m.computed_value.toFixed(2) : "—"}
+                                    </div>
+                                    {m.description && (
+                                      <div style={{ fontSize: "10px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                                        {m.description}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {itemMetrics.length > 0 && (
+                              <div style={{ overflowX: "auto" }}>
+                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                                  <thead>
+                                    <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                      <th style={{ textAlign: "left", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>Item</th>
+                                      <th style={{ textAlign: "right", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>#</th>
+                                      <th style={{ textAlign: "right", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>Avg</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {itemMetrics.slice(0, 6).map((row) => (
+                                      <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                        <td style={{ padding: "6px", color: "var(--text-primary)" }}>{row.item_text}</td>
+                                        <td style={{ padding: "6px", textAlign: "right", color: "var(--text-secondary)" }}>{row.times_checked}</td>
+                                        <td style={{ padding: "6px", textAlign: "right", color: row.avg_performance != null && row.avg_performance < 0 ? "var(--loss)" : "var(--text-primary)" }}>
+                                          {row.avg_performance != null
+                                            ? row.performance_kind === "r"
+                                              ? row.avg_performance.toFixed(2) + " R"
+                                              : row.performance_kind === "pct"
+                                                ? row.avg_performance.toFixed(1) + "%"
+                                                : "$" + row.avg_performance.toFixed(0)
+                                            : "—"}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                                {itemMetrics.length > 6 && (
+                                  <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>+{itemMetrics.length - 6} more</div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
                   </div>
-                ) : overviewMetricsStrategyIds.some((id) => overviewCustomMetricsByStrategy.has(id)) ? (
+                ) : overviewFilterStrategyIds.some((id) => overviewCustomMetricsByStrategy.has(id) || overviewChecklistItemMetricsByStrategy.has(id)) ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                     {strategies
-                      .filter((s) => s.id != null && overviewMetricsStrategyIds.includes(s.id) && overviewCustomMetricsByStrategy.has(s.id))
+                      .filter((s) => s.id != null && overviewFilterStrategyIds.includes(s.id) && (overviewCustomMetricsByStrategy.has(s.id) || overviewChecklistItemMetricsByStrategy.has(s.id)))
                       .map((s) => {
                         const metrics = overviewCustomMetricsByStrategy.get(s.id!) ?? [];
                         return (
@@ -6424,7 +7024,13 @@ export default function Strategies() {
                                   <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "2px" }}>
                                     {m.name}
                                   </div>
-                                  <div style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)" }}>
+                                  <div
+                                    style={{
+                                      fontSize: "16px",
+                                      fontWeight: "600",
+                                      color: m.computed_value != null ? getMetricColorFromScale((m.computed_value - 1) / 4, m.color_scale) : "var(--text-primary)",
+                                    }}
+                                  >
                                     {m.computed_value != null ? m.computed_value.toFixed(2) : "—"}
                                   </div>
                                   {m.description && (
@@ -6440,12 +7046,90 @@ export default function Strategies() {
                       })}
                   </div>
                 ) : (
-                  <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0, padding: "8px 0" }}>
-                    {overviewCustomMetricsByStrategy.size === 0
-                      ? "No custom metrics yet. Add metrics in a strategy’s Metrics tab."
-                      : "Choose one or more strategies above to view their custom metrics, or enable “One section per strategy”."}
-                  </p>
+                  <div style={{ padding: "16px", borderRadius: "8px", border: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)", minHeight: "80px" }}>
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>
+                    {overviewCustomMetricsByStrategy.size === 0 && overviewChecklistItemMetricsByStrategy.size === 0
+                      ? "No survey metrics or checklist item metrics yet. Add metrics in a strategy’s Metrics tab."
+                      : "Select one or more strategies in the Strategies dropdown at the top to view metrics."}
+                    </p>
+                  </div>
                 )}
+                {/* Checklist item metrics – always visible when not "One section per strategy"; blank when no strategy selected */}
+                {!overviewMetricsPerStrategy && (() => {
+                  const hasSelection = overviewFilterStrategyIds.length > 0;
+                  const strategyIds = hasSelection
+                    ? overviewFilterStrategyIds.filter((id) => strategies.some((s) => s.id === id))
+                    : [];
+                  const maxRows = 8;
+                  return (
+                    <div key={hasSelection ? overviewFilterStrategyIds.join(",") : "none"} style={{ marginTop: "20px", paddingTop: "20px", borderTop: "1px solid var(--border-color)" }}>
+                      <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "8px" }}>
+                        Checklist item metrics
+                      </h3>
+                      <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "12px" }}>
+                        Avg performance when each item was checked (R → % → price). Filtered by the Strategies dropdown at the top.
+                      </p>
+                      {!hasSelection ? (
+                        <div style={{ padding: "16px", borderRadius: "8px", border: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)", minHeight: "80px" }}>
+                          <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>Select one or more strategies in the Strategies dropdown at the top to view metrics.</p>
+                        </div>
+                      ) : strategyIds.length === 0 ? (
+                        <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>
+                          No checklist item metrics for the selected strategies.
+                        </p>
+                      ) : (
+                        strategyIds.map((sid) => {
+                          const items = overviewChecklistItemMetricsByStrategy.get(sid) ?? [];
+                          const strategy = strategies.find((s) => s.id === sid);
+                          return (
+                            <div key={sid} style={{ marginBottom: "16px" }}>
+                              {strategy && (
+                                <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "6px" }}>{strategy.name}</div>
+                              )}
+                              {items.length === 0 ? (
+                                <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>No checklist item metrics for this strategy.</p>
+                              ) : (
+                                <>
+                                  <div style={{ overflowX: "auto" }}>
+                                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                                      <thead>
+                                        <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                          <th style={{ textAlign: "left", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>Item</th>
+                                          <th style={{ textAlign: "right", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>#</th>
+                                          <th style={{ textAlign: "right", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>Avg</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {items.slice(0, maxRows).map((row) => (
+                                          <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                            <td style={{ padding: "6px", color: "var(--text-primary)" }}>{row.item_text}</td>
+                                            <td style={{ padding: "6px", textAlign: "right", color: "var(--text-secondary)" }}>{row.times_checked}</td>
+                                            <td style={{ padding: "6px", textAlign: "right", color: row.avg_performance != null && row.avg_performance < 0 ? "var(--loss)" : "var(--text-primary)" }}>
+                                              {row.avg_performance != null
+                                                ? row.performance_kind === "r"
+                                                  ? row.avg_performance.toFixed(2) + " R"
+                                                  : row.performance_kind === "pct"
+                                                    ? row.avg_performance.toFixed(1) + "%"
+                                                    : "$" + row.avg_performance.toFixed(0)
+                                                : "—"}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                  {items.length > maxRows && (
+                                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>+{items.length - maxRows} more</div>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
