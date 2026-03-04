@@ -6021,7 +6021,7 @@ pub struct VersionInfo {
     pub latest: String,
     pub is_up_to_date: bool,
     pub download_url: Option<String>,
-    /// Asset filename (e.g. TradeButler-1.2.7.msi) for installer temp file; API URL does not contain it.
+    /// Asset filename (e.g. TradeButler-1.2.8.msi) for installer temp file; API URL does not contain it.
     pub download_filename: Option<String>,
     pub release_notes: Option<String>,
     pub is_installer: bool,
@@ -6059,6 +6059,14 @@ pub fn get_app_version() -> String {
     get_current_version()
 }
 
+/// Installer type for Windows: NSIS (*-setup.exe) or MSI (.msi). Used to offer the same type on update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowsInstallerType {
+    Nsis,
+    Msi,
+    Unknown,
+}
+
 // Detect if running as installer or portable
 fn is_installer_version() -> bool {
     // On Windows, check if running from Program Files (installer) vs current directory (portable)
@@ -6081,6 +6089,35 @@ fn is_installer_version() -> bool {
     }
     
     false
+}
+
+/// On Windows, detect whether the current install is NSIS or MSI so we can offer the same installer type on update.
+/// NSIS leaves an Uninstall*.exe in the app directory; MSI does not.
+#[cfg(windows)]
+fn windows_installer_type() -> WindowsInstallerType {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(parent) = exe_path.parent() {
+            if let Ok(entries) = std::fs::read_dir(parent) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_lowercase();
+                    if name.starts_with("uninstall") && name.ends_with(".exe") {
+                        return WindowsInstallerType::Nsis;
+                    }
+                }
+            }
+        }
+    }
+    // If we're in Program Files and there's no Uninstall exe, assume MSI (or default to MSI for "unknown").
+    if is_installer_version() {
+        WindowsInstallerType::Msi
+    } else {
+        WindowsInstallerType::Unknown
+    }
+}
+
+#[cfg(not(windows))]
+fn windows_installer_type() -> WindowsInstallerType {
+    WindowsInstallerType::Unknown
 }
 
 // Compare version strings (simple semantic version comparison)
@@ -6243,19 +6280,49 @@ pub async fn check_version() -> Result<VersionInfo, String> {
     // Use browser_download_url for downloads: direct link, no API redirects or Accept header needed (more reliable for public repos)
     #[cfg(windows)]
     {
+        let installer_type = windows_installer_type();
         if is_installer {
-            // Look for .msi or .exe installer
+            // Prefer the same installer type as current install so update installs in place (NSIS->NSIS, MSI->MSI).
+            // NSIS bundles are *-setup.exe or *installer*.exe; MSI is *.msi. Portable .exe has no "setup"/"installer".
+            let is_nsis_asset = |name: &str| {
+                name.ends_with(".exe") && (name.to_lowercase().contains("setup") || name.to_lowercase().contains("installer"))
+            };
+            let is_msi_asset = |name: &str| name.to_lowercase().ends_with(".msi");
+            let mut nsis_url: Option<(String, String)> = None;
+            let mut msi_url: Option<(String, String)> = None;
             for asset in &release.assets {
-                if asset.name.ends_with(".msi") || (asset.name.ends_with(".exe") && asset.name.contains("installer")) {
-                    download_url = Some(asset.browser_download_url.clone());
-                    download_filename = Some(asset.name.clone());
-                    break;
+                let name = asset.name.as_str();
+                if is_nsis_asset(name) {
+                    nsis_url.get_or_insert_with(|| (asset.browser_download_url.clone(), asset.name.clone()));
+                } else if is_msi_asset(name) {
+                    msi_url.get_or_insert_with(|| (asset.browser_download_url.clone(), asset.name.clone()));
+                }
+            }
+            match installer_type {
+                WindowsInstallerType::Nsis => {
+                    if let Some((url, filename)) = nsis_url {
+                        download_url = Some(url);
+                        download_filename = Some(filename);
+                    } else if let Some((url, filename)) = msi_url {
+                        download_url = Some(url);
+                        download_filename = Some(filename);
+                    }
+                }
+                WindowsInstallerType::Msi | WindowsInstallerType::Unknown => {
+                    if let Some((url, filename)) = msi_url {
+                        download_url = Some(url);
+                        download_filename = Some(filename);
+                    } else if let Some((url, filename)) = nsis_url {
+                        download_url = Some(url);
+                        download_filename = Some(filename);
+                    }
                 }
             }
         } else {
-            // Look for portable .exe (not installer)
+            // Portable: only the single .exe that is NOT an installer (no "setup", no "installer", not .msi)
             for asset in &release.assets {
-                if asset.name.ends_with(".exe") && !asset.name.contains("installer") && !asset.name.ends_with(".msi") {
+                let name = asset.name.to_lowercase();
+                if name.ends_with(".exe") && !name.contains("setup") && !name.contains("installer") {
                     download_url = Some(asset.browser_download_url.clone());
                     download_filename = Some(asset.name.clone());
                     break;
@@ -6437,13 +6504,22 @@ pub async fn download_and_install_update(download_url: String, download_filename
     fs::write(&file_path, bytes)
         .map_err(|e| format!("Failed to save file: {}", e))?;
     
-    // Launch installer
+    // Launch installer: MSI via msiexec (updates in place); NSIS by running the .exe (updates in place in same location)
     #[cfg(windows)]
     {
-        Command::new("msiexec")
-            .args(&["/i", file_path.to_string_lossy().as_ref()])
-            .spawn()
-            .map_err(|e| format!("Failed to launch installer: {}", e))?;
+        let path_str = file_path.to_string_lossy();
+        if filename.to_lowercase().ends_with(".msi") {
+            Command::new("msiexec")
+                .args(&["/i", path_str.as_ref()])
+                .spawn()
+                .map_err(|e| format!("Failed to launch MSI installer: {}", e))?;
+        } else if filename.to_lowercase().ends_with(".exe") {
+            Command::new(path_str.as_ref())
+                .spawn()
+                .map_err(|e| format!("Failed to launch NSIS installer: {}", e))?;
+        } else {
+            return Err("Unsupported installer format. Expected .msi or .exe.".to_string());
+        }
     }
     
     #[cfg(target_os = "macos")]
