@@ -330,6 +330,11 @@ export default function DividendCalculator() {
             <strong>Calculate the Compound Growth and Income of Dividend Growth Stocks - the Dividend Snowball Effect.</strong>{" "}
             By reinvesting your dividends (DRIP), you can increase the number of shares you own. This will result in more shares earning dividends, continuously growing your portfolio.
           </p>
+          {dataMode === "paper" && (
+            <div style={{ padding: "10px 14px", marginTop: "12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
+              Paper mode – your data only. No example data. Live quotes work in Paper mode.
+            </div>
+          )}
         </div>
 
         {/* Optional Stock/ETF Selection */}

@@ -150,7 +150,7 @@ export default function AverageDownCalculator() {
           marginBottom: "24px",
         }}
       >
-        {dataMode === "sandbox" && (
+        {(dataMode === "sandbox" || dataMode === "paper") && (
           <div
             style={{
               padding: "10px 14px",
@@ -162,7 +162,9 @@ export default function AverageDownCalculator() {
               color: "var(--text-secondary)",
             }}
           >
-            Sandbox mode – this calculator works the same in all modes. Enter your own numbers to try it.
+            {dataMode === "sandbox"
+              ? "Sandbox mode – this calculator works the same in all modes. Enter your own numbers to try it."
+              : "Paper mode – your data only. No example data."}
           </div>
         )}
         <div

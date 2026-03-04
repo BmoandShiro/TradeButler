@@ -2570,7 +2570,7 @@ export default function Emotions() {
           setJournalEntries(entries);
           return;
         }
-        const entries = await invoke<{ id: number; date: string; title: string }[]>("get_journal_entries");
+        const entries = await invoke<{ id: number; date: string; title: string }[]>("get_journal_entries", dataMode === "paper" ? { paperOnly: true } : {});
         setJournalEntries(entries);
       } catch {
         setJournalEntries([]);
@@ -2595,10 +2595,11 @@ export default function Emotions() {
           })));
           return;
         }
-        const trades = await invoke<{ id: number; symbol: string; timestamp: string; side: string; quantity: number; price: number }[]>("get_trades");
+        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+        const trades = await invoke<{ id: number; symbol: string; timestamp: string; side: string; quantity: number; price: number }[]>("get_trades", paperArgs);
         let pnlMap: Record<number, number> = {};
         try {
-          const withPairing = await invoke<{ trade: { id: number }; entry_pairs: { net_profit_loss: number }[]; exit_pairs: { net_profit_loss: number }[] }[]>("get_trades_with_pairing", { pairing_method: null, start_date: null, end_date: null });
+          const withPairing = await invoke<{ trade: { id: number }; entry_pairs: { net_profit_loss: number }[]; exit_pairs: { net_profit_loss: number }[] }[]>("get_trades_with_pairing", { pairing_method: null, start_date: null, end_date: null, ...paperArgs });
           for (const row of withPairing) {
             const id = row.trade?.id;
             if (id == null) continue;
@@ -2672,7 +2673,7 @@ export default function Emotions() {
         setLoading(false);
         return;
       }
-      const data = await invoke<EmotionalState[]>("get_emotional_states");
+      const data = await invoke<EmotionalState[]>("get_emotional_states", dataMode === "paper" ? { paperOnly: true } : {});
       setStates(data);
     } catch (error) {
       console.error("Error loading emotional states:", error);
@@ -2784,6 +2785,7 @@ export default function Emotions() {
             journalTradeId,
             journalEntryIds: journalEntryIds.length > 0 ? JSON.stringify(journalEntryIds) : null,
             tradeIds: tradeIds.length > 0 ? JSON.stringify(tradeIds) : null,
+            isPaper: dataMode === "paper",
           });
         }
         await loadStates();
@@ -2829,6 +2831,7 @@ export default function Emotions() {
           journalTradeId,
           journalEntryIds: journalEntryIds.length > 0 ? JSON.stringify(journalEntryIds) : null,
           tradeIds: tradeIds.length > 0 ? JSON.stringify(tradeIds) : null,
+          isPaper: dataMode === "paper",
         });
         if (firstStateId === null) firstStateId = stateId;
       }
@@ -3023,7 +3026,11 @@ export default function Emotions() {
   return (
     <div ref={mainScrollRef} style={{ padding: "30px", overflowY: "auto", height: "100%", minHeight: 0 }}>
       <h1 style={{ fontSize: "28px", fontWeight: "700", marginBottom: "28px", color: "var(--text-primary)" }}>Emotions</h1>
-
+      {dataMode === "paper" && (
+        <div style={{ padding: "10px 14px", marginBottom: "20px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
+          Paper mode – your data only. No example data.
+        </div>
+      )}
       {/* Psychological Metrics – at top */}
       <MetricsDisplay surveys={surveys} states={states} />
 

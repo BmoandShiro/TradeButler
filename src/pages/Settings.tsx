@@ -497,6 +497,21 @@ export default function Settings() {
             Sandbox mode – app settings, theme, and version check use your connection. Switch to Real or Paper for live trade data.
           </div>
         )}
+        {dataMode === "paper" && (
+          <div
+            style={{
+              padding: "12px 16px",
+              marginBottom: "24px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              fontSize: "13px",
+              color: "var(--text-secondary)",
+            }}
+          >
+            Paper mode – app settings and version check use your connection. Your data only (no example data).
+          </div>
+        )}
 
         {/* Theme Customization Section */}
         <div

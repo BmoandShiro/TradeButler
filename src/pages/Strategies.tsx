@@ -2197,11 +2197,13 @@ export default function Strategies() {
         return;
       }
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
       const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
         strategyId: strategyId,
         pairingMethod: pairingMethod,
         startDate: null,
         endDate: null,
+        ...paperArgs,
       });
       const stats = calculateStrategyStats(pairs);
       setStrategyStats(new Map(strategyStats.set(strategyId, stats)));
@@ -2415,11 +2417,13 @@ export default function Strategies() {
           setStrategyStats(new Map(strategyStats.set(strategyId, stats)));
         } else {
           const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+          const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
           const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
             strategyId: strategyId,
             pairingMethod: pairingMethod,
             startDate: null,
             endDate: null,
+            ...paperArgs,
           });
           setStrategyPairs(new Map(strategyPairs.set(strategyId, pairs)));
           const stats = calculateStrategyStats(pairs);
@@ -3419,11 +3423,13 @@ export default function Strategies() {
           // Reload trades for this strategy
           try {
             const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+            const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
             const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
               strategyId: selectedStrategy,
               pairingMethod: pairingMethod,
               startDate: null,
               endDate: null,
+              ...paperArgs,
             });
             
             // Update pairs and stats
@@ -3604,11 +3610,13 @@ export default function Strategies() {
           setLoadingPairs(new Set([assignedStrategyId]));
           try {
             const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+            const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
             const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
               strategyId: assignedStrategyId,
               pairingMethod,
               startDate: null,
               endDate: null,
+              ...paperArgs,
             });
             setStrategyPairs(new Map(strategyPairs.set(assignedStrategyId, pairs)));
             const stats = calculateStrategyStats(pairs);
@@ -3822,11 +3830,13 @@ export default function Strategies() {
         setStrategyPairs(updatedPairs);
         // Reload trades for the new strategy
         const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
         const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
           strategyId: newStrategyId,
           pairingMethod: pairingMethod,
           startDate: null,
           endDate: null,
+          ...paperArgs,
         });
         setStrategyPairs(new Map(strategyPairs.set(newStrategyId, pairs)));
         // Update stats
@@ -6706,6 +6716,11 @@ export default function Strategies() {
             overflow: "auto",
           }}
         >
+          {dataMode === "paper" && (
+            <div style={{ padding: "10px 14px", marginBottom: "20px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
+              Paper mode – your data only. No example data.
+            </div>
+          )}
           <div
             style={{
               border: "1px solid var(--border-color)",

@@ -533,6 +533,24 @@ fn get_db_path() -> PathBuf {
     db_dir.join("tradebutler.db")
 }
 
+/// SQL fragment to filter to paper trades only (notes contain [PAPER]). Use when appending to an existing WHERE clause.
+fn paper_only_and_clause(paper_only: Option<bool>) -> &'static str {
+    if paper_only == Some(true) {
+        " AND (UPPER(COALESCE(notes,'')) LIKE '%[PAPER]%')"
+    } else {
+        ""
+    }
+}
+
+/// SQL fragment for WHERE when table has no other conditions. Use for queries that only need paper filter.
+fn paper_only_where_clause(paper_only: Option<bool>) -> &'static str {
+    if paper_only == Some(true) {
+        " WHERE (UPPER(COALESCE(notes,'')) LIKE '%[PAPER]%')"
+    } else {
+        ""
+    }
+}
+
 #[tauri::command]
 pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
     use csv::ReaderBuilder;
@@ -759,7 +777,7 @@ pub fn add_trade_manual(
 }
 
 #[tauri::command]
-pub fn get_trades_with_pairing(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>) -> Result<Vec<TradeWithPairing>, String> {
+pub fn get_trades_with_pairing(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>, paper_only: Option<bool>) -> Result<Vec<TradeWithPairing>, String> {
     use std::collections::HashMap;
     
     let db_path = get_db_path();
@@ -778,10 +796,15 @@ pub fn get_trades_with_pairing(pairing_method: Option<String>, start_date: Optio
     } else {
         String::new()
     };
+    let where_clause = if date_filter.is_empty() {
+        paper_only_where_clause(paper_only).to_string()
+    } else {
+        format!("{}{}", date_filter, paper_only_and_clause(paper_only))
+    };
     
     // Get all trades
     let mut stmt = conn
-        .prepare(&format!("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades{} ORDER BY timestamp DESC", date_filter))
+        .prepare(&format!("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades{} ORDER BY timestamp DESC", where_clause))
         .map_err(|e| e.to_string())?;
     
     let trade_iter = stmt
@@ -864,7 +887,7 @@ pub fn get_trades_with_pairing(pairing_method: Option<String>, start_date: Optio
 }
 
 #[tauri::command]
-pub fn get_position_groups(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>) -> Result<Vec<PositionGroup>, String> {
+pub fn get_position_groups(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>, paper_only: Option<bool>) -> Result<Vec<PositionGroup>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
@@ -881,10 +904,11 @@ pub fn get_position_groups(pairing_method: Option<String>, start_date: Option<St
     } else {
         String::new()
     };
+    let paper_clause = paper_only_and_clause(paper_only);
     
     // Get all trades ordered by timestamp
     let mut stmt = conn
-        .prepare(&format!("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades WHERE (status = 'Filled' OR status = 'FILLED'){} ORDER BY timestamp ASC", date_filter))
+        .prepare(&format!("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades WHERE (status = 'Filled' OR status = 'FILLED'){}{} ORDER BY timestamp ASC", date_filter, paper_clause))
         .map_err(|e| e.to_string())?;
     
     let trade_iter = stmt
@@ -1012,12 +1036,13 @@ pub fn get_position_groups(pairing_method: Option<String>, start_date: Option<St
 }
 
 #[tauri::command]
-pub fn get_trades() -> Result<Vec<Trade>, String> {
+pub fn get_trades(paper_only: Option<bool>) -> Result<Vec<Trade>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
+    let where_clause = paper_only_where_clause(paper_only);
     let mut stmt = conn
-        .prepare("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades ORDER BY timestamp DESC")
+        .prepare(&format!("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades{} ORDER BY timestamp DESC", where_clause))
         .map_err(|e| e.to_string())?;
     
     let trade_iter = stmt
@@ -1047,12 +1072,13 @@ pub fn get_trades() -> Result<Vec<Trade>, String> {
 }
 
 #[tauri::command]
-pub fn get_paired_trades(pairing_method: Option<String>) -> Result<Vec<PairedTrade>, String> {
+pub fn get_paired_trades(pairing_method: Option<String>, paper_only: Option<bool>) -> Result<Vec<PairedTrade>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
+    let paper_clause = paper_only_and_clause(paper_only);
     let mut stmt = conn
-        .prepare("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades WHERE status = 'Filled' OR status = 'FILLED' ORDER BY timestamp ASC")
+        .prepare(&format!("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades WHERE (status = 'Filled' OR status = 'FILLED'){} ORDER BY timestamp ASC", paper_clause))
         .map_err(|e| e.to_string())?;
     
     let trade_iter = stmt
@@ -1093,13 +1119,14 @@ pub fn get_paired_trades(pairing_method: Option<String>) -> Result<Vec<PairedTra
 }
 
 #[tauri::command]
-pub fn get_symbol_pnl(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>) -> Result<Vec<SymbolPnL>, String> {
+pub fn get_symbol_pnl(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>, paper_only: Option<bool>) -> Result<Vec<SymbolPnL>, String> {
     // Get both paired trades and open trades from pairing logic
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
+    let paper_clause = paper_only_and_clause(paper_only);
     let mut stmt = conn
-        .prepare("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades WHERE status = 'Filled' OR status = 'FILLED' ORDER BY timestamp ASC")
+        .prepare(&format!("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades WHERE (status = 'Filled' OR status = 'FILLED'){} ORDER BY timestamp ASC", paper_clause))
         .map_err(|e| e.to_string())?;
     
     let trade_iter = stmt
@@ -1317,22 +1344,24 @@ pub struct DailyPnL {
 }
 
 #[tauri::command]
-pub fn get_daily_pnl() -> Result<Vec<DailyPnL>, String> {
+pub fn get_daily_pnl(paper_only: Option<bool>) -> Result<Vec<DailyPnL>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
+    let paper_clause = paper_only_and_clause(paper_only);
     // Group trades by date and calculate P&L using paired trades
     // Use strftime for SQLite date extraction
     let mut stmt = conn
-        .prepare(
+        .prepare(&format!(
             "SELECT 
                 strftime('%Y-%m-%d', timestamp) as trade_date,
                 COUNT(*) as trade_count
             FROM trades
-            WHERE status = 'Filled' OR status = 'FILLED'
+            WHERE (status = 'Filled' OR status = 'FILLED'){}
             GROUP BY strftime('%Y-%m-%d', timestamp)
-            ORDER BY trade_date DESC"
-        )
+            ORDER BY trade_date DESC",
+            paper_clause
+        ))
         .map_err(|e| e.to_string())?;
     
     let daily_iter = stmt
@@ -1345,7 +1374,7 @@ pub fn get_daily_pnl() -> Result<Vec<DailyPnL>, String> {
         .map_err(|e| e.to_string())?;
     
     // Get paired trades to calculate accurate daily P&L
-    let paired_trades = get_paired_trades(None).map_err(|e| e.to_string())?;
+    let paired_trades = get_paired_trades(None, paper_only).map_err(|e| e.to_string())?;
     
     // Group paired trades by date
     use std::collections::HashMap;
@@ -1392,7 +1421,7 @@ pub fn get_daily_pnl() -> Result<Vec<DailyPnL>, String> {
 }
 
 #[tauri::command]
-pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>) -> Result<Metrics, String> {
+pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>, paper_only: Option<bool>) -> Result<Metrics, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
@@ -1409,15 +1438,20 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
     } else {
         String::new()
     };
+    let where_volume = if date_filter.is_empty() {
+        paper_only_where_clause(paper_only).to_string()
+    } else {
+        format!("{}{}", date_filter, paper_only_and_clause(paper_only))
+    };
     
     let total_volume: f64 = conn
-        .query_row(&format!("SELECT SUM(quantity * price) FROM trades{}", date_filter), [], |row| {
+        .query_row(&format!("SELECT SUM(quantity * price) FROM trades{}", where_volume), [], |row| {
             Ok(row.get::<_, Option<f64>>(0)?.unwrap_or(0.0))
         })
         .map_err(|e| e.to_string())?;
     
     // Get paired trades for accurate metrics
-    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    let paired_trades = get_paired_trades(pairing_method.clone(), paper_only).map_err(|e| e.to_string())?;
     
     // Filter paired trades by date range if provided
     let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
@@ -1442,7 +1476,7 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
     let total_trades = filtered_paired_trades.len() as i64;
     
     // Get position groups to calculate largest win/loss per position (not per pair)
-    let position_groups = get_position_groups(pairing_method, start_date.clone(), end_date.clone()).map_err(|e| e.to_string())?;
+    let position_groups = get_position_groups(pairing_method, start_date.clone(), end_date.clone(), paper_only).map_err(|e| e.to_string())?;
     
     let mut winning_trades = 0;
     let mut losing_trades = 0;
@@ -1632,7 +1666,7 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
     
     // Get daily P&L for best/worst day and trades per day
     // Filter daily P&L by date range if provided
-    let mut daily_pnl = get_daily_pnl().unwrap_or_default();
+    let mut daily_pnl = get_daily_pnl(paper_only).unwrap_or_default();
     
     // Filter by date range if provided
     if start_date.is_some() || end_date.is_some() {
@@ -1813,6 +1847,7 @@ pub fn add_emotional_state(
     journal_trade_id: Option<i64>,
     journal_entry_ids: Option<String>,
     trade_ids: Option<String>,
+    is_paper: Option<bool>,
 ) -> Result<i64, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
@@ -1823,10 +1858,28 @@ pub fn add_emotional_state(
         |row| row.get::<_, i64>(0),
     ).unwrap_or(0) > 0;
 
-    if has_multi {
+    let has_is_paper = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='is_paper'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    let paper = is_paper.unwrap_or(false) as i32;
+
+    if has_multi && has_is_paper {
+        conn.execute(
+            "INSERT INTO emotional_states (timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids, is_paper) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids, paper],
+        ).map_err(|e| e.to_string())?;
+    } else if has_multi {
         conn.execute(
             "INSERT INTO emotional_states (timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids],
+        ).map_err(|e| e.to_string())?;
+    } else if has_is_paper {
+        conn.execute(
+            "INSERT INTO emotional_states (timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, is_paper) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, paper],
         ).map_err(|e| e.to_string())?;
     } else {
         conn.execute(
@@ -1838,9 +1891,25 @@ pub fn add_emotional_state(
     Ok(conn.last_insert_rowid())
 }
 
-fn get_emotional_states_query(conn: &rusqlite::Connection, has_je_jt: bool, has_multi_ids: bool) -> Result<Vec<EmotionalState>, String> {
+fn emotional_states_paper_clause(conn: &rusqlite::Connection, paper_only: Option<bool>) -> String {
+    let has_is_paper: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='is_paper'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    if !has_is_paper {
+        return String::new();
+    }
+    match paper_only {
+        Some(true) => " WHERE is_paper = 1".to_string(),
+        Some(false) | None => " WHERE is_paper = 0".to_string(),
+    }
+}
+
+fn get_emotional_states_query(conn: &rusqlite::Connection, has_je_jt: bool, has_multi_ids: bool, paper_only: Option<bool>) -> Result<Vec<EmotionalState>, String> {
+    let paper_clause = emotional_states_paper_clause(conn, paper_only);
     if !has_je_jt {
-        let mut stmt = conn.prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id FROM emotional_states ORDER BY timestamp DESC")
+        let mut stmt = conn.prepare(&format!("SELECT id, timestamp, emotion, intensity, notes, trade_id FROM emotional_states{} ORDER BY timestamp DESC", paper_clause))
             .map_err(|e| e.to_string())?;
         let rows: Vec<EmotionalState> = stmt.query_map([], |row| {
             Ok(EmotionalState {
@@ -1859,7 +1928,7 @@ fn get_emotional_states_query(conn: &rusqlite::Connection, has_je_jt: bool, has_
         return Ok(rows);
     }
     if has_multi_ids {
-        let mut stmt = conn.prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids FROM emotional_states ORDER BY timestamp DESC")
+        let mut stmt = conn.prepare(&format!("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids FROM emotional_states{} ORDER BY timestamp DESC", paper_clause))
             .map_err(|e| e.to_string())?;
         let rows: Vec<EmotionalState> = stmt.query_map([], |row| {
             Ok(EmotionalState {
@@ -1877,7 +1946,7 @@ fn get_emotional_states_query(conn: &rusqlite::Connection, has_je_jt: bool, has_
         }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
         return Ok(rows);
     }
-    let mut stmt = conn.prepare("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states ORDER BY timestamp DESC")
+    let mut stmt = conn.prepare(&format!("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states{} ORDER BY timestamp DESC", paper_clause))
         .map_err(|e| e.to_string())?;
     let rows: Vec<EmotionalState> = stmt.query_map([], |row| {
         Ok(EmotionalState {
@@ -1897,7 +1966,7 @@ fn get_emotional_states_query(conn: &rusqlite::Connection, has_je_jt: bool, has_
 }
 
 #[tauri::command]
-pub fn get_emotional_states() -> Result<Vec<EmotionalState>, String> {
+pub fn get_emotional_states(paper_only: Option<bool>) -> Result<Vec<EmotionalState>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     let has_je = conn.query_row(
@@ -1915,13 +1984,14 @@ pub fn get_emotional_states() -> Result<Vec<EmotionalState>, String> {
         [],
         |row| row.get::<_, i64>(0),
     ).unwrap_or(0) > 0;
-    get_emotional_states_query(&conn, has_je && has_jt, has_multi_ids)
+    get_emotional_states_query(&conn, has_je && has_jt, has_multi_ids, paper_only)
 }
 
 #[tauri::command]
 pub fn get_emotional_states_for_journal(
     journal_entry_id: i64,
     journal_trade_id: Option<i64>,
+    paper_only: Option<bool>,
 ) -> Result<Vec<EmotionalState>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
@@ -1944,10 +2014,24 @@ pub fn get_emotional_states_for_journal(
         return Ok(vec![]);
     }
 
+    let has_is_paper = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='is_paper'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let and_paper = if has_is_paper {
+        match paper_only {
+            Some(true) => " AND is_paper = 1",
+            Some(false) | None => " AND is_paper = 0",
+        }
+    } else {
+        ""
+    };
+
     let rows: Vec<EmotionalState> = if has_multi_ids {
         if let Some(jt) = journal_trade_id {
-            let sql = "SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids FROM emotional_states WHERE (journal_entry_id = ?1 OR id IN (SELECT e2.id FROM emotional_states e2, json_each(e2.journal_entry_ids) WHERE json_type(e2.journal_entry_ids) = 'array' AND (json_each.value = ?2 OR CAST(json_each.value AS INTEGER) = ?2))) AND (journal_trade_id = ?3 OR journal_trade_id IS NULL) ORDER BY timestamp DESC";
-            let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+            let sql = format!("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids FROM emotional_states WHERE (journal_entry_id = ?1 OR id IN (SELECT e2.id FROM emotional_states e2, json_each(e2.journal_entry_ids) WHERE json_type(e2.journal_entry_ids) = 'array' AND (json_each.value = ?2 OR CAST(json_each.value AS INTEGER) = ?2))) AND (journal_trade_id = ?3 OR journal_trade_id IS NULL){} ORDER BY timestamp DESC", and_paper);
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
             let collected: Vec<EmotionalState> = stmt.query_map(params![journal_entry_id, journal_entry_id, jt], |row| {
                 Ok(EmotionalState {
                     id: Some(row.get(0)?),
@@ -1964,8 +2048,8 @@ pub fn get_emotional_states_for_journal(
             }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
             collected
         } else {
-            let sql = "SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids FROM emotional_states WHERE journal_entry_id = ?1 OR id IN (SELECT e2.id FROM emotional_states e2, json_each(e2.journal_entry_ids) WHERE json_type(e2.journal_entry_ids) = 'array' AND (json_each.value = ?2 OR CAST(json_each.value AS INTEGER) = ?2)) ORDER BY timestamp DESC";
-            let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+            let sql = format!("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id, journal_entry_ids, trade_ids FROM emotional_states WHERE journal_entry_id = ?1 OR id IN (SELECT e2.id FROM emotional_states e2, json_each(e2.journal_entry_ids) WHERE json_type(e2.journal_entry_ids) = 'array' AND (json_each.value = ?2 OR CAST(json_each.value AS INTEGER) = ?2)){} ORDER BY timestamp DESC", and_paper);
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
             let collected: Vec<EmotionalState> = stmt.query_map(params![journal_entry_id, journal_entry_id], |row| {
                 Ok(EmotionalState {
                     id: Some(row.get(0)?),
@@ -1983,9 +2067,8 @@ pub fn get_emotional_states_for_journal(
             collected
         }
     } else if let Some(jt) = journal_trade_id {
-        let mut stmt = conn.prepare(
-            "SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states WHERE journal_entry_id = ?1 AND (journal_trade_id = ?2 OR journal_trade_id IS NULL) ORDER BY timestamp DESC"
-        ).map_err(|e| e.to_string())?;
+        let sql = format!("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states WHERE journal_entry_id = ?1 AND (journal_trade_id = ?2 OR journal_trade_id IS NULL){} ORDER BY timestamp DESC", and_paper);
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let collected: Vec<EmotionalState> = stmt.query_map(params![journal_entry_id, jt], |row| {
             Ok(EmotionalState {
                 id: Some(row.get(0)?),
@@ -2002,9 +2085,8 @@ pub fn get_emotional_states_for_journal(
         }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
         collected
     } else {
-        let mut stmt = conn.prepare(
-            "SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states WHERE journal_entry_id = ?1 ORDER BY timestamp DESC"
-        ).map_err(|e| e.to_string())?;
+        let sql = format!("SELECT id, timestamp, emotion, intensity, notes, trade_id, journal_entry_id, journal_trade_id FROM emotional_states WHERE journal_entry_id = ?1{} ORDER BY timestamp DESC", and_paper);
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let collected: Vec<EmotionalState> = stmt.query_map(params![journal_entry_id], |row| {
             Ok(EmotionalState {
                 id: Some(row.get(0)?),
@@ -2466,20 +2548,32 @@ pub fn create_journal_entry(
     date: String,
     title: String,
     strategy_id: Option<i64>,
+    is_paper: Option<bool>,
 ) -> Result<i64, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
-    
-    conn.execute(
-        "INSERT INTO journal_entries (date, title, strategy_id) VALUES (?1, ?2, ?3)",
-        params![date, title, strategy_id],
-    ).map_err(|e| e.to_string())?;
-    
+    let has_is_paper: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_entries') WHERE name='is_paper'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    if has_is_paper {
+        let paper = is_paper.unwrap_or(false) as i32;
+        conn.execute(
+            "INSERT INTO journal_entries (date, title, strategy_id, is_paper) VALUES (?1, ?2, ?3, ?4)",
+            params![date, title, strategy_id, paper],
+        ).map_err(|e| e.to_string())?;
+    } else {
+        conn.execute(
+            "INSERT INTO journal_entries (date, title, strategy_id) VALUES (?1, ?2, ?3)",
+            params![date, title, strategy_id],
+        ).map_err(|e| e.to_string())?;
+    }
     Ok(conn.last_insert_rowid())
 }
 
 #[tauri::command]
-pub fn get_journal_entries() -> Result<Vec<JournalEntry>, String> {
+pub fn get_journal_entries(paper_only: Option<bool>) -> Result<Vec<JournalEntry>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
 
@@ -2489,9 +2583,25 @@ pub fn get_journal_entries() -> Result<Vec<JournalEntry>, String> {
         |row| row.get::<_, i64>(0),
     ).unwrap_or(0) > 0;
 
+    let has_is_paper = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_entries') WHERE name='is_paper'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    let paper_filter = if has_is_paper {
+        match paper_only {
+            Some(true) => " WHERE is_paper = 1",
+            Some(false) => " WHERE is_paper = 0",
+            None => " WHERE is_paper = 0",
+        }
+    } else {
+        ""
+    };
+
     let entries: Vec<JournalEntry> = if has_linked {
         let mut stmt = conn
-            .prepare("SELECT id, date, title, strategy_id, created_at, updated_at, linked_trade_ids FROM journal_entries ORDER BY date DESC, created_at DESC")
+            .prepare(&format!("SELECT id, date, title, strategy_id, created_at, updated_at, linked_trade_ids FROM journal_entries{} ORDER BY date DESC, created_at DESC", paper_filter))
             .map_err(|e| e.to_string())?;
         let collected: Vec<JournalEntry> = stmt.query_map([], |row| {
             Ok(JournalEntry {
@@ -2507,7 +2617,7 @@ pub fn get_journal_entries() -> Result<Vec<JournalEntry>, String> {
         collected
     } else {
         let mut stmt = conn
-            .prepare("SELECT id, date, title, strategy_id, created_at, updated_at FROM journal_entries ORDER BY date DESC, created_at DESC")
+            .prepare(&format!("SELECT id, date, title, strategy_id, created_at, updated_at FROM journal_entries{} ORDER BY date DESC, created_at DESC", paper_filter))
             .map_err(|e| e.to_string())?;
         let collected: Vec<JournalEntry> = stmt.query_map([], |row| {
             Ok(JournalEntry {
@@ -2870,7 +2980,7 @@ pub fn get_journal_entry_pairs(journal_entry_id: i64) -> Result<Vec<PairedTrade>
     if linked.is_empty() {
         return Ok(Vec::new());
     }
-    let all_pairs = get_paired_trades(None).map_err(|e| e.to_string())?;
+    let all_pairs = get_paired_trades(None, None).map_err(|e| e.to_string())?;
     let linked_set: std::collections::HashSet<(i64, i64)> = linked.into_iter().collect();
     let pairs: Vec<PairedTrade> = all_pairs
         .into_iter()
@@ -3134,7 +3244,7 @@ fn get_journal_trade_performance_raw(conn: &rusqlite::Connection, journal_trade_
     if pair_ids.is_empty() {
         return Ok((None, "none".to_string()));
     }
-    let all_pairs = get_paired_trades(None).map_err(|e| e.to_string())?;
+    let all_pairs = get_paired_trades(None, None).map_err(|e| e.to_string())?;
     let mut total_pnl = 0.0_f64;
     let mut total_cost = 0.0_f64;
     for p in &all_pairs {
@@ -3433,11 +3543,11 @@ pub struct StrategyPerformance {
 }
 
 #[tauri::command]
-pub fn get_strategy_performance(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>) -> Result<Vec<StrategyPerformance>, String> {
+pub fn get_strategy_performance(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>, paper_only: Option<bool>) -> Result<Vec<StrategyPerformance>, String> {
     use std::collections::HashMap;
     
     // Get paired trades using the pairing method
-    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    let paired_trades = get_paired_trades(pairing_method.clone(), paper_only).map_err(|e| e.to_string())?;
     
     // Filter paired trades by date range if provided
     let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
@@ -3459,7 +3569,7 @@ pub fn get_strategy_performance(pairing_method: Option<String>, start_date: Opti
     };
     
     // Get position groups to find the original entry trade's strategy_id for positions with additions
-    let position_groups = get_position_groups(pairing_method.clone(), start_date.clone(), end_date.clone()).map_err(|e| e.to_string())?;
+    let position_groups = get_position_groups(pairing_method.clone(), start_date.clone(), end_date.clone(), paper_only).map_err(|e| e.to_string())?;
     
     // Create a map: trade_id -> position_group_entry_trade_strategy_id
     // This maps any trade in a position group to the position group's entry trade's strategy_id
@@ -3576,9 +3686,10 @@ pub fn get_paired_trades_by_strategy(
     pairing_method: Option<String>,
     start_date: Option<String>,
     end_date: Option<String>,
+    paper_only: Option<bool>,
 ) -> Result<Vec<PairedTrade>, String> {
     // Get all paired trades
-    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    let paired_trades = get_paired_trades(pairing_method.clone(), paper_only).map_err(|e| e.to_string())?;
     
     // Filter by date range if provided
     let mut filtered = if start_date.is_some() || end_date.is_some() {
@@ -3600,7 +3711,7 @@ pub fn get_paired_trades_by_strategy(
     };
     
     // Get position groups to find the original entry trade's strategy_id for positions with additions
-    let position_groups = get_position_groups(pairing_method.clone(), start_date.clone(), end_date.clone()).map_err(|e| e.to_string())?;
+    let position_groups = get_position_groups(pairing_method.clone(), start_date.clone(), end_date.clone(), paper_only).map_err(|e| e.to_string())?;
     
     // Create a map: trade_id -> position_group_entry_trade_strategy_id
     use std::collections::HashMap;
@@ -3695,7 +3806,7 @@ pub struct RecentTrade {
 }
 
 #[tauri::command]
-pub fn get_recent_trades(limit: Option<i64>, pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>) -> Result<Vec<RecentTrade>, String> {
+pub fn get_recent_trades(limit: Option<i64>, pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>, paper_only: Option<bool>) -> Result<Vec<RecentTrade>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     let limit = limit.unwrap_or(5);
@@ -3713,10 +3824,11 @@ pub fn get_recent_trades(limit: Option<i64>, pairing_method: Option<String>, sta
     } else {
         String::new()
     };
+    let paper_clause = paper_only_and_clause(paper_only);
     
     // Get all filled trades
     let mut stmt = conn
-        .prepare(&format!("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades WHERE (status = 'Filled' OR status = 'FILLED'){} ORDER BY timestamp ASC", date_filter))
+        .prepare(&format!("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades WHERE (status = 'Filled' OR status = 'FILLED'){}{} ORDER BY timestamp ASC", date_filter, paper_clause))
         .map_err(|e| e.to_string())?;
     
     let trade_iter = stmt
@@ -4604,11 +4716,11 @@ pub struct EvaluationMetrics {
 }
 
 #[tauri::command]
-pub fn get_evaluation_metrics(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>) -> Result<EvaluationMetrics, String> {
+pub fn get_evaluation_metrics(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>, paper_only: Option<bool>) -> Result<EvaluationMetrics, String> {
     use std::collections::HashMap;
     
     // Get paired trades
-    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    let paired_trades = get_paired_trades(pairing_method.clone(), paper_only).map_err(|e| e.to_string())?;
     
     // Filter by date range if provided
     let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
@@ -4630,7 +4742,7 @@ pub fn get_evaluation_metrics(pairing_method: Option<String>, start_date: Option
     };
     
     // Get position groups to find strategy_id for positions with additions
-    let position_groups = get_position_groups(pairing_method.clone(), start_date.clone(), end_date.clone()).map_err(|e| e.to_string())?;
+    let position_groups = get_position_groups(pairing_method.clone(), start_date.clone(), end_date.clone(), paper_only).map_err(|e| e.to_string())?;
     
     // Create a map: trade_id -> position_group_entry_trade_strategy_id
     let mut trade_to_position_strategy: HashMap<i64, Option<i64>> = HashMap::new();
@@ -5017,11 +5129,11 @@ pub struct EquityCurveData {
 }
 
 #[tauri::command]
-pub fn get_equity_curve(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>) -> Result<EquityCurveData, String> {
+pub fn get_equity_curve(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>, paper_only: Option<bool>) -> Result<EquityCurveData, String> {
     use std::collections::HashMap;
     
     // Get paired trades
-    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    let paired_trades = get_paired_trades(pairing_method.clone(), paper_only).map_err(|e| e.to_string())?;
     
     // Filter by date range if provided
     let mut filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
@@ -5277,9 +5389,10 @@ pub fn get_distribution_concentration(
     start_date: Option<String>,
     end_date: Option<String>,
     concentration_percent: Option<f64>,
+    paper_only: Option<bool>,
 ) -> Result<DistributionConcentrationData, String> {
     // Get paired trades
-    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    let paired_trades = get_paired_trades(pairing_method.clone(), paper_only).map_err(|e| e.to_string())?;
     
     // Filter by date range if provided
     let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
@@ -5566,9 +5679,10 @@ pub fn get_tilt_metric(
     pairing_method: Option<String>,
     start_date: Option<String>,
     end_date: Option<String>,
+    paper_only: Option<bool>,
 ) -> Result<TiltStats, String> {
     // Get paired trades
-    let paired_trades = get_paired_trades(pairing_method.clone()).map_err(|e| e.to_string())?;
+    let paired_trades = get_paired_trades(pairing_method.clone(), paper_only).map_err(|e| e.to_string())?;
     
     // Filter by date range if provided
     let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {

@@ -77,9 +77,10 @@ export default function Calendar() {
         });
         setJournalEntriesByDate(journalMap);
       } else {
+        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
         const [pnlData, journalData] = await Promise.all([
-          invoke<DailyPnL[]>("get_daily_pnl"),
-          invoke<CalendarJournalEntry[]>("get_journal_entries"),
+          invoke<DailyPnL[]>("get_daily_pnl", paperArgs),
+          invoke<CalendarJournalEntry[]>("get_journal_entries", paperArgs),
         ]);
 
         const pnlMap: Record<string, DailyPnL> = {};
@@ -158,6 +159,11 @@ export default function Calendar() {
         padding: "20px",
       }}
     >
+      {dataMode === "paper" && (
+        <div style={{ padding: "10px 14px", marginBottom: "16px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
+          Paper mode – your data only. No example data.
+        </div>
+      )}
       <div
         style={{
           display: "flex",

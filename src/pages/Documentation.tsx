@@ -20,6 +20,8 @@ import {
 } from "../data/sandboxDocumentation";
 
 const STORAGE_KEY = "tradebutler_documentation";
+const PAPER_STORAGE_KEY = "tradebutler_documentation_paper";
+const PAPER_ORDER_KEY = "tradebutler_documentation_paper_order";
 
 interface DocPage {
   id: string;
@@ -30,11 +32,15 @@ interface DocPage {
 }
 
 function getStorageKey(mode: DataMode): string {
-  return mode === "sandbox" ? SANDBOX_DOCUMENTATION_KEY : STORAGE_KEY;
+  if (mode === "sandbox") return SANDBOX_DOCUMENTATION_KEY;
+  if (mode === "paper") return PAPER_STORAGE_KEY;
+  return STORAGE_KEY;
 }
 
 function getOrderKey(mode: DataMode): string {
-  return mode === "sandbox" ? SANDBOX_DOCUMENTATION_ORDER_KEY : STORAGE_KEY + "_order";
+  if (mode === "sandbox") return SANDBOX_DOCUMENTATION_ORDER_KEY;
+  if (mode === "paper") return PAPER_ORDER_KEY;
+  return STORAGE_KEY + "_order";
 }
 
 function parsePageList(parsed: unknown): DocPage[] {
@@ -59,11 +65,12 @@ function parsePageList(parsed: unknown): DocPage[] {
   return list;
 }
 
-function loadPages(key: string, isSandbox: boolean): DocPage[] {
+function loadPages(key: string, mode: DataMode): DocPage[] {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) {
-      if (isSandbox) {
+      // Only sandbox gets seed data; paper and real start empty
+      if (mode === "sandbox") {
         const seed = getSandboxDocumentationSeed();
         try {
           localStorage.setItem(key, JSON.stringify(seed));
@@ -80,7 +87,7 @@ function loadPages(key: string, isSandbox: boolean): DocPage[] {
     const parsed = JSON.parse(raw) as unknown;
     return parsePageList(parsed);
   } catch {
-    return isSandbox ? getSandboxDocumentationSeed() : [];
+    return mode === "sandbox" ? getSandboxDocumentationSeed() : [];
   }
 }
 
@@ -105,9 +112,9 @@ export default function Documentation() {
   const orderKey = getOrderKey(dataMode);
   const isSandbox = dataMode === "sandbox";
 
-  const [pages, setPages] = useState<DocPage[]>(() => loadPages(storageKey, isSandbox));
+  const [pages, setPages] = useState<DocPage[]>(() => loadPages(storageKey, dataMode));
   const [selectedId, setSelectedId] = useState<string | null>(() => {
-    const loaded = loadPages(storageKey, isSandbox);
+    const loaded = loadPages(storageKey, dataMode);
     const root = loaded.filter((p) => !p.parentId).sort((a, b) => a.order - b.order);
     return root.length > 0 ? root[0].id : null;
   });
@@ -124,8 +131,7 @@ export default function Documentation() {
   useEffect(() => {
     const key = getStorageKey(dataMode);
     const oKey = getOrderKey(dataMode);
-    const isSand = dataMode === "sandbox";
-    const loaded = loadPages(key, isSand);
+    const loaded = loadPages(key, dataMode);
     setPages(loaded);
     setRootOrder(loadRootOrder(oKey));
     const root = loaded.filter((p) => !p.parentId).sort((a, b) => a.order - b.order);
@@ -291,6 +297,11 @@ export default function Documentation() {
             <Plus size={18} />
           </button>
         </div>
+        {dataMode === "paper" && (
+          <div style={{ padding: "10px 14px", margin: "0 12px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "12px", color: "var(--text-secondary)" }}>
+            Paper mode – your resources only. No example data.
+          </div>
+        )}
         <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
           {rootPages.length === 0 ? (
             <div

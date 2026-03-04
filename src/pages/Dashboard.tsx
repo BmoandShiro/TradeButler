@@ -637,7 +637,8 @@ function SortableMetricCard({
             setShowPositionGroupModal(true);
             try {
               const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-              const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null });
+              const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+              const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null, ...paperArgs });
               const group = groups.find(g => g.entry_trade.id === metrics.largest_win_group_id);
               if (group) {
                 setSelectedPositionGroup(group);
@@ -651,7 +652,8 @@ function SortableMetricCard({
             setShowPositionGroupModal(true);
             try {
               const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-              const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null });
+              const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+              const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null, ...paperArgs });
               const group = groups.find(g => g.entry_trade.id === metrics.largest_loss_group_id);
               if (group) {
                 setSelectedPositionGroup(group);
@@ -1672,13 +1674,13 @@ export default function Dashboard() {
       const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
       const startDate = dateRange.start ? dateRange.start.toISOString() : null;
       const endDate = dateRange.end ? dateRange.end.toISOString() : null;
-      
+      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
       const [metricsData, pnlData, strategiesData, tradesData, allTradesData, strategiesList] = await Promise.all([
-        invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate }),
-        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate }),
-        invoke<StrategyPerformance[]>("get_strategy_performance", { pairingMethod, startDate, endDate }),
-        invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate }),
-        invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate }),
+        invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<StrategyPerformance[]>("get_strategy_performance", { pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate, ...paperArgs }),
         invoke<Strategy[]>("get_strategies"),
       ]);
       setMetrics(metricsData);
@@ -1760,11 +1762,13 @@ export default function Dashboard() {
             const startDate = dateRange.start ? dateRange.start.toISOString() : null;
             const endDate = dateRange.end ? dateRange.end.toISOString() : null;
             
+            const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
             const filteredPairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
               strategyId: selectedStrategyId,
               pairingMethod,
               startDate,
               endDate,
+              ...paperArgs,
             });
             
             // Calculate metrics for all instances using this strategy
@@ -1925,6 +1929,11 @@ export default function Dashboard() {
               Configure
             </button>
           </div>
+          {dataMode === "paper" && (
+            <div style={{ padding: "10px 14px", marginBottom: "20px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
+              Paper mode – your data only. No example data.
+            </div>
+          )}
           <div style={{ marginBottom: "30px" }}>
             <TimeframeSelector
               value={timeframe}
@@ -2432,11 +2441,13 @@ export default function Dashboard() {
                               const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
                               const startDate = dateRange.start ? dateRange.start.toISOString() : null;
                               const endDate = dateRange.end ? dateRange.end.toISOString() : null;
+                              const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
                               const loadedPairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
                                 strategyId: strategy.strategy_id,
                                 pairingMethod: pairingMethod,
                                 startDate: startDate,
                                 endDate: endDate,
+                                ...paperArgs,
                               });
                               setStrategyPairs(new Map(strategyPairs.set(strategyKey, loadedPairs)));
                             } catch (error) {

@@ -346,6 +346,26 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         conn.execute("ALTER TABLE journal_entries ADD COLUMN linked_trade_ids TEXT", [])?;
     }
 
+    // journal_entries: separate real vs paper (0 = real, 1 = paper)
+    let has_je_is_paper: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_entries') WHERE name='is_paper'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_je_is_paper {
+        conn.execute("ALTER TABLE journal_entries ADD COLUMN is_paper INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+
+    // emotional_states: separate real vs paper (0 = real, 1 = paper)
+    let has_es_is_paper: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='is_paper'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_es_is_paper {
+        conn.execute("ALTER TABLE emotional_states ADD COLUMN is_paper INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+
     // Migration: Add journal_trade_ids column for Analysis/Mantra trade association (nullable = entry-level, JSON array = specific trades)
     let has_column: bool = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='journal_trade_ids'",

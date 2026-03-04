@@ -253,20 +253,17 @@ export default function Trades() {
       const startDate = dateRange.start ? dateRange.start.toISOString() : null;
       const endDate = dateRange.end ? dateRange.end.toISOString() : null;
       
+      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
       const [tradesData, positionsData, strategiesData] = await Promise.all([
-        invoke<TradeWithPairing[]>("get_trades_with_pairing", { pairing_method: pairingMethod, startDate, endDate }),
-        invoke<PositionGroup[]>("get_position_groups", { pairing_method: pairingMethod, startDate, endDate }),
+        invoke<TradeWithPairing[]>("get_trades_with_pairing", { pairing_method: pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<PositionGroup[]>("get_position_groups", { pairing_method: pairingMethod, startDate, endDate, ...paperArgs }),
         invoke<Strategy[]>("get_strategies"),
       ]);
 
-      // For paper mode, show only trades tagged as [PAPER] in notes
+      // Backend returns only paper trades when paperOnly; for real mode filter out any [PAPER]-tagged
       if (dataMode === "paper") {
-        const paperOnly = tradesData.filter((item) =>
-          (item.trade.notes || "").toUpperCase().includes("[PAPER]")
-        );
-        setTradesWithPairing(paperOnly);
+        setTradesWithPairing(tradesData);
       } else {
-        // Real mode: hide trades explicitly tagged as [PAPER]
         const realOnly = tradesData.filter(
           (item) => !(item.trade.notes || "").toUpperCase().includes("[PAPER]")
         );
@@ -545,6 +542,11 @@ export default function Trades() {
 
   return (
     <div style={{ padding: "30px" }}>
+      {dataMode === "paper" && (
+        <div style={{ padding: "10px 14px", marginBottom: "20px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
+          Paper mode – your data only. No example data.
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
         <h1 style={{ fontSize: "32px", fontWeight: "bold" }}>Trades</h1>
         <div style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>

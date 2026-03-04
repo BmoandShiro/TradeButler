@@ -205,11 +205,12 @@ export default function Analytics() {
       const startDate = dateRange.start ? dateRange.start.toISOString() : null;
       const endDate = dateRange.end ? dateRange.end.toISOString() : null;
       
+      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
       const [tradesData, pnlData, equityData, journalEntriesData, journalTradesData] = await Promise.all([
-        invoke<Trade[]>("get_trades"),
-        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate }),
-        invoke<EquityCurveData>("get_equity_curve", { pairingMethod, startDate, endDate }),
-        invoke<JournalEntry[]>("get_journal_entries"),
+        invoke<Trade[]>("get_trades", paperArgs),
+        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<EquityCurveData>("get_equity_curve", { pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<JournalEntry[]>("get_journal_entries", paperArgs),
         invoke<JournalTrade[]>("get_all_journal_trades"),
       ]);
       setTrades(tradesData);
@@ -451,7 +452,11 @@ export default function Analytics() {
       <h1 style={{ fontSize: "32px", fontWeight: "bold", marginBottom: "20px" }}>
         Analytics
       </h1>
-      
+      {dataMode === "paper" && (
+        <div style={{ padding: "10px 14px", marginBottom: "20px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
+          Paper mode – your data only. No example data.
+        </div>
+      )}
       <div style={{ marginBottom: "30px" }}>
         <TimeframeSelector
           value={timeframe}

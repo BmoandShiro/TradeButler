@@ -178,22 +178,26 @@ export default function Evaluation() {
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
       const { start, end } = getTimeframeDates(timeframe, customStartDate, customEndDate);
       
+      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
       const [data, concentration, tilt] = await Promise.all([
         invoke<EvaluationMetrics>("get_evaluation_metrics", {
-        pairingMethod,
+          pairingMethod,
           startDate: start ? start.toISOString() : null,
           endDate: end ? end.toISOString() : null,
+          ...paperArgs,
         }),
         invoke<DistributionConcentrationData>("get_distribution_concentration", {
           pairingMethod,
           startDate: start ? start.toISOString() : null,
           endDate: end ? end.toISOString() : null,
           concentrationPercent: concentrationPercent,
+          ...paperArgs,
         }),
         invoke<TiltStats>("get_tilt_metric", {
           pairingMethod,
           startDate: start ? start.toISOString() : null,
           endDate: end ? end.toISOString() : null,
+          ...paperArgs,
         }),
       ]);
       
@@ -396,7 +400,11 @@ export default function Evaluation() {
   return (
     <div style={{ padding: "30px" }}>
       <h1 style={{ fontSize: "32px", fontWeight: "bold", marginBottom: "20px" }}>Evaluation</h1>
-      
+      {dataMode === "paper" && (
+        <div style={{ padding: "10px 14px", marginBottom: "20px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
+          Paper mode – your data only. No example data.
+        </div>
+      )}
       <div style={{ marginBottom: "30px" }}>
         <TimeframeSelector
           value={timeframe}
