@@ -11,7 +11,6 @@ import {
   Trash2,
   TrendingDown,
   Calculator,
-  DollarSign,
   FileText,
   BookOpen,
   Settings,
@@ -100,7 +99,7 @@ export default function Layout({ children }: LayoutProps) {
   // Initialize: Load saved scroll positions from localStorage
   useEffect(() => {
     // Load all saved scroll positions on mount
-    const paths = ["/", "/trades", "/calendar", "/strategies", "/journal", "/resources", "/emotions", "/analytics", "/evaluation", "/average-down-calculator", "/dividend-calculator", "/settings"];
+    const paths = ["/", "/trades", "/calendar", "/strategies", "/journal", "/resources", "/emotions", "/analytics", "/evaluation", "/tools", "/settings"];
     paths.forEach(path => {
       const saved = localStorage.getItem(`scroll_${path}`);
       if (saved) {
@@ -669,8 +668,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: "/emotions", icon: Heart, label: "Emotions" },
     { path: "/analytics", icon: BarChart3, label: "Analytics" },
     { path: "/evaluation", icon: TrendingDown, label: "Evaluation" },
-    { path: "/average-down-calculator", icon: Calculator, label: "Average Down Calculator" },
-    { path: "/dividend-calculator", icon: DollarSign, label: "Dividend Calculator" },
+    { path: "/tools", icon: Calculator, label: "Tools" },
     { path: "/settings", icon: Settings, label: "Settings" },
   ];
 
@@ -804,7 +802,7 @@ export default function Layout({ children }: LayoutProps) {
               </button>
             )}
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "16px" }}>
             <button
               onClick={handleImport}
               disabled={isImporting}
@@ -893,12 +891,6 @@ export default function Layout({ children }: LayoutProps) {
               <Trash2 size={16} />
               Clear All Data
             </button>
-          </div>
-        </div>
-
-        <nav style={{ flex: 1, overflowY: "auto", padding: "0" }}>
-          {/* Lock Button - Above Dashboard */}
-          <div style={{ padding: "8px 20px", borderBottom: "1px solid var(--border-color)" }}>
             <button
               onClick={handleLockToggle}
               disabled={!hasPassword()}
@@ -914,7 +906,7 @@ export default function Layout({ children }: LayoutProps) {
                 alignItems: "center",
                 justifyContent: "center",
                 gap: "8px",
-                fontSize: "13px",
+                fontSize: "14px",
                 fontWeight: "500",
                 opacity: hasPassword() ? 1 : 0.5,
                 transition: "all 0.2s",
@@ -925,7 +917,9 @@ export default function Layout({ children }: LayoutProps) {
               {isAppLocked ? "Locked" : "Lock"}
             </button>
           </div>
-          
+        </div>
+
+        <nav style={{ flex: 1, overflowY: "auto", padding: "0" }}>
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;

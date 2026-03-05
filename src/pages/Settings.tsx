@@ -498,9 +498,19 @@ export default function Settings() {
           </div>
         )}
         {dataMode === "paper" && (
-          <p style={{ margin: "0 0 24px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
-            Paper mode — you are viewing paper trades only.
-          </p>
+          <div
+            style={{
+              padding: "12px 16px",
+              marginBottom: "24px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              fontSize: "13px",
+              color: "var(--text-secondary)",
+            }}
+          >
+            Paper mode – app settings, theme, and version check work the same. Switch to Real or Demo for live trade data elsewhere.
+          </div>
         )}
 
         {/* Theme Customization Section */}
