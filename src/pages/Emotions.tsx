@@ -2572,6 +2572,7 @@ export default function Emotions() {
   }, []);
 
   useEffect(() => {
+    setLoading(true);
     loadStates();
     loadSurveys();
   }, [dataMode]);
