@@ -2653,6 +2653,11 @@ export default function Journal() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", flex: 1 }}>
+      {dataMode === "sandbox" && (
+        <p style={{ flexShrink: 0, margin: "0 0 12px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+          Demo mode — you are viewing demo data only.
+        </p>
+      )}
       {dataMode === "paper" && (
         <p style={{ flexShrink: 0, margin: "0 0 12px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
           Paper mode — you are viewing paper trades only.

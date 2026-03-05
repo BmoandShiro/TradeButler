@@ -804,7 +804,7 @@ export default function Layout({ children }: LayoutProps) {
               </button>
             )}
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "16px" }}>
             <button
               onClick={handleImport}
               disabled={isImporting}
@@ -893,12 +893,6 @@ export default function Layout({ children }: LayoutProps) {
               <Trash2 size={16} />
               Clear All Data
             </button>
-          </div>
-        </div>
-
-        <nav style={{ flex: 1, overflowY: "auto", padding: "0" }}>
-          {/* Lock Button - Above Dashboard */}
-          <div style={{ padding: "8px 20px", borderBottom: "1px solid var(--border-color)" }}>
             <button
               onClick={handleLockToggle}
               disabled={!hasPassword()}
@@ -914,7 +908,7 @@ export default function Layout({ children }: LayoutProps) {
                 alignItems: "center",
                 justifyContent: "center",
                 gap: "8px",
-                fontSize: "13px",
+                fontSize: "14px",
                 fontWeight: "500",
                 opacity: hasPassword() ? 1 : 0.5,
                 transition: "all 0.2s",
@@ -925,7 +919,9 @@ export default function Layout({ children }: LayoutProps) {
               {isAppLocked ? "Locked" : "Lock"}
             </button>
           </div>
-          
+        </div>
+
+        <nav style={{ flex: 1, overflowY: "auto", padding: "0" }}>
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;

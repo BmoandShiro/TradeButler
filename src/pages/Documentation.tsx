@@ -293,6 +293,11 @@ export default function Documentation() {
             <Plus size={18} />
           </button>
         </div>
+        {dataMode === "sandbox" && (
+          <p style={{ margin: "0 12px 12px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+            Demo mode — you are viewing demo data only.
+          </p>
+        )}
         {dataMode === "paper" && (
           <p style={{ margin: "0 12px 12px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
             Paper mode — you are viewing paper trades only.
