@@ -11,7 +11,6 @@ import {
   Trash2,
   TrendingDown,
   Calculator,
-  DollarSign,
   FileText,
   BookOpen,
   Settings,
@@ -100,7 +99,7 @@ export default function Layout({ children }: LayoutProps) {
   // Initialize: Load saved scroll positions from localStorage
   useEffect(() => {
     // Load all saved scroll positions on mount
-    const paths = ["/", "/trades", "/calendar", "/strategies", "/journal", "/resources", "/emotions", "/analytics", "/evaluation", "/average-down-calculator", "/dividend-calculator", "/settings"];
+    const paths = ["/", "/trades", "/calendar", "/strategies", "/journal", "/resources", "/emotions", "/analytics", "/evaluation", "/tools", "/settings"];
     paths.forEach(path => {
       const saved = localStorage.getItem(`scroll_${path}`);
       if (saved) {
@@ -669,8 +668,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: "/emotions", icon: Heart, label: "Emotions" },
     { path: "/analytics", icon: BarChart3, label: "Analytics" },
     { path: "/evaluation", icon: TrendingDown, label: "Evaluation" },
-    { path: "/average-down-calculator", icon: Calculator, label: "Average Down Calculator" },
-    { path: "/dividend-calculator", icon: DollarSign, label: "Dividend Calculator" },
+    { path: "/tools", icon: Calculator, label: "Tools" },
     { path: "/settings", icon: Settings, label: "Settings" },
   ];
 

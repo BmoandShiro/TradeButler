@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
 import Trades from "./pages/Trades";
@@ -9,8 +9,7 @@ import Strategies from "./pages/Strategies";
 import Journal from "./pages/Journal";
 import Documentation from "./pages/Documentation";
 import Evaluation from "./pages/Evaluation";
-import AverageDownCalculator from "./pages/AverageDownCalculator";
-import DividendCalculator from "./pages/DividendCalculator";
+import Tools from "./pages/Tools";
 import Settings from "./pages/Settings";
 
 function App() {
@@ -27,8 +26,9 @@ function App() {
           <Route path="/emotions" element={<Emotions />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/evaluation" element={<Evaluation />} />
-          <Route path="/average-down-calculator" element={<AverageDownCalculator />} />
-          <Route path="/dividend-calculator" element={<DividendCalculator />} />
+          <Route path="/tools" element={<Tools />} />
+          <Route path="/average-down-calculator" element={<Navigate to="/tools" replace />} />
+          <Route path="/dividend-calculator" element={<Navigate to="/tools?calc=dividend" replace />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </Layout>

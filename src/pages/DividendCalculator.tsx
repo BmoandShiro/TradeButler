@@ -334,14 +334,22 @@ export default function DividendCalculator() {
             <strong>Calculate the Compound Growth and Income of Dividend Growth Stocks - the Dividend Snowball Effect.</strong>{" "}
             By reinvesting your dividends (DRIP), you can increase the number of shares you own. This will result in more shares earning dividends, continuously growing your portfolio.
           </p>
-          {dataMode === "sandbox" && (
-            <p style={{ margin: "12px 0 0 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
-              Demo mode — you are viewing demo data only.
-            </p>
-          )}
-          {dataMode === "paper" && (
-            <p style={{ margin: "12px 0 0 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
-              Paper mode — you are viewing paper trades only.
+          {(dataMode === "sandbox" || dataMode === "paper") && (
+            <p
+              style={{
+                margin: "12px 0 0 0",
+                padding: "12px 16px",
+                fontSize: "14px",
+                fontWeight: "500",
+                color: "var(--text-secondary)",
+                backgroundColor: "var(--bg-tertiary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "8px",
+              }}
+            >
+              {dataMode === "sandbox"
+                ? "Demo mode – this calculator works the same in all modes. Enter your own numbers to try it."
+                : "Paper mode – this calculator works the same in all modes. Enter your own numbers to try it."}
             </p>
           )}
         </div>

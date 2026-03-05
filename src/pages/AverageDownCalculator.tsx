@@ -156,16 +156,16 @@ export default function AverageDownCalculator() {
               margin: "0 0 16px 0",
               padding: "12px 16px",
               fontSize: "14px",
-              fontWeight: dataMode === "paper" ? "600" : "500",
-              color: dataMode === "paper" ? "var(--accent)" : "var(--text-secondary)",
-              backgroundColor: dataMode === "paper" ? "color-mix(in srgb, var(--accent) 14%, transparent)" : "var(--bg-tertiary)",
-              border: dataMode === "paper" ? "2px solid var(--accent)" : "1px solid var(--border-color)",
+              fontWeight: "500",
+              color: "var(--text-secondary)",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
               borderRadius: "8px",
             }}
           >
             {dataMode === "sandbox"
               ? "Demo mode – this calculator works the same in all modes. Enter your own numbers to try it."
-              : "Paper mode — you are viewing paper trades only."}
+              : "Paper mode – this calculator works the same in all modes. Enter your own numbers to try it."}
           </p>
         )}
         <div
