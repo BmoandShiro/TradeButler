@@ -4,6 +4,7 @@ import Dashboard from "./pages/Dashboard";
 import Trades from "./pages/Trades";
 import Emotions from "./pages/Emotions";
 import Analytics from "./pages/Analytics";
+import { AnalyticsErrorBoundary } from "./components/AnalyticsErrorBoundary";
 import CalendarPage from "./pages/Calendar";
 import Strategies from "./pages/Strategies";
 import Journal from "./pages/Journal";
@@ -24,7 +25,7 @@ function App() {
           <Route path="/journal" element={<Journal />} />
           <Route path="/resources" element={<Documentation />} />
           <Route path="/emotions" element={<Emotions />} />
-          <Route path="/analytics" element={<Analytics />} />
+          <Route path="/analytics" element={<AnalyticsErrorBoundary><Analytics /></AnalyticsErrorBoundary>} />
           <Route path="/evaluation" element={<Evaluation />} />
           <Route path="/tools" element={<Tools />} />
           <Route path="/average-down-calculator" element={<Navigate to="/tools" replace />} />

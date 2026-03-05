@@ -24,6 +24,16 @@ interface Trade {
   status: string;
   fees: number | null;
   notes: string | null;
+  strategy_id?: number | null;
+}
+
+interface Strategy {
+  id: number;
+  name: string;
+  description?: string | null;
+  notes?: string | null;
+  created_at?: string | null;
+  color?: string | null;
 }
 
 interface SymbolPnL {
@@ -140,11 +150,19 @@ export default function Analytics() {
   const equitySettingsRef = useRef<HTMLDivElement>(null);
   const equitySettingsButtonRef = useRef<HTMLButtonElement>(null);
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
+  const prevDataModeRef = useRef<DataMode | null>(null);
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  // Analytics filters (Strategy, Symbol, Side, Type, Position Size) — drive Equity Curve & Drawdown
+  const [filterStrategyId, setFilterStrategyId] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_strategy") || "");
+  const [filterSymbol, setFilterSymbol] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_symbol") || "");
+  const [filterSide, setFilterSide] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_side") || "");
+  const [filterType, setFilterType] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_type") || "");
+  const [filterPositionSize, setFilterPositionSize] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_position_size") || "");
 
 
   useEffect(() => {
     loadData();
-  }, [timeframe, customStartDate, customEndDate, dataMode]);
+  }, [timeframe, customStartDate, customEndDate, dataMode, filterStrategyId, filterSymbol, filterSide, filterType, filterPositionSize]);
 
   useEffect(() => {
     setEquityBrushEnd(0);
@@ -153,7 +171,7 @@ export default function Analytics() {
     setEntriesChartBrushEnd(0);
     setPositionsChartBrushEnd(0);
     setOutcomeChartBrushEnd(0);
-  }, [timeframe, customStartDate, customEndDate]);
+  }, [timeframe, customStartDate, customEndDate, filterStrategyId, filterSymbol, filterSide, filterType, filterPositionSize]);
 
   useEffect(() => {
     const unsubscribe = subscribeToDataMode((mode) => {
@@ -163,6 +181,24 @@ export default function Analytics() {
       unsubscribe();
     };
   }, []);
+
+  // When user switches data mode, clear analytics filters so the new mode is not affected by the previous mode's filters
+  useEffect(() => {
+    const prevMode = prevDataModeRef.current;
+    prevDataModeRef.current = dataMode;
+    if (prevMode != null && prevMode !== dataMode) {
+      setFilterStrategyId("");
+      setFilterSymbol("");
+      setFilterSide("");
+      setFilterType("");
+      setFilterPositionSize("");
+      localStorage.removeItem("tradebutler_analytics_filter_strategy");
+      localStorage.removeItem("tradebutler_analytics_filter_symbol");
+      localStorage.removeItem("tradebutler_analytics_filter_side");
+      localStorage.removeItem("tradebutler_analytics_filter_type");
+      localStorage.removeItem("tradebutler_analytics_filter_position_size");
+    }
+  }, [dataMode]);
 
   // Close settings menu when clicking outside
   useEffect(() => {
@@ -211,15 +247,112 @@ export default function Analytics() {
     }
   }, [customStartDate, customEndDate]);
 
+  useEffect(() => {
+    if (filterStrategyId) localStorage.setItem("tradebutler_analytics_filter_strategy", filterStrategyId);
+    else localStorage.removeItem("tradebutler_analytics_filter_strategy");
+  }, [filterStrategyId]);
+  useEffect(() => {
+    if (filterSymbol) localStorage.setItem("tradebutler_analytics_filter_symbol", filterSymbol);
+    else localStorage.removeItem("tradebutler_analytics_filter_symbol");
+  }, [filterSymbol]);
+  useEffect(() => {
+    if (filterSide) localStorage.setItem("tradebutler_analytics_filter_side", filterSide);
+    else localStorage.removeItem("tradebutler_analytics_filter_side");
+  }, [filterSide]);
+  useEffect(() => {
+    if (filterType) localStorage.setItem("tradebutler_analytics_filter_type", filterType);
+    else localStorage.removeItem("tradebutler_analytics_filter_type");
+  }, [filterType]);
+  useEffect(() => {
+    if (filterPositionSize) localStorage.setItem("tradebutler_analytics_filter_position_size", filterPositionSize);
+    else localStorage.removeItem("tradebutler_analytics_filter_position_size");
+  }, [filterPositionSize]);
+
+  // Extract underlying symbol from options contract (defined early so useMemos below can use it)
+  const getUnderlyingSymbol = (symbol: string | null | undefined): string => {
+    if (symbol == null || symbol === "") return "";
+    const firstDigitIndex = symbol.search(/\d/);
+    if (firstDigitIndex > 0) return symbol.substring(0, firstDigitIndex);
+    return symbol;
+  };
+
+  // Filter options from current mode's data (trades + strategies); only truthy values to avoid chart crashes
+  const filterOptions = useMemo(() => {
+    const symbols = Array.from(new Set(trades.map((t) => t.symbol).filter((s): s is string => Boolean(s)))).sort();
+    const sides = Array.from(new Set(trades.map((t) => t.side).filter(Boolean))).sort();
+    const types = Array.from(new Set(trades.map((t) => t.order_type).filter(Boolean))).sort();
+    return { strategies, symbols, sides, types };
+  }, [trades, strategies]);
+
+  // Apply current filters to trades (used for all trade-based charts; works in Demo and Real/Paper)
+  const filteredTrades = useMemo(() => {
+    if (!filterStrategyId && !filterSymbol && !filterSide && !filterType && !filterPositionSize) {
+      return trades;
+    }
+    const strategyIdNum = filterStrategyId ? parseInt(filterStrategyId, 10) : null;
+    const posMin = filterPositionSize === "small" ? 0 : filterPositionSize === "medium" ? 100 : filterPositionSize === "large" ? 500 : null;
+    const posMax = filterPositionSize === "small" ? 100 : filterPositionSize === "medium" ? 500 : null;
+    return trades.filter((t) => {
+      if (strategyIdNum != null && (t.strategy_id == null || t.strategy_id !== strategyIdNum)) return false;
+      if (filterSymbol) {
+        const tSym = t.symbol ?? "";
+        if (filterSymbol !== tSym && getUnderlyingSymbol(tSym) !== getUnderlyingSymbol(filterSymbol)) return false;
+      }
+      if (filterSide && filterSide !== (t.side ?? "")) return false;
+      if (filterType && filterType !== (t.order_type ?? "")) return false;
+      if (posMin != null && t.quantity < posMin) return false;
+      if (posMax != null && t.quantity > posMax) return false;
+      return true;
+    });
+  }, [trades, filterStrategyId, filterSymbol, filterSide, filterType, filterPositionSize]);
+
   const loadData = async () => {
     try {
       if (dataMode === "sandbox") {
         const state = loadSandboxState();
-        setTrades(state.trades as unknown as Trade[]);
+        const demoTrades = state.trades as unknown as Trade[];
+        setTrades(demoTrades);
         setSymbolPnL(EXAMPLE_SYMBOL_PNL as unknown as SymbolPnL[]);
-        setEquityCurve(EXAMPLE_EQUITY_CURVE as unknown as EquityCurveData);
         setJournalEntries(state.journalEntries as unknown as JournalEntry[]);
         setJournalTrades(state.journalTrades as unknown as JournalTrade[]);
+        setStrategies(state.strategies as unknown as Strategy[]);
+        // In Demo, when Strategy or Symbol (or any filter) is set, build equity curve from filtered demo trades
+        const hasFilter = !!(filterStrategyId || filterSymbol || filterSide || filterType || filterPositionSize);
+        if (hasFilter) {
+          const strategyIdNum = filterStrategyId ? parseInt(filterStrategyId, 10) : null;
+          const posMin = filterPositionSize === "small" ? 0 : filterPositionSize === "medium" ? 100 : filterPositionSize === "large" ? 500 : null;
+          const posMax = filterPositionSize === "small" ? 100 : filterPositionSize === "medium" ? 500 : null;
+          const filtered = demoTrades.filter((t) => {
+            if (strategyIdNum != null && (t.strategy_id == null || t.strategy_id !== strategyIdNum)) return false;
+            if (filterSymbol) {
+              const tSym = t.symbol ?? "";
+              if (filterSymbol !== tSym && getUnderlyingSymbol(tSym) !== getUnderlyingSymbol(filterSymbol)) return false;
+            }
+            if (filterSide && filterSide !== (t.side ?? "")) return false;
+            if (filterType && filterType !== (t.order_type ?? "")) return false;
+            if (posMin != null && t.quantity < posMin) return false;
+            if (posMax != null && t.quantity > posMax) return false;
+            return true;
+          });
+          const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+          const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
+          const startDate = dateRange.start ? dateRange.start.toISOString() : null;
+          const endDate = dateRange.end ? dateRange.end.toISOString() : null;
+          try {
+            const curveData = await invoke<EquityCurveData>("get_equity_curve_from_trades", {
+              trades: filtered,
+              pairingMethod,
+              startDate,
+              endDate,
+            });
+            setEquityCurve(curveData);
+          } catch (e) {
+            console.error("Demo equity curve from trades failed:", e);
+            setEquityCurve(EXAMPLE_EQUITY_CURVE as unknown as EquityCurveData);
+          }
+        } else {
+          setEquityCurve(EXAMPLE_EQUITY_CURVE as unknown as EquityCurveData);
+        }
         return;
       }
 
@@ -229,43 +362,33 @@ export default function Analytics() {
       const endDate = dateRange.end ? dateRange.end.toISOString() : null;
       
       const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
-      const [tradesData, pnlData, equityData, journalEntriesData, journalTradesData] = await Promise.all([
+      const filters = (filterStrategyId || filterSymbol || filterSide || filterType || filterPositionSize) ? {
+        strategy_id: filterStrategyId ? parseInt(filterStrategyId, 10) : undefined,
+        symbol: filterSymbol || undefined,
+        side: filterSide || undefined,
+        order_type: filterType || undefined,
+        position_size_min: filterPositionSize === "small" ? 0 : filterPositionSize === "medium" ? 100 : filterPositionSize === "large" ? 500 : undefined,
+        position_size_max: filterPositionSize === "small" ? 100 : filterPositionSize === "medium" ? 500 : undefined,
+      } : undefined;
+      const [tradesData, pnlData, equityData, journalEntriesData, journalTradesData, strategiesData] = await Promise.all([
         invoke<Trade[]>("get_trades", paperArgs),
-        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate, ...paperArgs }),
-        invoke<EquityCurveData>("get_equity_curve", { pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate, ...paperArgs, filters }),
+        invoke<EquityCurveData>("get_equity_curve", { pairingMethod, startDate, endDate, ...paperArgs, filters }),
         invoke<JournalEntry[]>("get_journal_entries", paperArgs),
         invoke<JournalTrade[]>("get_all_journal_trades"),
+        invoke<Strategy[]>("get_strategies"),
       ]);
       setTrades(tradesData);
       setSymbolPnL(pnlData);
       setEquityCurve(equityData);
       setJournalEntries(journalEntriesData);
       setJournalTrades(journalTradesData);
+      setStrategies(strategiesData);
     } catch (error) {
       console.error("Error loading data:", error);
     } finally {
       setLoading(false);
     }
-  };
-
-  // Extract underlying symbol from options contract
-  // Examples: SPY251218C00679000 -> SPY, ABR251121P00011000 -> ABR
-  // For regular stocks, returns the symbol as-is
-  const getUnderlyingSymbol = (symbol: string): string => {
-    if (!symbol) {
-      return symbol;
-    }
-    
-    // Find the first digit in the symbol - everything before it is the base symbol
-    const firstDigitIndex = symbol.search(/\d/);
-    
-    if (firstDigitIndex > 0) {
-      // Found a digit, extract everything before it as the base symbol
-      return symbol.substring(0, firstDigitIndex);
-    }
-    
-    // No digits found - it's already a base symbol (e.g., "SPY", "ABR")
-    return symbol;
   };
 
   // Fill in missing dates for even scaling
@@ -487,21 +610,24 @@ export default function Analytics() {
     return computeDrawdownFromPoints(slice);
   }, [equityCurve, equityBrushStart, equityBrushEnd, timeframe, customStartDate, customEndDate]);
 
-  // Process trades for charts
+  // Process trades for charts (use filteredTrades so Trades by Symbol and Buy vs Sell respect filters)
   const processChartData = () => {
     const symbolCounts: Record<string, number> = {};
     const sideCounts: Record<string, number> = { BUY: 0, SELL: 0 };
 
-    trades.forEach((trade) => {
-      // Extract underlying symbol for aggregation
+    filteredTrades.forEach((trade) => {
       const underlyingSymbol = getUnderlyingSymbol(trade.symbol);
-      symbolCounts[underlyingSymbol] = (symbolCounts[underlyingSymbol] || 0) + 1;
-      if (trade.side === "BUY" || trade.side === "SELL") {
-        sideCounts[trade.side]++;
+      if (underlyingSymbol !== "") {
+        symbolCounts[underlyingSymbol] = (symbolCounts[underlyingSymbol] || 0) + 1;
+      }
+      const side = trade.side ?? "";
+      if (side === "BUY" || side === "SELL") {
+        sideCounts[side]++;
       }
     });
 
     const symbolData = Object.entries(symbolCounts)
+      .filter(([symbol]) => symbol != null && symbol !== "")
       .map(([symbol, count]) => ({ symbol, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 10);
@@ -509,8 +635,54 @@ export default function Analytics() {
     return { symbolData, sideData: [{ name: "BUY", value: sideCounts.BUY }, { name: "SELL", value: sideCounts.SELL }] };
   };
 
+  // Profit & Loss by Symbol: when symbol filter is set, show only that symbol (backend already filters in Real/Paper; client-side filter for consistency and Demo)
+  const displaySymbolPnL = useMemo(() => {
+    if (!filterSymbol) return symbolPnL;
+    return (symbolPnL ?? []).filter(
+      (p) =>
+        p.symbol === filterSymbol || getUnderlyingSymbol(p.symbol) === getUnderlyingSymbol(filterSymbol)
+    );
+  }, [symbolPnL, filterSymbol]);
+
+  // Journal entries/trades filtered by strategy and/or symbol
+  const filteredJournalEntries = useMemo(() => {
+    let entries = journalEntries;
+    if (filterStrategyId) {
+      const sid = parseInt(filterStrategyId, 10);
+      if (!Number.isNaN(sid)) {
+        entries = entries.filter((e) => e.strategy_id != null && e.strategy_id === sid);
+      }
+    }
+    if (filterSymbol) {
+      const entryIdsWithSymbol = new Set(
+        journalTrades
+          .filter(
+            (t) =>
+              t.symbol != null &&
+              (t.symbol === filterSymbol || getUnderlyingSymbol(t.symbol) === getUnderlyingSymbol(filterSymbol))
+          )
+          .map((t) => t.journal_entry_id)
+      );
+      entries = entries.filter((e) => entryIdsWithSymbol.has(e.id));
+    }
+    return entries;
+  }, [journalEntries, journalTrades, filterStrategyId, filterSymbol]);
+  const filteredJournalTrades = useMemo(() => {
+    const entryIds = new Set(filteredJournalEntries.map((e) => e.id));
+    return journalTrades.filter((t) => {
+      if (!entryIds.has(t.journal_entry_id)) return false;
+      if (filterSymbol) {
+        return (
+          t.symbol != null &&
+          (t.symbol === filterSymbol || getUnderlyingSymbol(t.symbol) === getUnderlyingSymbol(filterSymbol))
+        );
+      }
+      return true;
+    });
+  }, [journalTrades, filteredJournalEntries, filterSymbol]);
+
   const processJournalData = () => {
-    if (journalEntries.length === 0 && journalTrades.length === 0) {
+    if (filteredJournalEntries.length === 0 && filteredJournalTrades.length === 0) {
       return {
         entriesByMonth: [] as { month: string; count: number }[],
         positionsData: [] as { position: string; count: number }[],
@@ -522,7 +694,7 @@ export default function Analytics() {
     const start = dateRange.start;
     const end = dateRange.end;
 
-    const entriesInRange = journalEntries.filter((entry) => {
+    const entriesInRange = filteredJournalEntries.filter((entry) => {
       if (!entry.date) return false;
       const d = new Date(entry.date + "T00:00:00");
       if (isNaN(d.getTime())) return false;
@@ -533,7 +705,7 @@ export default function Analytics() {
 
     const entryIdsInRange = new Set(entriesInRange.map((e) => e.id));
 
-    const tradesInRange = journalTrades.filter((t) => entryIdsInRange.has(t.journal_entry_id));
+    const tradesInRange = filteredJournalTrades.filter((t) => entryIdsInRange.has(t.journal_entry_id));
 
     const entriesByMonthMap = new Map<string, number>();
     entriesInRange.forEach((entry) => {
@@ -576,8 +748,13 @@ export default function Analytics() {
     );
   }
 
-  const { symbolData, sideData } = processChartData();
-  const { entriesByMonth, positionsData, outcomeData } = processJournalData();
+  const chartData = processChartData();
+  const symbolData: { symbol: string; count: number }[] = Array.isArray(chartData?.symbolData) ? chartData.symbolData : [];
+  const sideData: { name: string; value: number }[] = Array.isArray(chartData?.sideData) ? chartData.sideData : [{ name: "BUY", value: 0 }, { name: "SELL", value: 0 }];
+  const journalData = processJournalData();
+  const entriesByMonth = journalData?.entriesByMonth ?? [];
+  const positionsData = journalData?.positionsData ?? [];
+  const outcomeData = journalData?.outcomeData ?? [];
 
   return (
     <div style={{ padding: "30px" }}>
@@ -620,6 +797,116 @@ export default function Analytics() {
         />
       </div>
 
+      {/* Analytics filters: drive Equity Curve & Drawdown (and other sections); options from current mode's data */}
+      <div style={{ marginBottom: "24px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px 20px" }}>
+        <span style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-secondary)", marginRight: "4px" }}>Filters:</span>
+        <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Strategy</span>
+          <select
+            value={filterStrategyId}
+            onChange={(e) => setFilterStrategyId(e.target.value)}
+            style={{
+              padding: "6px 10px",
+              fontSize: "13px",
+              background: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--text-primary)",
+              minWidth: "120px",
+            }}
+          >
+            <option value="">All</option>
+            {(filterOptions.strategies ?? []).filter((s) => s.id != null).map((s) => (
+              <option key={s.id} value={String(s.id)}>{s.name ?? ""}</option>
+            ))}
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Symbol</span>
+          <select
+            value={filterSymbol}
+            onChange={(e) => setFilterSymbol(e.target.value)}
+            style={{
+              padding: "6px 10px",
+              fontSize: "13px",
+              background: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--text-primary)",
+              minWidth: "120px",
+            }}
+          >
+            <option value="">All</option>
+            {(filterOptions.symbols ?? []).map((sym) => (
+              <option key={String(sym)} value={String(sym)}>{String(sym)}</option>
+            ))}
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Side</span>
+          <select
+            value={filterSide}
+            onChange={(e) => setFilterSide(e.target.value)}
+            style={{
+              padding: "6px 10px",
+              fontSize: "13px",
+              background: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--text-primary)",
+              minWidth: "100px",
+            }}
+          >
+            <option value="">All</option>
+            {filterOptions.sides.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Type</span>
+          <select
+            value={filterType}
+            onChange={(e) => setFilterType(e.target.value)}
+            style={{
+              padding: "6px 10px",
+              fontSize: "13px",
+              background: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--text-primary)",
+              minWidth: "100px",
+            }}
+          >
+            <option value="">All</option>
+            {filterOptions.types.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Position size</span>
+          <select
+            value={filterPositionSize}
+            onChange={(e) => setFilterPositionSize(e.target.value)}
+            style={{
+              padding: "6px 10px",
+              fontSize: "13px",
+              background: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--text-primary)",
+              minWidth: "140px",
+            }}
+          >
+            <option value="">All</option>
+            <option value="small">Small (0–100)</option>
+            <option value="medium">Medium (100–500)</option>
+            <option value="large">Large (500+)</option>
+          </select>
+        </label>
+      </div>
+
       {trades.length === 0 ? (
         <div
           style={{
@@ -637,7 +924,7 @@ export default function Analytics() {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "30px" }}>
           {/* Equity Curve + Drawdown Analysis */}
-          {equityCurve && equityCurve.equity_points.length > 0 && (
+          {equityCurve && Array.isArray(equityCurve.equity_points) && equityCurve.equity_points.length > 0 && (
             <div
               style={{
                 backgroundColor: "var(--bg-secondary)",
@@ -928,7 +1215,7 @@ export default function Analytics() {
           )}
 
           {/* Symbol P&L Table */}
-          {symbolPnL.length > 0 && (
+          {Array.isArray(displaySymbolPnL) && displaySymbolPnL.length > 0 && (
             <div
               style={{
                 backgroundColor: "var(--bg-secondary)",
@@ -968,7 +1255,7 @@ export default function Analytics() {
                     </tr>
                   </thead>
                   <tbody>
-                    {symbolPnL.map((pnl) => (
+                    {displaySymbolPnL.map((pnl) => (
                       <tr
                         key={pnl.symbol}
                         style={{
@@ -1038,14 +1325,15 @@ export default function Analytics() {
               Trades by Symbol
             </h2>
             {(() => {
-              const useBrush = symbolData.length > BRUSH_MIN_POINTS;
-              const start = useBrush && symbolChartBrushEnd > 0 ? Math.min(symbolChartBrushStart, symbolData.length - 1) : 0;
-              const end = useBrush && symbolChartBrushEnd > 0 ? Math.min(symbolData.length - 1, Math.max(start, symbolChartBrushEnd)) : Math.max(0, symbolData.length - 1);
+              const safeSymbolData = symbolData ?? [];
+              const useBrush = safeSymbolData.length > BRUSH_MIN_POINTS;
+              const start = useBrush && symbolChartBrushEnd > 0 ? Math.min(symbolChartBrushStart, Math.max(0, safeSymbolData.length - 1)) : 0;
+              const end = useBrush && symbolChartBrushEnd > 0 ? Math.min(Math.max(0, safeSymbolData.length - 1), Math.max(start, symbolChartBrushEnd)) : Math.max(0, safeSymbolData.length - 1);
               return (
             <ResponsiveContainer width="100%" height={useBrush ? 340 : 300}>
-              <BarChart data={symbolData}>
+              <BarChart data={safeSymbolData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                <XAxis dataKey="symbol" stroke="var(--text-secondary)" interval={symbolData.length > 20 ? Math.floor(symbolData.length / 10) : 0} />
+                <XAxis dataKey="symbol" stroke="var(--text-secondary)" interval={safeSymbolData.length > 20 ? Math.floor(safeSymbolData.length / 10) : 0} />
                 <YAxis stroke="var(--text-secondary)" />
                 <Tooltip
                   cursor={{ fill: "rgba(255,255,255,0.02)" }}
@@ -1077,12 +1365,13 @@ export default function Analytics() {
               Buy vs Sell
             </h2>
             {(() => {
-              const useBrush = sideData.length > BRUSH_MIN_POINTS;
-              const start = useBrush && sideChartBrushEnd > 0 ? Math.min(sideChartBrushStart, sideData.length - 1) : 0;
-              const end = useBrush && sideChartBrushEnd > 0 ? Math.min(sideData.length - 1, Math.max(start, sideChartBrushEnd)) : Math.max(0, sideData.length - 1);
+              const safeSideData = sideData ?? [];
+              const useBrush = safeSideData.length > BRUSH_MIN_POINTS;
+              const start = useBrush && sideChartBrushEnd > 0 ? Math.min(sideChartBrushStart, Math.max(0, safeSideData.length - 1)) : 0;
+              const end = useBrush && sideChartBrushEnd > 0 ? Math.min(Math.max(0, safeSideData.length - 1), Math.max(start, sideChartBrushEnd)) : Math.max(0, safeSideData.length - 1);
               return (
             <ResponsiveContainer width="100%" height={useBrush ? 340 : 300}>
-              <BarChart data={sideData}>
+              <BarChart data={safeSideData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                 <XAxis dataKey="name" stroke="var(--text-secondary)" />
                 <YAxis stroke="var(--text-secondary)" />

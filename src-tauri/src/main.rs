@@ -59,6 +59,7 @@ fn main() {
             commands::save_pair_notes,
             commands::get_evaluation_metrics,
             commands::get_equity_curve,
+            commands::get_equity_curve_from_trades,
             commands::get_distribution_concentration,
             commands::get_tilt_metric,
             commands::fetch_stock_quote,
