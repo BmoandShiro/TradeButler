@@ -11,6 +11,13 @@ import {
   FolderOpen,
 } from "lucide-react";
 import RichTextEditor from "../components/RichTextEditor";
+import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import type { DataMode } from "../utils/dataMode";
+import {
+  SANDBOX_DOCUMENTATION_KEY,
+  SANDBOX_DOCUMENTATION_ORDER_KEY,
+  getSandboxDocumentationSeed,
+} from "../data/sandboxDocumentation";
 
 const STORAGE_KEY = "tradebutler_documentation";
 
@@ -22,42 +29,73 @@ interface DocPage {
   order: number;
 }
 
-function loadPages(): DocPage[] {
+function getStorageKey(mode: DataMode): string {
+  if (mode === "sandbox") return SANDBOX_DOCUMENTATION_KEY;
+  // Paper shares resources with Real
+  return STORAGE_KEY;
+}
+
+function getOrderKey(mode: DataMode): string {
+  if (mode === "sandbox") return SANDBOX_DOCUMENTATION_ORDER_KEY;
+  // Paper shares resources with Real
+  return STORAGE_KEY + "_order";
+}
+
+function parsePageList(parsed: unknown): DocPage[] {
+  let list: DocPage[] = [];
+  if (Array.isArray(parsed)) {
+    list = parsed.map((p: Record<string, unknown>) => ({
+      id: String(p.id),
+      title: String(p.title ?? "Untitled"),
+      content: String(p.content ?? ""),
+      parentId: p.parentId != null ? String(p.parentId) : null,
+      order: typeof p.order === "number" ? p.order : 0,
+    }));
+  } else if (parsed && typeof parsed === "object" && "pages" in parsed && Array.isArray((parsed as { pages: unknown }).pages)) {
+    list = ((parsed as { pages: Record<string, unknown>[] }).pages).map((p) => ({
+      id: String(p.id),
+      title: String(p.title ?? "Untitled"),
+      content: String(p.content ?? ""),
+      parentId: p.parentId != null ? String(p.parentId) : null,
+      order: typeof p.order === "number" ? p.order : 0,
+    }));
+  }
+  return list;
+}
+
+function loadPages(key: string, mode: DataMode): DocPage[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    let list: DocPage[] = [];
-    if (Array.isArray(parsed)) {
-      list = parsed.map((p: Record<string, unknown>) => ({
-        id: String(p.id),
-        title: String(p.title ?? "Untitled"),
-        content: String(p.content ?? ""),
-        parentId: p.parentId != null ? String(p.parentId) : null,
-        order: typeof p.order === "number" ? p.order : 0,
-      }));
-    } else if (parsed?.pages && Array.isArray(parsed.pages)) {
-      list = parsed.pages.map((p: Record<string, unknown>) => ({
-        id: String(p.id),
-        title: String(p.title ?? "Untitled"),
-        content: String(p.content ?? ""),
-        parentId: p.parentId != null ? String(p.parentId) : null,
-        order: typeof p.order === "number" ? p.order : 0,
-      }));
+    const raw = localStorage.getItem(key);
+    if (!raw) {
+      // Only sandbox gets seed data; paper and real start empty
+      if (mode === "sandbox") {
+        const seed = getSandboxDocumentationSeed();
+        try {
+          localStorage.setItem(key, JSON.stringify(seed));
+          const orderKey = getOrderKey("sandbox");
+          const rootIds = seed.filter((p) => !p.parentId).sort((a, b) => a.order - b.order).map((p) => p.id);
+          localStorage.setItem(orderKey, JSON.stringify(rootIds));
+        } catch {
+          // ignore
+        }
+        return seed;
+      }
+      return [];
     }
-    return list;
+    const parsed = JSON.parse(raw) as unknown;
+    return parsePageList(parsed);
   } catch {
-    return [];
+    return mode === "sandbox" ? getSandboxDocumentationSeed() : [];
   }
 }
 
-function savePages(pages: DocPage[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(pages));
+function savePages(key: string, pages: DocPage[]) {
+  localStorage.setItem(key, JSON.stringify(pages));
 }
 
-function loadRootOrder(): string[] {
+function loadRootOrder(orderKey: string): string[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY + "_order");
+    const raw = localStorage.getItem(orderKey);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as string[];
     return Array.isArray(parsed) ? parsed : [];
@@ -67,16 +105,36 @@ function loadRootOrder(): string[] {
 }
 
 export default function Documentation() {
-  const [pages, setPages] = useState<DocPage[]>(() => loadPages());
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
+  const storageKey = getStorageKey(dataMode);
+  const orderKey = getOrderKey(dataMode);
+
+  const [pages, setPages] = useState<DocPage[]>(() => loadPages(storageKey, dataMode));
   const [selectedId, setSelectedId] = useState<string | null>(() => {
-    const loaded = loadPages();
+    const loaded = loadPages(storageKey, dataMode);
     const root = loaded.filter((p) => !p.parentId).sort((a, b) => a.order - b.order);
     return root.length > 0 ? root[0].id : null;
   });
-  const [rootOrder, setRootOrder] = useState<string[]>(() => loadRootOrder());
+  const [rootOrder, setRootOrder] = useState<string[]>(() => loadRootOrder(orderKey));
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   const [isEditing, setIsEditing] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string; subCount: number } | null>(null);
+
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    const key = getStorageKey(dataMode);
+    const oKey = getOrderKey(dataMode);
+    const loaded = loadPages(key, dataMode);
+    setPages(loaded);
+    setRootOrder(loadRootOrder(oKey));
+    const root = loaded.filter((p) => !p.parentId).sort((a, b) => a.order - b.order);
+    setSelectedId(root.length > 0 ? root[0].id : null);
+    setExpandedIds(new Set());
+  }, [dataMode]);
 
   const rootPages = (() => {
     const roots = pages.filter((p) => !p.parentId);
@@ -111,12 +169,12 @@ export default function Documentation() {
   );
 
   useEffect(() => {
-    savePages(pages);
-  }, [pages]);
+    savePages(storageKey, pages);
+  }, [pages, storageKey]);
 
   useEffect(() => {
-    if (rootOrder.length > 0) localStorage.setItem(STORAGE_KEY + "_order", JSON.stringify(rootOrder));
-  }, [rootOrder]);
+    if (rootOrder.length > 0) localStorage.setItem(orderKey, JSON.stringify(rootOrder));
+  }, [rootOrder, orderKey]);
 
   // Migrate: if we have pages but no root order (e.g. old data), set root order from root pages
   useEffect(() => {
@@ -162,7 +220,7 @@ export default function Documentation() {
         next.delete(id);
         return next;
       });
-      if (selectedId === id || (selectedId !== null && toRemove.includes(selectedId))) {
+      if (selectedId === id || (selectedId != null && toRemove.includes(selectedId))) {
         const remaining = pages.filter((p) => !toRemove.includes(p.id));
         setSelectedId(remaining.length > 0 ? remaining[0].id : null);
       }
@@ -235,6 +293,11 @@ export default function Documentation() {
             <Plus size={18} />
           </button>
         </div>
+        {dataMode === "paper" && (
+          <p style={{ margin: "0 12px 12px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+            Paper mode — you are viewing paper trades only.
+          </p>
+        )}
         <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
           {rootPages.length === 0 ? (
             <div

@@ -37,6 +37,15 @@ import {
 import { MetricsConfigPanel, useMetricsConfig } from "../components/MetricsConfig";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { format } from "date-fns";
+import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import { formatCompactNumber, formatWithCommas } from "../utils/formatCompactNumber";
+import { loadSandboxState } from "../utils/sandboxStore";
+import {
+  EXAMPLE_METRICS,
+  EXAMPLE_STRATEGY_PERFORMANCE,
+  EXAMPLE_RECENT_TRADES,
+  EXAMPLE_SYMBOL_PNL,
+} from "../exampleData";
 
 interface Metrics {
   total_trades: number;
@@ -178,9 +187,9 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
 
   switch (id) {
     case "total_trades":
-      return value.toString();
+      return formatWithCommas(Math.round(value));
     case "total_volume":
-      return `$${((value || 0) / 1000).toFixed(1)}k`;
+      return formatCompactNumber(value || 0, { prefix: "$", suffix: "" });
     case "total_profit_loss":
     case "average_profit":
     case "average_loss":
@@ -192,16 +201,15 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
     case "max_drawdown":
     case "best_day":
     case "worst_day":
-      // largest_loss is stored as negative, so display it as-is
-      return `$${(value || 0).toFixed(2)}`;
+      return `$${formatWithCommas(value || 0, { decimals: 2 })}`;
     case "win_rate":
-      return `${((value || 0) * 100).toFixed(1)}%`;
+      return `${formatWithCommas((value || 0) * 100, { minDecimals: 1, maxDecimals: 1 })}%`;
     case "expectancy":
     case "profit_factor":
     case "sharpe_ratio":
     case "risk_reward_ratio":
     case "trades_per_day":
-      return (value || 0).toFixed(2);
+      return formatWithCommas(value || 0, { minDecimals: 2, maxDecimals: 2 });
     case "winning_trades":
     case "losing_trades":
     case "consecutive_wins":
@@ -212,20 +220,20 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
     case "strategy_losing_trades":
     case "strategy_consecutive_wins":
     case "strategy_consecutive_losses":
-      return value.toString();
+      return formatWithCommas(Math.round(value));
     case "strategy_win_rate":
-      return `${((value || 0) * 100).toFixed(1)}%`;
+      return `${formatWithCommas((value || 0) * 100, { minDecimals: 1, maxDecimals: 1 })}%`;
     case "strategy_profit_loss":
-      return `$${(value || 0).toFixed(2)}`;
+      return `$${formatWithCommas(value || 0, { decimals: 2 })}`;
     case "average_holding_time_seconds":
       return formatHoldingTime(value || 0);
     case "average_gain_pct":
     case "average_loss_pct":
     case "largest_win_pct":
     case "largest_loss_pct":
-      return `${(value || 0) >= 0 ? "+" : ""}${(value || 0).toFixed(2)}%`;
+      return `${(value || 0) >= 0 ? "+" : ""}${formatWithCommas(value || 0, { decimals: 2 })}%`;
     default:
-      return value.toFixed(2);
+      return formatWithCommas(value, { minDecimals: 2, maxDecimals: 2 });
   }
 };
 
@@ -518,6 +526,7 @@ function SortableMetricCard({
   duplicateMetricInstance,
   removeMetricInstance,
   setMetricInstances,
+  dataMode,
 }: {
   id: string;
   metric: any;
@@ -545,6 +554,7 @@ function SortableMetricCard({
   duplicateMetricInstance: (instanceId: string) => void;
   removeMetricInstance: (instanceId: string) => void;
   setMetricInstances: React.Dispatch<React.SetStateAction<MetricInstance[]>>;
+  dataMode: DataMode;
 }) {
   const {
     attributes,
@@ -629,7 +639,8 @@ function SortableMetricCard({
             setShowPositionGroupModal(true);
             try {
               const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-              const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null });
+              const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+              const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null, ...paperArgs });
               const group = groups.find(g => g.entry_trade.id === metrics.largest_win_group_id);
               if (group) {
                 setSelectedPositionGroup(group);
@@ -643,7 +654,8 @@ function SortableMetricCard({
             setShowPositionGroupModal(true);
             try {
               const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-              const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null });
+              const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+              const groups = await invoke<any[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null, ...paperArgs });
               const group = groups.find(g => g.entry_trade.id === metrics.largest_loss_group_id);
               if (group) {
                 setSelectedPositionGroup(group);
@@ -1005,6 +1017,13 @@ export default function Dashboard() {
   const [recentTrades, setRecentTrades] = useState<RecentTrade[]>([]);
   const [trades, setTrades] = useState<RecentTrade[]>([]);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
+
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return () => unsub();
+  }, []);
+
   const [strategyFilterForMetrics, setStrategyFilterForMetrics] = useState<Record<string, number | null>>(() => {
     const saved = localStorage.getItem("tradebutler_strategy_filter_for_metrics");
     return saved ? JSON.parse(saved) : {};
@@ -1580,7 +1599,7 @@ export default function Dashboard() {
     loadDashboardData();
     // Reset to first page when timeframe changes
     setCurrentTradesPage(1);
-  }, [timeframe, customStartDate, customEndDate]);
+  }, [timeframe, customStartDate, customEndDate, dataMode]);
   
   useEffect(() => {
     localStorage.setItem("tradebutler_dashboard_timeframe", timeframe);
@@ -1635,17 +1654,35 @@ export default function Dashboard() {
   const loadDashboardData = async () => {
     setLoading(true);
     try {
+      if (dataMode === "sandbox") {
+        const state = loadSandboxState();
+        setMetrics(EXAMPLE_METRICS as unknown as Metrics);
+        setStrategies(state.strategies.map((s) => ({ id: s.id, name: s.name, description: s.description, notes: s.notes, color: s.color })) as unknown as Strategy[]);
+        const topSymbolsData = EXAMPLE_SYMBOL_PNL.slice(0, 5).map((pnl) => ({
+          symbol: pnl.symbol,
+          trade_count: pnl.closed_positions,
+          total_volume: 0,
+          estimated_pnl: pnl.total_net_pnl,
+        }));
+        setTopSymbols(topSymbolsData);
+        setStrategyPerformance(EXAMPLE_STRATEGY_PERFORMANCE as unknown as StrategyPerformance[]);
+        setRecentTrades(EXAMPLE_RECENT_TRADES.slice(0, 5) as unknown as RecentTrade[]);
+        setTrades(EXAMPLE_RECENT_TRADES as unknown as RecentTrade[]);
+        setLoading(false);
+        return;
+      }
+
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
       const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
       const startDate = dateRange.start ? dateRange.start.toISOString() : null;
       const endDate = dateRange.end ? dateRange.end.toISOString() : null;
-      
+      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
       const [metricsData, pnlData, strategiesData, tradesData, allTradesData, strategiesList] = await Promise.all([
-        invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate }),
-        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate }),
-        invoke<StrategyPerformance[]>("get_strategy_performance", { pairingMethod, startDate, endDate }),
-        invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate }),
-        invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate }),
+        invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<StrategyPerformance[]>("get_strategy_performance", { pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate, ...paperArgs }),
         invoke<Strategy[]>("get_strategies"),
       ]);
       setMetrics(metricsData);
@@ -1727,11 +1764,13 @@ export default function Dashboard() {
             const startDate = dateRange.start ? dateRange.start.toISOString() : null;
             const endDate = dateRange.end ? dateRange.end.toISOString() : null;
             
+            const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
             const filteredPairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
               strategyId: selectedStrategyId,
               pairingMethod,
               startDate,
               endDate,
+              ...paperArgs,
             });
             
             // Calculate metrics for all instances using this strategy
@@ -1892,6 +1931,11 @@ export default function Dashboard() {
               Configure
             </button>
           </div>
+          {dataMode === "paper" && (
+            <p style={{ margin: "0 0 16px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+              Paper mode — you are viewing paper trades only.
+            </p>
+          )}
           <div style={{ marginBottom: "30px" }}>
             <TimeframeSelector
               value={timeframe}
@@ -1973,6 +2017,7 @@ export default function Dashboard() {
               duplicateMetricInstance={duplicateMetricInstance}
               removeMetricInstance={removeMetricInstance}
               setMetricInstances={setMetricInstances}
+              dataMode={dataMode}
             />
           );
         })}
@@ -2168,10 +2213,10 @@ export default function Dashboard() {
                             color: symbol.estimated_pnl >= 0 ? "var(--profit)" : "var(--loss)",
                           }}
                         >
-                          ${symbol.estimated_pnl.toFixed(2)}
+                          ${formatWithCommas(symbol.estimated_pnl, { decimals: 2 })}
                         </p>
                         <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                          {symbol.trade_count} {symbol.trade_count === 1 ? "trade" : "trades"}
+                          {formatWithCommas(symbol.trade_count)} {symbol.trade_count === 1 ? "trade" : "trades"}
                         </p>
                       </div>
                     </div>
@@ -2399,11 +2444,13 @@ export default function Dashboard() {
                               const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
                               const startDate = dateRange.start ? dateRange.start.toISOString() : null;
                               const endDate = dateRange.end ? dateRange.end.toISOString() : null;
+                              const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
                               const loadedPairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
                                 strategyId: strategy.strategy_id,
                                 pairingMethod: pairingMethod,
                                 startDate: startDate,
                                 endDate: endDate,
+                                ...paperArgs,
                               });
                               setStrategyPairs(new Map(strategyPairs.set(strategyKey, loadedPairs)));
                             } catch (error) {
@@ -2432,14 +2479,14 @@ export default function Dashboard() {
                     {!isExpanded && (
                       <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
                     <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                          {totalTrades} trades
+                          {formatWithCommas(totalTrades)} trades
                     </p>
                         <p style={{ 
                           fontSize: "12px", 
                           color: totalPnL >= 0 ? "var(--profit)" : "var(--loss)",
                           fontWeight: "500"
                         }}>
-                          ${totalPnL >= 0 ? "+" : ""}{totalPnL.toFixed(2)} P&L
+                          ${totalPnL >= 0 ? "+" : ""}{formatWithCommas(totalPnL, { decimals: 2 })} P&L
                         </p>
                         {pairs.length > 0 && (
                           <p style={{ 
@@ -2447,7 +2494,7 @@ export default function Dashboard() {
                             color: winPercentage >= 50 ? "var(--profit)" : winPercentage > 0 ? "var(--text-secondary)" : "var(--loss)",
                             fontWeight: "500"
                           }}>
-                            {winPercentage.toFixed(1)}% win
+                            {formatWithCommas(winPercentage, { decimals: 1 })}% win
                           </p>
                         )}
                       </div>
@@ -2461,10 +2508,10 @@ export default function Dashboard() {
                         color: totalPnL >= 0 ? "var(--profit)" : "var(--loss)",
                       }}
                     >
-                      ${totalPnL.toFixed(2)}
+                      ${formatWithCommas(totalPnL, { decimals: 2 })}
                     </p>
                     <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                      ${(strategy.total_volume / 1000).toFixed(1)}k vol
+                      ${formatCompactNumber(strategy.total_volume, { prefix: "$" })} vol
                     </p>
                   </div>
                 </div>
@@ -2528,13 +2575,13 @@ export default function Dashboard() {
                                           {format(new Date(pair.exit_timestamp), "MMM dd, yyyy HH:mm")}
                                         </td>
                                         <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
-                                          {pair.quantity.toFixed(4)}
+                                          {formatWithCommas(pair.quantity, { minDecimals: 4, maxDecimals: 4 })}
                                         </td>
                                         <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
-                                          ${pair.entry_price.toFixed(2)}
+                                          ${formatWithCommas(pair.entry_price, { decimals: 2 })}
                                         </td>
                                         <td style={{ padding: "12px", fontSize: "14px", textAlign: "right" }}>
-                                          ${pair.exit_price.toFixed(2)}
+                                          ${formatWithCommas(pair.exit_price, { decimals: 2 })}
                                         </td>
                                         <td
                                           style={{
@@ -2545,7 +2592,7 @@ export default function Dashboard() {
                                             color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
                                           }}
                                         >
-                                          ${pair.net_profit_loss.toFixed(2)}
+                                          ${formatWithCommas(pair.net_profit_loss, { decimals: 2 })}
                                         </td>
                                       </tr>
                                     ))}
@@ -2794,7 +2841,7 @@ export default function Dashboard() {
                             color: trade.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
                           }}
                         >
-                          {trade.net_profit_loss >= 0 ? "+" : ""}${trade.net_profit_loss.toFixed(2)}
+                          {trade.net_profit_loss >= 0 ? "+" : ""}${formatWithCommas(trade.net_profit_loss, { decimals: 2 })}
                         </p>
                       </div>
                     </div>
@@ -2813,13 +2860,13 @@ export default function Dashboard() {
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
                             <span style={{ color: "var(--text-secondary)" }}>Entry:</span>
                             <span style={{ color: "var(--text-primary)" }}>
-                              {trade.quantity} @ ${trade.entry_price.toFixed(2)}
+                              {formatWithCommas(trade.quantity)} @ ${formatWithCommas(trade.entry_price, { decimals: 2 })}
                             </span>
                           </div>
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
                             <span style={{ color: "var(--text-secondary)" }}>Exit:</span>
                             <span style={{ color: "var(--text-primary)" }}>
-                              {trade.quantity} @ ${trade.exit_price.toFixed(2)}
+                              {formatWithCommas(trade.quantity)} @ ${formatWithCommas(trade.exit_price, { decimals: 2 })}
                             </span>
                           </div>
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
@@ -3067,7 +3114,7 @@ export default function Dashboard() {
                             color: trade.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
                           }}
                         >
-                          {trade.net_profit_loss >= 0 ? "+" : ""}${trade.net_profit_loss.toFixed(2)}
+                          {trade.net_profit_loss >= 0 ? "+" : ""}${formatWithCommas(trade.net_profit_loss, { decimals: 2 })}
                         </p>
                       </div>
                     </div>
@@ -3086,13 +3133,13 @@ export default function Dashboard() {
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
                             <span style={{ color: "var(--text-secondary)" }}>Entry:</span>
                             <span style={{ color: "var(--text-primary)" }}>
-                              {trade.quantity} @ ${trade.entry_price.toFixed(2)}
+                              {formatWithCommas(trade.quantity)} @ ${formatWithCommas(trade.entry_price, { decimals: 2 })}
                             </span>
                           </div>
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
                             <span style={{ color: "var(--text-secondary)" }}>Exit:</span>
                             <span style={{ color: "var(--text-primary)" }}>
-                              {trade.quantity} @ ${trade.exit_price.toFixed(2)}
+                              {formatWithCommas(trade.quantity)} @ ${formatWithCommas(trade.exit_price, { decimals: 2 })}
                             </span>
                           </div>
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
@@ -3291,7 +3338,7 @@ export default function Dashboard() {
                     color: selectedPositionGroup.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
                   }}
                 >
-                  ${selectedPositionGroup.total_pnl.toFixed(2)}
+                  ${formatWithCommas(selectedPositionGroup.total_pnl, { decimals: 2 })}
                 </p>
               </div>
               
@@ -3318,7 +3365,7 @@ export default function Dashboard() {
                     </div>
                     <div>
                       <span style={{ color: "var(--text-secondary)" }}>Price: </span>
-                      <span>${selectedPositionGroup.entry_trade.price.toFixed(2)}</span>
+                      <span>${formatWithCommas(selectedPositionGroup.entry_trade.price, { decimals: 2 })}</span>
                     </div>
                     <div>
                       <span style={{ color: "var(--text-secondary)" }}>Date: </span>
@@ -3355,7 +3402,7 @@ export default function Dashboard() {
                         </div>
                         <div>
                           <span style={{ color: "var(--text-secondary)" }}>Price: </span>
-                          <span>${trade.price.toFixed(2)}</span>
+                          <span>${formatWithCommas(trade.price, { decimals: 2 })}</span>
                         </div>
                         <div>
                           <span style={{ color: "var(--text-secondary)" }}>Date: </span>

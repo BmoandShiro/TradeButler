@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { Plus, Trash2, Calculator, X, ChevronUp, ChevronDown } from "lucide-react";
+import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import type { DataMode } from "../utils/dataMode";
 
 interface PurchaseRow {
   id: string;
@@ -17,6 +19,7 @@ const DEFAULT_ROWS: PurchaseRow[] = [
 ];
 
 export default function AverageDownCalculator() {
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [rows, setRows] = useState<PurchaseRow[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
@@ -36,6 +39,11 @@ export default function AverageDownCalculator() {
   const [averagePrice, setAveragePrice] = useState<number | null>(null);
   const [totalShares, setTotalShares] = useState<number>(0);
   const [totalCost, setTotalCost] = useState<number>(0);
+
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return unsub;
+  }, []);
 
   // Save to localStorage whenever rows change
   useEffect(() => {
@@ -142,6 +150,24 @@ export default function AverageDownCalculator() {
           marginBottom: "24px",
         }}
       >
+        {(dataMode === "sandbox" || dataMode === "paper") && (
+          <p
+            style={{
+              margin: "0 0 16px 0",
+              padding: "12px 16px",
+              fontSize: "14px",
+              fontWeight: dataMode === "paper" ? "600" : "500",
+              color: dataMode === "paper" ? "var(--accent)" : "var(--text-secondary)",
+              backgroundColor: dataMode === "paper" ? "color-mix(in srgb, var(--accent) 14%, transparent)" : "var(--bg-tertiary)",
+              border: dataMode === "paper" ? "2px solid var(--accent)" : "1px solid var(--border-color)",
+              borderRadius: "8px",
+            }}
+          >
+            {dataMode === "sandbox"
+              ? "Demo mode – this calculator works the same in all modes. Enter your own numbers to try it."
+              : "Paper mode — you are viewing paper trades only."}
+          </p>
+        )}
         <div
           style={{
             display: "flex",

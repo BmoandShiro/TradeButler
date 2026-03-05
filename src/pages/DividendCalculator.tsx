@@ -1,7 +1,11 @@
 import { useState, useEffect } from "react";
 import { Calculator, X, BarChart3, TrendingUp, ChevronUp, ChevronDown, Loader } from "lucide-react";
-import { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
+import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
 import { invoke } from "@tauri-apps/api/tauri";
+import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import type { DataMode } from "../utils/dataMode";
+import { formatCompactNumber } from "../utils/formatCompactNumber";
 
 interface DividendYearResult {
   year: number;
@@ -46,6 +50,7 @@ const DEFAULT_INPUTS: DividendInputs = {
 };
 
 export default function DividendCalculator() {
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [inputs, setInputs] = useState<DividendInputs>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
@@ -61,8 +66,15 @@ export default function DividendCalculator() {
 
   const [results, setResults] = useState<DividendYearResult[]>([]);
   const [chartType, setChartType] = useState<"line" | "bar">("line");
+  const [dividendChartBrushStart, setDividendChartBrushStart] = useState(0);
+  const [dividendChartBrushEnd, setDividendChartBrushEnd] = useState(0);
   const [ticker, setTicker] = useState("");
   const [loadingTicker, setLoadingTicker] = useState(false);
+
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return unsub;
+  }, []);
 
   // Save to localStorage whenever inputs change
   useEffect(() => {
@@ -322,6 +334,11 @@ export default function DividendCalculator() {
             <strong>Calculate the Compound Growth and Income of Dividend Growth Stocks - the Dividend Snowball Effect.</strong>{" "}
             By reinvesting your dividends (DRIP), you can increase the number of shares you own. This will result in more shares earning dividends, continuously growing your portfolio.
           </p>
+          {dataMode === "paper" && (
+            <p style={{ margin: "12px 0 0 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+              Paper mode — you are viewing paper trades only.
+            </p>
+          )}
         </div>
 
         {/* Optional Stock/ETF Selection */}
@@ -377,7 +394,10 @@ export default function DividendCalculator() {
               }}
               onClick={async () => {
                 if (!ticker.trim() || loadingTicker) return;
-                
+                if (dataMode === "sandbox") {
+                  alert("Live stock quotes are available in Real or Paper mode. In Demo you can enter share price and dividend manually.");
+                  return;
+                }
                 setLoadingTicker(true);
                 try {
                   const quote = await invoke<{
@@ -432,13 +452,16 @@ export default function DividendCalculator() {
                   setLoadingTicker(false);
                 }
               }}
-              disabled={loadingTicker || !ticker.trim()}
+              disabled={loadingTicker || !ticker.trim() || dataMode === "sandbox"}
+              title={dataMode === "sandbox" ? "Switch to Real or Paper for live stock quotes" : undefined}
             >
               {loadingTicker ? (
                 <>
                   <Loader size={16} style={{ animation: "spin 1s linear infinite" }} />
                   Loading...
                 </>
+              ) : dataMode === "sandbox" ? (
+                "Load (Real/Paper)"
               ) : (
                 "Load"
               )}
@@ -1289,7 +1312,13 @@ export default function DividendCalculator() {
                 </button>
               </div>
             </div>
-            <ResponsiveContainer width="100%" height={400}>
+            {(() => {
+              const useBrush = results.length > BRUSH_MIN_POINTS;
+              const start = useBrush && dividendChartBrushEnd > 0 ? Math.min(dividendChartBrushStart, results.length - 1) : 0;
+              const end = useBrush && dividendChartBrushEnd > 0 ? Math.min(results.length - 1, Math.max(start, dividendChartBrushEnd)) : Math.max(0, results.length - 1);
+              const brushProps = useBrush ? { startIndex: start, endIndex: end, onDragEnd: (r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setDividendChartBrushStart(r.startIndex); setDividendChartBrushEnd(r.endIndex); } } } : {};
+              return (
+            <ResponsiveContainer width="100%" height={useBrush ? 440 : 400}>
               {chartType === "line" ? (
                 <LineChart data={results}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
@@ -1302,7 +1331,7 @@ export default function DividendCalculator() {
                   <YAxis
                     stroke="var(--text-secondary)"
                     tick={{ fill: "var(--text-secondary)", fontSize: 12 }}
-                    tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`}
+                    tickFormatter={(value) => `$${formatCompactNumber(value, { decimals: 0 }).replace(/k$/, "K")}`}
                     label={{ value: "Total Dividends", angle: -90, position: "insideLeft", fill: "var(--text-secondary)" }}
                   />
                   <Tooltip
@@ -1319,9 +1348,10 @@ export default function DividendCalculator() {
                     dataKey="totalDividends"
                     stroke="var(--accent)"
                     strokeWidth={2}
-                    dot={{ fill: "var(--accent)", r: 4 }}
+                    dot={results.length > 50 ? false : { fill: "var(--accent)", r: 4 }}
                     activeDot={{ r: 6 }}
                   />
+                  {useBrush && <Brush dataKey="year" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" {...brushProps} />}
                 </LineChart>
               ) : (
                 <BarChart data={results}>
@@ -1335,7 +1365,7 @@ export default function DividendCalculator() {
                   <YAxis
                     stroke="var(--text-secondary)"
                     tick={{ fill: "var(--text-secondary)", fontSize: 12 }}
-                    tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`}
+                    tickFormatter={(value) => `$${formatCompactNumber(value, { decimals: 0 }).replace(/k$/, "K")}`}
                     label={{ value: "Total Dividends", angle: -90, position: "insideLeft", fill: "var(--text-secondary)" }}
                   />
                   <Tooltip
@@ -1348,9 +1378,12 @@ export default function DividendCalculator() {
                     labelFormatter={(label) => `Year ${label}`}
                   />
                   <Bar dataKey="totalDividends" fill="var(--accent)" />
+                  {useBrush && <Brush dataKey="year" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" {...brushProps} />}
                 </BarChart>
               )}
             </ResponsiveContainer>
+              );
+            })()}
           </div>
         )}
 

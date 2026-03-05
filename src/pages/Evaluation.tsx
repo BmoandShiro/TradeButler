@@ -3,7 +3,14 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { Settings } from "lucide-react";
 import { createPortal } from "react-dom";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
+import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
+import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import {
+  SANDBOX_EVALUATION_METRICS,
+  SANDBOX_DISTRIBUTION_CONCENTRATION,
+  SANDBOX_TILT_STATS,
+} from "../data/sandboxEvaluation";
 
 interface WeekdayPerformance {
   weekday: number;
@@ -131,6 +138,7 @@ interface TiltStats {
 }
 
 export default function Evaluation() {
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [metrics, setMetrics] = useState<EvaluationMetrics | null>(null);
   const [concentrationData, setConcentrationData] = useState<DistributionConcentrationData | null>(null);
   const [tiltData, setTiltData] = useState<TiltStats | null>(null);
@@ -150,31 +158,53 @@ export default function Evaluation() {
     return saved ? parseFloat(saved) : 10;
   });
   const [showConcentrationSettings, setShowConcentrationSettings] = useState(false);
+  const [histogramBrushStart, setHistogramBrushStart] = useState(0);
+  const [histogramBrushEnd, setHistogramBrushEnd] = useState(0);
   const concentrationSettingsButtonRef = useRef<HTMLButtonElement>(null);
   const concentrationSettingsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    setHistogramBrushEnd(0);
+  }, [timeframe, customStartDate, customEndDate, concentrationData]);
 
   const loadEvaluationData = async () => {
     try {
       setLoading(true);
+      if (dataMode === "sandbox") {
+        setMetrics(SANDBOX_EVALUATION_METRICS as unknown as EvaluationMetrics);
+        setConcentrationData(SANDBOX_DISTRIBUTION_CONCENTRATION as unknown as DistributionConcentrationData);
+        setTiltData(SANDBOX_TILT_STATS as unknown as TiltStats);
+        setLoading(false);
+        return;
+      }
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
       const { start, end } = getTimeframeDates(timeframe, customStartDate, customEndDate);
       
+      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
       const [data, concentration, tilt] = await Promise.all([
         invoke<EvaluationMetrics>("get_evaluation_metrics", {
-        pairingMethod,
+          pairingMethod,
           startDate: start ? start.toISOString() : null,
           endDate: end ? end.toISOString() : null,
+          ...paperArgs,
         }),
         invoke<DistributionConcentrationData>("get_distribution_concentration", {
           pairingMethod,
           startDate: start ? start.toISOString() : null,
           endDate: end ? end.toISOString() : null,
           concentrationPercent: concentrationPercent,
+          ...paperArgs,
         }),
         invoke<TiltStats>("get_tilt_metric", {
           pairingMethod,
           startDate: start ? start.toISOString() : null,
           endDate: end ? end.toISOString() : null,
+          ...paperArgs,
         }),
       ]);
       
@@ -191,7 +221,7 @@ export default function Evaluation() {
 
   useEffect(() => {
     loadEvaluationData();
-  }, [timeframe, customStartDate, customEndDate, concentrationPercent]);
+  }, [timeframe, customStartDate, customEndDate, concentrationPercent, dataMode]);
 
   // Click outside handler for concentration settings
   useEffect(() => {
@@ -377,7 +407,11 @@ export default function Evaluation() {
   return (
     <div style={{ padding: "30px" }}>
       <h1 style={{ fontSize: "32px", fontWeight: "bold", marginBottom: "20px" }}>Evaluation</h1>
-      
+      {dataMode === "paper" && (
+        <p style={{ margin: "0 0 16px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+          Paper mode — you are viewing paper trades only.
+        </p>
+      )}
       <div style={{ marginBottom: "30px" }}>
         <TimeframeSelector
           value={timeframe}
@@ -1016,17 +1050,22 @@ export default function Evaluation() {
           </div>
 
           {/* Histogram */}
-          {concentrationData.histogram.length > 0 && (
+          {concentrationData.histogram.length > 0 && (() => {
+            const histData = concentrationData.histogram.map(bin => ({
+              range: `$${bin.bin_start.toFixed(0)} - $${bin.bin_end.toFixed(0)}`,
+              count: bin.count,
+              total_pnl: bin.total_pnl,
+            }));
+            const useBrush = histData.length > BRUSH_MIN_POINTS;
+            const start = useBrush && histogramBrushEnd > 0 ? Math.min(histogramBrushStart, histData.length - 1) : 0;
+            const end = useBrush && histogramBrushEnd > 0 ? Math.min(histData.length - 1, Math.max(start, histogramBrushEnd)) : Math.max(0, histData.length - 1);
+            return (
             <div style={{ marginBottom: "30px" }}>
               <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px" }}>
                 Distribution of Returns
               </h3>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={concentrationData.histogram.map(bin => ({
-                  range: `$${bin.bin_start.toFixed(0)} - $${bin.bin_end.toFixed(0)}`,
-                  count: bin.count,
-                  total_pnl: bin.total_pnl,
-                }))}>
+              <ResponsiveContainer width="100%" height={useBrush ? 340 : 300}>
+                <BarChart data={histData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                   <XAxis 
                     dataKey="range" 
@@ -1045,10 +1084,14 @@ export default function Evaluation() {
                     }}
                   />
                   <Bar dataKey="count" fill="var(--text-primary)" />
+                  {useBrush && (
+                    <Brush dataKey="range" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setHistogramBrushStart(r.startIndex); setHistogramBrushEnd(r.endIndex); } }} />
+                  )}
                 </BarChart>
               </ResponsiveContainer>
             </div>
-          )}
+            );
+          })()}
 
           {/* Concentration Summary */}
           <div style={{ marginBottom: "30px" }}>

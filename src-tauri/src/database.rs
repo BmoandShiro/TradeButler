@@ -101,6 +101,8 @@ pub struct JournalTrade {
     pub emotional_state: Option<String>,
     pub notes: Option<String>,
     pub outcome: Option<String>,
+    /// User-entered R-multiple for this journal trade (positive/negative).
+    pub r_multiple: Option<f64>,
     pub trade_order: i64,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
@@ -275,6 +277,7 @@ pub fn init_database(db_path: &Path) -> Result<()> {
             emotional_state TEXT,
             notes TEXT,
             outcome TEXT,
+            r_multiple REAL,
             trade_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -288,6 +291,14 @@ pub fn init_database(db_path: &Path) -> Result<()> {
     let _ = conn.execute("ALTER TABLE journal_trades ADD COLUMN timeframe TEXT", []);
     let _ = conn.execute("ALTER TABLE journal_trades ADD COLUMN entry_type TEXT", []);
     let _ = conn.execute("ALTER TABLE journal_trades ADD COLUMN exit_type TEXT", []);
+    let has_r_multiple: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_trades') WHERE name='r_multiple'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_r_multiple {
+        conn.execute("ALTER TABLE journal_trades ADD COLUMN r_multiple REAL", [])?;
+    }
 
     // Create index for journal_entries
     conn.execute(
@@ -335,6 +346,26 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         conn.execute("ALTER TABLE journal_entries ADD COLUMN linked_trade_ids TEXT", [])?;
     }
 
+    // journal_entries: separate real vs paper (0 = real, 1 = paper)
+    let has_je_is_paper: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_entries') WHERE name='is_paper'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_je_is_paper {
+        conn.execute("ALTER TABLE journal_entries ADD COLUMN is_paper INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+
+    // emotional_states: separate real vs paper (0 = real, 1 = paper)
+    let has_es_is_paper: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='is_paper'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_es_is_paper {
+        conn.execute("ALTER TABLE emotional_states ADD COLUMN is_paper INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+
     // Migration: Add journal_trade_ids column for Analysis/Mantra trade association (nullable = entry-level, JSON array = specific trades)
     let has_column: bool = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='journal_trade_ids'",
@@ -343,6 +374,73 @@ pub fn init_database(db_path: &Path) -> Result<()> {
     ).unwrap_or(0) > 0;
     if !has_column {
         conn.execute("ALTER TABLE journal_checklist_responses ADD COLUMN journal_trade_ids TEXT", [])?;
+    }
+
+    // Migration: response_value for survey items (1-5 scale); null = legacy Yes/No (is_checked)
+    let has_response_value: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='response_value'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_response_value {
+        conn.execute("ALTER TABLE journal_checklist_responses ADD COLUMN response_value INTEGER", [])?;
+    }
+
+    // Custom survey metrics per strategy (name, description, formula, which survey items) — like Psychological Metrics but user-defined
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS strategy_survey_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            formula_type TEXT NOT NULL DEFAULT 'avg',
+            item_ids TEXT NOT NULL,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (strategy_id) REFERENCES strategies(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_strategy_survey_metrics_strategy ON strategy_survey_metrics(strategy_id)",
+        [],
+    )?;
+    // Migration: color_scale for custom metrics (JSON: {"type":"gradient","preset":"ryg"} or {"type":"static","hex":"#..."})
+    let has_color_scale: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_survey_metrics') WHERE name='color_scale'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_color_scale {
+        conn.execute("ALTER TABLE strategy_survey_metrics ADD COLUMN color_scale TEXT", [])?;
+    }
+
+    // Calculation presets (saved formula templates: name + formula_type for reuse in metrics)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS strategy_calculation_presets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            formula_type TEXT NOT NULL DEFAULT 'avg',
+            display_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (strategy_id) REFERENCES strategies(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_strategy_calculation_presets_strategy ON strategy_calculation_presets(strategy_id)",
+        [],
+    )?;
+    let has_formula_expression: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_calculation_presets') WHERE name='formula_expression'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_formula_expression {
+        conn.execute("ALTER TABLE strategy_calculation_presets ADD COLUMN formula_expression TEXT", [])?;
     }
 
     // emotional_states: link to journal entry and/or journal trade (implementation)

@@ -37,6 +37,8 @@ import {
   resetGalaxyThemeSettings,
   GalaxyThemeSettings,
 } from "../utils/galaxyThemeManager";
+import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import type { DataMode } from "../utils/dataMode";
 
 interface VersionInfo {
   current: string;
@@ -49,6 +51,7 @@ interface VersionInfo {
 }
 
 export default function Settings() {
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [isChecking, setIsChecking] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -440,6 +443,11 @@ export default function Settings() {
     }, 3000);
   };
 
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return unsub;
+  }, []);
+
   return (
     <div
       style={{
@@ -473,6 +481,27 @@ export default function Settings() {
             Settings
           </h1>
         </div>
+
+        {dataMode === "sandbox" && (
+          <div
+            style={{
+              padding: "12px 16px",
+              marginBottom: "24px",
+              backgroundColor: "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              fontSize: "13px",
+              color: "var(--text-secondary)",
+            }}
+          >
+            Demo mode – app settings, theme, and version check use your connection. Switch to Real or Paper for live trade data.
+          </div>
+        )}
+        {dataMode === "paper" && (
+          <p style={{ margin: "0 0 24px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+            Paper mode — you are viewing paper trades only.
+          </p>
+        )}
 
         {/* Theme Customization Section */}
         <div

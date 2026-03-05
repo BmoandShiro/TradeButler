@@ -1,9 +1,17 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/tauri";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea } from "recharts";
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Brush } from "recharts";
 import { TrendingUp, TrendingDown, Settings } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
+import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import { formatWithCommas } from "../utils/formatCompactNumber";
+import { sampleTimeSeries, CHART_MAX_POINTS, xAxisInterval, BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
+import { loadSandboxState } from "../utils/sandboxStore";
+import {
+  EXAMPLE_SYMBOL_PNL,
+  EXAMPLE_EQUITY_CURVE,
+} from "../exampleData";
 
 interface Trade {
   id: number;
@@ -117,13 +125,44 @@ export default function Analytics() {
     return saved !== "false"; // Default to true
   });
   const [showEquitySettings, setShowEquitySettings] = useState(false);
+  const [equityBrushStart, setEquityBrushStart] = useState(0);
+  const [equityBrushEnd, setEquityBrushEnd] = useState(0);
+  const [symbolChartBrushStart, setSymbolChartBrushStart] = useState(0);
+  const [symbolChartBrushEnd, setSymbolChartBrushEnd] = useState(0);
+  const [sideChartBrushStart, setSideChartBrushStart] = useState(0);
+  const [sideChartBrushEnd, setSideChartBrushEnd] = useState(0);
+  const [entriesChartBrushStart, setEntriesChartBrushStart] = useState(0);
+  const [entriesChartBrushEnd, setEntriesChartBrushEnd] = useState(0);
+  const [positionsChartBrushStart, setPositionsChartBrushStart] = useState(0);
+  const [positionsChartBrushEnd, setPositionsChartBrushEnd] = useState(0);
+  const [outcomeChartBrushStart, setOutcomeChartBrushStart] = useState(0);
+  const [outcomeChartBrushEnd, setOutcomeChartBrushEnd] = useState(0);
   const equitySettingsRef = useRef<HTMLDivElement>(null);
   const equitySettingsButtonRef = useRef<HTMLButtonElement>(null);
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
 
 
   useEffect(() => {
     loadData();
+  }, [timeframe, customStartDate, customEndDate, dataMode]);
+
+  useEffect(() => {
+    setEquityBrushEnd(0);
+    setSymbolChartBrushEnd(0);
+    setSideChartBrushEnd(0);
+    setEntriesChartBrushEnd(0);
+    setPositionsChartBrushEnd(0);
+    setOutcomeChartBrushEnd(0);
   }, [timeframe, customStartDate, customEndDate]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToDataMode((mode) => {
+      setDataMode(mode);
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   // Close settings menu when clicking outside
   useEffect(() => {
@@ -174,16 +213,27 @@ export default function Analytics() {
 
   const loadData = async () => {
     try {
+      if (dataMode === "sandbox") {
+        const state = loadSandboxState();
+        setTrades(state.trades as unknown as Trade[]);
+        setSymbolPnL(EXAMPLE_SYMBOL_PNL as unknown as SymbolPnL[]);
+        setEquityCurve(EXAMPLE_EQUITY_CURVE as unknown as EquityCurveData);
+        setJournalEntries(state.journalEntries as unknown as JournalEntry[]);
+        setJournalTrades(state.journalTrades as unknown as JournalTrade[]);
+        return;
+      }
+
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
       const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
       const startDate = dateRange.start ? dateRange.start.toISOString() : null;
       const endDate = dateRange.end ? dateRange.end.toISOString() : null;
       
+      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
       const [tradesData, pnlData, equityData, journalEntriesData, journalTradesData] = await Promise.all([
-        invoke<Trade[]>("get_trades"),
-        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate }),
-        invoke<EquityCurveData>("get_equity_curve", { pairingMethod, startDate, endDate }),
-        invoke<JournalEntry[]>("get_journal_entries"),
+        invoke<Trade[]>("get_trades", paperArgs),
+        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<EquityCurveData>("get_equity_curve", { pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<JournalEntry[]>("get_journal_entries", paperArgs),
         invoke<JournalTrade[]>("get_all_journal_trades"),
       ]);
       setTrades(tradesData);
@@ -328,6 +378,115 @@ export default function Analytics() {
     return result;
   };
 
+  // Compute drawdown metrics and best surge from a slice of equity points (for visible/filtered range)
+  const computeDrawdownFromPoints = (points: { date: string; cumulative_pnl: number }[]): { metrics: DrawdownMetrics; best_surge_start: string | null; best_surge_end: string | null; best_surge_value: number } => {
+    if (points.length === 0) {
+      return {
+        metrics: { max_drawdown: 0, max_drawdown_pct: 0, max_drawdown_start: null, max_drawdown_end: null, avg_drawdown: 0, longest_drawdown_days: 0, longest_drawdown_start: null, longest_drawdown_end: null },
+        best_surge_start: null,
+        best_surge_end: null,
+        best_surge_value: 0,
+      };
+    }
+    let peak = points[0].cumulative_pnl;
+    let peakDate = points[0].date; // date of the high-water mark (peak before drawdown)
+    let maxDd = 0;
+    let maxDdStart: string | null = null;
+    let maxDdEnd: string | null = null;
+    let drawdownSum = 0;
+    let drawdownCount = 0;
+    let currentDrawdownDays = 0;
+    let longestDays = 0;
+    let longestStart: string | null = null;
+    let longestEnd: string | null = null;
+    let surgeStartDate: string | null = points[0].date;
+    let surgeStartEquity = points[0].cumulative_pnl;
+    let bestSurgeValue = 0;
+    let bestSurgeStart: string | null = null;
+    let bestSurgeEnd: string | null = null;
+    let inDrawdown = false;
+    let drawdownStartDate: string | null = null;
+
+    for (let i = 0; i < points.length; i++) {
+      const { date, cumulative_pnl } = points[i];
+      if (cumulative_pnl > peak) {
+        peak = cumulative_pnl;
+        peakDate = date;
+        surgeStartDate = date;
+        surgeStartEquity = cumulative_pnl;
+      }
+      const drawdown = peak - cumulative_pnl;
+
+      if (drawdown > maxDd) {
+        maxDd = drawdown;
+        maxDdStart = peakDate; // start at the high-water mark (peak)
+        maxDdEnd = date;       // end at the trough
+      }
+      if (drawdown > 0) {
+        drawdownSum += drawdown;
+        drawdownCount++;
+        if (!inDrawdown) {
+          inDrawdown = true;
+          drawdownStartDate = date;
+          currentDrawdownDays = 1;
+        } else {
+          currentDrawdownDays++;
+        }
+      } else {
+        if (inDrawdown && currentDrawdownDays > longestDays) {
+          longestDays = currentDrawdownDays;
+          longestStart = drawdownStartDate;
+          longestEnd = date;
+        }
+        inDrawdown = false;
+        currentDrawdownDays = 0;
+        drawdownStartDate = null;
+      }
+      if (surgeStartDate && cumulative_pnl > surgeStartEquity) {
+        const surgeValue = cumulative_pnl - surgeStartEquity;
+        if (surgeValue > bestSurgeValue) {
+          bestSurgeValue = surgeValue;
+          bestSurgeStart = surgeStartDate;
+          bestSurgeEnd = date;
+        }
+      }
+    }
+    if (inDrawdown && currentDrawdownDays > longestDays) {
+      longestDays = currentDrawdownDays;
+      longestStart = drawdownStartDate;
+      longestEnd = points[points.length - 1]?.date ?? null;
+    }
+    const avgDrawdown = drawdownCount > 0 ? drawdownSum / drawdownCount : 0;
+    const maxDdPct = peak > 0 ? (maxDd / peak) * 100 : 0;
+    return {
+      metrics: {
+        max_drawdown: maxDd,
+        max_drawdown_pct: maxDdPct,
+        max_drawdown_start: maxDdStart,
+        max_drawdown_end: maxDdEnd,
+        avg_drawdown: avgDrawdown,
+        longest_drawdown_days: longestDays,
+        longest_drawdown_start: longestStart,
+        longest_drawdown_end: longestEnd,
+      },
+      best_surge_start: bestSurgeStart,
+      best_surge_end: bestSurgeEnd,
+      best_surge_value: bestSurgeValue,
+    };
+  };
+
+  // Visible drawdown/surge: from brushed or full chart range (updates with timeframe + brush)
+  const visibleDrawdown = useMemo(() => {
+    if (!equityCurve || !Array.isArray(equityCurve.equity_points) || equityCurve.equity_points.length === 0) return null;
+    const raw = fillMissingDates(equityCurve.equity_points);
+    const chartData = raw.length <= 400 ? raw : sampleTimeSeries(raw, CHART_MAX_POINTS);
+    const useBrush = chartData.length > 24 && equityBrushEnd > 0;
+    const start = useBrush ? Math.min(equityBrushStart, chartData.length - 1) : 0;
+    const end = useBrush ? Math.min(chartData.length - 1, Math.max(start, equityBrushEnd)) : chartData.length - 1;
+    const slice = chartData.slice(start, end + 1).map((p) => ({ date: p.date, cumulative_pnl: p.cumulative_pnl }));
+    return computeDrawdownFromPoints(slice);
+  }, [equityCurve, equityBrushStart, equityBrushEnd, timeframe, customStartDate, customEndDate]);
+
   // Process trades for charts
   const processChartData = () => {
     const symbolCounts: Record<string, number> = {};
@@ -425,7 +584,11 @@ export default function Analytics() {
       <h1 style={{ fontSize: "32px", fontWeight: "bold", marginBottom: "20px" }}>
         Analytics
       </h1>
-      
+      {dataMode === "paper" && (
+        <p style={{ margin: "0 0 16px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+          Paper mode — you are viewing paper trades only.
+        </p>
+      )}
       <div style={{ marginBottom: "30px" }}>
         <TimeframeSelector
           value={timeframe}
@@ -568,102 +731,159 @@ export default function Analytics() {
                 </div>
               </div>
               
-              {/* Drawdown Metrics */}
+              {/* Drawdown Metrics (reflect timeframe + brush/scroll) */}
+              {(() => {
+                const dd = visibleDrawdown ?? { metrics: equityCurve.drawdown_metrics, best_surge_start: equityCurve.best_surge_start, best_surge_end: equityCurve.best_surge_end, best_surge_value: equityCurve.best_surge_value };
+                const m = dd.metrics;
+                return (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px", marginBottom: "20px" }}>
                 <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                   <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Max Drawdown</div>
                   <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--loss)" }}>
-                    ${equityCurve.drawdown_metrics.max_drawdown.toFixed(2)}
+                    ${formatWithCommas(m.max_drawdown, { decimals: 2 })}
                   </div>
                   <div style={{ fontSize: "14px", color: "var(--loss)" }}>
-                    {equityCurve.drawdown_metrics.max_drawdown_pct.toFixed(2)}%
+                    {formatWithCommas(m.max_drawdown_pct, { decimals: 2 })}%
                   </div>
                 </div>
                 <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                   <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Avg Drawdown</div>
                   <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>
-                    ${equityCurve.drawdown_metrics.avg_drawdown.toFixed(2)}
+                    ${formatWithCommas(m.avg_drawdown, { decimals: 2 })}
                   </div>
                 </div>
                 <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                   <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Longest Drawdown</div>
                   <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>
-                    {equityCurve.drawdown_metrics.longest_drawdown_days} days
+                    {m.longest_drawdown_days} days
                   </div>
-                  {equityCurve.drawdown_metrics.longest_drawdown_start && (
+                  {m.longest_drawdown_start && (
                     <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
-                      {equityCurve.drawdown_metrics.longest_drawdown_start} - {equityCurve.drawdown_metrics.longest_drawdown_end || "Ongoing"}
+                      {m.longest_drawdown_start} - {m.longest_drawdown_end || "Ongoing"}
                     </div>
                   )}
                 </div>
-                {equityCurve.best_surge_start && (
+                {dd.best_surge_start && dd.best_surge_value > 0 && (
                   <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                     <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Best Surge</div>
                     <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--profit)" }}>
-                      ${equityCurve.best_surge_value.toFixed(2)}
+                      ${formatWithCommas(dd.best_surge_value, { decimals: 2 })}
                     </div>
                     <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
-                      {equityCurve.best_surge_start} - {equityCurve.best_surge_end || "Ongoing"}
+                      {dd.best_surge_start} - {dd.best_surge_end || "Ongoing"}
                     </div>
                   </div>
                 )}
               </div>
+                );
+              })()}
               
               {/* Equity Curve Chart */}
-              <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={
-                  // Always fill dates when a specific timeframe is selected (not "all")
-                  // This ensures the chart shows the full date range on the X-axis
-                  // For "All Time", only fill if scaleEvenly is enabled
-                  timeframe !== "all" 
-                    ? fillMissingDates(equityCurve.equity_points)
-                    : scaleEvenly 
-                      ? fillMissingDates(equityCurve.equity_points)
-                      : equityCurve.equity_points
-                }>
+              {(() => {
+                // Always fill to one point per calendar day so the curve changes daily (flat on no-trade days, move on trade days)
+                const rawEquityData = fillMissingDates(equityCurve.equity_points);
+                // Keep daily granularity when feasible (e.g. up to ~1 year); otherwise sample for performance
+                const equityChartData = rawEquityData.length <= 400
+                  ? rawEquityData
+                  : sampleTimeSeries(rawEquityData, CHART_MAX_POINTS);
+                const equityUseBrush = equityChartData.length > 24;
+                const equityBrushStartClamped =
+                  equityUseBrush && equityBrushEnd > 0
+                    ? Math.min(equityBrushStart, equityChartData.length - 1)
+                    : 0;
+                const equityBrushEndClamped =
+                  equityUseBrush && equityBrushEnd > 0
+                    ? Math.min(equityChartData.length - 1, Math.max(equityBrushStartClamped, equityBrushEnd))
+                    : Math.max(0, equityChartData.length - 1);
+                const equityXInterval = xAxisInterval(Math.max(1, equityBrushEndClamped - equityBrushStartClamped + 1));
+                // Use visible (brushed) segment for Y domain so the line isn't flat when viewing a narrow range
+                const visibleSlice = equityChartData.slice(equityBrushStartClamped, equityBrushEndClamped + 1);
+                const visiblePnls = visibleSlice.map((d: { cumulative_pnl?: number }) => d.cumulative_pnl ?? 0).filter((v: number) => typeof v === "number" && !Number.isNaN(v));
+                const minPnl = visiblePnls.length ? Math.min(...visiblePnls) : 0;
+                const maxPnl = visiblePnls.length ? Math.max(...visiblePnls) : 0;
+                const range = Math.max(maxPnl - minPnl, Math.abs(minPnl) * 0.1, 100);
+                const padding = range * 0.08;
+                const domainMin = minPnl - padding;
+                const domainMax = maxPnl + padding;
+                // Snap a date range to chart data so ReferenceArea boundaries align with data points (fixes jagged edges)
+                const snapToChartData = (startDate: string, endDate: string): { x1: string; x2: string } | null => {
+                  const dates = equityChartData.map((d: { date: string }) => d.date);
+                  const firstIdx = dates.findIndex((d) => d >= startDate);
+                  const lastIdx = dates.reduce((acc, d, i) => (d <= endDate ? i : acc), -1);
+                  if (firstIdx < 0 || lastIdx < 0 || firstIdx > lastIdx) return null;
+                  return { x1: dates[firstIdx], x2: dates[lastIdx] };
+                };
+                const m = visibleDrawdown ? visibleDrawdown.metrics : equityCurve.drawdown_metrics;
+                const surge = visibleDrawdown ? { start: visibleDrawdown.best_surge_start, end: visibleDrawdown.best_surge_end } : { start: equityCurve.best_surge_start, end: equityCurve.best_surge_end };
+                const maxDdRange = m.max_drawdown_start && m.max_drawdown_end ? snapToChartData(m.max_drawdown_start, m.max_drawdown_end) : null;
+                const surgeRange = surge.start && surge.end ? snapToChartData(surge.start, surge.end) : null;
+                const longestDdRange = m.longest_drawdown_start && m.longest_drawdown_end ? snapToChartData(m.longest_drawdown_start, m.longest_drawdown_end) : null;
+                return (
+              <ResponsiveContainer width="100%" height={equityUseBrush ? 440 : 400}>
+                <LineChart data={equityChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                  <XAxis 
-                    dataKey="date" 
+                  <XAxis
+                    dataKey="date"
+                    interval={equityXInterval}
                     stroke="var(--text-secondary)"
                     tick={{ fill: "var(--text-secondary)", fontSize: 12 }}
                     angle={-45}
                     textAnchor="end"
                     height={80}
                   />
-                  <YAxis 
+                  <YAxis
+                    domain={[domainMin, domainMax]}
                     stroke="var(--text-secondary)"
                     tick={{ fill: "var(--text-secondary)", fontSize: 12 }}
-                    tickFormatter={(value) => `$${value.toFixed(0)}`}
+                    tickFormatter={(value) => `$${formatWithCommas(value, { decimals: 0 })}`}
                   />
                   <Tooltip
+                    cursor={{ fill: "rgba(255,255,255,0.02)" }}
                     contentStyle={{
                       backgroundColor: "var(--bg-tertiary)",
                       border: "1px solid var(--border-color)",
                       color: "var(--text-primary)",
                     }}
-                    formatter={(value: any) => [`$${Number(value).toFixed(2)}`, "Cumulative P&L"]}
+                    formatter={(value: any) => [`$${formatWithCommas(Number(value), { decimals: 2 })}`, "Cumulative P&L"]}
                     labelFormatter={(label) => `Date: ${label}`}
                   />
                   
-                  {/* Highlight max drawdown zone */}
-                  {showMaxDrawdown && equityCurve.drawdown_metrics.max_drawdown_start && equityCurve.drawdown_metrics.max_drawdown_end && (
+                  {/* Longest drawdown zone (aligns to chart data for clean edges) */}
+                  {longestDdRange && (
                     <ReferenceArea
-                      x1={equityCurve.drawdown_metrics.max_drawdown_start}
-                      x2={equityCurve.drawdown_metrics.max_drawdown_end}
-                      stroke="rgba(239, 68, 68, 0.3)"
-                      fill="rgba(239, 68, 68, 0.1)"
-                      label="Max Drawdown"
+                      x1={longestDdRange.x1}
+                      x2={longestDdRange.x2}
+                      stroke="rgba(245, 158, 11, 0.5)"
+                      strokeWidth={1}
+                      fill="rgba(245, 158, 11, 0.12)"
+                      label="Longest Drawdown"
+                      isAnimationActive={false}
                     />
                   )}
                   
-                  {/* Highlight best surge zone */}
-                  {equityCurve.best_surge_start && equityCurve.best_surge_end && (
+                  {/* Highlight max drawdown zone (snapped to chart data for clean left/right edges) */}
+                  {showMaxDrawdown && maxDdRange && (
                     <ReferenceArea
-                      x1={equityCurve.best_surge_start}
-                      x2={equityCurve.best_surge_end}
-                      stroke="rgba(34, 197, 94, 0.3)"
+                      x1={maxDdRange.x1}
+                      x2={maxDdRange.x2}
+                      stroke="rgba(239, 68, 68, 0.5)"
+                      strokeWidth={1}
+                      fill="rgba(239, 68, 68, 0.1)"
+                      label="Max Drawdown"
+                      isAnimationActive={false}
+                    />
+                  )}
+                  
+                  {/* Highlight best surge zone (snapped to chart data) */}
+                  {surgeRange && (
+                    <ReferenceArea
+                      x1={surgeRange.x1}
+                      x2={surgeRange.x2}
+                      stroke="rgba(34, 197, 94, 0.5)"
+                      strokeWidth={1}
                       fill="rgba(34, 197, 94, 0.1)"
                       label="Best Surge"
+                      isAnimationActive={false}
                     />
                   )}
                   
@@ -673,11 +893,32 @@ export default function Analytics() {
                     dataKey="cumulative_pnl"
                     stroke="var(--accent)"
                     strokeWidth={2}
+                    strokeOpacity={0.9}
                     dot={false}
+                    activeDot={{ r: 6, fill: "var(--accent)", stroke: "var(--bg-secondary)", strokeWidth: 2 }}
                     name="Cumulative P&L"
                   />
+                  {equityUseBrush && (
+                    <Brush
+                      data={equityChartData}
+                      dataKey="date"
+                      height={36}
+                      stroke="var(--border-color)"
+                      fill="var(--bg-tertiary)"
+                      startIndex={equityBrushStartClamped}
+                      endIndex={equityBrushEndClamped}
+                      onDragEnd={(range: { startIndex?: number; endIndex?: number }) => {
+                        if (range.startIndex != null && range.endIndex != null) {
+                          setEquityBrushStart(range.startIndex);
+                          setEquityBrushEnd(range.endIndex);
+                        }
+                      }}
+                    />
+                  )}
                 </LineChart>
               </ResponsiveContainer>
+                );
+              })()}
             </div>
           )}
 
@@ -732,12 +973,12 @@ export default function Analytics() {
                         <td style={{ padding: "12px", fontWeight: "600" }}>{pnl.symbol}</td>
                         <td style={{ padding: "12px", textAlign: "right" }}>{pnl.closed_positions}</td>
                         <td style={{ padding: "12px", textAlign: "right", color: pnl.open_position_qty > 0 ? "var(--accent)" : "var(--text-secondary)" }}>
-                          {pnl.open_position_qty > 0 ? pnl.open_position_qty.toFixed(4) : "—"}
+                          {pnl.open_position_qty > 0 ? formatWithCommas(pnl.open_position_qty, { minDecimals: 4, maxDecimals: 4 }) : "—"}
                         </td>
                         <td style={{ padding: "12px", textAlign: "right" }}>
                           {pnl.closed_positions > 0 ? (
                             <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "4px" }}>
-                              {(pnl.win_rate * 100).toFixed(1)}%
+                              {formatWithCommas(pnl.win_rate * 100, { decimals: 1 })}%
                               {pnl.win_rate >= 0.5 ? (
                                 <TrendingUp size={14} color="var(--profit)" />
                               ) : (
@@ -756,10 +997,10 @@ export default function Analytics() {
                             color: pnl.total_gross_pnl >= 0 ? "var(--profit)" : "var(--loss)",
                           }}
                         >
-                          ${pnl.total_gross_pnl.toFixed(2)}
+                          ${formatWithCommas(pnl.total_gross_pnl, { decimals: 2 })}
                         </td>
                         <td style={{ padding: "12px", textAlign: "right", color: "var(--text-secondary)" }}>
-                          ${pnl.total_fees.toFixed(2)}
+                          ${formatWithCommas(pnl.total_fees, { decimals: 2 })}
                         </td>
                         <td
                           style={{
@@ -770,7 +1011,7 @@ export default function Analytics() {
                             color: pnl.total_net_pnl >= 0 ? "var(--profit)" : "var(--loss)",
                           }}
                         >
-                          ${pnl.total_net_pnl.toFixed(2)}
+                          ${formatWithCommas(pnl.total_net_pnl, { decimals: 2 })}
                         </td>
                       </tr>
                     ))}
@@ -791,21 +1032,32 @@ export default function Analytics() {
             <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "20px" }}>
               Trades by Symbol
             </h2>
-            <ResponsiveContainer width="100%" height={300}>
+            {(() => {
+              const useBrush = symbolData.length > BRUSH_MIN_POINTS;
+              const start = useBrush && symbolChartBrushEnd > 0 ? Math.min(symbolChartBrushStart, symbolData.length - 1) : 0;
+              const end = useBrush && symbolChartBrushEnd > 0 ? Math.min(symbolData.length - 1, Math.max(start, symbolChartBrushEnd)) : Math.max(0, symbolData.length - 1);
+              return (
+            <ResponsiveContainer width="100%" height={useBrush ? 340 : 300}>
               <BarChart data={symbolData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                <XAxis dataKey="symbol" stroke="var(--text-secondary)" />
+                <XAxis dataKey="symbol" stroke="var(--text-secondary)" interval={symbolData.length > 20 ? Math.floor(symbolData.length / 10) : 0} />
                 <YAxis stroke="var(--text-secondary)" />
                 <Tooltip
+                  cursor={{ fill: "rgba(255,255,255,0.02)" }}
                   contentStyle={{
                     backgroundColor: "var(--bg-tertiary)",
                     border: "1px solid var(--border-color)",
                     color: "var(--text-primary)",
                   }}
                 />
-                <Bar dataKey="count" fill="var(--accent)" />
+                <Bar dataKey="count" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                {useBrush && (
+                  <Brush dataKey="symbol" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setSymbolChartBrushStart(r.startIndex); setSymbolChartBrushEnd(r.endIndex); } }} />
+                )}
               </BarChart>
             </ResponsiveContainer>
+              );
+            })()}
           </div>
 
           <div
@@ -819,21 +1071,32 @@ export default function Analytics() {
             <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "20px" }}>
               Buy vs Sell
             </h2>
-            <ResponsiveContainer width="100%" height={300}>
+            {(() => {
+              const useBrush = sideData.length > BRUSH_MIN_POINTS;
+              const start = useBrush && sideChartBrushEnd > 0 ? Math.min(sideChartBrushStart, sideData.length - 1) : 0;
+              const end = useBrush && sideChartBrushEnd > 0 ? Math.min(sideData.length - 1, Math.max(start, sideChartBrushEnd)) : Math.max(0, sideData.length - 1);
+              return (
+            <ResponsiveContainer width="100%" height={useBrush ? 340 : 300}>
               <BarChart data={sideData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                 <XAxis dataKey="name" stroke="var(--text-secondary)" />
                 <YAxis stroke="var(--text-secondary)" />
                 <Tooltip
+                  cursor={{ fill: "rgba(255,255,255,0.02)" }}
                   contentStyle={{
                     backgroundColor: "var(--bg-tertiary)",
                     border: "1px solid var(--border-color)",
                     color: "var(--text-primary)",
                   }}
                 />
-                <Bar dataKey="value" fill="var(--accent)" />
+                <Bar dataKey="value" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                {useBrush && (
+                  <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setSideChartBrushStart(r.startIndex); setSideChartBrushEnd(r.endIndex); } }} />
+                )}
               </BarChart>
             </ResponsiveContainer>
+              );
+            })()}
           </div>
 
           <div
@@ -862,12 +1125,18 @@ export default function Analytics() {
                       No entries in the selected timeframe.
                     </p>
                   ) : (
-                    <ResponsiveContainer width="100%" height={260}>
+                    (() => {
+                      const useBrush = entriesByMonth.length > BRUSH_MIN_POINTS;
+                      const start = useBrush && entriesChartBrushEnd > 0 ? Math.min(entriesChartBrushStart, entriesByMonth.length - 1) : 0;
+                      const end = useBrush && entriesChartBrushEnd > 0 ? Math.min(entriesByMonth.length - 1, Math.max(start, entriesChartBrushEnd)) : Math.max(0, entriesByMonth.length - 1);
+                      return (
+                    <ResponsiveContainer width="100%" height={useBrush ? 300 : 260}>
                       <BarChart data={entriesByMonth}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                         <XAxis dataKey="month" stroke="var(--text-secondary)" />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                         <Tooltip
+                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
                           contentStyle={{
                             backgroundColor: "var(--bg-tertiary)",
                             border: "1px solid var(--border-color)",
@@ -875,9 +1144,14 @@ export default function Analytics() {
                           }}
                           formatter={(value: any) => [value, "Entries"]}
                         />
-                        <Bar dataKey="count" fill="var(--accent)" />
+                        <Bar dataKey="count" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                        {useBrush && (
+                          <Brush dataKey="month" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setEntriesChartBrushStart(r.startIndex); setEntriesChartBrushEnd(r.endIndex); } }} />
+                        )}
                       </BarChart>
                     </ResponsiveContainer>
+                      );
+                    })()
                   )}
                 </div>
 
@@ -890,12 +1164,18 @@ export default function Analytics() {
                       No implementation trades recorded in your journals for this timeframe.
                     </p>
                   ) : (
-                    <ResponsiveContainer width="100%" height={260}>
+                    (() => {
+                      const useBrush = positionsData.length > BRUSH_MIN_POINTS;
+                      const start = useBrush && positionsChartBrushEnd > 0 ? Math.min(positionsChartBrushStart, positionsData.length - 1) : 0;
+                      const end = useBrush && positionsChartBrushEnd > 0 ? Math.min(positionsData.length - 1, Math.max(start, positionsChartBrushEnd)) : Math.max(0, positionsData.length - 1);
+                      return (
+                    <ResponsiveContainer width="100%" height={useBrush ? 300 : 260}>
                       <BarChart data={positionsData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                         <XAxis dataKey="position" stroke="var(--text-secondary)" />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                         <Tooltip
+                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
                           contentStyle={{
                             backgroundColor: "var(--bg-tertiary)",
                             border: "1px solid var(--border-color)",
@@ -903,9 +1183,14 @@ export default function Analytics() {
                           }}
                           formatter={(value: any) => [value, "Trades"]}
                         />
-                        <Bar dataKey="count" fill="var(--accent)" />
+                        <Bar dataKey="count" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                        {useBrush && (
+                          <Brush dataKey="position" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setPositionsChartBrushStart(r.startIndex); setPositionsChartBrushEnd(r.endIndex); } }} />
+                        )}
                       </BarChart>
                     </ResponsiveContainer>
+                      );
+                    })()
                   )}
                 </div>
 
@@ -918,12 +1203,18 @@ export default function Analytics() {
                       No outcomes recorded in your journals for this timeframe.
                     </p>
                   ) : (
-                    <ResponsiveContainer width="100%" height={260}>
+                    (() => {
+                      const useBrush = outcomeData.length > BRUSH_MIN_POINTS;
+                      const start = useBrush && outcomeChartBrushEnd > 0 ? Math.min(outcomeChartBrushStart, outcomeData.length - 1) : 0;
+                      const end = useBrush && outcomeChartBrushEnd > 0 ? Math.min(outcomeData.length - 1, Math.max(start, outcomeChartBrushEnd)) : Math.max(0, outcomeData.length - 1);
+                      return (
+                    <ResponsiveContainer width="100%" height={useBrush ? 300 : 260}>
                       <BarChart data={outcomeData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                         <XAxis dataKey="outcome" stroke="var(--text-secondary)" />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                         <Tooltip
+                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
                           contentStyle={{
                             backgroundColor: "var(--bg-tertiary)",
                             border: "1px solid var(--border-color)",
@@ -931,9 +1222,14 @@ export default function Analytics() {
                           }}
                           formatter={(value: any) => [value, "Trades"]}
                         />
-                        <Bar dataKey="count" fill="var(--accent)" />
+                        <Bar dataKey="count" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                        {useBrush && (
+                          <Brush dataKey="outcome" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setOutcomeChartBrushStart(r.startIndex); setOutcomeChartBrushEnd(r.endIndex); } }} />
+                        )}
                       </BarChart>
                     </ResponsiveContainer>
+                      );
+                    })()
                   )}
                 </div>
               </div>

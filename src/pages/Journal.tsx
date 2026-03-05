@@ -1,12 +1,39 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, BarChart3, Search } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, BarChart3, Search, LayoutDashboard } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
 import { format, parse } from "date-fns";
+import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
+import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
+import { getSurveyScoreColor, getSurveyScoreBgRgba } from "../utils/intensityColor";
 import RichTextEditor from "../components/RichTextEditor";
 import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
+import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import {
+  getSandboxJournalEntries,
+  getSandboxJournalEntry,
+  getSandboxAllJournalTrades,
+  getSandboxJournalTrades,
+  getSandboxJournalEntryPairsAsPairedTrades,
+  getSandboxStrategies,
+  createSandboxJournalEntry,
+  updateSandboxJournalEntry,
+  deleteSandboxJournalEntry,
+  createSandboxJournalTrade,
+  updateSandboxJournalTrade,
+  deleteSandboxJournalTrade,
+  setSandboxJournalEntryPairs,
+  getSandboxEmotionalStates,
+  getSandboxEmotionalStatesForJournal,
+  getSandboxEmotionSurveys,
+  addSandboxJournalEntryToEmotionalStates,
+  removeSandboxJournalEntryFromEmotionalStates,
+  linkSandboxEmotionalStatesToJournal,
+  deleteSandboxEmotionalState,
+  loadSandboxState,
+} from "../utils/sandboxStore";
 
 interface JournalEntry {
   id: number;
@@ -32,6 +59,7 @@ interface JournalTrade {
   emotional_state: string | null;
   notes: string | null;
   outcome: string | null;
+  r_multiple: number | null;
   trade_order: number;
   created_at: string | null;
   updated_at: string | null;
@@ -77,6 +105,7 @@ interface JournalChecklistResponse {
   checklist_item_id: number;
   is_checked: boolean;
   journal_trade_ids?: string | null; // JSON array of trade IDs when associated with specific trades, null = whole entry
+  response_value?: number | null; // For survey items: 1-5 scale
 }
 
 const ENTRY_LEVEL_CHECKLIST_TYPES = ["daily_analysis", "daily_mantra"];
@@ -112,35 +141,62 @@ const INTENSITY_LABELS: Record<number, string> = {
   6: "Strong", 7: "Very strong", 8: "Intense", 9: "Severe", 10: "Extreme",
 };
 
-/** Same question groups as Emotions page — unified emotional state entry format */
+/** Same question groups as Emotions page — unified emotional state entry format. highIsGood: true = 5 is desirable, false = 1 is desirable. */
 const JOURNAL_SURVEY_QUESTIONS = {
   before: [
-    { key: "before_calm_clear", question: "How calm and mentally clear did you feel before considering this trade?", scale: "1 = Very anxious/confused, 5 = Very calm/clear" },
-    { key: "before_urgency_pressure", question: "Did you feel any urgency or pressure to \"make something happen\" in the market?", scale: "1 = No urgency, 5 = Extreme pressure" },
-    { key: "before_confidence_vs_validation", question: "Were you feeling confident in yourself, or seeking validation from a win?", scale: "1 = Confident in self, 5 = Seeking validation" },
-    { key: "before_fomo", question: "Did fear of missing out (FOMO) influence your desire to enter?", scale: "1 = No FOMO, 5 = Strong FOMO" },
-    { key: "before_recovering_loss", question: "Were you trying to recover from a previous loss emotionally?", scale: "1 = Not at all, 5 = Strongly trying to recover" },
-    { key: "before_patient_detached", question: "Did you feel patient and detached, or restless and impulsive?", scale: "1 = Patient/detached, 5 = Restless/impulsive" },
-    { key: "before_trust_process", question: "How strong was your trust in your process at that moment?", scale: "1 = No trust, 5 = Complete trust" },
-    { key: "before_emotional_state", question: "Were you feeling bored, excited, anxious, or neutral before entry?", scale: "1 = Neutral/calm, 5 = Extremely emotional (any)" },
+    { key: "before_calm_clear", question: "How calm and mentally clear did you feel before considering this trade?", scale: "1 = Very anxious/confused, 5 = Very calm/clear", highIsGood: true },
+    { key: "before_urgency_pressure", question: "Did you feel any urgency or pressure to \"make something happen\" in the market?", scale: "1 = No urgency, 5 = Extreme pressure", highIsGood: false },
+    { key: "before_confidence_vs_validation", question: "Were you feeling confident in yourself, or seeking validation from a win?", scale: "1 = Confident in self, 5 = Seeking validation", highIsGood: false },
+    { key: "before_fomo", question: "Did fear of missing out (FOMO) influence your desire to enter?", scale: "1 = No FOMO, 5 = Strong FOMO", highIsGood: false },
+    { key: "before_recovering_loss", question: "Were you trying to recover from a previous loss emotionally?", scale: "1 = Not at all, 5 = Strongly trying to recover", highIsGood: false },
+    { key: "before_patient_detached", question: "Did you feel patient and detached, or restless and impulsive?", scale: "1 = Patient/detached, 5 = Restless/impulsive", highIsGood: false },
+    { key: "before_trust_process", question: "How strong was your trust in your process at that moment?", scale: "1 = No trust, 5 = Complete trust", highIsGood: true },
+    { key: "before_emotional_state", question: "Were you feeling bored, excited, anxious, or neutral before entry?", scale: "1 = Neutral/calm, 5 = Extremely emotional (any)", highIsGood: false },
   ],
   during: [
-    { key: "during_stable", question: "How stable were your emotions once the trade was live?", scale: "1 = Very stable, 5 = Very unstable" },
-    { key: "during_tension_stress", question: "Did you feel tension, nervousness, or physical stress while price moved?", scale: "1 = No tension, 5 = Extreme tension/stress" },
-    { key: "during_tempted_interfere", question: "Were you tempted to interfere with the trade out of fear or hope?", scale: "1 = No temptation, 5 = Strong temptation" },
-    { key: "during_need_control", question: "Did you feel a need to \"control\" the outcome instead of letting it play out?", scale: "1 = Let it play, 5 = Strong need to control" },
-    { key: "during_fear_loss", question: "How strong was your fear of loss while in the position?", scale: "1 = No fear, 5 = Extreme fear" },
-    { key: "during_excitement_greed", question: "How strong was your excitement or greed as price moved in your favor?", scale: "1 = Calm, 5 = Extreme excitement/greed" },
-    { key: "during_mentally_present", question: "Did you feel mentally present, or distracted and reactive?", scale: "1 = Very present, 5 = Very distracted/reactive" },
+    { key: "during_stable", question: "How stable were your emotions once the trade was live?", scale: "1 = Very stable, 5 = Very unstable", highIsGood: false },
+    { key: "during_tension_stress", question: "Did you feel tension, nervousness, or physical stress while price moved?", scale: "1 = No tension, 5 = Extreme tension/stress", highIsGood: false },
+    { key: "during_tempted_interfere", question: "Were you tempted to interfere with the trade out of fear or hope?", scale: "1 = No temptation, 5 = Strong temptation", highIsGood: false },
+    { key: "during_need_control", question: "Did you feel a need to \"control\" the outcome instead of letting it play out?", scale: "1 = Let it play, 5 = Strong need to control", highIsGood: false },
+    { key: "during_fear_loss", question: "How strong was your fear of loss while in the position?", scale: "1 = No fear, 5 = Extreme fear", highIsGood: false },
+    { key: "during_excitement_greed", question: "How strong was your excitement or greed as price moved in your favor?", scale: "1 = Calm, 5 = Extreme excitement/greed", highIsGood: false },
+    { key: "during_mentally_present", question: "Did you feel mentally present, or distracted and reactive?", scale: "1 = Very present, 5 = Very distracted/reactive", highIsGood: false },
   ],
   after: [
-    { key: "after_accept_outcome", question: "How well did you accept the outcome emotionally, regardless of win or loss?", scale: "1 = Full acceptance, 5 = Poor acceptance" },
-    { key: "after_emotional_reaction", question: "Did you feel relief, frustration, disappointment, or satisfaction?", scale: "1 = Neutral/balanced, 5 = Strong emotional reaction" },
-    { key: "after_confidence_affected", question: "Did the result affect your confidence in yourself?", scale: "1 = No effect, 5 = Strong effect (positive or negative)" },
-    { key: "after_tempted_another_trade", question: "Did you feel tempted to immediately take another trade to change your emotional state?", scale: "1 = No temptation, 5 = Strong temptation" },
-    { key: "after_proud_discipline", question: "Did you feel proud of your discipline, or focused only on the money outcome?", scale: "1 = Proud of discipline, 5 = Only focused on money" },
+    { key: "after_accept_outcome", question: "How well did you accept the outcome emotionally, regardless of win or loss?", scale: "1 = Full acceptance, 5 = Poor acceptance", highIsGood: false },
+    { key: "after_emotional_reaction", question: "Did you feel relief, frustration, disappointment, or satisfaction?", scale: "1 = Neutral/balanced, 5 = Strong emotional reaction", highIsGood: false },
+    { key: "after_confidence_affected", question: "Did the result affect your confidence in yourself?", scale: "1 = No effect, 5 = Strong effect (positive or negative)", highIsGood: false },
+    { key: "after_tempted_another_trade", question: "Did you feel tempted to immediately take another trade to change your emotional state?", scale: "1 = No temptation, 5 = Strong temptation", highIsGood: false },
+    { key: "after_proud_discipline", question: "Did you feel proud of your discipline, or focused only on the money outcome?", scale: "1 = Proud of discipline, 5 = Only focused on money", highIsGood: false },
   ],
 };
+
+/** Emotion survey linked to an emotional state (before/during/after 1–5 responses). */
+interface JournalEmotionSurvey {
+  id: number;
+  emotional_state_id: number;
+  timestamp: string;
+  before_calm_clear: number;
+  before_urgency_pressure: number;
+  before_confidence_vs_validation: number;
+  before_fomo: number;
+  before_recovering_loss: number;
+  before_patient_detached: number;
+  before_trust_process: number;
+  before_emotional_state: number;
+  during_stable: number;
+  during_tension_stress: number;
+  during_tempted_interfere: number;
+  during_need_control: number;
+  during_fear_loss: number;
+  during_excitement_greed: number;
+  during_mentally_present: number;
+  after_accept_outcome: number;
+  after_emotional_reaction: number;
+  after_confidence_affected: number;
+  after_tempted_another_trade: number;
+  after_proud_discipline: number;
+}
 
 /** Group emotional states by timestamp (same timestamp = one entry with shared notes). */
 function groupEmotionalStatesByTimestamp(states: JournalEmotionalState[]): JournalEmotionalState[][] {
@@ -181,9 +237,27 @@ export default function Journal() {
   const JOURNAL_ENTRIES_PAGE_SIZE = 25;
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [selectedEntry, setSelectedEntry] = useState<JournalEntry | null>(() => {
-    // Try to restore selected entry ID from localStorage
     const savedId = localStorage.getItem('journal_selected_entry_id');
     return savedId ? null : null; // Will be loaded by ID in useEffect
+  });
+  // If we have a saved entry id to restore, don't show overview until load completes (avoids flash)
+  const [pendingRestoreEntryId, setPendingRestoreEntryId] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    const savedId = localStorage.getItem("journal_selected_entry_id");
+    if (savedId) {
+      const id = parseInt(savedId, 10);
+      if (!Number.isNaN(id)) return id;
+    }
+    try {
+      const wip = localStorage.getItem("journal_work_in_progress");
+      if (wip) {
+        const parsed = JSON.parse(wip) as { selectedEntryId?: number | null; isCreating?: boolean };
+        if (parsed.selectedEntryId != null && !parsed.isCreating) return parsed.selectedEntryId;
+      }
+    } catch {
+      /* ignore */
+    }
+    return null;
   });
   const [selectedTrades, setSelectedTrades] = useState<JournalTrade[]>([]);
   const [allJournalTrades, setAllJournalTrades] = useState<JournalTrade[]>([]);
@@ -250,6 +324,7 @@ export default function Journal() {
   // Checklist state (per trade, but checklists come from strategy)
   const [strategyChecklists, setStrategyChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [checklistResponses, setChecklistResponses] = useState<Map<number, Map<number, boolean>>>(new Map()); // trade_index -> checklist_item_id -> is_checked
+  const [surveyScores, setSurveyScores] = useState<Map<number, number>>(new Map()); // checklist_item_id -> 1-5 (for survey type items)
   // Entry-level (Analysis & Mantra): associated with whole journal by default, optionally with specific trades
   const [entryLevelChecklistResponses, setEntryLevelChecklistResponses] = useState<Map<number, boolean>>(new Map()); // item_id -> is_checked
   const [checklistTradeAssociations, setChecklistTradeAssociations] = useState<Map<number, number[] | null>>(new Map()); // item_id -> null (whole entry) or [trade_id, ...]
@@ -297,6 +372,7 @@ export default function Journal() {
   const [emotionalStateDeleteTarget, setEmotionalStateDeleteTarget] = useState<null | { type: "saved"; states: JournalEmotionalState[] } | { type: "pending"; tradeIndex: number; idx: number }>(null);
   // View mode: emotional states for the selected entry (when not editing), and whether the section is expanded
   const [viewEntryEmotionalStates, setViewEntryEmotionalStates] = useState<JournalEmotionalState[]>([]);
+  const [viewEntrySurveys, setViewEntrySurveys] = useState<JournalEmotionSurvey[]>([]);
   const [emotionalStatesSectionExpanded, setEmotionalStatesSectionExpanded] = useState(false);
   // For "Link to emotional states" / "Link to real trades" from Journal (entry-level)
   const [allEmotionalStates, setAllEmotionalStates] = useState<JournalEmotionalState[]>([]);
@@ -310,7 +386,13 @@ export default function Journal() {
   const titleInputRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
   const navigate = useNavigate();
-  
+  const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
+
+  useEffect(() => {
+    const unsub = subscribeToDataMode(setDataMode);
+    return () => unsub();
+  }, []);
+
   // Edit history for undo functionality
   const [editHistory, setEditHistory] = useState<Array<{
     entry: { date: string; title: string; strategy_id: number | null };
@@ -532,7 +614,12 @@ export default function Journal() {
         restoreWorkInProgress();
       }, 200);
     }
-  }, []);
+  }, [dataMode]);
+
+  // Clear pending restore once an entry is selected (so we don't stay in "loading" state)
+  useEffect(() => {
+    if (selectedEntry != null) setPendingRestoreEntryId(null);
+  }, [selectedEntry]);
 
   // Open specific entry/trade when navigated from Emotions (e.g. "Open in Journal")
   useEffect(() => {
@@ -598,14 +685,19 @@ export default function Journal() {
     let cancelled = false;
     (async () => {
       try {
-        const trades = await invoke<ActualTrade[]>("get_trades");
+        if (dataMode === "sandbox") {
+          const state = loadSandboxState();
+          if (!cancelled) setActualTrades(state.trades as unknown as ActualTrade[]);
+          return;
+        }
+        const trades = await invoke<ActualTrade[]>("get_trades", dataMode === "paper" ? { paperOnly: true } : {});
         if (!cancelled) setActualTrades(trades);
       } catch (e) {
         if (!cancelled) setActualTrades([]);
       }
     })();
     return () => { cancelled = true; };
-  }, [linkActualTradesModalJournalTradeId]);
+  }, [linkActualTradesModalJournalTradeId, dataMode]);
 
   // Load emotional states linked to this journal entry/implementation when on Emotional State or Links tab
   useEffect(() => {
@@ -617,9 +709,32 @@ export default function Journal() {
     let cancelled = false;
     (async () => {
       try {
+        if (dataMode === "sandbox") {
+          const states = getSandboxEmotionalStatesForJournal(selectedEntry.id) as unknown as JournalEmotionalState[];
+          if (!cancelled) {
+            setJournalEmotionalStates(states);
+            const groups = groupEmotionalStatesByTimestamp(states);
+            const ids = groups.map((g) => g[0].id);
+            const scopes: Record<number, { scope: "entry" | "trades"; tradeIndex: number | null }> = {};
+            for (const g of groups) {
+              const first = g[0];
+              const jtIdVal = first.journal_trade_id ?? null;
+              if (jtIdVal == null) {
+                scopes[first.id] = { scope: "entry", tradeIndex: null };
+              } else {
+                const idx = tradesFormData.findIndex((t) => t.id === jtIdVal);
+                scopes[first.id] = { scope: "trades", tradeIndex: idx >= 0 ? idx : null };
+              }
+            }
+            setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: ids, linked_emotional_state_link_scopes: scopes }));
+          }
+          return;
+        }
+        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
         const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
           journalEntryId: selectedEntry.id,
           journalTradeId: jtId ?? undefined,
+          ...paperArgs,
         });
         if (!cancelled) {
           setJournalEmotionalStates(states);
@@ -628,11 +743,11 @@ export default function Journal() {
           const scopes: Record<number, { scope: "entry" | "trades"; tradeIndex: number | null }> = {};
           for (const g of groups) {
             const first = g[0];
-            const jtId = first.journal_trade_id ?? null;
-            if (jtId == null) {
+            const jtIdVal = first.journal_trade_id ?? null;
+            if (jtIdVal == null) {
               scopes[first.id] = { scope: "entry", tradeIndex: null };
             } else {
-              const idx = tradesFormData.findIndex((t) => t.id === jtId);
+              const idx = tradesFormData.findIndex((t) => t.id === jtIdVal);
               scopes[first.id] = { scope: "trades", tradeIndex: idx >= 0 ? idx : null };
             }
           }
@@ -646,7 +761,7 @@ export default function Journal() {
       }
     })();
     return () => { cancelled = true; };
-  }, [activeTab, selectedEntry?.id, activeTradeIndex, tradesFormData]);
+  }, [activeTab, selectedEntry?.id, activeTradeIndex, tradesFormData, dataMode]);
 
   // Load emotional states for view mode (when viewing an entry, not editing)
   useEffect(() => {
@@ -657,8 +772,15 @@ export default function Journal() {
     let cancelled = false;
     (async () => {
       try {
+        if (dataMode === "sandbox") {
+          const states = getSandboxEmotionalStatesForJournal(selectedEntry.id) as unknown as JournalEmotionalState[];
+          if (!cancelled) setViewEntryEmotionalStates(states);
+          return;
+        }
+        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
         const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
           journalEntryId: selectedEntry.id,
+          ...paperArgs,
         });
         if (!cancelled) setViewEntryEmotionalStates(states);
       } catch {
@@ -666,21 +788,61 @@ export default function Journal() {
       }
     })();
     return () => { cancelled = true; };
-  }, [selectedEntry?.id, isCreating, isEditing]);
+  }, [selectedEntry?.id, isCreating, isEditing, dataMode]);
+
+  // Load emotion surveys for the emotional states linked to this journal entry (for view mode)
+  useEffect(() => {
+    if (viewEntryEmotionalStates.length === 0) {
+      setViewEntrySurveys([]);
+      return;
+    }
+    const stateIds = new Set(viewEntryEmotionalStates.map((s) => s.id));
+    let cancelled = false;
+    (async () => {
+      try {
+        if (dataMode === "sandbox") {
+          const all = getSandboxEmotionSurveys() as unknown as JournalEmotionSurvey[];
+          const filtered = all.filter((s) => stateIds.has(s.emotional_state_id));
+          if (!cancelled) setViewEntrySurveys(filtered);
+          return;
+        }
+        const all = await invoke<JournalEmotionSurvey[]>("get_all_emotion_surveys");
+        if (!cancelled) setViewEntrySurveys(all.filter((s) => stateIds.has(s.emotional_state_id)));
+      } catch {
+        if (!cancelled) setViewEntrySurveys([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [viewEntryEmotionalStates, dataMode]);
 
   // Load all emotional states and real trades for "Link to" dropdowns when on Emotional State tab
   useEffect(() => {
     if (activeTab !== "emotional_state" && activeTab !== "links") return;
     (async () => {
       try {
+        if (dataMode === "sandbox") {
+          const states = getSandboxEmotionalStates() as unknown as JournalEmotionalState[];
+          const state = loadSandboxState();
+          setAllEmotionalStates(states);
+          setRealTradesForLink(state.trades.map((t) => ({
+            id: t.id,
+            symbol: t.symbol,
+            side: t.side,
+            timestamp: t.timestamp,
+            quantity: t.quantity ?? 0,
+            pnl: undefined,
+          })));
+          return;
+        }
+        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
         const [states, trades] = await Promise.all([
-          invoke<JournalEmotionalState[]>("get_emotional_states"),
-          invoke<{ id: number; symbol: string; side: string; timestamp: string; quantity: number; price: number }[]>("get_trades"),
+          invoke<JournalEmotionalState[]>("get_emotional_states", paperArgs),
+          invoke<{ id: number; symbol: string; side: string; timestamp: string; quantity: number; price: number }[]>("get_trades", paperArgs),
         ]);
         setAllEmotionalStates(states);
         let pnlMap: Record<number, number> = {};
         try {
-          const withPairing = await invoke<{ trade: { id: number }; entry_pairs: { net_profit_loss: number }[]; exit_pairs: { net_profit_loss: number }[] }[]>("get_trades_with_pairing", { pairing_method: null, start_date: null, end_date: null });
+          const withPairing = await invoke<{ trade: { id: number }; entry_pairs: { net_profit_loss: number }[]; exit_pairs: { net_profit_loss: number }[] }[]>("get_trades_with_pairing", { pairing_method: null, start_date: null, end_date: null, ...paperArgs });
           for (const row of withPairing) {
             const id = row.trade?.id;
             if (id == null) continue;
@@ -704,7 +866,7 @@ export default function Journal() {
         setRealTradesForLink([]);
       }
     })();
-  }, [activeTab, selectedEntry?.id]);
+  }, [activeTab, selectedEntry?.id, dataMode]);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
@@ -717,7 +879,13 @@ export default function Journal() {
 
   const loadEntries = async () => {
     try {
-      const data = await invoke<JournalEntry[]>("get_journal_entries");
+      if (dataMode === "sandbox") {
+        const data = getSandboxJournalEntries() as unknown as JournalEntry[];
+        setEntries(data);
+        setLoading(false);
+        return;
+      }
+      const data = await invoke<JournalEntry[]>("get_journal_entries", dataMode === "paper" ? { paperOnly: true } : {});
       setEntries(data);
     } catch (error) {
       console.error("Error loading journal entries:", error);
@@ -728,6 +896,11 @@ export default function Journal() {
 
   const loadAllJournalTrades = async () => {
     try {
+      if (dataMode === "sandbox") {
+        const trades = getSandboxAllJournalTrades() as unknown as JournalTrade[];
+        setAllJournalTrades(trades);
+        return;
+      }
       const trades = await invoke<JournalTrade[]>("get_all_journal_trades");
       setAllJournalTrades(trades);
     } catch (error) {
@@ -758,6 +931,11 @@ export default function Journal() {
 
   const loadStrategies = async () => {
     try {
+      if (dataMode === "sandbox") {
+        const data = getSandboxStrategies() as unknown as Strategy[];
+        setStrategies(data);
+        return;
+      }
       const data = await invoke<Strategy[]>("get_strategies");
       setStrategies(data);
     } catch (error) {
@@ -767,6 +945,13 @@ export default function Journal() {
 
   const loadAvailableSymbols = async () => {
     try {
+      if (dataMode === "sandbox") {
+        const state = loadSandboxState();
+        const symSet = new Set<string>();
+        state.trades.forEach((t) => symSet.add(t.symbol));
+        setAvailableSymbols(Array.from(symSet).sort());
+        return;
+      }
       const symbols = await invoke<string[]>("get_all_symbols");
       setAvailableSymbols(symbols);
     } catch (error) {
@@ -776,6 +961,11 @@ export default function Journal() {
 
   const loadTrades = async (entryId: number): Promise<JournalTrade[]> => {
     try {
+      if (dataMode === "sandbox") {
+        const trades = getSandboxJournalTrades(entryId) as unknown as JournalTrade[];
+        setSelectedTrades(trades);
+        return trades;
+      }
       const trades = await invoke<JournalTrade[]>("get_journal_trades", { journalEntryId: entryId });
       setSelectedTrades(trades);
       return trades;
@@ -787,6 +977,11 @@ export default function Journal() {
 
   const loadLinkedPairs = async (entryId: number) => {
     try {
+      if (dataMode === "sandbox") {
+        const pairs = getSandboxJournalEntryPairsAsPairedTrades(entryId) as unknown as PairedTrade[];
+        setLinkedPairs(pairs);
+        return;
+      }
       const pairs = await invoke<PairedTrade[]>("get_journal_entry_pairs", { journalEntryId: entryId });
       setLinkedPairs(pairs);
     } catch (error) {
@@ -826,6 +1021,7 @@ export default function Journal() {
       setChecklistResponses(newResponses);
       setEntryLevelChecklistResponses(new Map());
       setChecklistTradeAssociations(new Map());
+      setSurveyScores(new Map());
     } catch (error) {
       console.error("Error loading strategy checklists:", error);
     }
@@ -846,6 +1042,7 @@ export default function Journal() {
       const entryLevelChecked = new Map<number, boolean>();
       const entryLevelTradeAssociations = new Map<number, number[] | null>();
       const perTradeResponseMap = new Map<number, boolean>();
+      const loadedSurveyScores = new Map<number, number>();
 
       for (const response of responses) {
         const itemType = itemIdToType.get(response.checklist_item_id);
@@ -863,11 +1060,15 @@ export default function Journal() {
           }
         } else {
           perTradeResponseMap.set(response.checklist_item_id, response.is_checked);
+          if (itemType === "survey" && response.response_value != null) {
+            loadedSurveyScores.set(response.checklist_item_id, response.response_value);
+          }
         }
       }
 
       setEntryLevelChecklistResponses(entryLevelChecked);
       setChecklistTradeAssociations(entryLevelTradeAssociations);
+      setSurveyScores(loadedSurveyScores);
 
       const newResponses = new Map<number, Map<number, boolean>>();
       selectedTrades.forEach((_, index) => {
@@ -1043,6 +1244,15 @@ export default function Journal() {
     if (!selectedEntry) return;
     
     try {
+      if (dataMode === "sandbox") {
+        deleteSandboxJournalEntry(selectedEntry.id);
+        await loadEntries();
+        setSelectedEntry(null);
+        localStorage.removeItem('journal_selected_entry_id');
+        setSelectedTrades([]);
+        setShowDeleteConfirmModal(false);
+        return;
+      }
       await invoke("delete_journal_entry", { id: selectedEntry.id });
       await loadEntries();
       setSelectedEntry(null);
@@ -1068,16 +1278,28 @@ export default function Journal() {
     if (!emotionalStateDeleteTarget) return;
     if (emotionalStateDeleteTarget.type === "saved") {
       try {
-        for (const state of emotionalStateDeleteTarget.states) {
-          await invoke("delete_emotional_state", { id: state.id });
-        }
-        const jtId = tradesFormData[activeTradeIndex]?.id ?? null;
-        if (selectedEntry?.id != null) {
-          const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
-            journalEntryId: selectedEntry.id,
-            journalTradeId: jtId ?? undefined,
-          });
-          setJournalEmotionalStates(states);
+        if (dataMode === "sandbox") {
+          for (const state of emotionalStateDeleteTarget.states) {
+            deleteSandboxEmotionalState(state.id);
+          }
+          if (selectedEntry?.id != null) {
+            const states = getSandboxEmotionalStatesForJournal(selectedEntry.id) as unknown as JournalEmotionalState[];
+            setJournalEmotionalStates(states);
+          }
+        } else {
+          for (const state of emotionalStateDeleteTarget.states) {
+            await invoke("delete_emotional_state", { id: state.id });
+          }
+          const jtId = tradesFormData[activeTradeIndex]?.id ?? null;
+          if (selectedEntry?.id != null) {
+            const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+            const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
+              journalEntryId: selectedEntry.id,
+              journalTradeId: jtId ?? undefined,
+              ...paperArgs,
+            });
+            setJournalEmotionalStates(states);
+          }
         }
       } catch (e) {
         console.error(e);
@@ -1164,11 +1386,81 @@ export default function Journal() {
       let entryId: number;
       let toAdd: number[] = [];
 
+      if (dataMode === "sandbox") {
+        if (isCreating) {
+          entryId = createSandboxJournalEntry({
+            date: entryFormData.date,
+            title: entryFormData.title,
+            strategy_id: entryFormData.strategy_id,
+            linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null,
+          });
+          updateSandboxJournalEntry(entryId, { linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null });
+          setIsCreating(false);
+          setIsEditing(true);
+          const savedEntry = getSandboxJournalEntry(entryId) as unknown as JournalEntry;
+          setSelectedEntry(savedEntry);
+        } else if (selectedEntry) {
+          entryId = selectedEntry.id;
+          updateSandboxJournalEntry(entryId, {
+            date: entryFormData.date,
+            title: entryFormData.title,
+            strategy_id: entryFormData.strategy_id,
+            linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null,
+          });
+          const formStateIds = entryFormData.linked_emotional_state_ids ?? [];
+          const currentGroupIds = groupEmotionalStatesByTimestamp(journalEmotionalStates).map((g) => g[0].id);
+          const toRemove = currentGroupIds.filter((id) => !formStateIds.includes(id));
+          toAdd = formStateIds.filter((id) => !currentGroupIds.includes(id));
+          if (toRemove.length > 0) removeSandboxJournalEntryFromEmotionalStates(entryId, toRemove);
+          if (toAdd.length > 0) addSandboxJournalEntryToEmotionalStates(entryId, toAdd);
+        } else {
+          return;
+        }
+        const tradeIdsInOrder: number[] = [];
+        for (let i = 0; i < tradesFormData.length; i++) {
+          const tradeData = tradesFormData[i];
+          const payload = {
+            symbol: tradeData.symbol || null,
+            position: tradeData.position || null,
+            timeframe: tradeData.timeframe || null,
+            entry_type: tradeData.entry_type || null,
+            exit_type: tradeData.exit_type || null,
+            trade: tradeData.trade || null,
+            what_went_well: tradeData.what_went_well || null,
+            what_could_be_improved: tradeData.what_could_be_improved || null,
+            emotional_state: tradeData.emotional_state || null,
+            notes: tradeData.notes || null,
+            outcome: tradeData.outcome || null,
+            trade_order: i,
+          };
+          if (tradeData.id) {
+            tradeIdsInOrder.push(tradeData.id);
+            updateSandboxJournalTrade(tradeData.id, payload);
+          } else {
+            const newTradeId = createSandboxJournalTrade(entryId, payload);
+            tradeIdsInOrder.push(newTradeId);
+          }
+        }
+        const stateIdsToLinkAfterTrades = isCreating ? (entryFormData.linked_emotional_state_ids ?? []) : toAdd;
+        if (stateIdsToLinkAfterTrades.length > 0) {
+          if (isCreating) addSandboxJournalEntryToEmotionalStates(entryId, stateIdsToLinkAfterTrades);
+          for (const stateId of stateIdsToLinkAfterTrades) {
+            const scope = entryFormData.linked_emotional_state_link_scopes?.[stateId];
+            const jtId = scope?.scope === "trades" && scope.tradeIndex != null ? tradeIdsInOrder[scope.tradeIndex] ?? null : null;
+            linkSandboxEmotionalStatesToJournal([stateId], entryId, jtId ?? undefined);
+          }
+        }
+        await loadTrades(entryId);
+        await loadLinkedPairs(entryId);
+        return;
+      }
+
       if (isCreating) {
         entryId = await invoke<number>("create_journal_entry", {
           date: entryFormData.date,
           title: entryFormData.title,
           strategyId: entryFormData.strategy_id,
+          isPaper: dataMode === "paper",
         });
         // Persist linked trades on the new entry
         await invoke("update_journal_entry", {
@@ -1223,6 +1515,7 @@ export default function Journal() {
             emotionalState: tradeData.emotional_state || null,
             notes: tradeData.notes || null,
             outcome: tradeData.outcome || null,
+            rMultiple: (tradeData as { r_multiple?: string }).r_multiple?.trim() ? Number((tradeData as { r_multiple?: string }).r_multiple) : null,
             tradeOrder: i,
           });
         } else {
@@ -1239,6 +1532,7 @@ export default function Journal() {
             emotionalState: tradeData.emotional_state || null,
             notes: tradeData.notes || null,
             outcome: tradeData.outcome || null,
+            rMultiple: (tradeData as { r_multiple?: string }).r_multiple?.trim() ? Number((tradeData as { r_multiple?: string }).r_multiple) : null,
             tradeOrder: i,
           });
           tradeIdsInOrder.push(newTradeId);
@@ -1249,11 +1543,12 @@ export default function Journal() {
       if (entryFormData.strategy_id) {
         const checklists = strategyChecklists.get(entryFormData.strategy_id);
         if (checklists) {
-          const responses: [number, boolean, string | null][] = [];
+          const responses: [number, boolean, string | null, number | null][] = [];
           const firstTradeResponses = checklistResponses.get(0) || new Map();
           for (const [, items] of checklists.entries()) {
             for (const item of items) {
               const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(item.checklist_type || "");
+              const isSurvey = (item.checklist_type || "") === "survey";
               let isChecked: boolean;
               let journalTradeIds: string | null = null;
               if (isEntryLevel) {
@@ -1268,7 +1563,8 @@ export default function Journal() {
               } else {
                 isChecked = firstTradeResponses.get(item.id) || false;
               }
-              responses.push([item.id, isChecked, journalTradeIds]);
+              const responseValue = isSurvey ? (surveyScores.get(item.id) ?? null) : null;
+              responses.push([item.id, isChecked, journalTradeIds, responseValue]);
             }
           }
           await invoke("save_journal_checklist_responses", {
@@ -1433,6 +1729,24 @@ export default function Journal() {
     }
 
     try {
+      if (dataMode === "sandbox") {
+        if (!isCreating && selectedEntry) {
+          const keptTradeIds = new Set(tradesFormData.filter((t) => t.id !== null).map((t) => t.id!));
+          for (const trade of selectedTrades) {
+            if (trade.id && !keptTradeIds.has(trade.id)) deleteSandboxJournalTrade(trade.id);
+          }
+        }
+        await autoSave();
+        if (selectedEntry) {
+          await loadTrades(selectedEntry.id);
+          await loadLinkedPairs(selectedEntry.id);
+        }
+        setIsEditing(false);
+        setShowAddEmotionalStateForm(false);
+        setPendingEmotionalStates([]);
+        return;
+      }
+
       let entryId: number;
       let toAdd: number[] = [];
 
@@ -1441,6 +1755,7 @@ export default function Journal() {
           date: entryFormData.date,
           title: entryFormData.title,
           strategyId: entryFormData.strategy_id,
+          isPaper: dataMode === "paper",
         });
         // Persist linked trades (and metadata) on the new entry
         await invoke("update_journal_entry", {
@@ -1499,6 +1814,7 @@ export default function Journal() {
             emotionalState: tradeData.emotional_state || null,
             notes: tradeData.notes || null,
             outcome: tradeData.outcome || null,
+            rMultiple: (tradeData as { r_multiple?: string }).r_multiple?.trim() ? Number((tradeData as { r_multiple?: string }).r_multiple) : null,
             tradeOrder: i,
           });
         } else {
@@ -1515,6 +1831,7 @@ export default function Journal() {
             emotionalState: tradeData.emotional_state || null,
             notes: tradeData.notes || null,
             outcome: tradeData.outcome || null,
+            rMultiple: (tradeData as { r_multiple?: string }).r_multiple?.trim() ? Number((tradeData as { r_multiple?: string }).r_multiple) : null,
             tradeOrder: i,
           });
           tradeIdsInOrder.push(newTradeId);
@@ -1525,11 +1842,12 @@ export default function Journal() {
       if (entryFormData.strategy_id) {
         const checklists = strategyChecklists.get(entryFormData.strategy_id);
         if (checklists) {
-          const responses: [number, boolean, string | null][] = [];
+          const responses: [number, boolean, string | null, number | null][] = [];
           const firstTradeResponses = checklistResponses.get(0) || new Map();
           for (const [, items] of checklists.entries()) {
             for (const item of items) {
               const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(item.checklist_type || "");
+              const isSurvey = (item.checklist_type || "") === "survey";
               let isChecked: boolean;
               let journalTradeIds: string | null = null;
               if (isEntryLevel) {
@@ -1544,7 +1862,8 @@ export default function Journal() {
               } else {
                 isChecked = firstTradeResponses.get(item.id) || false;
               }
-              responses.push([item.id, isChecked, journalTradeIds]);
+              const responseValue = isSurvey ? (surveyScores.get(item.id) ?? null) : null;
+              responses.push([item.id, isChecked, journalTradeIds, responseValue]);
             }
           }
           await invoke("save_journal_checklist_responses", {
@@ -1566,7 +1885,8 @@ export default function Journal() {
           }
         }
       }
-      const allStatesForEntry = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId });
+      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+      const allStatesForEntry = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId, ...paperArgs });
       const deleteGroup = async (group: JournalEmotionalState[]) => {
         for (const s of group) await invoke("delete_emotional_state", { id: s.id });
       };
@@ -1587,6 +1907,7 @@ export default function Journal() {
                 tradeId: null,
                 journalEntryId: entryId,
                 journalTradeId: null,
+                isPaper: dataMode === "paper",
               });
               if (firstStateId === null) firstStateId = stateId;
             }
@@ -1605,6 +1926,7 @@ export default function Journal() {
                   tradeId: null,
                   journalEntryId: entryId,
                   journalTradeId,
+                  isPaper: dataMode === "paper",
                 });
                 if (firstStateId === null) firstStateId = stateId;
               }
@@ -1749,6 +2071,45 @@ export default function Journal() {
 
   const loadEntry = async (id: number, options?: { skipTradesFormDataSync?: boolean; restoredTradesCount?: number; openTradeId?: number }) => {
     try {
+      if (dataMode === "sandbox") {
+        const entry = getSandboxJournalEntry(id) as unknown as JournalEntry | null;
+        if (!entry) return;
+        setSelectedEntry(entry);
+        let linkedTradeIds: number[] = [];
+        if (entry.linked_trade_ids) {
+          try {
+            const parsed = JSON.parse(entry.linked_trade_ids) as number[];
+            if (Array.isArray(parsed)) linkedTradeIds = parsed;
+          } catch { /* ignore */ }
+        }
+        setEntryFormData((prev) => ({ ...prev, date: entry.date, title: entry.title, strategy_id: entry.strategy_id, linked_trade_ids: linkedTradeIds }));
+        localStorage.setItem('journal_selected_entry_id', id.toString());
+        const loadedTrades = await loadTrades(id);
+        if (options?.openTradeId != null && loadedTrades.length > 0) {
+          const idx = loadedTrades.findIndex((t) => t.id === options.openTradeId);
+          if (idx >= 0) setActiveTradeIndex(idx);
+        }
+        await loadLinkedPairs(id);
+        const shouldSyncTrades = !options?.skipTradesFormDataSync || (options?.restoredTradesCount != null && loadedTrades.length < options.restoredTradesCount);
+        if (shouldSyncTrades) {
+          setTradesFormData(loadedTrades.map((t, i) => ({
+            id: t.id,
+            symbol: t.symbol ?? "",
+            position: t.position ?? "",
+            timeframe: t.timeframe ?? "",
+            entry_type: t.entry_type ?? "",
+            exit_type: t.exit_type ?? "",
+            trade: t.trade ?? "",
+            what_went_well: t.what_went_well ?? "",
+            what_could_be_improved: t.what_could_be_improved ?? "",
+            emotional_state: t.emotional_state ?? "",
+            notes: t.notes ?? "",
+            outcome: t.outcome ?? "Positive",
+            trade_order: i,
+          })));
+        }
+        return;
+      }
       const entry = await invoke<JournalEntry>("get_journal_entry", { id });
       setSelectedEntry(entry);
       let linkedTradeIds: number[] = [];
@@ -1785,7 +2146,7 @@ export default function Journal() {
         if (loadedTrades.length > MAX_TRADES_PER_ENTRY) {
           setTimeout(() => alert(`This entry had ${loadedTrades.length} trades (max ${MAX_TRADES_PER_ENTRY}). Showing first ${MAX_TRADES_PER_ENTRY}. Save to remove the extra ${loadedTrades.length - MAX_TRADES_PER_ENTRY} from the database.`), 100);
         }
-        type TradeFormItem = { id: number | null; symbol: string; position: string; timeframe: string; entry_type: string; exit_type: string; trade: string; what_went_well: string; what_could_be_improved: string; emotional_state: string; notes: string; outcome: string; trade_order: number };
+        type TradeFormItem = { id: number | null; symbol: string; position: string; timeframe: string; entry_type: string; exit_type: string; trade: string; what_went_well: string; what_could_be_improved: string; emotional_state: string; notes: string; outcome: string; r_multiple: string; trade_order: number };
         const tradesData: TradeFormItem[] = tradesToUse.map((trade: JournalTrade) => ({
           id: trade.id,
           symbol: trade.symbol || "",
@@ -1799,6 +2160,7 @@ export default function Journal() {
           emotional_state: trade.emotional_state || "",
           notes: trade.notes || "",
           outcome: trade.outcome || "None",
+          r_multiple: trade.r_multiple != null ? String(trade.r_multiple) : "",
           trade_order: trade.trade_order ?? 0,
         }));
         if (tradesData.length === 0) {
@@ -1815,6 +2177,7 @@ export default function Journal() {
             emotional_state: "",
             notes: "",
             outcome: "None",
+            r_multiple: "",
             trade_order: 0,
           });
         }
@@ -1865,6 +2228,7 @@ export default function Journal() {
       setTimeout(() => restoreScroll(), 200);
     } catch (error) {
       console.error("Error loading entry:", error);
+      setPendingRestoreEntryId(null);
     }
   };
 
@@ -2216,9 +2580,32 @@ export default function Journal() {
     });
   }, [entries, journalTradesByEntry, journalFilters]);
 
-  const entriesByMonth = useMemo(() => {
+  const [overviewChartTab, setOverviewChartTab] = useState<
+    "entries_over_time" | "symbol" | "position" | "timeframe" | "entry_type" | "exit_type" | "outcome"
+  >("entries_over_time");
+  const [chartTimeframe, setChartTimeframe] = useState<Timeframe>("1y");
+  const [chartCustomStart, setChartCustomStart] = useState("");
+  const [chartCustomEnd, setChartCustomEnd] = useState("");
+  const [overviewEntriesBrushStart, setOverviewEntriesBrushStart] = useState(0);
+  const [overviewEntriesBrushEnd, setOverviewEntriesBrushEnd] = useState(0);
+  const [overviewDimBrushStart, setOverviewDimBrushStart] = useState(0);
+  const [overviewDimBrushEnd, setOverviewDimBrushEnd] = useState(0);
+
+  const overviewEntriesFiltered = useMemo(() => {
+    const { start, end } = getTimeframeDates(chartTimeframe, chartCustomStart || undefined, chartCustomEnd || undefined);
+    if (!start || !end) return filteredEntries;
+    return filteredEntries.filter((entry) => {
+      if (!entry.date) return false;
+      const d = parse(entry.date, "yyyy-MM-dd", new Date());
+      if (isNaN(d.getTime())) return false;
+      const t = d.getTime();
+      return t >= start.getTime() && t <= end.getTime();
+    });
+  }, [filteredEntries, chartTimeframe, chartCustomStart, chartCustomEnd]);
+
+  const overviewEntriesByMonth = useMemo(() => {
     const counts = new Map<string, number>();
-    filteredEntries.forEach((entry) => {
+    overviewEntriesFiltered.forEach((entry) => {
       if (!entry.date) return;
       const parsedDate = parse(entry.date, "yyyy-MM-dd", new Date());
       if (isNaN(parsedDate.getTime())) return;
@@ -2228,21 +2615,17 @@ export default function Journal() {
     return Array.from(counts.entries())
       .map(([month, count]) => ({ month, count }))
       .sort((a, b) => a.month.localeCompare(b.month));
-  }, [filteredEntries]);
+  }, [overviewEntriesFiltered]);
 
-  const [overviewChartTab, setOverviewChartTab] = useState<
-    "entries_over_time" | "symbol" | "position" | "timeframe" | "entry_type" | "exit_type" | "outcome"
-  >("entries_over_time");
-
-  const filteredTradesForCharts = useMemo(() => {
-    const ids = new Set(filteredEntries.map((e) => e.id));
+  const overviewFilteredTradesForCharts = useMemo(() => {
+    const ids = new Set(overviewEntriesFiltered.map((e) => e.id));
     return allJournalTrades.filter((t) => ids.has(t.journal_entry_id));
-  }, [filteredEntries, allJournalTrades]);
+  }, [overviewEntriesFiltered, allJournalTrades]);
 
-  const journalChartData = useMemo(() => {
+  const overviewJournalChartData = useMemo(() => {
     const aggregate = (key: "symbol" | "position" | "timeframe" | "entry_type" | "exit_type" | "outcome") => {
       const counts = new Map<string, number>();
-      filteredTradesForCharts.forEach((t) => {
+      overviewFilteredTradesForCharts.forEach((t) => {
         const raw = (t as any)[key] as string | null | undefined;
         const value = (raw || "Unspecified").trim();
         counts.set(value, (counts.get(value) || 0) + 1);
@@ -2251,7 +2634,6 @@ export default function Journal() {
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count);
     };
-
     return {
       symbol: aggregate("symbol"),
       position: aggregate("position"),
@@ -2260,7 +2642,7 @@ export default function Journal() {
       exit_type: aggregate("exit_type"),
       outcome: aggregate("outcome"),
     };
-  }, [filteredTradesForCharts]);
+  }, [overviewFilteredTradesForCharts]);
 
   const [showAllRecent, setShowAllRecent] = useState(false);
 
@@ -2270,7 +2652,13 @@ export default function Journal() {
   );
 
   return (
-    <div style={{ display: "flex", height: "100%", overflow: "hidden", flex: 1 }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", flex: 1 }}>
+      {dataMode === "paper" && (
+        <p style={{ flexShrink: 0, margin: "0 0 12px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+          Paper mode — you are viewing paper trades only.
+        </p>
+      )}
+      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
       {/* Left Panel - Entry Details */}
       <div
         style={{
@@ -2281,13 +2669,33 @@ export default function Journal() {
           overflow: "hidden",
         }}
       >
-        {selectedEntry && !isCreating && !isEditing ? (
+        {pendingRestoreEntryId != null && selectedEntry == null ? (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", fontSize: "14px" }}>
+            Loading journal entry…
+          </div>
+        ) : selectedEntry && !isCreating && !isEditing ? (
           <>
             <div style={{ padding: "24px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h2 style={{ fontSize: "24px", fontWeight: "bold", marginBottom: "8px" }}>
                 {format(parse(selectedEntry.date, "yyyy-MM-dd", new Date()), "MM/dd/yyyy")} - {selectedEntry.title}
               </h2>
               <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <button
+                  onClick={() => setSelectedEntry(null)}
+                  style={{
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    padding: "8px",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                  }}
+                  title="Journal overview"
+                >
+                  <LayoutDashboard size={16} />
+                </button>
                 <button
                   onClick={() => setIsMaximized(!isMaximized)}
                   style={{
@@ -2578,6 +2986,7 @@ export default function Journal() {
                         groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).map((group) => {
                           const first = group[0];
                           const notes = first.notes;
+                          const survey = viewEntrySurveys.find((s) => s.emotional_state_id === first.id);
                           return (
                             <div
                               key={first.timestamp}
@@ -2599,7 +3008,52 @@ export default function Journal() {
                                 ))}
                               </div>
                               {notes && (
-                                <div style={{ fontSize: "13px", color: "var(--text-secondary)" }} dangerouslySetInnerHTML={{ __html: notes }} />
+                                <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: survey ? "12px" : 0 }} dangerouslySetInnerHTML={{ __html: notes }} />
+                              )}
+                              {survey && (
+                                <div style={{ marginTop: "14px", paddingTop: "14px", borderTop: "1px solid var(--border-color)" }}>
+                                  <div style={{ fontSize: "11px", color: "var(--accent)", marginBottom: "12px", letterSpacing: "0.03em", fontWeight: "500" }}>Survey</div>
+                                  {(["before", "during", "after"] as const).map((phase) => {
+                                    const phaseStyle = phase === "before"
+                                      ? { borderColor: "var(--accent)", labelColor: "var(--accent)" }
+                                      : phase === "during"
+                                        ? { borderColor: "var(--warning)", labelColor: "var(--warning)" }
+                                        : { borderColor: "var(--success)", labelColor: "var(--success)" };
+                                    return (
+                                      <div key={phase} style={{ marginBottom: "14px", paddingLeft: "12px", borderLeft: `2px solid ${phaseStyle.borderColor}` }}>
+                                        <div style={{ fontSize: "11px", color: phaseStyle.labelColor, marginBottom: "8px", fontWeight: "500" }}>{phase}</div>
+                                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                          {JOURNAL_SURVEY_QUESTIONS[phase].map((q) => {
+                                            const score = (survey as unknown as Record<string, number>)[q.key];
+                                            const scoreNum = typeof score === "number" && score >= 1 && score <= 5 ? score : null;
+                                            const pillColor = scoreNum != null ? getSurveyScoreColor(scoreNum) : "var(--text-secondary)";
+                                            const pillBg = scoreNum != null ? getSurveyScoreBgRgba(scoreNum) : "var(--bg-tertiary)";
+                                            return (
+                                              <div key={q.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", fontSize: "12px" }}>
+                                                <span style={{ color: "var(--text-secondary)", flex: 1, lineHeight: 1.35 }}>{q.question}</span>
+                                                <span
+                                                  style={{
+                                                    flexShrink: 0,
+                                                    minWidth: "28px",
+                                                    padding: "3px 8px",
+                                                    borderRadius: "6px",
+                                                    backgroundColor: pillBg,
+                                                    color: pillColor,
+                                                    fontSize: "12px",
+                                                    fontWeight: "500",
+                                                    textAlign: "center",
+                                                  }}
+                                                >
+                                                  {score != null ? score : "—"}
+                                                </span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               )}
                             </div>
                           );
@@ -3078,6 +3532,28 @@ export default function Journal() {
                           <option value="Breakeven">Breakeven</option>
                         </select>
                       </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                          R-multiple
+                        </label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={(currentTrade as { r_multiple?: string }).r_multiple ?? ""}
+                          onChange={(e) => updateTradeFormData(activeTradeIndex, "r_multiple", e.target.value)}
+                          placeholder="e.g. 1.5 or -0.5"
+                          style={{
+                            width: "100%",
+                            padding: "8px",
+                            backgroundColor: "var(--bg-primary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "4px",
+                            color: "var(--text-primary)",
+                            fontSize: "14px",
+                          }}
+                        />
+                        <p style={{ margin: "2px 0 0", fontSize: "10px", color: "var(--text-secondary)" }}>Used for metrics; if blank, % or P&L from linked trades is used.</p>
+                      </div>
                     </div>
                     {/* Link this journal trade to actual trades (from Trades table) - only when editing and journal trade has id */}
                     {(isEditing && currentTrade.id != null) || (selectedEntry?.id && !isTabContentMaximized) ? (
@@ -3224,11 +3700,16 @@ export default function Journal() {
                                     (p) => !(p.entry_trade_id === pair.entry_trade_id && p.exit_trade_id === pair.exit_trade_id)
                                   );
                                   try {
-                                    await invoke("set_journal_entry_pairs", {
-                                      journalEntryId: selectedEntry.id,
-                                      pairs: remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })),
-                                    });
-                                    setLinkedPairs(remaining);
+                                    if (dataMode === "sandbox") {
+                                      setSandboxJournalEntryPairs(selectedEntry.id, remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })));
+                                      setLinkedPairs(remaining);
+                                    } else {
+                                      await invoke("set_journal_entry_pairs", {
+                                        journalEntryId: selectedEntry.id,
+                                        pairs: remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })),
+                                      });
+                                      setLinkedPairs(remaining);
+                                    }
                                   } catch (err) {
                                     console.error("Failed to unlink pair:", err);
                                     alert("Failed to unlink pair.");
@@ -3632,7 +4113,8 @@ export default function Journal() {
                                             onClick={async () => {
                                               try {
                                                 await invoke("remove_journal_entry_from_emotional_states", { journalEntryId: selectedEntry!.id, emotionalStateIds: group.map((s) => s.id) });
-                                                const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id });
+                                                const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+                                                const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id, ...paperArgs });
                                                 setJournalEmotionalStates(states);
                                                 const groups = groupEmotionalStatesByTimestamp(states);
                                                 const ids = groups.map((g) => g[0].id);
@@ -3677,7 +4159,8 @@ export default function Journal() {
                                                 await invoke("add_journal_entry_to_emotional_states", { journalEntryId: selectedEntry!.id, emotionalStateIds: ids });
                                                 const jtId = linkExistingEmotionalStateScope === "entry" ? null : (linkExistingEmotionalStateTradeIndex != null ? tradesFormData[linkExistingEmotionalStateTradeIndex]?.id ?? null : null);
                                                 await invoke("link_emotional_states_to_journal", { emotionalStateIds: ids, journalEntryId: selectedEntry!.id, journalTradeId: jtId ?? undefined });
-                                                const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id });
+                                                const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+                                                const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id, ...paperArgs });
                                                 setJournalEmotionalStates(states);
                                                 const grps = groupEmotionalStatesByTimestamp(states);
                                                 const linkIds = grps.map((g) => g[0].id);
@@ -3979,7 +4462,8 @@ export default function Journal() {
                                       if (savedEntry) {
                                         try {
                                           const now = new Date().toISOString();
-                                          const allStates = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId! });
+                                          const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+                                          const allStates = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
                                           const deleteGroup = async (group: JournalEmotionalState[]) => {
                                             for (const s of group) {
                                               await invoke("delete_emotional_state", { id: s.id });
@@ -3999,6 +4483,7 @@ export default function Journal() {
                                                 tradeId: null,
                                                 journalEntryId: entryId,
                                                 journalTradeId: null,
+                                                isPaper: dataMode === "paper",
                                               });
                                               if (firstStateId === null) firstStateId = stateId;
                                             }
@@ -4019,6 +4504,7 @@ export default function Journal() {
                                                   tradeId: null,
                                                   journalEntryId: entryId,
                                                   journalTradeId: jtId,
+                                                  isPaper: dataMode === "paper",
                                                 });
                                                 if (firstStateId === null) firstStateId = stateId;
                                               }
@@ -4056,7 +4542,7 @@ export default function Journal() {
                                               console.error("Failed to save emotion survey:", err);
                                             }
                                           }
-                                          const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId! });
+                                          const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
                                           setJournalEmotionalStates(states);
                                           setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
                                           setNewEmotionalStateSurveyResponses({});
@@ -4467,8 +4953,6 @@ export default function Journal() {
                                 }
                               });
 
-                              const tradeResponses = checklistResponses.get(activeTradeIndex) || new Map();
-
                               return (
                                 <div style={{ marginBottom: "24px" }}>
                                   <h4 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>
@@ -4493,9 +4977,7 @@ export default function Journal() {
                                           {group.item_text}
                                         </div>
                                         {children.map((child) => {
-                                          const response = tradeResponses.get(child.id);
-                                          const isYes = response === true;
-                                          const isNo = response === false;
+                                          const score = surveyScores.get(child.id);
                                           return (
                                             <div
                                               key={child.id}
@@ -4520,55 +5002,37 @@ export default function Journal() {
                                               >
                                                 {child.item_text}
                                               </label>
-                                              <div style={{ display: "flex", gap: "8px" }}>
-                                                <button
-                                                  onClick={() => {
-                                                    setChecklistResponses(prev => {
-                                                      const newMap = new Map(prev);
-                                                      const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
-                                                      tradeResponses.set(child.id, true);
-                                                      newMap.set(activeTradeIndex, tradeResponses);
-                                                      return newMap;
-                                                    });
-                                                  }}
-                                                  style={{
-                                                    padding: "6px 16px",
-                                                    backgroundColor: isYes ? "var(--accent)" : "var(--bg-secondary)",
-                                                    border: `1px solid ${isYes ? "var(--accent)" : "var(--border-color)"}`,
-                                                    borderRadius: "6px",
-                                                    color: isYes ? "white" : "var(--text-primary)",
-                                                    cursor: "pointer",
-                                                    fontSize: "13px",
-                                                    fontWeight: "500",
-                                                    transition: "all 0.2s",
-                                                  }}
-                                                >
-                                                  Yes
-                                                </button>
-                                                <button
-                                                  onClick={() => {
-                                                    setChecklistResponses(prev => {
-                                                      const newMap = new Map(prev);
-                                                      const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
-                                                      tradeResponses.set(child.id, false);
-                                                      newMap.set(activeTradeIndex, tradeResponses);
-                                                      return newMap;
-                                                    });
-                                                  }}
-                                                  style={{
-                                                    padding: "6px 16px",
-                                                    backgroundColor: isNo ? "var(--accent)" : "var(--bg-secondary)",
-                                                    border: `1px solid ${isNo ? "var(--accent)" : "var(--border-color)"}`,
-                                                    borderRadius: "6px",
-                                                    color: isNo ? "white" : "var(--text-primary)",
-                                                    cursor: "pointer",
-                                                    fontSize: "13px",
-                                                    fontWeight: "500",
-                                                    transition: "all 0.2s",
-                                                  }}
-                                                >
-                                                  No
-                                                </button>
+                                              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                                                {[1, 2, 3, 4, 5].map((n) => (
+                                                  <button
+                                                    key={n}
+                                                    type="button"
+                                                    onClick={() => {
+                                                      setSurveyScores(prev => new Map(prev).set(child.id, n));
+                                                      setChecklistResponses(prev => {
+                                                        const newMap = new Map(prev);
+                                                        const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
+                                                        tradeResponses.set(child.id, true);
+                                                        newMap.set(activeTradeIndex, tradeResponses);
+                                                        return newMap;
+                                                      });
+                                                    }}
+                                                    style={{
+                                                      width: "32px",
+                                                      height: "32px",
+                                                      padding: 0,
+                                                      borderRadius: "6px",
+                                                      border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`,
+                                                      backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)",
+                                                      color: score === n ? "white" : "var(--text-primary)",
+                                                      cursor: "pointer",
+                                                      fontSize: "13px",
+                                                      fontWeight: "600",
+                                                    }}
+                                                  >
+                                                    {n}
+                                                  </button>
+                                                ))}
                                               </div>
                                             </div>
                                           );
@@ -4578,9 +5042,7 @@ export default function Journal() {
                                   })}
                                   {/* Render regular items */}
                                   {regularItems.map((item) => {
-                                    const response = tradeResponses.get(item.id);
-                                    const isYes = response === true;
-                                    const isNo = response === false;
+                                    const score = surveyScores.get(item.id);
                                     return (
                                       <div
                                         key={item.id}
@@ -4604,55 +5066,37 @@ export default function Journal() {
                                         >
                                           {item.item_text}
                                         </label>
-                                        <div style={{ display: "flex", gap: "8px" }}>
-                                          <button
-                                            onClick={() => {
-                                              setChecklistResponses(prev => {
-                                                const newMap = new Map(prev);
-                                                const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
-                                                tradeResponses.set(item.id, true);
-                                                newMap.set(activeTradeIndex, tradeResponses);
-                                                return newMap;
-                                              });
-                                            }}
-                                            style={{
-                                              padding: "6px 16px",
-                                              backgroundColor: isYes ? "var(--accent)" : "var(--bg-secondary)",
-                                              border: `1px solid ${isYes ? "var(--accent)" : "var(--border-color)"}`,
-                                              borderRadius: "6px",
-                                              color: isYes ? "white" : "var(--text-primary)",
-                                              cursor: "pointer",
-                                              fontSize: "13px",
-                                              fontWeight: "500",
-                                              transition: "all 0.2s",
-                                            }}
-                                          >
-                                            Yes
-                                          </button>
-                                          <button
-                                            onClick={() => {
-                                              setChecklistResponses(prev => {
-                                                const newMap = new Map(prev);
-                                                const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
-                                                tradeResponses.set(item.id, false);
-                                                newMap.set(activeTradeIndex, tradeResponses);
-                                                return newMap;
-                                              });
-                                            }}
-                                            style={{
-                                              padding: "6px 16px",
-                                              backgroundColor: isNo ? "var(--accent)" : "var(--bg-secondary)",
-                                              border: `1px solid ${isNo ? "var(--accent)" : "var(--border-color)"}`,
-                                              borderRadius: "6px",
-                                              color: isNo ? "white" : "var(--text-primary)",
-                                              cursor: "pointer",
-                                              fontSize: "13px",
-                                              fontWeight: "500",
-                                              transition: "all 0.2s",
-                                            }}
-                                          >
-                                            No
-                                          </button>
+                                        <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                                          {[1, 2, 3, 4, 5].map((n) => (
+                                            <button
+                                              key={n}
+                                              type="button"
+                                              onClick={() => {
+                                                setSurveyScores(prev => new Map(prev).set(item.id, n));
+                                                setChecklistResponses(prev => {
+                                                  const newMap = new Map(prev);
+                                                  const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
+                                                  tradeResponses.set(item.id, true);
+                                                  newMap.set(activeTradeIndex, tradeResponses);
+                                                  return newMap;
+                                                });
+                                              }}
+                                              style={{
+                                                width: "32px",
+                                                height: "32px",
+                                                padding: 0,
+                                                borderRadius: "6px",
+                                                border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`,
+                                                backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)",
+                                                color: score === n ? "white" : "var(--text-primary)",
+                                                cursor: "pointer",
+                                                fontSize: "13px",
+                                                fontWeight: "600",
+                                              }}
+                                            >
+                                              {n}
+                                            </button>
+                                          ))}
                                         </div>
                                       </div>
                                     );
@@ -4954,174 +5398,151 @@ export default function Journal() {
                   </div>
                 </div>
               </div>
-              <div style={{ height: 260 }}>
-                <div
+              <div
+                style={{
+                  marginBottom: "12px",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "8px",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <span
                   style={{
-                    marginBottom: "12px",
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: "8px",
-                    alignItems: "center",
-                    justifyContent: "space-between",
+                    fontSize: "12px",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    color: "var(--text-secondary)",
                   }}
                 >
-                  <span
-                    style={{
-                      fontSize: "12px",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    Journal Distributions
-                  </span>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: "4px",
-                      padding: "4px",
-                      borderRadius: "999px",
-                      background:
-                        "linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))",
-                      border: "1px solid rgba(255,255,255,0.06)",
-                    }}
-                  >
-                    {[
-                    { id: "entries_over_time" as const, label: "Entries Over Time" },
-                    { id: "symbol" as const, label: "Symbols" },
-                    { id: "position" as const, label: "Positions" },
-                    { id: "timeframe" as const, label: "Timeframes" },
-                    { id: "entry_type" as const, label: "Entry Types" },
-                    { id: "exit_type" as const, label: "Exit Types" },
-                    { id: "outcome" as const, label: "Outcomes" },
-                  ].map((tab) => {
-                    const isActive = overviewChartTab === tab.id;
-                    return (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => setOverviewChartTab(tab.id)}
-                        style={{
-                          padding: "6px 12px",
-                          fontSize: "12px",
-                          borderRadius: "999px",
-                          border: "none",
-                          backgroundColor: isActive ? "var(--accent)" : "transparent",
-                          color: isActive ? "#ffffff" : "var(--text-secondary)",
-                          cursor: "pointer",
-                          boxShadow: isActive ? "0 0 0 1px rgba(255,255,255,0.08)" : "none",
-                          transition: "background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease",
-                          whiteSpace: "nowrap",
-                        }}
-                        onMouseEnter={(e) => {
-                          if (!isActive) {
-                            (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.02)");
-                            e.currentTarget.style.color = "var(--text-primary)";
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (!isActive) {
-                            e.currentTarget.style.backgroundColor = "transparent";
-                            e.currentTarget.style.color = "var(--text-secondary)";
-                          }
-                        }}
-                      >
-                        {tab.label}
-                      </button>
-                    );
-                  })}
-                  </div>
-                </div>
-                {overviewChartTab === "entries_over_time" ? (
-                  entriesByMonth.length === 0 ? (
-                    <div
+                  Journal Distributions
+                </span>
+                <TimeframeSelector
+                  value={chartTimeframe}
+                  onChange={(tf) => {
+                    setChartTimeframe(tf);
+                    setOverviewEntriesBrushEnd(0);
+                    setOverviewDimBrushEnd(0);
+                  }}
+                  customStartDate={chartCustomStart || undefined}
+                  customEndDate={chartCustomEnd || undefined}
+                  onCustomDatesChange={(start, end) => {
+                    setChartCustomStart(start);
+                    setChartCustomEnd(end);
+                    setOverviewEntriesBrushEnd(0);
+                    setOverviewDimBrushEnd(0);
+                  }}
+                />
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "4px",
+                    padding: "4px",
+                    borderRadius: "999px",
+                    background:
+                      "linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))",
+                    border: "1px solid rgba(255,255,255,0.06)",
+                  }}
+                >
+                  {[
+                  { id: "entries_over_time" as const, label: "Entries Over Time" },
+                  { id: "symbol" as const, label: "Symbols" },
+                  { id: "position" as const, label: "Positions" },
+                  { id: "timeframe" as const, label: "Timeframes" },
+                  { id: "entry_type" as const, label: "Entry Types" },
+                  { id: "exit_type" as const, label: "Exit Types" },
+                  { id: "outcome" as const, label: "Outcomes" },
+                ].map((tab) => {
+                  const isActive = overviewChartTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setOverviewChartTab(tab.id)}
                       style={{
-                        height: "100%",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        color: "var(--text-secondary)",
-                        fontSize: "13px",
+                        padding: "6px 12px",
+                        fontSize: "12px",
+                        borderRadius: "999px",
+                        border: "none",
+                        backgroundColor: isActive ? "var(--accent)" : "transparent",
+                        color: isActive ? "#ffffff" : "var(--text-secondary)",
+                        cursor: "pointer",
+                        boxShadow: isActive ? "0 0 0 1px rgba(255,255,255,0.08)" : "none",
+                        transition: "background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease",
+                        whiteSpace: "nowrap",
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isActive) {
+                          (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.02)");
+                          e.currentTarget.style.color = "var(--text-primary)";
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isActive) {
+                          e.currentTarget.style.backgroundColor = "transparent";
+                          e.currentTarget.style.color = "var(--text-secondary)";
+                        }
                       }}
                     >
-                      No entries match the current filters.
-                    </div>
-                  ) : (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={entriesByMonth}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis
-                          dataKey="month"
-                          stroke="var(--text-secondary)"
-                          tick={{ fontSize: 12, fill: "var(--text-secondary)" }}
-                        />
-                        <YAxis
-                          stroke="var(--text-secondary)"
-                          tick={{ fontSize: 12, fill: "var(--text-secondary)" }}
-                          allowDecimals={false}
-                        />
-                        <Tooltip
-                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
-                          contentStyle={{
-                            backgroundColor: "var(--bg-tertiary)",
-                            border: "1px solid var(--border-color)",
-                            color: "var(--text-primary)",
-                          }}
-                        />
-                        <Bar
-                          dataKey="count"
-                          fill="var(--accent)"
-                          fillOpacity={0.5}
-                          stroke="var(--accent)"
-                          strokeWidth={1.6}
-                          activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }}
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  )
-                ) : (() => {
+                      {tab.label}
+                    </button>
+                  );
+                })}
+                </div>
+              </div>
+              <div style={{ height: 260, minHeight: 260, overflow: "hidden" }}>
+                {(() => {
+                  if (overviewChartTab === "entries_over_time") {
+                    if (overviewEntriesByMonth.length === 0) {
+                      return (
+                        <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", fontSize: "13px" }}>
+                          No entries match the current filters.
+                        </div>
+                      );
+                    }
+                    const useBrush = overviewEntriesByMonth.length > BRUSH_MIN_POINTS;
+                    const start = useBrush && overviewEntriesBrushEnd > 0 ? Math.min(overviewEntriesBrushStart, overviewEntriesByMonth.length - 1) : 0;
+                    const end = useBrush && overviewEntriesBrushEnd > 0 ? Math.min(overviewEntriesByMonth.length - 1, Math.max(start, overviewEntriesBrushEnd)) : Math.max(0, overviewEntriesByMonth.length - 1);
+                    return (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={overviewEntriesByMonth}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                          <XAxis dataKey="month" stroke="var(--text-secondary)" tick={{ fontSize: 12, fill: "var(--text-secondary)" }} />
+                          <YAxis stroke="var(--text-secondary)" tick={{ fontSize: 12, fill: "var(--text-secondary)" }} allowDecimals={false} />
+                          <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} />
+                          <Bar dataKey="count" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                          {useBrush && (
+                            <Brush dataKey="month" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setOverviewEntriesBrushStart(r.startIndex); setOverviewEntriesBrushEnd(r.endIndex); } }} />
+                          )}
+                        </BarChart>
+                      </ResponsiveContainer>
+                    );
+                  }
                   const key = overviewChartTab;
-                  const data = journalChartData[key];
+                  const data = overviewJournalChartData[key];
                   if (!data || data.length === 0) {
                     return (
-                      <div
-                        style={{
-                          height: "100%",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          color: "var(--text-secondary)",
-                          fontSize: "13px",
-                        }}
-                      >
+                      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", fontSize: "13px" }}>
                         No journal trades match the current filters for this dimension.
                       </div>
                     );
                   }
+                  const useBrush = data.length > BRUSH_MIN_POINTS;
+                  const start = useBrush && overviewDimBrushEnd > 0 ? Math.min(overviewDimBrushStart, data.length - 1) : 0;
+                  const end = useBrush && overviewDimBrushEnd > 0 ? Math.min(data.length - 1, Math.max(start, overviewDimBrushEnd)) : Math.max(0, data.length - 1);
                   return (
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={data}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                         <XAxis dataKey="name" stroke="var(--text-secondary)" />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                        <Tooltip
-                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
-                          contentStyle={{
-                            backgroundColor: "var(--bg-tertiary)",
-                            border: "1px solid var(--border-color)",
-                            color: "var(--text-primary)",
-                          }}
-                          formatter={(value: any) => [value, "Entries"]}
-                        />
-                        <Bar
-                          dataKey="count"
-                          fill="var(--accent)"
-                          fillOpacity={0.5}
-                          stroke="var(--accent)"
-                          strokeWidth={1.6}
-                          activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }}
-                        />
+                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: any) => [value, "Entries"]} />
+                        <Bar dataKey="count" fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                        {useBrush && (
+                          <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setOverviewDimBrushStart(r.startIndex); setOverviewDimBrushEnd(r.endIndex); } }} />
+                        )}
                       </BarChart>
                     </ResponsiveContainer>
                   );
@@ -6187,9 +6608,15 @@ export default function Journal() {
                       const [e, x] = key.split("_").map(Number);
                       return { entry_trade_id: e, exit_trade_id: x };
                     });
-                    await invoke("set_journal_entry_pairs", { journalEntryId: selectedEntry.id, pairs });
-                    const updated = await invoke<PairedTrade[]>("get_journal_entry_pairs", { journalEntryId: selectedEntry.id });
-                    setLinkedPairs(updated);
+                    if (dataMode === "sandbox") {
+                      setSandboxJournalEntryPairs(selectedEntry.id, pairs);
+                      const updated = getSandboxJournalEntryPairsAsPairedTrades(selectedEntry.id) as unknown as PairedTrade[];
+                      setLinkedPairs(updated);
+                    } else {
+                      await invoke("set_journal_entry_pairs", { journalEntryId: selectedEntry.id, pairs });
+                      const updated = await invoke<PairedTrade[]>("get_journal_entry_pairs", { journalEntryId: selectedEntry.id });
+                      setLinkedPairs(updated);
+                    }
                     setShowLinkPairsModal(false);
                   } catch (e) {
                     console.error("Failed to save linked pairs:", e);
@@ -6217,6 +6644,7 @@ export default function Journal() {
           onClose={() => setSelectedPairForChart(null)}
         />
       )}
+      </div>
     </div>
   );
 }
