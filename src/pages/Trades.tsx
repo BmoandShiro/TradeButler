@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
@@ -7,7 +7,7 @@ import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/T
 import { TradeChart } from "../components/TradeChart";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { formatWithCommas } from "../utils/formatCompactNumber";
-import { loadSandboxState, deleteSandboxTrade, updateSandboxTradeStrategy } from "../utils/sandboxStore";
+import { loadSandboxState, deleteSandboxTrade, updateSandboxTradeStrategy, updateSandboxTradeNotes } from "../utils/sandboxStore";
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 
 interface JournalEntrySummary {
@@ -138,6 +138,9 @@ export default function Trades() {
   const [journalPairPage, setJournalPairPage] = useState<number>(0);
   const navigate = useNavigate();
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
+  /** Trade IDs selected for bulk "Mark as paper" / "Remove paper" (checkboxes in Paper column). */
+  const [selectedTradeIdsForPaper, setSelectedTradeIdsForPaper] = useState<Set<number>>(new Set());
+  const stickyBarRef = useRef<HTMLDivElement>(null);
 
   const JOURNAL_ENTRIES_PER_PAGE = 10;
 
@@ -186,7 +189,7 @@ export default function Trades() {
   useEffect(() => {
     localStorage.setItem("tradebutler_trades_timeframe", timeframe);
   }, [timeframe]);
-  
+
   useEffect(() => {
     if (customStartDate) {
       localStorage.setItem("tradebutler_trades_custom_start", customStartDate);
@@ -406,6 +409,68 @@ export default function Trades() {
     }
   };
 
+  const togglePaperSelection = (tradeId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedTradeIdsForPaper((prev) => {
+      const next = new Set(prev);
+      if (next.has(tradeId)) next.delete(tradeId);
+      else next.add(tradeId);
+      return next;
+    });
+  };
+
+  const markSelectedAsPaper = async () => {
+    if (selectedTradeIdsForPaper.size === 0) return;
+    try {
+      for (const tradeId of selectedTradeIdsForPaper) {
+        if (dataMode === "sandbox") {
+          const state = loadSandboxState();
+          const trade = state.trades.find((t) => t.id === tradeId);
+          if (!trade) continue;
+          const notes = trade.notes || "";
+          const newNotes = notes.trim() ? `${notes.trim()} [PAPER]` : "[PAPER]";
+          updateSandboxTradeNotes(tradeId, newNotes);
+        } else {
+          const trade = await invoke<Trade | null>("get_trade_by_id", { id: tradeId });
+          if (!trade) continue;
+          const notes = trade.notes || "";
+          const newNotes = notes.trim() ? `${notes.trim()} [PAPER]` : "[PAPER]";
+          await invoke("update_trade", { id: tradeId, trade: { ...trade, notes: newNotes } });
+        }
+      }
+      setSelectedTradeIdsForPaper(new Set());
+      await loadData();
+    } catch (error) {
+      console.error("Error marking as paper:", error);
+      alert("Failed to update trades: " + (error instanceof Error ? error.message : String(error)));
+    }
+  };
+
+  const removePaperFromSelected = async () => {
+    if (selectedTradeIdsForPaper.size === 0) return;
+    try {
+      for (const tradeId of selectedTradeIdsForPaper) {
+        if (dataMode === "sandbox") {
+          const state = loadSandboxState();
+          const trade = state.trades.find((t) => t.id === tradeId);
+          if (!trade) continue;
+          const notes = (trade.notes || "").replace(/\s*\[PAPER\]\s*/gi, "").trim() || null;
+          updateSandboxTradeNotes(tradeId, notes);
+        } else {
+          const trade = await invoke<Trade | null>("get_trade_by_id", { id: tradeId });
+          if (!trade) continue;
+          const notes = (trade.notes || "").replace(/\s*\[PAPER\]\s*/gi, "").trim() || null;
+          await invoke("update_trade", { id: tradeId, trade: { ...trade, notes } });
+        }
+      }
+      setSelectedTradeIdsForPaper(new Set());
+      await loadData();
+    } catch (error) {
+      console.error("Error removing paper flag:", error);
+      alert("Failed to update trades: " + (error instanceof Error ? error.message : String(error)));
+    }
+  };
+
   const handleSort = (column: "date" | "symbol" | "pnl" | "price" | "quantity" | "trades") => {
     if (sortBy === column) {
       setSortDirection(sortDirection === "asc" ? "desc" : "asc");
@@ -435,6 +500,7 @@ export default function Trades() {
           userSelect: "none",
           backgroundColor: isActive ? "var(--bg-secondary)" : "var(--bg-tertiary)",
           transition: "background-color 0.2s",
+          whiteSpace: "nowrap",
         }}
         onMouseEnter={(e) => {
           if (!isActive) {
@@ -565,7 +631,7 @@ export default function Trades() {
       : null;
     const symbols = viewMode === "Pair"
       ? new Set(filteredAndSortedPositionGroups.map((g) => g.entry_trade.symbol))
-      : new Set(filteredAndSortedTrades.map((t) => t.symbol));
+      : new Set(filteredAndSortedTrades.map((t) => t.trade.symbol));
     return { count, totalPnl, symbolCount: symbols.size };
   }, [viewMode, filteredAndSortedTrades, filteredAndSortedPositionGroups]);
 
@@ -577,12 +643,25 @@ export default function Trades() {
     );
   }
 
+  const stickyHeaderStyle: React.CSSProperties = {
+    position: "sticky",
+    top: 0,
+    zIndex: 10,
+    backgroundColor: "var(--bg-primary)",
+    marginLeft: "-30px",
+    marginRight: "-30px",
+    paddingLeft: "30px",
+    paddingRight: "30px",
+    paddingBottom: "4px",
+  };
+
   return (
     <div style={{ padding: "30px" }}>
+      <div ref={stickyBarRef} style={stickyHeaderStyle}>
       {dataMode === "paper" && (
-        <div style={{ padding: "10px 14px", marginBottom: "20px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
-          Paper mode – your data only. No example data.
-        </div>
+        <p style={{ margin: "0 0 16px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+          Paper mode — you are viewing paper trades only.
+        </p>
       )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
         <h1 style={{ fontSize: "32px", fontWeight: "bold" }}>Trades</h1>
@@ -860,6 +939,7 @@ export default function Trades() {
           )}
         </div>
       </div>
+      </div>
 
       {viewMode === "Pair" ? (
         // Pair View Mode - Show only entry trades with position details
@@ -886,11 +966,55 @@ export default function Trades() {
               overflow: "hidden",
             }}
           >
-            <div style={{ overflowX: "auto" }}>
+            {selectedTradeIdsForPaper.size > 0 && dataMode !== "sandbox" && (
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "12px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
+                {dataMode === "paper" ? (
+                  <button
+                    type="button"
+                    onClick={removePaperFromSelected}
+                    style={{
+                      padding: "10px 20px",
+                      fontSize: "14px",
+                      fontWeight: "600",
+                      border: "none",
+                      borderRadius: "8px",
+                      background: "var(--accent)",
+                      color: "white",
+                      cursor: "pointer",
+                      boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                    }}
+                  >
+                    Mark as real ({selectedTradeIdsForPaper.size})
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={markSelectedAsPaper}
+                    style={{
+                      padding: "10px 20px",
+                      fontSize: "14px",
+                      fontWeight: "600",
+                      border: "none",
+                      borderRadius: "8px",
+                      background: "var(--accent)",
+                      color: "white",
+                      cursor: "pointer",
+                      boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                    }}
+                  >
+                    Mark as paper ({selectedTradeIdsForPaper.size})
+                  </button>
+                )}
+              </div>
+            )}
+            <div style={{ overflowY: "auto", overflowX: "auto", maxHeight: "calc(100vh - 260px)" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
+                <thead style={{ position: "sticky", top: 0, zIndex: 9, backgroundColor: "var(--bg-tertiary)", boxShadow: "0 1px 0 0 var(--border-color)" }}>
                   <tr style={{ backgroundColor: "var(--bg-tertiary)", borderBottom: "1px solid var(--border-color)" }}>
                     <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", width: "40px" }}>
+                    </th>
+                    <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--text-primary)", textTransform: "uppercase", minWidth: "100px", whiteSpace: "nowrap", backgroundColor: "var(--bg-secondary)" }} title={dataMode === "paper" ? "Select to mark as real" : "Select to mark as paper"}>
+                      {dataMode === "paper" ? "Mark as Real" : "Mark As Paper"}
                     </th>
                     <SortableHeader column="date" label="Entry Date" viewMode={viewMode} />
                     <SortableHeader column="symbol" label="Symbol" viewMode={viewMode} />
@@ -899,11 +1023,11 @@ export default function Trades() {
                     <SortableHeader column="trades" label="Trades" viewMode={viewMode} />
                     {!hidePnlDollars && <SortableHeader column="pnl" label="P&L" viewMode={viewMode} />}
                     {!hidePnlPercent && (
-                      <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                      <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", whiteSpace: "nowrap" }}>
                         %
                       </th>
                     )}
-                    <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                    <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", minWidth: "100px", whiteSpace: "nowrap" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                         <span>Strategy</span>
                         <button
@@ -929,7 +1053,7 @@ export default function Trades() {
                         </button>
                       </div>
                     </th>
-                    <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", width: "56px" }}>
+                    <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", width: "56px", whiteSpace: "nowrap" }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
                         <span>Delete</span>
                         <button
@@ -972,6 +1096,22 @@ export default function Trades() {
                         >
                           <td style={{ padding: "12px 16px", fontSize: "14px" }}>
                             {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                          </td>
+                          <td style={{ padding: "12px 16px", textAlign: "center", fontSize: "12px" }} onClick={(e) => e.stopPropagation()}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", flexWrap: "wrap" }}>
+                              <label title="Select entry for Mark as paper" style={{ display: "flex", cursor: "pointer", margin: 0 }}>
+                                <input type="checkbox" checked={selectedTradeIdsForPaper.has(group.entry_trade.id)} onChange={() => {}} onClick={(e) => togglePaperSelection(group.entry_trade.id, e as unknown as React.MouseEvent)} style={{ cursor: "pointer" }} />
+                                <span style={{ marginLeft: "2px", color: "var(--text-secondary)" }}>E</span>
+                              </label>
+                              {group.position_trades.length >= 1 && (
+                                <>
+                                  <label title="Select exit for Mark as paper" style={{ display: "flex", cursor: "pointer", margin: 0 }}>
+                                    <input type="checkbox" checked={selectedTradeIdsForPaper.has((group.position_trades[group.position_trades.length - 1] as Trade).id)} onChange={() => {}} onClick={(e) => togglePaperSelection((group.position_trades[group.position_trades.length - 1] as Trade).id, e as unknown as React.MouseEvent)} style={{ cursor: "pointer" }} />
+                                    <span style={{ marginLeft: "2px", color: "var(--text-secondary)" }}>X</span>
+                                  </label>
+                                </>
+                              )}
+                            </div>
                           </td>
                           <td style={{ padding: "12px 16px", fontSize: "14px" }}>
                             {formatDate(group.entry_trade.timestamp)}
@@ -1499,30 +1639,74 @@ export default function Trades() {
             overflow: "hidden",
           }}
         >
-          <div style={{ overflowX: "auto" }}>
+          {selectedTradeIdsForPaper.size > 0 && dataMode !== "sandbox" && (
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "12px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
+              {dataMode === "paper" ? (
+                <button
+                  type="button"
+                  onClick={removePaperFromSelected}
+                  style={{
+                    padding: "10px 20px",
+                    fontSize: "14px",
+                    fontWeight: "600",
+                    border: "none",
+                    borderRadius: "8px",
+                    background: "var(--accent)",
+                    color: "white",
+                    cursor: "pointer",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                  }}
+                >
+                  Mark as real ({selectedTradeIdsForPaper.size})
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={markSelectedAsPaper}
+                  style={{
+                    padding: "10px 20px",
+                    fontSize: "14px",
+                    fontWeight: "600",
+                    border: "none",
+                    borderRadius: "8px",
+                    background: "var(--accent)",
+                    color: "white",
+                    cursor: "pointer",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                  }}
+                >
+                  Mark as paper ({selectedTradeIdsForPaper.size})
+                </button>
+              )}
+            </div>
+          )}
+          <div style={{ overflowY: "auto", overflowX: "auto", maxHeight: "calc(100vh - 260px)" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
+              <thead style={{ position: "sticky", top: 0, zIndex: 9, backgroundColor: "var(--bg-tertiary)", boxShadow: "0 1px 0 0 var(--border-color)" }}>
                 <tr style={{ backgroundColor: "var(--bg-tertiary)", borderBottom: "1px solid var(--border-color)" }}>
                   <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", width: "40px" }}>
                   </th>
+                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--text-primary)", textTransform: "uppercase", minWidth: "100px", whiteSpace: "nowrap", backgroundColor: "var(--bg-secondary)" }} title={dataMode === "paper" ? "Select to mark as real" : "Select to mark as paper"}>
+                    {dataMode === "paper" ? "Mark as Real" : "Mark As Paper"}
+                  </th>
                   <SortableHeader column="date" label="Date" viewMode={viewMode} />
                   <SortableHeader column="symbol" label="Symbol" viewMode={viewMode} />
-                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", whiteSpace: "nowrap" }}>
                     Side
                   </th>
                   <SortableHeader column="quantity" label="Quantity" viewMode={viewMode} />
                   <SortableHeader column="price" label="Price" viewMode={viewMode} />
-                  <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                  <th style={{ padding: "12px 16px", textAlign: "right", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", whiteSpace: "nowrap" }}>
                     Value
                   </th>
                   {!hidePnlDollars && <SortableHeader column="pnl" label="P&L" viewMode={viewMode} />}
-                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", whiteSpace: "nowrap" }}>
                     Type
                   </th>
-                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", whiteSpace: "nowrap" }}>
                     Status
                   </th>
-                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>
+                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", minWidth: "100px", whiteSpace: "nowrap" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                       <span>Strategy</span>
                       <button
@@ -1548,7 +1732,7 @@ export default function Trades() {
                       </button>
                     </div>
                   </th>
-                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", width: "56px" }}>
+                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", width: "56px", whiteSpace: "nowrap" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
                       <span>Delete</span>
                       <button
@@ -1600,6 +1784,13 @@ export default function Trades() {
                           {hasPairs && (
                             isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />
                           )}
+                        </td>
+                        <td style={{ padding: "12px 16px", textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                            <label style={{ display: "flex", cursor: "pointer", margin: 0 }} title="Select for Mark as paper">
+                              <input type="checkbox" checked={selectedTradeIdsForPaper.has(trade.id)} onChange={() => {}} onClick={(e) => togglePaperSelection(trade.id, e as unknown as React.MouseEvent)} style={{ cursor: "pointer" }} />
+                            </label>
+                          </div>
                         </td>
                         <td style={{ padding: "12px 16px", fontSize: "14px" }}>
                           {formatDate(trade.timestamp)}

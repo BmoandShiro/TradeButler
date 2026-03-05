@@ -59,11 +59,14 @@ export default function Layout({ children }: LayoutProps) {
     orderType: "MARKET",
     fees: "",
     notes: "",
+    isPaperTrade: false,
   });
   const [isAddingTrade, setIsAddingTrade] = useState(false);
   const [addTradeError, setAddTradeError] = useState<string | null>(null);
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [pendingCsvImport, setPendingCsvImport] = useState<{ contents: string; markAsPaper: boolean } | null>(null);
+  const [isImportingCsv, setIsImportingCsv] = useState(false);
   const [isAppLocked, setIsAppLocked] = useState(() => isLocked());
   const [useGalaxyBackground, setUseGalaxyBackground] = useState(() => {
     const settings = getGalaxyThemeSettings();
@@ -86,6 +89,13 @@ export default function Layout({ children }: LayoutProps) {
   useEffect(() => {
     setCurrentDataMode(dataMode);
   }, [dataMode]);
+
+  // When opening Add Trade modal, default "Flag as paper trade" from current data mode (Real/Paper only; Demo keeps previous choice)
+  useEffect(() => {
+    if (showAddTradeModal && dataMode !== "sandbox") {
+      setAddTradeForm((f) => ({ ...f, isPaperTrade: dataMode === "paper" }));
+    }
+  }, [showAddTradeModal, dataMode]);
 
   // Initialize: Load saved scroll positions from localStorage
   useEffect(() => {
@@ -304,9 +314,9 @@ export default function Layout({ children }: LayoutProps) {
           
           alert(`Data imported successfully!\n\n${summary}`);
         } else {
-          // CSV import
-          await invoke("import_trades_csv", { csvData: contents });
-          alert("Trades imported successfully!");
+          // CSV import: show confirm with option to mark as paper
+          setPendingCsvImport({ contents, markAsPaper: dataMode === "paper" });
+          return;
         }
         window.location.reload();
       }
@@ -405,9 +415,12 @@ export default function Layout({ children }: LayoutProps) {
     try {
       setIsAddingTrade(true);
       const baseNotes = addTradeForm.notes.trim();
+      const notesWithPaper = addTradeForm.isPaperTrade
+        ? (baseNotes ? `${baseNotes} [PAPER]` : "[PAPER]")
+        : (baseNotes || null);
 
       if (dataMode === "sandbox") {
-        // In Sandbox mode, write to the local sandbox store instead of the real database
+        // In Demo mode, write to the local sandbox store instead of the real database
         addSandboxTrade({
           symbol: addTradeForm.symbol.trim(),
           side: addTradeForm.side,
@@ -416,17 +429,10 @@ export default function Layout({ children }: LayoutProps) {
           timestamp,
           order_type: addTradeForm.orderType || "MARKET",
           fees: feeVal,
-          notes: baseNotes || null,
+          notes: notesWithPaper,
           strategy_id: null,
         });
       } else {
-        // In Paper mode, tag the trade in notes so pages can treat it as simulated
-        const isPaper = dataMode === "paper";
-        const notesWithMode =
-          isPaper
-            ? `${baseNotes ? baseNotes + " " : ""}[PAPER]`
-            : baseNotes || null;
-
         await invoke<number>("add_trade_manual", {
           symbol: addTradeForm.symbol.trim(),
           side: addTradeForm.side,
@@ -435,7 +441,7 @@ export default function Layout({ children }: LayoutProps) {
           timestamp,
           order_type: addTradeForm.orderType || null,
           fees: feeVal,
-          notes: notesWithMode,
+          notes: notesWithPaper,
           strategy_id: null,
         });
       }
@@ -450,6 +456,7 @@ export default function Layout({ children }: LayoutProps) {
         orderType: "MARKET",
         fees: "",
         notes: "",
+        isPaperTrade: dataMode === "paper",
       });
       window.dispatchEvent(new CustomEvent("tradeButlerTradeAdded"));
       alert("Trade added successfully.");
@@ -485,6 +492,26 @@ export default function Layout({ children }: LayoutProps) {
   const handleCancelClearData = () => {
     setShowClearDataModal(false);
     setDeleteConfirmText("");
+  };
+
+  const handleConfirmCsvImport = async () => {
+    if (!pendingCsvImport) return;
+    try {
+      setIsImportingCsv(true);
+      await invoke("import_trades_csv", { csvData: pendingCsvImport.contents, mark_as_paper: pendingCsvImport.markAsPaper ? true : undefined });
+      alert("Trades imported successfully!");
+      setPendingCsvImport(null);
+      window.location.reload();
+    } catch (error) {
+      console.error("Error importing CSV:", error);
+      alert("Failed to import: " + error);
+    } finally {
+      setIsImportingCsv(false);
+    }
+  };
+
+  const handleCancelCsvImport = () => {
+    setPendingCsvImport(null);
   };
 
   // Save scroll position for current route
@@ -1139,6 +1166,70 @@ export default function Layout({ children }: LayoutProps) {
         document.body
       )}
 
+      {/* CSV Import Confirm Modal */}
+      {pendingCsvImport && createPortal(
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 10000,
+          }}
+          onClick={handleCancelCsvImport}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "420px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>
+              Import CSV Trades
+            </h3>
+            <p style={{ fontSize: "14px", color: "var(--text-secondary)", marginBottom: "16px" }}>
+              Import trades from the selected CSV file.
+            </p>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "14px", color: "var(--text-primary)", marginBottom: "20px" }}>
+              <input
+                type="checkbox"
+                checked={pendingCsvImport.markAsPaper}
+                onChange={(e) => setPendingCsvImport((p) => p ? { ...p, markAsPaper: e.target.checked } : null)}
+              />
+              <span>Mark imported trades as paper trades</span>
+            </label>
+            <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
+              <button
+                onClick={handleCancelCsvImport}
+                disabled={isImportingCsv}
+                style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", padding: "10px 20px", color: "var(--text-primary)", cursor: isImportingCsv ? "not-allowed" : "pointer", fontSize: "14px", fontWeight: "500" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmCsvImport}
+                disabled={isImportingCsv}
+                style={{ background: "var(--accent)", border: "none", borderRadius: "6px", padding: "10px 20px", color: "white", cursor: isImportingCsv ? "not-allowed" : "pointer", fontSize: "14px", fontWeight: "500", opacity: isImportingCsv ? 0.7 : 1 }}
+              >
+                {isImportingCsv ? "Importing..." : "Import"}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
       {/* Add Trade Modal */}
       {showAddTradeModal && createPortal(
         <div
@@ -1294,6 +1385,14 @@ export default function Layout({ children }: LayoutProps) {
                   style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
                 />
               </div>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "14px", color: "var(--text-primary)" }}>
+                <input
+                  type="checkbox"
+                  checked={addTradeForm.isPaperTrade}
+                  onChange={(e) => setAddTradeForm(f => ({ ...f, isPaperTrade: e.target.checked }))}
+                />
+                <span>Flag as paper trade</span>
+              </label>
             </div>
             <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end", marginTop: "20px" }}>
               <button

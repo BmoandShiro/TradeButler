@@ -335,9 +335,9 @@ export default function DividendCalculator() {
             By reinvesting your dividends (DRIP), you can increase the number of shares you own. This will result in more shares earning dividends, continuously growing your portfolio.
           </p>
           {dataMode === "paper" && (
-            <div style={{ padding: "10px 14px", marginTop: "12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
-              Paper mode – your data only. No example data. Live quotes work in Paper mode.
-            </div>
+            <p style={{ margin: "12px 0 0 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+              Paper mode — you are viewing paper trades only.
+            </p>
           )}
         </div>
 

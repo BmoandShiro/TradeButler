@@ -552,7 +552,7 @@ fn paper_only_where_clause(paper_only: Option<bool>) -> &'static str {
 }
 
 #[tauri::command]
-pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
+pub fn import_trades_csv(csv_data: String, mark_as_paper: Option<bool>) -> Result<Vec<i64>, String> {
     use csv::ReaderBuilder;
     
     let mut reader = ReaderBuilder::new()
@@ -566,6 +566,7 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
+    let mark_paper = mark_as_paper == Some(true);
     let mut inserted_ids = Vec::new();
     
     if is_webull {
@@ -641,7 +642,7 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
                 continue; // Skip duplicate trade
             }
             
-            let _id = conn.execute(
+            conn.execute(
                 "INSERT INTO trades (symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
@@ -658,7 +659,20 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
                 ],
             ).map_err(|e| e.to_string())?;
             
-            inserted_ids.push(conn.last_insert_rowid());
+            let row_id = conn.last_insert_rowid();
+            if mark_paper {
+                let existing_notes: Option<String> = conn.query_row(
+                    "SELECT notes FROM trades WHERE id = ?1",
+                    params![row_id],
+                    |row| row.get(0),
+                ).ok().flatten();
+                let new_notes = match &existing_notes {
+                    Some(s) if !s.is_empty() => format!("{} [PAPER]", s.trim()),
+                    _ => "[PAPER]".to_string(),
+                };
+                conn.execute("UPDATE trades SET notes = ?1 WHERE id = ?2", params![new_notes, row_id]).map_err(|e| e.to_string())?;
+            }
+            inserted_ids.push(row_id);
         }
     } else {
         // Standard format
@@ -692,7 +706,7 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
                 continue; // Skip duplicate trade
             }
             
-            let _id = conn.execute(
+            conn.execute(
                 "INSERT INTO trades (symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
@@ -709,7 +723,20 @@ pub fn import_trades_csv(csv_data: String) -> Result<Vec<i64>, String> {
                 ],
             ).map_err(|e| e.to_string())?;
             
-            inserted_ids.push(conn.last_insert_rowid());
+            let row_id = conn.last_insert_rowid();
+            if mark_paper {
+                let existing_notes: Option<String> = conn.query_row(
+                    "SELECT notes FROM trades WHERE id = ?1",
+                    params![row_id],
+                    |row| row.get(0),
+                ).ok().flatten();
+                let new_notes = match &existing_notes {
+                    Some(s) if !s.is_empty() => format!("{} [PAPER]", s.trim()),
+                    _ => "[PAPER]".to_string(),
+                };
+                conn.execute("UPDATE trades SET notes = ?1 WHERE id = ?2", params![new_notes, row_id]).map_err(|e| e.to_string())?;
+            }
+            inserted_ids.push(row_id);
         }
     }
     

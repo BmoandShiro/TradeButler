@@ -1639,6 +1639,7 @@ export default function Strategies() {
   const [pendingTradeIds, setPendingTradeIds] = useState<number[]>([]);
   const [isImportingCSV, setIsImportingCSV] = useState(false);
   const [showCSVFormatModal, setShowCSVFormatModal] = useState(false);
+  const [markImportedTradesAsPaper, setMarkImportedTradesAsPaper] = useState(false);
   const [pendingCSVFile, setPendingCSVFile] = useState<{ path: string; isForExisting: boolean } | null>(null);
   const [pendingCSVFiles, setPendingCSVFiles] = useState<{ path: string; isForExisting: boolean }[]>([]);
   const [importResults, setImportResults] = useState<{
@@ -1694,12 +1695,27 @@ export default function Strategies() {
     orderType: "MARKET",
     fees: "",
     notes: "",
+    isPaperTrade: false,
   });
   const [isAddingTrade, setIsAddingTrade] = useState(false);
   const [addTradeError, setAddTradeError] = useState<string | null>(null);
   /** Strategy to assign the new trade to: captured when user opens Add Trade from Strategies tab (so it auto-assigns to the currently selected strategy). */
   const addTradeStrategyIdRef = useRef<number | null>(null);
   const [selectedPairForChart, setSelectedPairForChart] = useState<PairedTrade | null>(null);
+
+  // When opening Add Trade modal, default "Flag as paper trade" from current data mode
+  useEffect(() => {
+    if (showAddTradeModal && dataMode !== "sandbox") {
+      setAddTradeForm((f) => ({ ...f, isPaperTrade: dataMode === "paper" }));
+    }
+  }, [showAddTradeModal, dataMode]);
+
+  // When opening CSV format modal, default "Mark as paper" from current data mode
+  useEffect(() => {
+    if (showCSVFormatModal && dataMode !== "sandbox") {
+      setMarkImportedTradesAsPaper(dataMode === "paper");
+    }
+  }, [showCSVFormatModal, dataMode]);
   const [editHistory, setEditHistory] = useState<Array<{ name: string; description: string; color: string; notes: string }>>([]);
   const [editingChecklists, setEditingChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [originalChecklists, setOriginalChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
@@ -3376,7 +3392,7 @@ export default function Strategies() {
           const tradesInFile = countTradesInCSV(contents);
           totalAttempted += tradesInFile;
           
-          const importedTradeIds = await invoke<number[]>("import_trades_csv", { csvData: contents });
+          const importedTradeIds = await invoke<number[]>("import_trades_csv", { csvData: contents, mark_as_paper: markImportedTradesAsPaper ? true : undefined });
           
           if (importedTradeIds && importedTradeIds.length > 0) {
             allImportedTradeIds.push(...importedTradeIds);
@@ -3562,6 +3578,10 @@ export default function Strategies() {
     const strategyId = isCreating ? null : (addTradeStrategyIdRef.current ?? null);
     try {
       setIsAddingTrade(true);
+      const baseNotes = addTradeForm.notes.trim();
+      const notesWithPaper = addTradeForm.isPaperTrade
+        ? `${baseNotes ? baseNotes + " " : ""}[PAPER]`
+        : (baseNotes || null);
       const newId = await invoke<number>("add_trade_manual", {
         symbol: addTradeForm.symbol.trim(),
         side: addTradeForm.side,
@@ -3570,7 +3590,7 @@ export default function Strategies() {
         timestamp,
         order_type: addTradeForm.orderType || null,
         fees: feeVal,
-        notes: addTradeForm.notes.trim() || null,
+        notes: notesWithPaper,
         strategy_id: strategyId,
       });
       setShowAddTradeModal(false);
@@ -3584,6 +3604,7 @@ export default function Strategies() {
         orderType: "MARKET",
         fees: "",
         notes: "",
+        isPaperTrade: dataMode === "paper",
       });
       if (isCreating) {
         const newPendingIds = [...pendingTradeIds, newId];
@@ -6720,9 +6741,9 @@ export default function Strategies() {
           }}
         >
           {dataMode === "paper" && (
-            <div style={{ padding: "10px 14px", marginBottom: "20px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
-              Paper mode – performance and trades shown are paper-only. Strategy list and checklists are shared with Real mode.
-            </div>
+            <p style={{ margin: "0 0 16px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+              Paper mode — you are viewing paper trades only.
+            </p>
           )}
           <div
             style={{
@@ -8275,12 +8296,22 @@ export default function Strategies() {
               style={{
                 fontSize: "14px",
                 color: "var(--text-secondary)",
-                marginBottom: "20px",
+                marginBottom: "16px",
                 lineHeight: "1.5",
               }}
             >
               Is this CSV file from Webull or Coinbase?
             </p>
+            {dataMode !== "sandbox" && (
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "14px", color: "var(--text-primary)", marginBottom: "20px" }}>
+                <input
+                  type="checkbox"
+                  checked={markImportedTradesAsPaper}
+                  onChange={(e) => setMarkImportedTradesAsPaper(e.target.checked)}
+                />
+                <span>Mark imported trades as paper trades</span>
+              </label>
+            )}
             <div
               style={{
                 display: "flex",
@@ -8505,6 +8536,14 @@ export default function Strategies() {
                   style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: "14px" }}
                 />
               </div>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "14px", color: "var(--text-primary)" }}>
+                <input
+                  type="checkbox"
+                  checked={addTradeForm.isPaperTrade}
+                  onChange={(e) => setAddTradeForm(f => ({ ...f, isPaperTrade: e.target.checked }))}
+                />
+                <span>Flag as paper trade</span>
+              </label>
             </div>
             <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end", marginTop: "20px" }}>
               <button

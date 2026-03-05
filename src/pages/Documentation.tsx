@@ -294,9 +294,9 @@ export default function Documentation() {
           </button>
         </div>
         {dataMode === "paper" && (
-          <div style={{ padding: "10px 14px", margin: "0 12px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "8px", fontSize: "12px", color: "var(--text-secondary)" }}>
-            Paper mode – trades and metrics are paper-only. Resources are shared with Real mode.
-          </div>
+          <p style={{ margin: "0 12px 12px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+            Paper mode — you are viewing paper trades only.
+          </p>
         )}
         <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
           {rootPages.length === 0 ? (

@@ -2654,9 +2654,9 @@ export default function Journal() {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", flex: 1 }}>
       {dataMode === "paper" && (
-        <div style={{ flexShrink: 0, padding: "10px 14px", backgroundColor: "var(--bg-tertiary)", borderBottom: "1px solid var(--border-color)", fontSize: "13px", color: "var(--text-secondary)" }}>
-          Paper mode – your data only. No example data.
-        </div>
+        <p style={{ flexShrink: 0, margin: "0 0 12px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
+          Paper mode — you are viewing paper trades only.
+        </p>
       )}
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
       {/* Left Panel - Entry Details */}

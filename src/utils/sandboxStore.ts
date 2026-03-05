@@ -158,6 +158,15 @@ export function updateSandboxTradeStrategy(tradeId: number, strategyId: number |
   });
 }
 
+/** Update a sandbox trade's notes (e.g. add/remove [PAPER]). */
+export function updateSandboxTradeNotes(tradeId: number, notes: string | null) {
+  const state = loadSandboxState();
+  saveSandboxState({
+    ...state,
+    trades: state.trades.map((t) => (t.id === tradeId ? { ...t, notes } : t)),
+  });
+}
+
 // ---- Strategies ----
 export function getSandboxStrategies(): ExampleStrategy[] {
   return loadSandboxState().strategies;
