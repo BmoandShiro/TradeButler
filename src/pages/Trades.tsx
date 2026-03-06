@@ -2236,8 +2236,8 @@ export default function Trades() {
                                     </tbody>
                                   </table>
                                 </div>
-                                {/* Add View Chart button and Notes for closed positions */}
-                                {group.final_quantity === 0 && group.position_trades.length >= 2 && (
+                                {/* Add View Chart button and Notes (closed or open positions) */}
+                                {group.position_trades.length >= 1 && (
                                   <div style={{ marginTop: "16px" }}>
                                     <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
                                       <button

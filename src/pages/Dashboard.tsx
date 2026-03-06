@@ -34,8 +34,10 @@ import {
   GripVertical,
   Copy,
   Trash2,
+  Lock,
+  Unlock,
 } from "lucide-react";
-import { MetricsConfigPanel, useMetricsConfig } from "../components/MetricsConfig";
+import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY } from "../components/MetricsConfig";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { format } from "date-fns";
 import {
@@ -333,6 +335,7 @@ const DASHBOARD_SECTIONS_KEY = "tradebutler_dashboard_sections";
 const DASHBOARD_SECTION_ORDER_KEY = "tradebutler_dashboard_section_order";
 const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
 const METRIC_INSTANCES_KEY = "tradebutler_metric_instances";
+const LAYOUT_LOCKED_KEY = "tradebutler_dashboard_layout_locked";
 
 interface MetricInstance {
   instanceId: string; // e.g., "strategy_win_rate_1", "strategy_win_rate_2"
@@ -561,6 +564,7 @@ function SortableMetricCard({
   setMetricInstances,
   dataMode,
   openPositionGroups = [],
+  isGridLayout = false,
 }: {
   id: string;
   metric: any;
@@ -590,6 +594,7 @@ function SortableMetricCard({
   setMetricInstances: React.Dispatch<React.SetStateAction<MetricInstance[]>>;
   dataMode: DataMode;
   openPositionGroups?: OpenPositionGroup[];
+  isGridLayout?: boolean;
 }) {
   const {
     attributes,
@@ -708,10 +713,14 @@ function SortableMetricCard({
           cursor: isDragging ? "grabbing" : "grab",
           userSelect: "none",
           WebkitUserSelect: "none",
-          flex: `0 0 ${chartWidth ? `${chartWidth}px` : "280px"}`,
-          width: chartWidth ? `${chartWidth}px` : "280px",
-          minWidth: 280,
-          maxWidth: chartWidth ? 1200 : undefined,
+          ...(isGridLayout
+            ? { width: "100%", minWidth: 0 }
+            : {
+                flex: `0 0 ${chartWidth ? `${chartWidth}px` : "280px"}`,
+                width: chartWidth ? `${chartWidth}px` : "280px",
+                minWidth: 280,
+                maxWidth: chartWidth ? 1200 : undefined,
+              }),
           minHeight: "320px",
           position: "relative",
           ...style,
@@ -1011,9 +1020,7 @@ function SortableMetricCard({
         cursor: isDragging ? "grabbing" : "grab",
         userSelect: "none",
         WebkitUserSelect: "none",
-        flex: "0 0 280px",
-        width: "280px",
-        minWidth: 280,
+        ...(isGridLayout ? { width: "100%", minWidth: 0 } : { flex: "0 0 280px", width: "280px", minWidth: 280 }),
         height: "100px",
         ...style,
       }}
@@ -1679,6 +1686,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [showMetricsConfig, setShowMetricsConfig] = useState(false);
   const [configKey, setConfigKey] = useState(0); // Force re-render when config changes
+  const [layoutLocked, setLayoutLocked] = useState(() => localStorage.getItem(LAYOUT_LOCKED_KEY) === "true");
   const [expandedRecentTrades, setExpandedRecentTrades] = useState<Set<number>>(new Set());
   const [expandedStrategies, setExpandedStrategies] = useState<Set<number | string>>(new Set());
   const [strategyPairs, setStrategyPairs] = useState<Map<number | string, PairedTrade[]>>(new Map());
@@ -2384,24 +2392,49 @@ export default function Dashboard() {
             }}
           >
             <h1 style={{ fontSize: "32px", fontWeight: "bold" }}>Dashboard</h1>
-            <button
-              onClick={() => setShowMetricsConfig(true)}
-              style={{
-                background: "var(--bg-secondary)",
-                border: "1px solid var(--border-color)",
-                borderRadius: "8px",
-                padding: "10px 16px",
-                color: "var(--text-primary)",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                fontSize: "14px",
-              }}
-            >
-              <Settings size={16} />
-              Configure
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <button
+                onClick={() => {
+                  setLayoutLocked((prev) => {
+                    const next = !prev;
+                    localStorage.setItem(LAYOUT_LOCKED_KEY, next ? "true" : "false");
+                    return next;
+                  });
+                }}
+                title={layoutLocked ? "Unlock layout (allow reflow on resize)" : "Lock layout (keep arrangement on resize)"}
+                style={{
+                  background: layoutLocked ? "color-mix(in srgb, var(--accent) 20%, var(--bg-secondary))" : "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "10px 12px",
+                  color: layoutLocked ? "var(--accent)" : "var(--text-primary)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                {layoutLocked ? <Lock size={18} /> : <Unlock size={18} />}
+              </button>
+              <button
+                onClick={() => setShowMetricsConfig(true)}
+                style={{
+                  background: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "10px 16px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  fontSize: "14px",
+                }}
+              >
+                <Settings size={16} />
+                Configure
+              </button>
+            </div>
           </div>
           {dataMode === "sandbox" && (
             <p style={{ margin: "0 0 16px 0", padding: "12px 16px", fontSize: "14px", fontWeight: "600", color: "var(--accent)", backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)", border: "2px solid var(--accent)", borderRadius: "8px" }}>
@@ -2439,6 +2472,18 @@ export default function Dashboard() {
           </div>
 
       {/* Metrics Cards */}
+      {(() => {
+        const maxMetricRows = Math.max(0, parseInt(localStorage.getItem(DASHBOARD_MAX_METRIC_ROWS_KEY) || "0", 10));
+        const maxColumns = Math.max(0, Math.min(10, parseInt(localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY) || "0", 10)));
+        const useGridLayout = layoutLocked || maxMetricRows > 0 || maxColumns > 0;
+        const gridColumns = useGridLayout
+          ? (maxMetricRows > 0
+              ? Math.max(1, Math.ceil(sortedMetrics.length / maxMetricRows))
+              : maxColumns > 0
+                ? maxColumns
+                : layoutLocked ? 4 : 1)
+          : 1;
+        return (
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -2450,8 +2495,9 @@ export default function Dashboard() {
         >
       <div
         style={{
-          display: "flex",
-          flexWrap: "wrap",
+          display: useGridLayout ? "grid" : "flex",
+          flexWrap: useGridLayout ? undefined : "wrap",
+          gridTemplateColumns: useGridLayout ? `repeat(${gridColumns}, 1fr)` : undefined,
           gap: "20px",
           marginBottom: "30px",
           alignItems: "stretch",
@@ -2497,12 +2543,15 @@ export default function Dashboard() {
               setMetricInstances={setMetricInstances}
               dataMode={dataMode}
               openPositionGroups={openPositionGroups}
+              isGridLayout={useGridLayout}
             />
           );
         })}
       </div>
         </SortableContext>
       </DndContext>
+        );
+      })()}
 
       {/* Dashboard Stats Grid */}
       <DndContext
