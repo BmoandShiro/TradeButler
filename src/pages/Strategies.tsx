@@ -6180,7 +6180,7 @@ export default function Strategies() {
                               </tr>
                             </thead>
                             <tbody>
-                              {checklistItemMetrics.map((row) => (
+                              {checklistItemMetrics.filter((row) => row.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER).map((row) => (
                                 <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
                                   <td style={{ padding: "8px", color: "var(--text-primary)" }}>{row.item_text}</td>
                                   <td style={{ padding: "8px", color: "var(--text-secondary)" }}>{row.checklist_type === "survey" ? "Post-Trade Survey" : row.checklist_type === "entry" ? "Entry" : row.checklist_type === "exit" ? "Exit" : row.checklist_type.replace(/^survey_/, "").replace(/_/g, " ")}</td>
@@ -6445,7 +6445,7 @@ export default function Strategies() {
                                           }));
                                         }}
                                       />
-                                      <span style={{ color: "var(--text-primary)" }}>{item.item_text}</span>
+                                      <span style={{ color: "var(--text-primary)" }}>{item.item_text === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : item.item_text}</span>
                                     </label>
                                   ))
                                 )}
@@ -6762,8 +6762,8 @@ export default function Strategies() {
                                 fontSize: "13px",
                               }}
                             >
-                              <span style={{ color: "var(--text-primary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.item_text}>
-                                {m.item_text}
+                              <span style={{ color: "var(--text-primary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.item_text === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "" : m.item_text}>
+                                {m.item_text === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : m.item_text}
                               </span>
                               <span style={{ color: "var(--text-secondary)", marginLeft: "12px" }}>
                                 {m.response_count} response{m.response_count !== 1 ? "s" : ""}
@@ -7249,7 +7249,7 @@ export default function Strategies() {
                                       </tr>
                                     </thead>
                                     <tbody>
-                                      {itemMetrics.map((row) => (
+                                      {itemMetrics.filter((row) => row.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER).map((row) => (
                                         <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
                                           <td style={{ padding: "6px", color: "var(--text-primary)" }}>{row.item_text}</td>
                                           <td style={{ padding: "6px", textAlign: "right", color: "var(--text-secondary)" }}>{row.times_checked}</td>

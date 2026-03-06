@@ -338,6 +338,64 @@ export default function Analytics() {
   const [expandedChartId, setExpandedChartId] = useState<string | null>(null);
   const [expandedBrushStart, setExpandedBrushStart] = useState(0);
   const [expandedBrushEnd, setExpandedBrushEnd] = useState(0);
+  const [expandedSliderDrag, setExpandedSliderDrag] = useState<{ which: "left" | "right"; position: number } | { which: "slide"; startPct: number; endPct: number } | null>(null);
+  const expandedSliderTrackRef = useRef<HTMLDivElement>(null);
+  type ExpandedDragCtx =
+    | { which: "left" | "right"; bound: number; n: number; position: number; trackRect: DOMRect | null; setStart: (n: number) => void; setEnd: (n: number) => void; wasFullRange?: boolean; startIdx: number; endIdx: number }
+    | { which: "slide"; initialStartPct: number; initialEndPct: number; initialClientX: number; trackRect: DOMRect | null; n: number; startPct: number; endPct: number; setStart: (n: number) => void; setEnd: (n: number) => void };
+  const expandedSliderDragRef = useRef<ExpandedDragCtx | null>(null);
+
+  const handleExpandedSliderMove = useCallback((e: MouseEvent | TouchEvent) => {
+    if (e.type === "touchmove") e.preventDefault();
+    const ctx = expandedSliderDragRef.current;
+    if (!ctx?.trackRect || ctx.trackRect.width <= 0) return;
+    const clientX = "touches" in e && e.touches?.length ? e.touches[0].clientX : "clientX" in e ? (e as MouseEvent).clientX : 0;
+    if (ctx.which === "slide") {
+      const deltaPct = (clientX - ctx.initialClientX) / ctx.trackRect.width;
+      const delta = Math.max(-ctx.initialStartPct, Math.min(1 - ctx.initialEndPct, deltaPct));
+      const newStart = ctx.initialStartPct + delta;
+      const newEnd = ctx.initialEndPct + delta;
+      ctx.startPct = newStart;
+      ctx.endPct = newEnd;
+      setExpandedSliderDrag({ which: "slide", startPct: newStart, endPct: newEnd });
+    } else {
+      const pos = Math.max(0, Math.min(1, (clientX - ctx.trackRect.left) / ctx.trackRect.width));
+      const newPos = ctx.which === "left" ? Math.min(pos, ctx.bound) : Math.max(pos, ctx.bound);
+      ctx.position = newPos;
+      setExpandedSliderDrag((prev) => (prev && "position" in prev ? { ...prev, position: newPos } : null));
+    }
+  }, []);
+
+  const handleExpandedSliderUp = useCallback(() => {
+    const ctx = expandedSliderDragRef.current;
+    if (!ctx) return;
+    const n = ctx.n;
+    const setStart = ctx.setStart;
+    const setEnd = ctx.setEnd;
+    if (ctx.which === "slide") {
+      const startIdx = Math.max(0, Math.min(n - 1, Math.round(ctx.startPct * (n - 1))));
+      const endIdx = Math.max(startIdx, Math.min(n - 1, Math.round(ctx.endPct * (n - 1))));
+      setStart(startIdx);
+      setEnd(endIdx);
+    } else {
+      const idx = Math.round(ctx.position * (n - 1));
+      const clampedIdx = Math.max(0, Math.min(n - 1, idx));
+      if (ctx.which === "left") {
+        setStart(clampedIdx);
+        setEnd(ctx.wasFullRange ? n - 1 : ctx.endIdx);
+      } else {
+        setEnd(clampedIdx);
+        setStart(ctx.wasFullRange ? 0 : ctx.startIdx);
+      }
+    }
+    setExpandedSliderDrag(null);
+    expandedSliderDragRef.current = null;
+    document.removeEventListener("mousemove", handleExpandedSliderMove as EventListener, true);
+    document.removeEventListener("mouseup", handleExpandedSliderUp, true);
+    document.removeEventListener("touchmove", handleExpandedSliderMove as EventListener, true);
+    document.removeEventListener("touchend", handleExpandedSliderUp, true);
+  }, [handleExpandedSliderMove]);
+
   const [coverageChartBrushStart, setCoverageChartBrushStart] = useState(0);
   const [coverageChartBrushEnd, setCoverageChartBrushEnd] = useState(0);
   const [dailyPnlBrushStart, setDailyPnlBrushStart] = useState(0);
@@ -351,6 +409,7 @@ export default function Analytics() {
     if (expandedChartId) {
       setExpandedBrushStart(0);
       setExpandedBrushEnd(0);
+      setExpandedSliderDrag(null);
     }
   }, [expandedChartId]);
 
@@ -2791,7 +2850,7 @@ export default function Analytics() {
                 <Minimize2 size={16} /> Close
               </button>
             </div>
-            <div style={{ width: "100%", minWidth: "400px", minHeight: EXPANDED_CHART_HEIGHT, height: EXPANDED_CHART_HEIGHT + 48 }}>
+            <div style={{ width: "100%", minWidth: "400px", minHeight: EXPANDED_CHART_HEIGHT, height: EXPANDED_CHART_HEIGHT + 88 }}>
               {expandedChartId === "daily-pnl-dist" && dailyPnlDistributionData.length > 0 && (
                 <ResponsiveContainer width="100%" height={EXPANDED_CHART_HEIGHT}>
                   <BarChart data={dailyPnlDistributionData} margin={{ top: 8, right: 8, left: 0, bottom: 72 }}>
@@ -2821,32 +2880,66 @@ export default function Analytics() {
               {expandedChartId === "trade-symbol" && (() => {
                 const d = fullSymbolData;
                 const useBrush = d.length >= BRUSH_SHOW_MIN;
+                const n = d.length;
                 const start = useBrush && symbolChartBrushEnd > 0 ? Math.min(symbolChartBrushStart, d.length - 1) : 0;
                 const end = useBrush && symbolChartBrushEnd > 0 ? Math.min(d.length - 1, Math.max(start, symbolChartBrushEnd)) : Math.max(0, d.length - 1);
+                const startClamped = Math.max(0, Math.min(n - 1, start));
+                const endClamped = Math.max(startClamped, Math.min(n - 1, end));
+                const leftPct = n <= 1 ? 0 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.startPct : (expandedSliderDrag?.which === "left" ? expandedSliderDrag.position : (symbolChartBrushEnd > 0 ? startClamped / (n - 1) : 0));
+                const rightPct = n <= 1 ? 1 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.endPct : (expandedSliderDrag?.which === "right" ? expandedSliderDrag.position : (symbolChartBrushEnd > 0 ? endClamped / (n - 1) : 1));
+                const displayStartIdx = Math.max(0, Math.min(n - 1, Math.round(leftPct * (n - 1))));
+                const displayEndIdx = Math.max(displayStartIdx, Math.min(n - 1, Math.round(rightPct * (n - 1))));
+                const displayData = useBrush ? d.slice(displayStartIdx, displayEndIdx + 1) : d;
+                const displayStartLabel = d[displayStartIdx] ? String((d[displayStartIdx] as Record<string, unknown>).symbol ?? "") : "";
+                const displayEndLabel = d[displayEndIdx] ? String((d[displayEndIdx] as Record<string, unknown>).symbol ?? "") : "";
+                const startDragLeft = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "left", bound: rightPct, n, position: leftPct, trackRect: rect, setStart: setSymbolChartBrushStart, setEnd: setSymbolChartBrushEnd, wasFullRange: symbolChartBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "left", position: leftPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragRight = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "right", bound: leftPct, n, position: rightPct, trackRect: rect, setStart: setSymbolChartBrushStart, setEnd: setSymbolChartBrushEnd, wasFullRange: symbolChartBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "right", position: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragSlide = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; const clientX = "touches" in e && e.touches?.length ? e.touches[0].clientX : (e as React.MouseEvent).clientX; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "slide", initialStartPct: leftPct, initialEndPct: rightPct, initialClientX: clientX, trackRect: rect, n, startPct: leftPct, endPct: rightPct, setStart: setSymbolChartBrushStart, setEnd: setSymbolChartBrushEnd }; setExpandedSliderDrag({ which: "slide", startPct: leftPct, endPct: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
                 return (
+                <>
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
-                  <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
+                  <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                     <XAxis dataKey="symbol" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                     <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Trades"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
-                    {useBrush && (
-                      <Brush dataKey="symbol" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setSymbolChartBrushStart(r.startIndex); setSymbolChartBrushEnd(r.endIndex); } }} />
-                    )}
                   </BarChart>
                 </ResponsiveContainer>
+                {useBrush && (
+                  <div style={{ height: 36, marginTop: 4, position: "relative", width: "100%" }} ref={expandedSliderTrackRef}>
+                    <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 6, marginTop: -3, backgroundColor: "var(--bg-tertiary)", borderRadius: 3 }} />
+                    <div role="button" tabIndex={0} onMouseDown={startDragSlide} onTouchStart={startDragSlide} style={{ position: "absolute", left: `${leftPct * 100}%`, right: `${(1 - rightPct) * 100}%`, top: 0, bottom: 0, backgroundColor: "var(--border-color)", opacity: 0.25, cursor: "grab", zIndex: 1, touchAction: "none" }} title="Drag to pan range" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragLeft} onTouchStart={startDragLeft} style={{ position: "absolute", left: `${leftPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust start" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragRight} onTouchStart={startDragRight} style={{ position: "absolute", left: `${rightPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust end" />
+                    <div style={{ position: "absolute", left: 0, right: 0, top: 18, fontSize: 10, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between" }}><span>{displayStartLabel}</span><span>{displayEndLabel}</span></div>
+                  </div>
+                )}
+                </>
                 );
               })()}
               {expandedChartId === "trade-pnl" && expandedPnLBySymbol.length > 0 && (() => {
                 const d = expandedPnLBySymbol;
                 const useBrush = d.length >= BRUSH_SHOW_MIN;
+                const n = d.length;
                 const start = useBrush && expandedBrushEnd > 0 ? Math.min(expandedBrushStart, d.length - 1) : 0;
                 const end = useBrush && expandedBrushEnd > 0 ? Math.min(d.length - 1, Math.max(start, expandedBrushEnd)) : Math.max(0, d.length - 1);
-                const visibleSlice = useBrush ? d.slice(start, end + 1) : d;
+                const startClamped = Math.max(0, Math.min(n - 1, start));
+                const endClamped = Math.max(startClamped, Math.min(n - 1, end));
+                const leftPct = n <= 1 ? 0 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.startPct : (expandedSliderDrag?.which === "left" ? expandedSliderDrag.position : (expandedBrushEnd > 0 ? startClamped / (n - 1) : 0));
+                const rightPct = n <= 1 ? 1 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.endPct : (expandedSliderDrag?.which === "right" ? expandedSliderDrag.position : (expandedBrushEnd > 0 ? endClamped / (n - 1) : 1));
+                const displayStartIdx = Math.max(0, Math.min(n - 1, Math.round(leftPct * (n - 1))));
+                const displayEndIdx = Math.max(displayStartIdx, Math.min(n - 1, Math.round(rightPct * (n - 1))));
+                const visibleSlice = useBrush ? d.slice(displayStartIdx, displayEndIdx + 1) : d;
+                const displayStartLabel = d[displayStartIdx] ? String((d[displayStartIdx] as Record<string, unknown>).name ?? "") : "";
+                const displayEndLabel = d[displayEndIdx] ? String((d[displayEndIdx] as Record<string, unknown>).name ?? "") : "";
+                const startDragLeft = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "left", bound: rightPct, n, position: leftPct, trackRect: rect, setStart: setExpandedBrushStart, setEnd: setExpandedBrushEnd, wasFullRange: expandedBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "left", position: leftPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragRight = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "right", bound: leftPct, n, position: rightPct, trackRect: rect, setStart: setExpandedBrushStart, setEnd: setExpandedBrushEnd, wasFullRange: expandedBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "right", position: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragSlide = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; const clientX = "touches" in e && e.touches?.length ? e.touches[0].clientX : (e as React.MouseEvent).clientX; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "slide", initialStartPct: leftPct, initialEndPct: rightPct, initialClientX: clientX, trackRect: rect, n, startPct: leftPct, endPct: rightPct, setStart: setExpandedBrushStart, setEnd: setExpandedBrushEnd }; setExpandedSliderDrag({ which: "slide", startPct: leftPct, endPct: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
                 return (
+                <>
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
-                  <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
+                  <BarChart data={visibleSlice} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                     <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" tickFormatter={(v) => typeof v === "number" ? (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v)) : String(v)} />
@@ -2856,59 +2949,125 @@ export default function Analytics() {
                         <Cell key={`cell-${index}`} fill={entry.value >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} stroke={entry.value >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} />
                       ))}
                     </Bar>
-                    {useBrush && (
-                      <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setExpandedBrushStart(r.startIndex); setExpandedBrushEnd(r.endIndex); } }} />
-                    )}
                   </BarChart>
                 </ResponsiveContainer>
+                {useBrush && (
+                  <div style={{ height: 36, marginTop: 4, position: "relative", width: "100%" }} ref={expandedSliderTrackRef}>
+                    <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 6, marginTop: -3, backgroundColor: "var(--bg-tertiary)", borderRadius: 3 }} />
+                    <div role="button" tabIndex={0} onMouseDown={startDragSlide} onTouchStart={startDragSlide} style={{ position: "absolute", left: `${leftPct * 100}%`, right: `${(1 - rightPct) * 100}%`, top: 0, bottom: 0, backgroundColor: "var(--border-color)", opacity: 0.25, cursor: "grab", zIndex: 1, touchAction: "none" }} title="Drag to pan range" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragLeft} onTouchStart={startDragLeft} style={{ position: "absolute", left: `${leftPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust start" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragRight} onTouchStart={startDragRight} style={{ position: "absolute", left: `${rightPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust end" />
+                    <div style={{ position: "absolute", left: 0, right: 0, top: 18, fontSize: 10, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between" }}><span>{displayStartLabel}</span><span>{displayEndLabel}</span></div>
+                  </div>
+                )}
+                </>
                 );
               })()}
               {expandedChartId === "strategy-trades" && strategyFindingsData.tradesByStrategy.length > 0 && (() => {
                 const d = strategyFindingsData.tradesByStrategy;
                 const useBrush = d.length >= BRUSH_SHOW_MIN;
+                const n = d.length;
                 const start = useBrush && strategyTradesBrushEnd > 0 ? Math.min(strategyTradesBrushStart, d.length - 1) : 0;
                 const end = useBrush && strategyTradesBrushEnd > 0 ? Math.min(d.length - 1, Math.max(start, strategyTradesBrushEnd)) : d.length - 1;
+                const startClamped = Math.max(0, Math.min(n - 1, start));
+                const endClamped = Math.max(startClamped, Math.min(n - 1, end));
+                const leftPct = n <= 1 ? 0 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.startPct : (expandedSliderDrag?.which === "left" ? expandedSliderDrag.position : (strategyTradesBrushEnd > 0 ? startClamped / (n - 1) : 0));
+                const rightPct = n <= 1 ? 1 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.endPct : (expandedSliderDrag?.which === "right" ? expandedSliderDrag.position : (strategyTradesBrushEnd > 0 ? endClamped / (n - 1) : 1));
+                const displayStartIdx = Math.max(0, Math.min(n - 1, Math.round(leftPct * (n - 1))));
+                const displayEndIdx = Math.max(displayStartIdx, Math.min(n - 1, Math.round(rightPct * (n - 1))));
+                const displayData = useBrush ? d.slice(displayStartIdx, displayEndIdx + 1) : d;
+                const displayStartLabel = d[displayStartIdx] ? String((d[displayStartIdx] as Record<string, unknown>).name ?? "") : "";
+                const displayEndLabel = d[displayEndIdx] ? String((d[displayEndIdx] as Record<string, unknown>).name ?? "") : "";
+                const startDragLeft = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "left", bound: rightPct, n, position: leftPct, trackRect: rect, setStart: setStrategyTradesBrushStart, setEnd: setStrategyTradesBrushEnd, wasFullRange: strategyTradesBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "left", position: leftPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragRight = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "right", bound: leftPct, n, position: rightPct, trackRect: rect, setStart: setStrategyTradesBrushStart, setEnd: setStrategyTradesBrushEnd, wasFullRange: strategyTradesBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "right", position: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragSlide = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; const clientX = "touches" in e && e.touches?.length ? e.touches[0].clientX : (e as React.MouseEvent).clientX; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "slide", initialStartPct: leftPct, initialEndPct: rightPct, initialClientX: clientX, trackRect: rect, n, startPct: leftPct, endPct: rightPct, setStart: setStrategyTradesBrushStart, setEnd: setStrategyTradesBrushEnd }; setExpandedSliderDrag({ which: "slide", startPct: leftPct, endPct: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
                 return (
+                <>
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
-                  <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
+                  <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                     <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                     <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Trades"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
-                    {useBrush && <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setStrategyTradesBrushStart(r.startIndex); setStrategyTradesBrushEnd(r.endIndex); } }} />}
                   </BarChart>
                 </ResponsiveContainer>
+                {useBrush && (
+                  <div style={{ height: 36, marginTop: 4, position: "relative", width: "100%" }} ref={expandedSliderTrackRef}>
+                    <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 6, marginTop: -3, backgroundColor: "var(--bg-tertiary)", borderRadius: 3 }} />
+                    <div role="button" tabIndex={0} onMouseDown={startDragSlide} onTouchStart={startDragSlide} style={{ position: "absolute", left: `${leftPct * 100}%`, right: `${(1 - rightPct) * 100}%`, top: 0, bottom: 0, backgroundColor: "var(--border-color)", opacity: 0.25, cursor: "grab", zIndex: 1, touchAction: "none" }} title="Drag to pan range" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragLeft} onTouchStart={startDragLeft} style={{ position: "absolute", left: `${leftPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust start" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragRight} onTouchStart={startDragRight} style={{ position: "absolute", left: `${rightPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust end" />
+                    <div style={{ position: "absolute", left: 0, right: 0, top: 18, fontSize: 10, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between" }}><span>{displayStartLabel}</span><span>{displayEndLabel}</span></div>
+                  </div>
+                )}
+                </>
                 );
               })()}
               {expandedChartId === "strategy-profitable" && strategyFindingsData.profitableTradesByStrategy.length > 0 && (() => {
                 const d = strategyFindingsData.profitableTradesByStrategy;
                 const useBrush = d.length >= BRUSH_SHOW_MIN;
+                const n = d.length;
                 const start = useBrush && strategyProfitableBrushEnd > 0 ? Math.min(strategyProfitableBrushStart, d.length - 1) : 0;
                 const end = useBrush && strategyProfitableBrushEnd > 0 ? Math.min(d.length - 1, Math.max(start, strategyProfitableBrushEnd)) : d.length - 1;
+                const startClamped = Math.max(0, Math.min(n - 1, start));
+                const endClamped = Math.max(startClamped, Math.min(n - 1, end));
+                const leftPct = n <= 1 ? 0 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.startPct : (expandedSliderDrag?.which === "left" ? expandedSliderDrag.position : (strategyProfitableBrushEnd > 0 ? startClamped / (n - 1) : 0));
+                const rightPct = n <= 1 ? 1 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.endPct : (expandedSliderDrag?.which === "right" ? expandedSliderDrag.position : (strategyProfitableBrushEnd > 0 ? endClamped / (n - 1) : 1));
+                const displayStartIdx = Math.max(0, Math.min(n - 1, Math.round(leftPct * (n - 1))));
+                const displayEndIdx = Math.max(displayStartIdx, Math.min(n - 1, Math.round(rightPct * (n - 1))));
+                const displayData = useBrush ? d.slice(displayStartIdx, displayEndIdx + 1) : d;
+                const displayStartLabel = d[displayStartIdx] ? String((d[displayStartIdx] as Record<string, unknown>).name ?? "") : "";
+                const displayEndLabel = d[displayEndIdx] ? String((d[displayEndIdx] as Record<string, unknown>).name ?? "") : "";
+                const startDragLeft = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "left", bound: rightPct, n, position: leftPct, trackRect: rect, setStart: setStrategyProfitableBrushStart, setEnd: setStrategyProfitableBrushEnd, wasFullRange: strategyProfitableBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "left", position: leftPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragRight = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "right", bound: leftPct, n, position: rightPct, trackRect: rect, setStart: setStrategyProfitableBrushStart, setEnd: setStrategyProfitableBrushEnd, wasFullRange: strategyProfitableBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "right", position: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragSlide = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; const clientX = "touches" in e && e.touches?.length ? e.touches[0].clientX : (e as React.MouseEvent).clientX; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "slide", initialStartPct: leftPct, initialEndPct: rightPct, initialClientX: clientX, trackRect: rect, n, startPct: leftPct, endPct: rightPct, setStart: setStrategyProfitableBrushStart, setEnd: setStrategyProfitableBrushEnd }; setExpandedSliderDrag({ which: "slide", startPct: leftPct, endPct: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
                 return (
+                <>
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
-                  <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
+                  <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                     <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                     <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, ""]} labelFormatter={(label) => `${label} (Winning / Losing)`} />
                     <Bar dataKey="winning" fill="var(--success, #22c55e)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--success, #22c55e)" strokeWidth={1} />
                     <Bar dataKey="losing" fill="var(--danger, #ef4444)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--danger, #ef4444)" strokeWidth={1} />
-                    {useBrush && <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setStrategyProfitableBrushStart(r.startIndex); setStrategyProfitableBrushEnd(r.endIndex); } }} />}
                   </BarChart>
                 </ResponsiveContainer>
+                {useBrush && (
+                  <div style={{ height: 36, marginTop: 4, position: "relative", width: "100%" }} ref={expandedSliderTrackRef}>
+                    <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 6, marginTop: -3, backgroundColor: "var(--bg-tertiary)", borderRadius: 3 }} />
+                    <div role="button" tabIndex={0} onMouseDown={startDragSlide} onTouchStart={startDragSlide} style={{ position: "absolute", left: `${leftPct * 100}%`, right: `${(1 - rightPct) * 100}%`, top: 0, bottom: 0, backgroundColor: "var(--border-color)", opacity: 0.25, cursor: "grab", zIndex: 1, touchAction: "none" }} title="Drag to pan range" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragLeft} onTouchStart={startDragLeft} style={{ position: "absolute", left: `${leftPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust start" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragRight} onTouchStart={startDragRight} style={{ position: "absolute", left: `${rightPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust end" />
+                    <div style={{ position: "absolute", left: 0, right: 0, top: 18, fontSize: 10, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between" }}><span>{displayStartLabel}</span><span>{displayEndLabel}</span></div>
+                  </div>
+                )}
+                </>
                 );
               })()}
               {expandedChartId === "strategy-profit" && strategyFindingsData.profitByStrategy.length > 0 && (() => {
                 const d = strategyFindingsData.profitByStrategy;
                 const useBrush = d.length >= BRUSH_SHOW_MIN;
+                const n = d.length;
                 const start = useBrush && strategyProfitBrushEnd > 0 ? Math.min(strategyProfitBrushStart, d.length - 1) : 0;
                 const end = useBrush && strategyProfitBrushEnd > 0 ? Math.min(d.length - 1, Math.max(start, strategyProfitBrushEnd)) : d.length - 1;
-                const visibleSlice = useBrush ? d.slice(start, end + 1) : d;
+                const startClamped = Math.max(0, Math.min(n - 1, start));
+                const endClamped = Math.max(startClamped, Math.min(n - 1, end));
+                const leftPct = n <= 1 ? 0 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.startPct : (expandedSliderDrag?.which === "left" ? expandedSliderDrag.position : (strategyProfitBrushEnd > 0 ? startClamped / (n - 1) : 0));
+                const rightPct = n <= 1 ? 1 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.endPct : (expandedSliderDrag?.which === "right" ? expandedSliderDrag.position : (strategyProfitBrushEnd > 0 ? endClamped / (n - 1) : 1));
+                const displayStartIdx = Math.max(0, Math.min(n - 1, Math.round(leftPct * (n - 1))));
+                const displayEndIdx = Math.max(displayStartIdx, Math.min(n - 1, Math.round(rightPct * (n - 1))));
+                const visibleSlice = useBrush ? d.slice(displayStartIdx, displayEndIdx + 1) : d;
+                const displayStartLabel = d[displayStartIdx] ? String((d[displayStartIdx] as Record<string, unknown>).name ?? "") : "";
+                const displayEndLabel = d[displayEndIdx] ? String((d[displayEndIdx] as Record<string, unknown>).name ?? "") : "";
+                const startDragLeft = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "left", bound: rightPct, n, position: leftPct, trackRect: rect, setStart: setStrategyProfitBrushStart, setEnd: setStrategyProfitBrushEnd, wasFullRange: strategyProfitBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "left", position: leftPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragRight = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "right", bound: leftPct, n, position: rightPct, trackRect: rect, setStart: setStrategyProfitBrushStart, setEnd: setStrategyProfitBrushEnd, wasFullRange: strategyProfitBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "right", position: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragSlide = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; const clientX = "touches" in e && e.touches?.length ? e.touches[0].clientX : (e as React.MouseEvent).clientX; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "slide", initialStartPct: leftPct, initialEndPct: rightPct, initialClientX: clientX, trackRect: rect, n, startPct: leftPct, endPct: rightPct, setStart: setStrategyProfitBrushStart, setEnd: setStrategyProfitBrushEnd }; setExpandedSliderDrag({ which: "slide", startPct: leftPct, endPct: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
                 return (
+                <>
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
-                  <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
+                  <BarChart data={visibleSlice} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                     <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" tickFormatter={(v) => typeof v === "number" ? (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v)) : String(v)} />
@@ -2918,117 +3077,264 @@ export default function Analytics() {
                         <Cell key={`cell-${index}`} fill={entry.profit >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} stroke={entry.profit >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} />
                       ))}
                     </Bar>
-                    {useBrush && <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setStrategyProfitBrushStart(r.startIndex); setStrategyProfitBrushEnd(r.endIndex); } }} />}
                   </BarChart>
                 </ResponsiveContainer>
+                {useBrush && (
+                  <div style={{ height: 36, marginTop: 4, position: "relative", width: "100%" }} ref={expandedSliderTrackRef}>
+                    <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 6, marginTop: -3, backgroundColor: "var(--bg-tertiary)", borderRadius: 3 }} />
+                    <div role="button" tabIndex={0} onMouseDown={startDragSlide} onTouchStart={startDragSlide} style={{ position: "absolute", left: `${leftPct * 100}%`, right: `${(1 - rightPct) * 100}%`, top: 0, bottom: 0, backgroundColor: "var(--border-color)", opacity: 0.25, cursor: "grab", zIndex: 1, touchAction: "none" }} title="Drag to pan range" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragLeft} onTouchStart={startDragLeft} style={{ position: "absolute", left: `${leftPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust start" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragRight} onTouchStart={startDragRight} style={{ position: "absolute", left: `${rightPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust end" />
+                    <div style={{ position: "absolute", left: 0, right: 0, top: 18, fontSize: 10, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between" }}><span>{displayStartLabel}</span><span>{displayEndLabel}</span></div>
+                  </div>
+                )}
+                </>
                 );
               })()}
               {expandedChartId === "journal-entries" && entriesByMonth.length > 0 && (() => {
                 const d = entriesByMonth;
                 const useBrush = d.length >= BRUSH_SHOW_MIN;
+                const n = d.length;
                 const start = useBrush && entriesChartBrushEnd > 0 ? Math.min(entriesChartBrushStart, d.length - 1) : 0;
                 const end = useBrush && entriesChartBrushEnd > 0 ? Math.min(d.length - 1, Math.max(start, entriesChartBrushEnd)) : d.length - 1;
+                const startClamped = Math.max(0, Math.min(n - 1, start));
+                const endClamped = Math.max(startClamped, Math.min(n - 1, end));
+                const leftPct = n <= 1 ? 0 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.startPct : (expandedSliderDrag?.which === "left" ? expandedSliderDrag.position : (entriesChartBrushEnd > 0 ? startClamped / (n - 1) : 0));
+                const rightPct = n <= 1 ? 1 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.endPct : (expandedSliderDrag?.which === "right" ? expandedSliderDrag.position : (entriesChartBrushEnd > 0 ? endClamped / (n - 1) : 1));
+                const displayStartIdx = Math.max(0, Math.min(n - 1, Math.round(leftPct * (n - 1))));
+                const displayEndIdx = Math.max(displayStartIdx, Math.min(n - 1, Math.round(rightPct * (n - 1))));
+                const displayData = useBrush ? d.slice(displayStartIdx, displayEndIdx + 1) : d;
+                const displayStartLabel = d[displayStartIdx] ? String((d[displayStartIdx] as Record<string, unknown>).month ?? "") : "";
+                const displayEndLabel = d[displayEndIdx] ? String((d[displayEndIdx] as Record<string, unknown>).month ?? "") : "";
+                const startDragLeft = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "left", bound: rightPct, n, position: leftPct, trackRect: rect, setStart: setEntriesChartBrushStart, setEnd: setEntriesChartBrushEnd, wasFullRange: entriesChartBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "left", position: leftPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragRight = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "right", bound: leftPct, n, position: rightPct, trackRect: rect, setStart: setEntriesChartBrushStart, setEnd: setEntriesChartBrushEnd, wasFullRange: entriesChartBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "right", position: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragSlide = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; const clientX = "touches" in e && e.touches?.length ? e.touches[0].clientX : (e as React.MouseEvent).clientX; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "slide", initialStartPct: leftPct, initialEndPct: rightPct, initialClientX: clientX, trackRect: rect, n, startPct: leftPct, endPct: rightPct, setStart: setEntriesChartBrushStart, setEnd: setEntriesChartBrushEnd }; setExpandedSliderDrag({ which: "slide", startPct: leftPct, endPct: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
                 return (
+                <>
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
-                  <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
+                  <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                     <XAxis dataKey="month" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                     <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Entries"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
-                    {useBrush && <Brush dataKey="month" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setEntriesChartBrushStart(r.startIndex); setEntriesChartBrushEnd(r.endIndex); } }} />}
                   </BarChart>
                 </ResponsiveContainer>
+                {useBrush && (
+                  <div style={{ height: 36, marginTop: 4, position: "relative", width: "100%" }} ref={expandedSliderTrackRef}>
+                    <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 6, marginTop: -3, backgroundColor: "var(--bg-tertiary)", borderRadius: 3 }} />
+                    <div role="button" tabIndex={0} onMouseDown={startDragSlide} onTouchStart={startDragSlide} style={{ position: "absolute", left: `${leftPct * 100}%`, right: `${(1 - rightPct) * 100}%`, top: 0, bottom: 0, backgroundColor: "var(--border-color)", opacity: 0.25, cursor: "grab", zIndex: 1, touchAction: "none" }} title="Drag to pan range" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragLeft} onTouchStart={startDragLeft} style={{ position: "absolute", left: `${leftPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust start" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragRight} onTouchStart={startDragRight} style={{ position: "absolute", left: `${rightPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust end" />
+                    <div style={{ position: "absolute", left: 0, right: 0, top: 18, fontSize: 10, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between" }}><span>{displayStartLabel}</span><span>{displayEndLabel}</span></div>
+                  </div>
+                )}
+                </>
                 );
               })()}
               {expandedChartId === "journal-positions" && positionsData.length > 0 && (() => {
                 const d = positionsData;
                 const useBrush = d.length >= BRUSH_SHOW_MIN;
+                const n = d.length;
                 const start = useBrush && positionsChartBrushEnd > 0 ? Math.min(positionsChartBrushStart, d.length - 1) : 0;
                 const end = useBrush && positionsChartBrushEnd > 0 ? Math.min(d.length - 1, Math.max(start, positionsChartBrushEnd)) : d.length - 1;
+                const startClamped = Math.max(0, Math.min(n - 1, start));
+                const endClamped = Math.max(startClamped, Math.min(n - 1, end));
+                const leftPct = n <= 1 ? 0 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.startPct : (expandedSliderDrag?.which === "left" ? expandedSliderDrag.position : (positionsChartBrushEnd > 0 ? startClamped / (n - 1) : 0));
+                const rightPct = n <= 1 ? 1 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.endPct : (expandedSliderDrag?.which === "right" ? expandedSliderDrag.position : (positionsChartBrushEnd > 0 ? endClamped / (n - 1) : 1));
+                const displayStartIdx = Math.max(0, Math.min(n - 1, Math.round(leftPct * (n - 1))));
+                const displayEndIdx = Math.max(displayStartIdx, Math.min(n - 1, Math.round(rightPct * (n - 1))));
+                const displayData = useBrush ? d.slice(displayStartIdx, displayEndIdx + 1) : d;
+                const displayStartLabel = d[displayStartIdx] ? String((d[displayStartIdx] as Record<string, unknown>).position ?? "") : "";
+                const displayEndLabel = d[displayEndIdx] ? String((d[displayEndIdx] as Record<string, unknown>).position ?? "") : "";
+                const startDragLeft = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "left", bound: rightPct, n, position: leftPct, trackRect: rect, setStart: setPositionsChartBrushStart, setEnd: setPositionsChartBrushEnd, wasFullRange: positionsChartBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "left", position: leftPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragRight = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "right", bound: leftPct, n, position: rightPct, trackRect: rect, setStart: setPositionsChartBrushStart, setEnd: setPositionsChartBrushEnd, wasFullRange: positionsChartBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "right", position: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragSlide = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; const clientX = "touches" in e && e.touches?.length ? e.touches[0].clientX : (e as React.MouseEvent).clientX; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "slide", initialStartPct: leftPct, initialEndPct: rightPct, initialClientX: clientX, trackRect: rect, n, startPct: leftPct, endPct: rightPct, setStart: setPositionsChartBrushStart, setEnd: setPositionsChartBrushEnd }; setExpandedSliderDrag({ which: "slide", startPct: leftPct, endPct: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
                 return (
+                <>
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
-                  <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
+                  <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                     <XAxis dataKey="position" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                     <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Trades"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
-                    {useBrush && <Brush dataKey="position" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setPositionsChartBrushStart(r.startIndex); setPositionsChartBrushEnd(r.endIndex); } }} />}
                   </BarChart>
                 </ResponsiveContainer>
+                {useBrush && (
+                  <div style={{ height: 36, marginTop: 4, position: "relative", width: "100%" }} ref={expandedSliderTrackRef}>
+                    <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 6, marginTop: -3, backgroundColor: "var(--bg-tertiary)", borderRadius: 3 }} />
+                    <div role="button" tabIndex={0} onMouseDown={startDragSlide} onTouchStart={startDragSlide} style={{ position: "absolute", left: `${leftPct * 100}%`, right: `${(1 - rightPct) * 100}%`, top: 0, bottom: 0, backgroundColor: "var(--border-color)", opacity: 0.25, cursor: "grab", zIndex: 1, touchAction: "none" }} title="Drag to pan range" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragLeft} onTouchStart={startDragLeft} style={{ position: "absolute", left: `${leftPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust start" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragRight} onTouchStart={startDragRight} style={{ position: "absolute", left: `${rightPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust end" />
+                    <div style={{ position: "absolute", left: 0, right: 0, top: 18, fontSize: 10, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between" }}><span>{displayStartLabel}</span><span>{displayEndLabel}</span></div>
+                  </div>
+                )}
+                </>
                 );
               })()}
               {expandedChartId === "journal-outcomes" && outcomeData.length > 0 && (() => {
                 const d = outcomeData;
                 const useBrush = d.length >= BRUSH_SHOW_MIN;
+                const n = d.length;
                 const start = useBrush && outcomeChartBrushEnd > 0 ? Math.min(outcomeChartBrushStart, d.length - 1) : 0;
                 const end = useBrush && outcomeChartBrushEnd > 0 ? Math.min(d.length - 1, Math.max(start, outcomeChartBrushEnd)) : d.length - 1;
+                const startClamped = Math.max(0, Math.min(n - 1, start));
+                const endClamped = Math.max(startClamped, Math.min(n - 1, end));
+                const leftPct = n <= 1 ? 0 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.startPct : (expandedSliderDrag?.which === "left" ? expandedSliderDrag.position : (outcomeChartBrushEnd > 0 ? startClamped / (n - 1) : 0));
+                const rightPct = n <= 1 ? 1 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.endPct : (expandedSliderDrag?.which === "right" ? expandedSliderDrag.position : (outcomeChartBrushEnd > 0 ? endClamped / (n - 1) : 1));
+                const displayStartIdx = Math.max(0, Math.min(n - 1, Math.round(leftPct * (n - 1))));
+                const displayEndIdx = Math.max(displayStartIdx, Math.min(n - 1, Math.round(rightPct * (n - 1))));
+                const displayData = useBrush ? d.slice(displayStartIdx, displayEndIdx + 1) : d;
+                const displayStartLabel = d[displayStartIdx] ? String((d[displayStartIdx] as Record<string, unknown>).outcome ?? "") : "";
+                const displayEndLabel = d[displayEndIdx] ? String((d[displayEndIdx] as Record<string, unknown>).outcome ?? "") : "";
+                const startDragLeft = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "left", bound: rightPct, n, position: leftPct, trackRect: rect, setStart: setOutcomeChartBrushStart, setEnd: setOutcomeChartBrushEnd, wasFullRange: outcomeChartBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "left", position: leftPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragRight = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "right", bound: leftPct, n, position: rightPct, trackRect: rect, setStart: setOutcomeChartBrushStart, setEnd: setOutcomeChartBrushEnd, wasFullRange: outcomeChartBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "right", position: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragSlide = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; const clientX = "touches" in e && e.touches?.length ? e.touches[0].clientX : (e as React.MouseEvent).clientX; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "slide", initialStartPct: leftPct, initialEndPct: rightPct, initialClientX: clientX, trackRect: rect, n, startPct: leftPct, endPct: rightPct, setStart: setOutcomeChartBrushStart, setEnd: setOutcomeChartBrushEnd }; setExpandedSliderDrag({ which: "slide", startPct: leftPct, endPct: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
                 return (
+                <>
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
-                  <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
+                  <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                     <XAxis dataKey="outcome" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                     <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Trades"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
-                    {useBrush && <Brush dataKey="outcome" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setOutcomeChartBrushStart(r.startIndex); setOutcomeChartBrushEnd(r.endIndex); } }} />}
                   </BarChart>
                 </ResponsiveContainer>
+                {useBrush && (
+                  <div style={{ height: 36, marginTop: 4, position: "relative", width: "100%" }} ref={expandedSliderTrackRef}>
+                    <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 6, marginTop: -3, backgroundColor: "var(--bg-tertiary)", borderRadius: 3 }} />
+                    <div role="button" tabIndex={0} onMouseDown={startDragSlide} onTouchStart={startDragSlide} style={{ position: "absolute", left: `${leftPct * 100}%`, right: `${(1 - rightPct) * 100}%`, top: 0, bottom: 0, backgroundColor: "var(--border-color)", opacity: 0.25, cursor: "grab", zIndex: 1, touchAction: "none" }} title="Drag to pan range" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragLeft} onTouchStart={startDragLeft} style={{ position: "absolute", left: `${leftPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust start" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragRight} onTouchStart={startDragRight} style={{ position: "absolute", left: `${rightPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust end" />
+                    <div style={{ position: "absolute", left: 0, right: 0, top: 18, fontSize: 10, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between" }}><span>{displayStartLabel}</span><span>{displayEndLabel}</span></div>
+                  </div>
+                )}
+                </>
                 );
               })()}
               {expandedChartId === "emotion-type" && emotionalFindingsData.emotionsByType.length > 0 && (() => {
                 const d = emotionalFindingsData.emotionsByType;
                 const useBrush = d.length >= BRUSH_SHOW_MIN;
+                const n = d.length;
                 const start = useBrush && emotionTypeBrushEnd > 0 ? Math.min(emotionTypeBrushStart, d.length - 1) : 0;
                 const end = useBrush && emotionTypeBrushEnd > 0 ? Math.min(d.length - 1, Math.max(start, emotionTypeBrushEnd)) : d.length - 1;
+                const startClamped = Math.max(0, Math.min(n - 1, start));
+                const endClamped = Math.max(startClamped, Math.min(n - 1, end));
+                const leftPct = n <= 1 ? 0 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.startPct : (expandedSliderDrag?.which === "left" ? expandedSliderDrag.position : (emotionTypeBrushEnd > 0 ? startClamped / (n - 1) : 0));
+                const rightPct = n <= 1 ? 1 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.endPct : (expandedSliderDrag?.which === "right" ? expandedSliderDrag.position : (emotionTypeBrushEnd > 0 ? endClamped / (n - 1) : 1));
+                const displayStartIdx = Math.max(0, Math.min(n - 1, Math.round(leftPct * (n - 1))));
+                const displayEndIdx = Math.max(displayStartIdx, Math.min(n - 1, Math.round(rightPct * (n - 1))));
+                const displayData = useBrush ? d.slice(displayStartIdx, displayEndIdx + 1) : d;
+                const displayStartLabel = d[displayStartIdx] ? String((d[displayStartIdx] as Record<string, unknown>).name ?? "") : "";
+                const displayEndLabel = d[displayEndIdx] ? String((d[displayEndIdx] as Record<string, unknown>).name ?? "") : "";
+                const startDragLeft = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "left", bound: rightPct, n, position: leftPct, trackRect: rect, setStart: setEmotionTypeBrushStart, setEnd: setEmotionTypeBrushEnd, wasFullRange: emotionTypeBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "left", position: leftPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragRight = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "right", bound: leftPct, n, position: rightPct, trackRect: rect, setStart: setEmotionTypeBrushStart, setEnd: setEmotionTypeBrushEnd, wasFullRange: emotionTypeBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "right", position: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragSlide = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; const clientX = "touches" in e && e.touches?.length ? e.touches[0].clientX : (e as React.MouseEvent).clientX; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "slide", initialStartPct: leftPct, initialEndPct: rightPct, initialClientX: clientX, trackRect: rect, n, startPct: leftPct, endPct: rightPct, setStart: setEmotionTypeBrushStart, setEnd: setEmotionTypeBrushEnd }; setExpandedSliderDrag({ which: "slide", startPct: leftPct, endPct: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
                 return (
+                <>
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
-                  <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
+                  <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                     <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                     <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Count"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
-                    {useBrush && <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setEmotionTypeBrushStart(r.startIndex); setEmotionTypeBrushEnd(r.endIndex); } }} />}
                   </BarChart>
                 </ResponsiveContainer>
+                {useBrush && (
+                  <div style={{ height: 36, marginTop: 4, position: "relative", width: "100%" }} ref={expandedSliderTrackRef}>
+                    <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 6, marginTop: -3, backgroundColor: "var(--bg-tertiary)", borderRadius: 3 }} />
+                    <div role="button" tabIndex={0} onMouseDown={startDragSlide} onTouchStart={startDragSlide} style={{ position: "absolute", left: `${leftPct * 100}%`, right: `${(1 - rightPct) * 100}%`, top: 0, bottom: 0, backgroundColor: "var(--border-color)", opacity: 0.25, cursor: "grab", zIndex: 1, touchAction: "none" }} title="Drag to pan range" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragLeft} onTouchStart={startDragLeft} style={{ position: "absolute", left: `${leftPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust start" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragRight} onTouchStart={startDragRight} style={{ position: "absolute", left: `${rightPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust end" />
+                    <div style={{ position: "absolute", left: 0, right: 0, top: 18, fontSize: 10, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between" }}><span>{displayStartLabel}</span><span>{displayEndLabel}</span></div>
+                  </div>
+                )}
+                </>
                 );
               })()}
               {expandedChartId === "emotion-time" && emotionalFindingsData.emotionsOverTime.length > 0 && (() => {
                 const d = emotionalFindingsData.emotionsOverTime;
                 const useBrush = d.length >= BRUSH_SHOW_MIN;
+                const n = d.length;
                 const start = useBrush && emotionTimeBrushEnd > 0 ? Math.min(emotionTimeBrushStart, d.length - 1) : 0;
                 const end = useBrush && emotionTimeBrushEnd > 0 ? Math.min(d.length - 1, Math.max(start, emotionTimeBrushEnd)) : d.length - 1;
+                const startClamped = Math.max(0, Math.min(n - 1, start));
+                const endClamped = Math.max(startClamped, Math.min(n - 1, end));
+                const leftPct = n <= 1 ? 0 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.startPct : (expandedSliderDrag?.which === "left" ? expandedSliderDrag.position : (emotionTimeBrushEnd > 0 ? startClamped / (n - 1) : 0));
+                const rightPct = n <= 1 ? 1 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.endPct : (expandedSliderDrag?.which === "right" ? expandedSliderDrag.position : (emotionTimeBrushEnd > 0 ? endClamped / (n - 1) : 1));
+                const displayStartIdx = Math.max(0, Math.min(n - 1, Math.round(leftPct * (n - 1))));
+                const displayEndIdx = Math.max(displayStartIdx, Math.min(n - 1, Math.round(rightPct * (n - 1))));
+                const displayData = useBrush ? d.slice(displayStartIdx, displayEndIdx + 1) : d;
+                const displayStartLabel = d[displayStartIdx] ? String((d[displayStartIdx] as Record<string, unknown>).month ?? "") : "";
+                const displayEndLabel = d[displayEndIdx] ? String((d[displayEndIdx] as Record<string, unknown>).month ?? "") : "";
+                const startDragLeft = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "left", bound: rightPct, n, position: leftPct, trackRect: rect, setStart: setEmotionTimeBrushStart, setEnd: setEmotionTimeBrushEnd, wasFullRange: emotionTimeBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "left", position: leftPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragRight = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "right", bound: leftPct, n, position: rightPct, trackRect: rect, setStart: setEmotionTimeBrushStart, setEnd: setEmotionTimeBrushEnd, wasFullRange: emotionTimeBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "right", position: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragSlide = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; const clientX = "touches" in e && e.touches?.length ? e.touches[0].clientX : (e as React.MouseEvent).clientX; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "slide", initialStartPct: leftPct, initialEndPct: rightPct, initialClientX: clientX, trackRect: rect, n, startPct: leftPct, endPct: rightPct, setStart: setEmotionTimeBrushStart, setEnd: setEmotionTimeBrushEnd }; setExpandedSliderDrag({ which: "slide", startPct: leftPct, endPct: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
                 return (
+                <>
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
-                  <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
+                  <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                     <XAxis dataKey="month" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                     <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "States"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
-                    {useBrush && <Brush dataKey="month" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setEmotionTimeBrushStart(r.startIndex); setEmotionTimeBrushEnd(r.endIndex); } }} />}
                   </BarChart>
                 </ResponsiveContainer>
+                {useBrush && (
+                  <div style={{ height: 36, marginTop: 4, position: "relative", width: "100%" }} ref={expandedSliderTrackRef}>
+                    <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 6, marginTop: -3, backgroundColor: "var(--bg-tertiary)", borderRadius: 3 }} />
+                    <div role="button" tabIndex={0} onMouseDown={startDragSlide} onTouchStart={startDragSlide} style={{ position: "absolute", left: `${leftPct * 100}%`, right: `${(1 - rightPct) * 100}%`, top: 0, bottom: 0, backgroundColor: "var(--border-color)", opacity: 0.25, cursor: "grab", zIndex: 1, touchAction: "none" }} title="Drag to pan range" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragLeft} onTouchStart={startDragLeft} style={{ position: "absolute", left: `${leftPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust start" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragRight} onTouchStart={startDragRight} style={{ position: "absolute", left: `${rightPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust end" />
+                    <div style={{ position: "absolute", left: 0, right: 0, top: 18, fontSize: 10, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between" }}><span>{displayStartLabel}</span><span>{displayEndLabel}</span></div>
+                  </div>
+                )}
+                </>
                 );
               })()}
               {expandedChartId === "emotion-intensity" && emotionalFindingsData.avgIntensityByEmotion.length > 0 && (() => {
                 const d = emotionalFindingsData.avgIntensityByEmotion;
                 const useBrush = d.length >= BRUSH_SHOW_MIN;
+                const n = d.length;
                 const start = useBrush && emotionIntensityBrushEnd > 0 ? Math.min(emotionIntensityBrushStart, d.length - 1) : 0;
                 const end = useBrush && emotionIntensityBrushEnd > 0 ? Math.min(d.length - 1, Math.max(start, emotionIntensityBrushEnd)) : d.length - 1;
+                const startClamped = Math.max(0, Math.min(n - 1, start));
+                const endClamped = Math.max(startClamped, Math.min(n - 1, end));
+                const leftPct = n <= 1 ? 0 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.startPct : (expandedSliderDrag?.which === "left" ? expandedSliderDrag.position : (emotionIntensityBrushEnd > 0 ? startClamped / (n - 1) : 0));
+                const rightPct = n <= 1 ? 1 : expandedSliderDrag?.which === "slide" ? expandedSliderDrag.endPct : (expandedSliderDrag?.which === "right" ? expandedSliderDrag.position : (emotionIntensityBrushEnd > 0 ? endClamped / (n - 1) : 1));
+                const displayStartIdx = Math.max(0, Math.min(n - 1, Math.round(leftPct * (n - 1))));
+                const displayEndIdx = Math.max(displayStartIdx, Math.min(n - 1, Math.round(rightPct * (n - 1))));
+                const displayData = useBrush ? d.slice(displayStartIdx, displayEndIdx + 1) : d;
+                const displayStartLabel = d[displayStartIdx] ? String((d[displayStartIdx] as Record<string, unknown>).name ?? "") : "";
+                const displayEndLabel = d[displayEndIdx] ? String((d[displayEndIdx] as Record<string, unknown>).name ?? "") : "";
+                const startDragLeft = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "left", bound: rightPct, n, position: leftPct, trackRect: rect, setStart: setEmotionIntensityBrushStart, setEnd: setEmotionIntensityBrushEnd, wasFullRange: emotionIntensityBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "left", position: leftPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragRight = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "right", bound: leftPct, n, position: rightPct, trackRect: rect, setStart: setEmotionIntensityBrushStart, setEnd: setEmotionIntensityBrushEnd, wasFullRange: emotionIntensityBrushEnd === 0, startIdx: start, endIdx: end }; setExpandedSliderDrag({ which: "right", position: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
+                const startDragSlide = (e: React.MouseEvent | React.TouchEvent) => { e.preventDefault(); const rect = expandedSliderTrackRef.current?.getBoundingClientRect() ?? null; const clientX = "touches" in e && e.touches?.length ? e.touches[0].clientX : (e as React.MouseEvent).clientX; if (!rect || rect.width <= 0) return; expandedSliderDragRef.current = { which: "slide", initialStartPct: leftPct, initialEndPct: rightPct, initialClientX: clientX, trackRect: rect, n, startPct: leftPct, endPct: rightPct, setStart: setEmotionIntensityBrushStart, setEnd: setEmotionIntensityBrushEnd }; setExpandedSliderDrag({ which: "slide", startPct: leftPct, endPct: rightPct }); document.addEventListener("mousemove", handleExpandedSliderMove as EventListener, true); document.addEventListener("mouseup", handleExpandedSliderUp, true); document.addEventListener("touchmove", handleExpandedSliderMove as EventListener, { capture: true, passive: false }); document.addEventListener("touchend", handleExpandedSliderUp, true); };
                 return (
+                <>
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
-                  <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
+                  <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                     <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" domain={[0, 10]} allowDecimals={true} />
                     <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [typeof value === "number" ? value.toFixed(1) : value, "Avg intensity"]} />
                     <Bar dataKey="avgIntensity" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
-                    {useBrush && <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setEmotionIntensityBrushStart(r.startIndex); setEmotionIntensityBrushEnd(r.endIndex); } }} />}
                   </BarChart>
                 </ResponsiveContainer>
+                {useBrush && (
+                  <div style={{ height: 36, marginTop: 4, position: "relative", width: "100%" }} ref={expandedSliderTrackRef}>
+                    <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 6, marginTop: -3, backgroundColor: "var(--bg-tertiary)", borderRadius: 3 }} />
+                    <div role="button" tabIndex={0} onMouseDown={startDragSlide} onTouchStart={startDragSlide} style={{ position: "absolute", left: `${leftPct * 100}%`, right: `${(1 - rightPct) * 100}%`, top: 0, bottom: 0, backgroundColor: "var(--border-color)", opacity: 0.25, cursor: "grab", zIndex: 1, touchAction: "none" }} title="Drag to pan range" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragLeft} onTouchStart={startDragLeft} style={{ position: "absolute", left: `${leftPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust start" />
+                    <div role="button" tabIndex={0} onMouseDown={startDragRight} onTouchStart={startDragRight} style={{ position: "absolute", left: `${rightPct * 100}%`, width: 12, top: 0, bottom: 0, marginLeft: -6, cursor: "ew-resize", zIndex: 2, touchAction: "none", backgroundColor: "var(--border-color)", borderRadius: 2 }} title="Drag to adjust end" />
+                    <div style={{ position: "absolute", left: 0, right: 0, top: 18, fontSize: 10, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between" }}><span>{displayStartLabel}</span><span>{displayEndLabel}</span></div>
+                  </div>
+                )}
+                </>
                 );
               })()}
               {expandedChartId === "equity" && equityCurve && Array.isArray(equityCurve.equity_points) && equityCurve.equity_points.length > 0 && (() => {
