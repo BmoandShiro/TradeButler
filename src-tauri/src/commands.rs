@@ -1150,7 +1150,14 @@ pub fn get_paired_trades(pairing_method: Option<String>, paper_only: Option<bool
 }
 
 #[tauri::command]
-pub fn get_symbol_pnl(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>, paper_only: Option<bool>) -> Result<Vec<SymbolPnL>, String> {
+pub fn get_symbol_pnl(
+    pairing_method: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    paper_only: Option<bool>,
+    filters: Option<EquityCurveFilters>,
+) -> Result<Vec<SymbolPnL>, String> {
+    use std::collections::HashMap;
     // Get both paired trades and open trades from pairing logic
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
@@ -1184,14 +1191,14 @@ pub fn get_symbol_pnl(pairing_method: Option<String>, start_date: Option<String>
     }
     
     let use_fifo = pairing_method.as_deref().unwrap_or("FIFO") == "FIFO";
-    let (paired_trades, open_trades) = if use_fifo {
+    let (paired_trades, mut open_trades) = if use_fifo {
         pair_trades_fifo(trades)
     } else {
         pair_trades_lifo(trades)
     };
     
     // Filter paired trades by date range if provided
-    let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
+    let mut filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
         paired_trades.into_iter().filter(|pair| {
             let exit_date = &pair.exit_timestamp;
             let in_range = if let Some(start) = &start_date {
@@ -1209,7 +1216,187 @@ pub fn get_symbol_pnl(pairing_method: Option<String>, start_date: Option<String>
         paired_trades
     };
     
-    use std::collections::HashMap;
+    // Apply strategy/symbol/side/order_type/position_size filters (same as get_equity_curve; multi-select + position size USD)
+    if let Some(ref f) = filters {
+        let has_multi = f.strategy_ids.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+            || f.symbols.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+            || f.sides.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+            || f.order_types.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+        let has_single = f.strategy_id.is_some() || f.symbol.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+            || f.side.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+            || f.order_type.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+        let has_pos = f.position_size_min.is_some() || f.position_size_max.is_some()
+            || f.position_size_min_usd.is_some() || f.position_size_max_usd.is_some();
+        let has_filter = has_multi || has_single || has_pos;
+        if has_filter {
+            let entry_ids: Vec<i64> = filtered_paired_trades.iter().map(|p| p.entry_trade_id).collect();
+            let entry_trades = get_trades_by_ids(&entry_ids).map_err(|e| e.to_string())?;
+            filtered_paired_trades = filtered_paired_trades
+                .into_iter()
+                .filter(|pair| {
+                    if let Some(entry) = entry_trades.get(&pair.entry_trade_id) {
+                        if let Some(ref ids) = f.strategy_ids {
+                            if !ids.is_empty() {
+                                let ok = pair.strategy_id.map_or(false, |id| ids.contains(&id));
+                                if !ok {
+                                    return false;
+                                }
+                            }
+                        } else if let Some(sid) = f.strategy_id {
+                            if pair.strategy_id != Some(sid) {
+                                return false;
+                            }
+                        }
+                        if let Some(ref syms) = f.symbols {
+                            if !syms.is_empty() {
+                                let pair_underlying = get_underlying_symbol(&pair.symbol);
+                                let match_ = syms.iter().any(|s| {
+                                    pair.symbol == *s || pair_underlying == get_underlying_symbol(s)
+                                });
+                                if !match_ {
+                                    return false;
+                                }
+                            }
+                        } else if let Some(ref sym) = f.symbol {
+                            if !sym.is_empty() {
+                                let pair_underlying = get_underlying_symbol(&pair.symbol);
+                                let filter_underlying = get_underlying_symbol(sym);
+                                if pair.symbol != *sym && pair_underlying != filter_underlying {
+                                    return false;
+                                }
+                            }
+                        }
+                        if let Some(ref sides) = f.sides {
+                            if !sides.is_empty() && !sides.iter().any(|s| entry.side.eq_ignore_ascii_case(s)) {
+                                return false;
+                            }
+                        } else if let Some(ref side) = f.side {
+                            if !side.is_empty() && !entry.side.eq_ignore_ascii_case(side) {
+                                return false;
+                            }
+                        }
+                        if let Some(ref ots) = f.order_types {
+                            if !ots.is_empty() && !ots.iter().any(|o| entry.order_type.eq_ignore_ascii_case(o)) {
+                                return false;
+                            }
+                        } else if let Some(ref ot) = f.order_type {
+                            if !ot.is_empty() && !entry.order_type.eq_ignore_ascii_case(ot) {
+                                return false;
+                            }
+                        }
+                        if f.position_size_min_usd.is_some() || f.position_size_max_usd.is_some() {
+                            let pos_usd = pair.quantity * pair.entry_price;
+                            if let Some(min_u) = f.position_size_min_usd {
+                                if pos_usd < min_u {
+                                    return false;
+                                }
+                            }
+                            if let Some(max_u) = f.position_size_max_usd {
+                                if pos_usd > max_u {
+                                    return false;
+                                }
+                            }
+                        } else {
+                            if let Some(min_q) = f.position_size_min {
+                                if pair.quantity < min_q {
+                                    return false;
+                                }
+                            }
+                            if let Some(max_q) = f.position_size_max {
+                                if pair.quantity > max_q {
+                                    return false;
+                                }
+                            }
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+            // Filter open_trades by same criteria (use quantity*price for USD when position_size_*_usd set)
+            open_trades = open_trades
+                .into_iter()
+                .filter(|t| {
+                    if let Some(ref ids) = f.strategy_ids {
+                        if !ids.is_empty() {
+                            let ok = t.strategy_id.map_or(false, |id| ids.contains(&id));
+                            if !ok {
+                                return false;
+                            }
+                        }
+                    } else if let Some(sid) = f.strategy_id {
+                        if t.strategy_id != Some(sid) {
+                            return false;
+                        }
+                    }
+                    if let Some(ref syms) = f.symbols {
+                        if !syms.is_empty() {
+                            let t_underlying = get_underlying_symbol(&t.symbol);
+                            let match_ = syms.iter().any(|s| {
+                                t.symbol == *s || t_underlying == get_underlying_symbol(s)
+                            });
+                            if !match_ {
+                                return false;
+                            }
+                        }
+                    } else if let Some(ref sym) = f.symbol {
+                        if !sym.is_empty() {
+                            let t_underlying = get_underlying_symbol(&t.symbol);
+                            let filter_underlying = get_underlying_symbol(sym);
+                            if t.symbol != *sym && t_underlying != filter_underlying {
+                                return false;
+                            }
+                        }
+                    }
+                    if let Some(ref sides) = f.sides {
+                        if !sides.is_empty() && !sides.iter().any(|s| t.side.eq_ignore_ascii_case(s)) {
+                            return false;
+                        }
+                    } else if let Some(ref side) = f.side {
+                        if !side.is_empty() && !t.side.eq_ignore_ascii_case(side) {
+                            return false;
+                        }
+                    }
+                    if let Some(ref ots) = f.order_types {
+                        if !ots.is_empty() && !ots.iter().any(|o| t.order_type.eq_ignore_ascii_case(o)) {
+                            return false;
+                        }
+                    } else if let Some(ref ot) = f.order_type {
+                        if !ot.is_empty() && !t.order_type.eq_ignore_ascii_case(ot) {
+                            return false;
+                        }
+                    }
+                    if f.position_size_min_usd.is_some() || f.position_size_max_usd.is_some() {
+                        let pos_usd = t.quantity * t.price;
+                        if let Some(min_u) = f.position_size_min_usd {
+                            if pos_usd < min_u {
+                                return false;
+                            }
+                        }
+                        if let Some(max_u) = f.position_size_max_usd {
+                            if pos_usd > max_u {
+                                return false;
+                            }
+                        }
+                    } else {
+                        if let Some(min_q) = f.position_size_min {
+                            if t.quantity < min_q {
+                                return false;
+                            }
+                        }
+                        if let Some(max_q) = f.position_size_max {
+                            if t.quantity > max_q {
+                                return false;
+                            }
+                        }
+                    }
+                    true
+                })
+                .collect();
+        }
+    }
+    
     let mut symbol_map: HashMap<String, SymbolPnL> = HashMap::new();
     
     // Calculate P&L for closed positions, grouped by underlying symbol
@@ -1317,6 +1504,39 @@ pub fn get_trade_by_id(id: i64) -> Result<Option<Trade>, String> {
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// Fetch multiple trades by id. Used for filtering equity curve by entry-trade fields (side, order_type).
+fn get_trades_by_ids(ids: &[i64]) -> Result<std::collections::HashMap<i64, Trade>, String> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let placeholders = std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+    let sql = format!("SELECT id, symbol, side, quantity, price, timestamp, order_type, status, fees, notes, strategy_id FROM trades WHERE id IN ({})", placeholders);
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut rows = stmt.query(rusqlite::params_from_iter(ids.iter())).map_err(|e| e.to_string())?;
+    let mut map = std::collections::HashMap::new();
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let trade = Trade {
+            id: Some(row.get(0).map_err(|e| e.to_string())?),
+            symbol: row.get(1).map_err(|e| e.to_string())?,
+            side: row.get(2).map_err(|e| e.to_string())?,
+            quantity: row.get(3).map_err(|e| e.to_string())?,
+            price: row.get(4).map_err(|e| e.to_string())?,
+            timestamp: row.get(5).map_err(|e| e.to_string())?,
+            order_type: row.get(6).map_err(|e| e.to_string())?,
+            status: row.get(7).map_err(|e| e.to_string())?,
+            fees: row.get(8).map_err(|e| e.to_string())?,
+            notes: row.get(9).map_err(|e| e.to_string())?,
+            strategy_id: row.get(10).map_err(|e| e.to_string())?,
+        };
+        if let Some(id) = trade.id {
+            map.insert(id, trade);
+        }
+    }
+    Ok(map)
 }
 
 #[tauri::command]
@@ -3441,6 +3661,139 @@ pub fn get_strategy_checklist_item_metrics(strategy_id: i64) -> Result<Vec<Check
     Ok(out)
 }
 
+#[derive(serde::Serialize)]
+pub struct ChecklistItemMetricByOutcomeRow {
+    pub checklist_item_id: i64,
+    pub item_text: String,
+    pub checklist_type: String,
+    pub times_checked_good: i64,
+    pub times_checked_bad: i64,
+    /// Count of losing journal entries (avg trade performance <= 0) where this checklist item was not checked.
+    pub times_not_checked_bad: i64,
+}
+
+#[tauri::command]
+pub fn get_strategy_checklist_item_metrics_by_outcome(strategy_id: i64) -> Result<Vec<ChecklistItemMetricByOutcomeRow>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let has_jt_ids = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='journal_trade_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let items: Vec<(i64, String, String)> = conn.prepare(
+        "SELECT id, item_text, checklist_type FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id"
+    ).map_err(|e| e.to_string())?
+        .query_map(params![strategy_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    // Journal entry IDs for this strategy that are "losing" (avg trade performance <= 0).
+    let losing_entry_ids: std::collections::HashSet<i64> = {
+        let entry_ids: Vec<i64> = conn.prepare(
+            "SELECT id FROM journal_entries WHERE strategy_id = ?1"
+        ).map_err(|e| e.to_string())?
+            .query_map(params![strategy_id], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        let mut losing = std::collections::HashSet::new();
+        for journal_entry_id in entry_ids {
+            let jt_ids: Vec<i64> = conn.prepare("SELECT id FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order")
+                .map_err(|e| e.to_string())?
+                .query_map(params![journal_entry_id], |row| row.get(0))
+                .map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .collect();
+            if jt_ids.is_empty() {
+                losing.insert(journal_entry_id);
+                continue;
+            }
+            let mut sum = 0.0_f64;
+            let mut n = 0_i32;
+            for jt_id in &jt_ids {
+                if let Ok((v, _)) = get_journal_trade_performance_raw(&conn, *jt_id) {
+                    if let Some(val) = v {
+                        sum += val;
+                        n += 1;
+                    }
+                }
+            }
+            if n == 0 || (sum / n as f64) <= 0.0 {
+                losing.insert(journal_entry_id);
+            }
+        }
+        losing
+    };
+    let mut out = Vec::new();
+    for (item_id, item_text, checklist_type) in items {
+        let sql = if has_jt_ids {
+            "SELECT jcr.journal_entry_id, jcr.journal_trade_ids FROM journal_checklist_responses jcr
+             INNER JOIN journal_entries je ON je.id = jcr.journal_entry_id AND je.strategy_id = ?1
+             WHERE jcr.checklist_item_id = ?2 AND jcr.is_checked = 1"
+        } else {
+            "SELECT jcr.journal_entry_id, NULL FROM journal_checklist_responses jcr
+             INNER JOIN journal_entries je ON je.id = jcr.journal_entry_id AND je.strategy_id = ?1
+             WHERE jcr.checklist_item_id = ?2 AND jcr.is_checked = 1"
+        };
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, Option<String>)> = stmt.query_map(params![strategy_id, item_id], |row| {
+            Ok((row.get(0)?, row.get(1).ok()))
+        }).map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        let mut times_good = 0_i64;
+        let mut times_bad = 0_i64;
+        for (journal_entry_id, journal_trade_ids) in &rows {
+            let jt_ids: Vec<i64> = if let Some(ref s) = journal_trade_ids {
+                serde_json::from_str(s.as_str()).unwrap_or_default()
+            } else {
+                conn.prepare("SELECT id FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order")
+                    .map_err(|e| e.to_string())?
+                    .query_map(params![journal_entry_id], |row| row.get(0))
+                    .map_err(|e| e.to_string())?
+                    .filter_map(|r| r.ok())
+                    .collect()
+            };
+            if jt_ids.is_empty() {
+                times_bad += 1;
+                continue;
+            }
+            let mut sum = 0.0_f64;
+            let mut n = 0;
+            for jt_id in &jt_ids {
+                if let Ok((v, _)) = get_journal_trade_performance_raw(&conn, *jt_id) {
+                    if let Some(val) = v {
+                        sum += val;
+                        n += 1;
+                    }
+                }
+            }
+            if n > 0 {
+                let avg = sum / n as f64;
+                if avg > 0.0 {
+                    times_good += 1;
+                } else {
+                    times_bad += 1;
+                }
+            } else {
+                times_bad += 1;
+            }
+        }
+        let checked_entry_ids: std::collections::HashSet<i64> = rows.iter().map(|(eid, _)| *eid).collect();
+        let times_not_checked_bad = losing_entry_ids.iter().filter(|eid| !checked_entry_ids.contains(eid)).count() as i64;
+        out.push(ChecklistItemMetricByOutcomeRow {
+            checklist_item_id: item_id,
+            item_text: item_text.clone(),
+            checklist_type: checklist_type.clone(),
+            times_checked_good: times_good,
+            times_checked_bad: times_bad,
+            times_not_checked_bad,
+        });
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 pub fn clear_all_data() -> Result<(), String> {
     let db_path = get_db_path();
@@ -3569,6 +3922,7 @@ pub struct StrategyPerformance {
     pub strategy_id: Option<i64>,
     pub strategy_name: String,
     pub trade_count: i64,
+    pub winning_trades: i64,
     pub total_volume: f64,
     pub estimated_pnl: f64,
 }
@@ -3691,6 +4045,7 @@ pub fn get_strategy_performance(pairing_method: Option<String>, start_date: Opti
                 strategy_id,
                 strategy_name,
                 trade_count: 0,
+                winning_trades: 0,
                 total_volume: 0.0,
                 estimated_pnl: 0.0,
             }
@@ -3698,6 +4053,9 @@ pub fn get_strategy_performance(pairing_method: Option<String>, start_date: Opti
         
         // Count closed positions (pairs), not individual trades
         entry.trade_count += 1;
+        if paired.net_profit_loss > 0.0 {
+            entry.winning_trades += 1;
+        }
         // Calculate volume from the paired trade
         entry.total_volume += paired.quantity * paired.entry_price;
         // Use actual net_profit_loss from paired trades
@@ -5159,10 +5517,199 @@ pub struct EquityCurveData {
     pub best_surge_value: f64,
 }
 
-#[tauri::command]
-pub fn get_equity_curve(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>, paper_only: Option<bool>) -> Result<EquityCurveData, String> {
+#[derive(Debug, Deserialize)]
+pub struct EquityCurveFilters {
+    /// Single-value (legacy) or use strategy_ids for multi-select
+    pub strategy_id: Option<i64>,
+    pub strategy_ids: Option<Vec<i64>>,
+    pub symbol: Option<String>,
+    pub symbols: Option<Vec<String>>,
+    pub side: Option<String>,
+    pub sides: Option<Vec<String>>,
+    pub order_type: Option<String>,
+    pub order_types: Option<Vec<String>>,
+    pub position_size_min: Option<f64>,
+    pub position_size_max: Option<f64>,
+    /// Position size in USD (quantity * entry_price) — matches Trades page
+    pub position_size_min_usd: Option<f64>,
+    pub position_size_max_usd: Option<f64>,
+}
+
+/// Build equity curve and drawdown metrics from a list of paired trades (sorted by exit timestamp).
+fn build_equity_curve_from_pairs(mut pairs: Vec<PairedTrade>) -> EquityCurveData {
     use std::collections::HashMap;
-    
+    pairs.sort_by(|a, b| a.exit_timestamp.cmp(&b.exit_timestamp));
+    let mut daily_pnl_map: HashMap<String, f64> = HashMap::new();
+    for pair in &pairs {
+        if let Some(date_str) = pair.exit_timestamp.split('T').next() {
+            *daily_pnl_map.entry(date_str.to_string()).or_insert(0.0) += pair.net_profit_loss;
+        }
+    }
+    let mut dates: Vec<String> = daily_pnl_map.keys().cloned().collect();
+    dates.sort();
+    let mut equity_points = Vec::new();
+    let mut cumulative_pnl = 0.0;
+    let mut peak_equity = 0.0;
+    let mut max_drawdown = 0.0;
+    let mut max_drawdown_start: Option<String> = None;
+    let mut max_drawdown_end: Option<String> = None;
+    let mut current_drawdown_start: Option<String> = None;
+    let mut longest_drawdown_days: i64 = 0;
+    let mut longest_drawdown_start: Option<String> = None;
+    let mut longest_drawdown_end: Option<String> = None;
+    let mut current_drawdown_days = 0;
+    let mut current_drawdown_start_date: Option<String> = None;
+    let mut drawdown_sum = 0.0;
+    let mut drawdown_count = 0;
+    let mut current_streak_type: Option<bool> = None;
+    let mut current_streak_start: Option<String> = None;
+    let mut winning_streaks: Vec<(String, String)> = Vec::new();
+    let mut losing_streaks: Vec<(String, String)> = Vec::new();
+    let mut best_surge_start: Option<String> = None;
+    let mut best_surge_end: Option<String> = None;
+    let mut best_surge_value = 0.0;
+    let mut surge_start_date: Option<String> = None;
+    let mut surge_start_equity = 0.0;
+    for date in &dates {
+        let daily_pnl = daily_pnl_map.get(date).copied().unwrap_or(0.0);
+        cumulative_pnl += daily_pnl;
+        if cumulative_pnl > peak_equity {
+            peak_equity = cumulative_pnl;
+            surge_start_date = Some(date.clone());
+            surge_start_equity = cumulative_pnl;
+        }
+        let drawdown = peak_equity - cumulative_pnl;
+        let drawdown_pct = if peak_equity > 0.0 {
+            (drawdown / peak_equity) * 100.0
+        } else if peak_equity < 0.0 {
+            (drawdown / peak_equity.abs()) * 100.0
+        } else {
+            0.0
+        };
+        if drawdown > max_drawdown {
+            max_drawdown = drawdown;
+            if current_drawdown_start.is_none() {
+                current_drawdown_start = Some(date.clone());
+            }
+            max_drawdown_start = current_drawdown_start.clone();
+            max_drawdown_end = Some(date.clone());
+        }
+        if drawdown > 0.0 {
+            if current_drawdown_start_date.is_none() {
+                current_drawdown_start_date = Some(date.clone());
+            }
+            current_drawdown_days += 1;
+            drawdown_sum += drawdown;
+            drawdown_count += 1;
+        } else {
+            if current_drawdown_days > longest_drawdown_days {
+                longest_drawdown_days = current_drawdown_days as i64;
+                longest_drawdown_start = current_drawdown_start_date.clone();
+                longest_drawdown_end = Some(date.clone());
+            }
+            current_drawdown_days = 0;
+            current_drawdown_start_date = None;
+            current_drawdown_start = None;
+        }
+        if let Some(ref surge_start) = surge_start_date {
+            if cumulative_pnl > surge_start_equity {
+                let surge_value = cumulative_pnl - surge_start_equity;
+                if surge_value > best_surge_value {
+                    best_surge_value = surge_value;
+                    best_surge_start = Some(surge_start.clone());
+                    best_surge_end = Some(date.clone());
+                }
+            }
+        }
+        let is_win = daily_pnl > 0.0;
+        let is_loss = daily_pnl < 0.0;
+        if is_win {
+            if current_streak_type == Some(false) {
+                if let Some(start) = current_streak_start.take() {
+                    losing_streaks.push((start, date.clone()));
+                }
+            }
+            if current_streak_type != Some(true) {
+                current_streak_type = Some(true);
+                current_streak_start = Some(date.clone());
+            }
+        } else if is_loss {
+            if current_streak_type == Some(true) {
+                if let Some(start) = current_streak_start.take() {
+                    winning_streaks.push((start, date.clone()));
+                }
+            }
+            if current_streak_type != Some(false) {
+                current_streak_type = Some(false);
+                current_streak_start = Some(date.clone());
+            }
+        }
+        let is_max_drawdown = max_drawdown_start.as_ref().map_or(false, |start| {
+            date >= start && max_drawdown_end.as_ref().map_or(false, |end| date <= end)
+        });
+        let is_best_surge = best_surge_start.as_ref().map_or(false, |start| {
+            date >= start && best_surge_end.as_ref().map_or(false, |end| date <= end)
+        });
+        let is_winning_streak = winning_streaks.iter().any(|(s, e)| date >= s && date <= e)
+            || (current_streak_type == Some(true) && current_streak_start.as_ref().map_or(false, |s| date >= s));
+        let is_losing_streak = losing_streaks.iter().any(|(s, e)| date >= s && date <= e)
+            || (current_streak_type == Some(false) && current_streak_start.as_ref().map_or(false, |s| date >= s));
+        equity_points.push(EquityPoint {
+            date: date.clone(),
+            cumulative_pnl,
+            daily_pnl,
+            peak_equity,
+            drawdown,
+            drawdown_pct,
+            is_winning_streak: is_winning_streak || (current_streak_type == Some(true) && current_streak_start.as_ref().map_or(false, |s| date >= s)),
+            is_losing_streak: is_losing_streak || (current_streak_type == Some(false) && current_streak_start.as_ref().map_or(false, |s| date >= s)),
+            is_max_drawdown,
+            is_best_surge,
+        });
+    }
+    if current_drawdown_days > longest_drawdown_days {
+        longest_drawdown_days = current_drawdown_days as i64;
+        longest_drawdown_start = current_drawdown_start_date.clone();
+        longest_drawdown_end = dates.last().cloned();
+    }
+    let avg_drawdown = if drawdown_count > 0 {
+        drawdown_sum / drawdown_count as f64
+    } else {
+        0.0
+    };
+    let max_drawdown_pct = if peak_equity > 0.0 {
+        (max_drawdown / peak_equity) * 100.0
+    } else if peak_equity < 0.0 {
+        (max_drawdown / peak_equity.abs()) * 100.0
+    } else {
+        0.0
+    };
+    EquityCurveData {
+        equity_points,
+        drawdown_metrics: DrawdownMetrics {
+            max_drawdown,
+            max_drawdown_pct,
+            max_drawdown_start,
+            max_drawdown_end,
+            avg_drawdown,
+            longest_drawdown_days,
+            longest_drawdown_start,
+            longest_drawdown_end,
+        },
+        best_surge_start,
+        best_surge_end,
+        best_surge_value,
+    }
+}
+
+#[tauri::command]
+pub fn get_equity_curve(
+    pairing_method: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    paper_only: Option<bool>,
+    filters: Option<EquityCurveFilters>,
+) -> Result<EquityCurveData, String> {
     // Get paired trades
     let paired_trades = get_paired_trades(pairing_method.clone(), paper_only).map_err(|e| e.to_string())?;
     
@@ -5185,204 +5732,150 @@ pub fn get_equity_curve(pairing_method: Option<String>, start_date: Option<Strin
         paired_trades
     };
     
-    // Sort by exit timestamp (chronological order)
-    filtered_paired_trades.sort_by(|a, b| a.exit_timestamp.cmp(&b.exit_timestamp));
-    
-    // Group by date and calculate daily P&L
-    let mut daily_pnl_map: HashMap<String, f64> = HashMap::new();
-    for pair in &filtered_paired_trades {
-        if let Some(date_str) = pair.exit_timestamp.split('T').next() {
-            *daily_pnl_map.entry(date_str.to_string()).or_insert(0.0) += pair.net_profit_loss;
+    // Apply strategy/symbol/side/order_type/position_size filters via entry-trade lookup (multi-select + position size USD)
+    if let Some(ref f) = filters {
+        let has_multi = f.strategy_ids.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+            || f.symbols.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+            || f.sides.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+            || f.order_types.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+        let has_single = f.strategy_id.is_some() || f.symbol.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+            || f.side.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+            || f.order_type.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+        let has_pos = f.position_size_min.is_some() || f.position_size_max.is_some()
+            || f.position_size_min_usd.is_some() || f.position_size_max_usd.is_some();
+        let has_filter = has_multi || has_single || has_pos;
+        if has_filter {
+            let entry_ids: Vec<i64> = filtered_paired_trades.iter().map(|p| p.entry_trade_id).collect();
+            let entry_trades = get_trades_by_ids(&entry_ids).map_err(|e| e.to_string())?;
+            filtered_paired_trades = filtered_paired_trades
+                .into_iter()
+                .filter(|pair| {
+                    if let Some(entry) = entry_trades.get(&pair.entry_trade_id) {
+                        if let Some(ref ids) = f.strategy_ids {
+                            if !ids.is_empty() {
+                                let ok = pair.strategy_id.map_or(false, |id| ids.contains(&id));
+                                if !ok {
+                                    return false;
+                                }
+                            }
+                        } else if let Some(sid) = f.strategy_id {
+                            if pair.strategy_id != Some(sid) {
+                                return false;
+                            }
+                        }
+                        if let Some(ref syms) = f.symbols {
+                            if !syms.is_empty() {
+                                let pair_underlying = get_underlying_symbol(&pair.symbol);
+                                let match_ = syms.iter().any(|s| {
+                                    pair.symbol == *s || pair_underlying == get_underlying_symbol(s)
+                                });
+                                if !match_ {
+                                    return false;
+                                }
+                            }
+                        }
+                        if f.symbols.as_ref().map(|v| v.is_empty()).unwrap_or(true) {
+                            if let Some(ref sym) = f.symbol {
+                                if !sym.is_empty() {
+                                    let pair_underlying = get_underlying_symbol(&pair.symbol);
+                                    let filter_underlying = get_underlying_symbol(sym);
+                                    if pair.symbol != *sym && pair_underlying != filter_underlying {
+                                        return false;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(ref sides) = f.sides {
+                            if !sides.is_empty() && !sides.iter().any(|s| entry.side.eq_ignore_ascii_case(s)) {
+                                return false;
+                            }
+                        }
+                        if f.sides.as_ref().map(|v| v.is_empty()).unwrap_or(true) {
+                            if let Some(ref side) = f.side {
+                                if !side.is_empty() && !entry.side.eq_ignore_ascii_case(side) {
+                                    return false;
+                                }
+                            }
+                        }
+                        if let Some(ref ots) = f.order_types {
+                            if !ots.is_empty() && !ots.iter().any(|o| entry.order_type.eq_ignore_ascii_case(o)) {
+                                return false;
+                            }
+                        }
+                        if f.order_types.as_ref().map(|v| v.is_empty()).unwrap_or(true) {
+                            if let Some(ref ot) = f.order_type {
+                                if !ot.is_empty() && !entry.order_type.eq_ignore_ascii_case(ot) {
+                                    return false;
+                                }
+                            }
+                        }
+                        if f.position_size_min_usd.is_some() || f.position_size_max_usd.is_some() {
+                            let pos_usd = pair.quantity * pair.entry_price;
+                            if let Some(min_u) = f.position_size_min_usd {
+                                if pos_usd < min_u {
+                                    return false;
+                                }
+                            }
+                            if let Some(max_u) = f.position_size_max_usd {
+                                if pos_usd > max_u {
+                                    return false;
+                                }
+                            }
+                        } else {
+                            if let Some(min_q) = f.position_size_min {
+                                if pair.quantity < min_q {
+                                    return false;
+                                }
+                            }
+                            if let Some(max_q) = f.position_size_max {
+                                if pair.quantity > max_q {
+                                    return false;
+                                }
+                            }
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .collect();
         }
     }
     
-    // Convert to sorted vector of dates
-    let mut dates: Vec<String> = daily_pnl_map.keys().cloned().collect();
-    dates.sort();
-    
-    // Build equity curve
-    let mut equity_points = Vec::new();
-    let mut cumulative_pnl = 0.0;
-    let mut peak_equity = 0.0;
-    let mut max_drawdown = 0.0;
-    let mut max_drawdown_start: Option<String> = None;
-    let mut max_drawdown_end: Option<String> = None;
-    let mut current_drawdown_start: Option<String> = None;
-    let mut longest_drawdown_days = 0;
-    let mut longest_drawdown_start: Option<String> = None;
-    let mut longest_drawdown_end: Option<String> = None;
-    let mut current_drawdown_days = 0;
-    let mut current_drawdown_start_date: Option<String> = None;
-    let mut drawdown_sum = 0.0;
-    let mut drawdown_count = 0;
-    
-    // Track streaks
-    let mut current_streak_type: Option<bool> = None; // true = winning, false = losing
-    let mut current_streak_start: Option<String> = None;
-    let mut winning_streaks: Vec<(String, String)> = Vec::new(); // (start, end)
-    let mut losing_streaks: Vec<(String, String)> = Vec::new();
-    
-    // Track best equity surge
-    let mut best_surge_start: Option<String> = None;
-    let mut best_surge_end: Option<String> = None;
-    let mut best_surge_value = 0.0;
-    let mut surge_start_date: Option<String> = None;
-    let mut surge_start_equity = 0.0;
-    
-    for date in &dates {
-        let daily_pnl = daily_pnl_map.get(date).copied().unwrap_or(0.0);
-        cumulative_pnl += daily_pnl;
-        
-        // Update peak equity
-        if cumulative_pnl > peak_equity {
-            peak_equity = cumulative_pnl;
-            // Reset surge tracking when we hit a new peak
-            surge_start_date = Some(date.clone());
-            surge_start_equity = cumulative_pnl;
-        }
-        
-        // Calculate drawdown
-        let drawdown = peak_equity - cumulative_pnl;
-        let drawdown_pct = if peak_equity > 0.0 {
-            (drawdown / peak_equity) * 100.0
-        } else if peak_equity < 0.0 {
-            (drawdown / peak_equity.abs()) * 100.0
-        } else {
-            0.0
-        };
-        
-        // Track max drawdown
-        if drawdown > max_drawdown {
-            max_drawdown = drawdown;
-            if current_drawdown_start.is_none() {
-                current_drawdown_start = Some(date.clone());
-            }
-            max_drawdown_start = current_drawdown_start.clone();
-            max_drawdown_end = Some(date.clone());
-        }
-        
-        // Track drawdown periods
-        if drawdown > 0.0 {
-            if current_drawdown_start_date.is_none() {
-                current_drawdown_start_date = Some(date.clone());
-            }
-            current_drawdown_days += 1;
-            drawdown_sum += drawdown;
-            drawdown_count += 1;
-        } else {
-            // Drawdown ended
-            if current_drawdown_days > longest_drawdown_days {
-                longest_drawdown_days = current_drawdown_days;
-                longest_drawdown_start = current_drawdown_start_date.clone();
-                longest_drawdown_end = Some(date.clone());
-            }
-            current_drawdown_days = 0;
-            current_drawdown_start_date = None;
-            current_drawdown_start = None;
-        }
-        
-        // Track best equity surge (from a low to a new peak)
-        if let Some(ref surge_start) = surge_start_date {
-            if cumulative_pnl > surge_start_equity {
-                let surge_value = cumulative_pnl - surge_start_equity;
-                if surge_value > best_surge_value {
-                    best_surge_value = surge_value;
-                    best_surge_start = Some(surge_start.clone());
-                    best_surge_end = Some(date.clone());
-                }
-            }
-        }
-        
-        // Track streaks
-        let is_win = daily_pnl > 0.0;
-        let is_loss = daily_pnl < 0.0;
-        
-        if is_win {
-            if current_streak_type == Some(false) {
-                // End losing streak
-                if let Some(start) = current_streak_start.take() {
-                    losing_streaks.push((start, date.clone()));
-                }
-            }
-            if current_streak_type != Some(true) {
-                current_streak_type = Some(true);
-                current_streak_start = Some(date.clone());
-            }
-        } else if is_loss {
-            if current_streak_type == Some(true) {
-                // End winning streak
-                if let Some(start) = current_streak_start.take() {
-                    winning_streaks.push((start, date.clone()));
-                }
-            }
-            if current_streak_type != Some(false) {
-                current_streak_type = Some(false);
-                current_streak_start = Some(date.clone());
-            }
-        }
-        
-        // Check if this date is in max drawdown period
-        let is_max_drawdown = max_drawdown_start.as_ref().map_or(false, |start| {
-            date >= start && max_drawdown_end.as_ref().map_or(false, |end| date <= end)
-        });
-        
-        // Check if this date is in best surge period
-        let is_best_surge = best_surge_start.as_ref().map_or(false, |start| {
-            date >= start && best_surge_end.as_ref().map_or(false, |end| date <= end)
-        });
-        
-        // Check if this date is in a winning/losing streak
-        let is_winning_streak = winning_streaks.iter().any(|(s, e)| date >= s && date <= e) ||
-            (current_streak_type == Some(true) && current_streak_start.as_ref().map_or(false, |s| date >= s));
-        let is_losing_streak = losing_streaks.iter().any(|(s, e)| date >= s && date <= e) ||
-            (current_streak_type == Some(false) && current_streak_start.as_ref().map_or(false, |s| date >= s));
-        
-        equity_points.push(EquityPoint {
-            date: date.clone(),
-            cumulative_pnl,
-            daily_pnl,
-            peak_equity,
-            drawdown,
-            drawdown_pct,
-            is_winning_streak: is_winning_streak || (current_streak_type == Some(true) && current_streak_start.as_ref().map_or(false, |s| date >= s)),
-            is_losing_streak: is_losing_streak || (current_streak_type == Some(false) && current_streak_start.as_ref().map_or(false, |s| date >= s)),
-            is_max_drawdown,
-            is_best_surge,
-        });
-    }
-    
-    // Calculate average drawdown
-    let avg_drawdown = if drawdown_count > 0 {
-        drawdown_sum / drawdown_count as f64
+    Ok(build_equity_curve_from_pairs(filtered_paired_trades))
+}
+
+/// Build equity curve from an in-memory list of trades (for Demo mode with strategy/symbol filters).
+#[tauri::command]
+pub fn get_equity_curve_from_trades(
+    trades: Vec<Trade>,
+    pairing_method: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+) -> Result<EquityCurveData, String> {
+    let filled: Vec<Trade> = trades
+        .into_iter()
+        .filter(|t| t.status.eq_ignore_ascii_case("Filled") || t.status.eq_ignore_ascii_case("FILLED"))
+        .collect();
+    let use_fifo = pairing_method.as_deref().unwrap_or("FIFO") == "FIFO";
+    let (paired_trades, _open_trades) = if use_fifo {
+        pair_trades_fifo(filled)
     } else {
-        0.0
+        pair_trades_lifo(filled)
     };
-    
-    // Calculate max drawdown percentage
-    let max_drawdown_pct = if peak_equity > 0.0 {
-        (max_drawdown / peak_equity) * 100.0
-    } else if peak_equity < 0.0 {
-        (max_drawdown / peak_equity.abs()) * 100.0
+    let filtered: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
+        paired_trades
+            .into_iter()
+            .filter(|pair| {
+                let exit = &pair.exit_timestamp;
+                (start_date.as_ref().map_or(true, |s| exit >= s))
+                    && (end_date.as_ref().map_or(true, |e| exit <= e))
+            })
+            .collect()
     } else {
-        0.0
+        paired_trades
     };
-    
-    Ok(EquityCurveData {
-        equity_points,
-        drawdown_metrics: DrawdownMetrics {
-            max_drawdown,
-            max_drawdown_pct,
-            max_drawdown_start,
-            max_drawdown_end,
-            avg_drawdown,
-            longest_drawdown_days,
-            longest_drawdown_start,
-            longest_drawdown_end,
-        },
-        best_surge_start,
-        best_surge_end,
-        best_surge_value,
-    })
+    Ok(build_equity_curve_from_pairs(filtered))
 }
 
 // Distribution & Concentration Structures

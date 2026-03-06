@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, BarChart3, Search, LayoutDashboard } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
@@ -241,9 +241,10 @@ export default function Journal() {
     const savedId = localStorage.getItem('journal_selected_entry_id');
     return savedId ? null : null; // Will be loaded by ID in useEffect
   });
-  // If we have a saved entry id to restore, don't show overview until load completes (avoids flash)
+  // If we have a saved entry id to restore, don't show overview until load completes (avoids flash). Skip when URL has ?overview=1 (e.g. from Analytics).
   const [pendingRestoreEntryId, setPendingRestoreEntryId] = useState<number | null>(() => {
     if (typeof window === "undefined") return null;
+    if (new URLSearchParams(window.location.search).get("overview") === "1") return null;
     const savedId = localStorage.getItem("journal_selected_entry_id");
     if (savedId) {
       const id = parseInt(savedId, 10);
@@ -388,12 +389,23 @@ export default function Journal() {
   const titleInputRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
 
   useEffect(() => {
     const unsub = subscribeToDataMode(setDataMode);
     return () => unsub();
   }, []);
+
+  // When navigating from Analytics (e.g. "Journal Overview" link) with ?overview=1, show the overview (no entry selected, no create form)
+  useEffect(() => {
+    if (searchParams.get("overview") === "1") {
+      setSelectedEntry(null);
+      setPendingRestoreEntryId(null);
+      setIsCreating(false);
+      setIsEditing(false);
+    }
+  }, [searchParams]);
 
   // Edit history for undo functionality
   const [editHistory, setEditHistory] = useState<Array<{
@@ -597,9 +609,11 @@ export default function Journal() {
     loadAvailableSymbols();
     loadAllJournalTrades();
     
-    // Restore selected entry if we have a saved ID (skip when opened from Emotions via state)
+    // When URL has ?overview=1 (e.g. from Analytics "Journal Overview" link), do not restore entry or work-in-progress
+    const forceOverview = searchParams.get("overview") === "1";
     const openFromState = (location.state as { openEntryId?: number } | null)?.openEntryId != null;
-    if (!openFromState) {
+    
+    if (!openFromState && !forceOverview) {
       const savedEntryId = localStorage.getItem('journal_selected_entry_id');
       if (savedEntryId) {
         const entryId = parseInt(savedEntryId, 10);
@@ -609,14 +623,15 @@ export default function Journal() {
       }
     }
     
-    // Restore work in progress after loading (only if we have saved state)
-    const hasWorkInProgress = localStorage.getItem('journal_work_in_progress');
-    if (hasWorkInProgress) {
-      setTimeout(() => {
-        restoreWorkInProgress();
-      }, 200);
+    if (!forceOverview) {
+      const hasWorkInProgress = localStorage.getItem('journal_work_in_progress');
+      if (hasWorkInProgress) {
+        setTimeout(() => {
+          restoreWorkInProgress();
+        }, 200);
+      }
     }
-  }, [dataMode]);
+  }, [dataMode, searchParams]);
 
   // Clear pending restore once an entry is selected (so we don't stay in "loading" state)
   useEffect(() => {
@@ -2534,28 +2549,67 @@ export default function Journal() {
     return map;
   }, [allJournalTrades]);
 
+  // Cascading filter options: each dropdown shows only values that exist when other filters are applied
   const journalFilterOptions = useMemo(() => {
-    const symbols = new Set<string>();
-    const positions = new Set<string>();
-    const timeframes = new Set<string>();
-    const entryTypes = new Set<string>();
-    const exitTypes = new Set<string>();
-    const outcomes = new Set<string>();
+    const {
+      symbol,
+      position,
+      timeframe,
+      entry_type,
+      exit_type,
+      outcome,
+      text,
+    } = journalFilters;
+    const q = text.trim().toLowerCase();
 
-    allJournalTrades.forEach((t) => {
-      if (t.symbol) symbols.add(t.symbol);
-      if (t.position) positions.add(t.position);
-      if (t.timeframe) timeframes.add(t.timeframe);
-      if (t.entry_type) entryTypes.add(t.entry_type);
-      if (t.exit_type) exitTypes.add(t.exit_type);
-      if (t.outcome) outcomes.add(t.outcome);
-    });
+    const entryIdsMatchingText: Set<number> =
+      q === ""
+        ? new Set(entries.map((e) => e.id))
+        : new Set(
+            entries
+              .filter((entry) => {
+                const trades = journalTradesByEntry.get(entry.id) || [];
+                const titleMatch = (entry.title || "").toLowerCase().includes(q);
+                const tradeTextMatch = trades.some((t) => {
+                  const fields = [t.trade, t.what_went_well, t.what_could_be_improved, t.emotional_state, t.notes];
+                  return fields.some((f) => (f || "").toLowerCase().includes(q));
+                });
+                return titleMatch || tradeTextMatch;
+              })
+              .map((e) => e.id)
+          );
+
+    type Skip = "symbol" | "position" | "timeframe" | "entry_type" | "exit_type" | "outcome";
+    const matchTrade = (t: JournalTrade, skip: Skip): boolean => {
+      if (!entryIdsMatchingText.has(t.journal_entry_id)) return false;
+      if (skip !== "symbol" && symbol && (t.symbol || "").toLowerCase() !== symbol.toLowerCase()) return false;
+      if (skip !== "position" && position && (t.position || "").toLowerCase() !== position.toLowerCase()) return false;
+      if (skip !== "timeframe" && timeframe && (t.timeframe || "").toLowerCase() !== timeframe.toLowerCase()) return false;
+      if (skip !== "entry_type" && entry_type && (t.entry_type || "").toLowerCase() !== entry_type.toLowerCase()) return false;
+      if (skip !== "exit_type" && exit_type && (t.exit_type || "").toLowerCase() !== exit_type.toLowerCase()) return false;
+      if (skip !== "outcome" && outcome && (t.outcome || "").toLowerCase() !== outcome.toLowerCase()) return false;
+      return true;
+    };
 
     const toSortedArray = (set: Set<string>) =>
       Array.from(set.values())
         .map((v) => v.trim())
         .filter((v) => v.length > 0)
         .sort((a, b) => a.localeCompare(b));
+
+    const forSymbol = allJournalTrades.filter((t) => matchTrade(t, "symbol"));
+    const forPosition = allJournalTrades.filter((t) => matchTrade(t, "position"));
+    const forTimeframe = allJournalTrades.filter((t) => matchTrade(t, "timeframe"));
+    const forEntryType = allJournalTrades.filter((t) => matchTrade(t, "entry_type"));
+    const forExitType = allJournalTrades.filter((t) => matchTrade(t, "exit_type"));
+    const forOutcome = allJournalTrades.filter((t) => matchTrade(t, "outcome"));
+
+    const symbols = new Set<string>(forSymbol.map((t) => t.symbol).filter(Boolean) as string[]);
+    const positions = new Set<string>(forPosition.map((t) => t.position).filter(Boolean) as string[]);
+    const timeframes = new Set<string>(forTimeframe.map((t) => t.timeframe).filter(Boolean) as string[]);
+    const entryTypes = new Set<string>(forEntryType.map((t) => t.entry_type).filter(Boolean) as string[]);
+    const exitTypes = new Set<string>(forExitType.map((t) => t.exit_type).filter(Boolean) as string[]);
+    const outcomes = new Set<string>(forOutcome.map((t) => t.outcome).filter(Boolean) as string[]);
 
     return {
       symbols: toSortedArray(symbols),
@@ -2565,7 +2619,28 @@ export default function Journal() {
       exitTypes: toSortedArray(exitTypes),
       outcomes: toSortedArray(outcomes),
     };
-  }, [allJournalTrades]);
+  }, [allJournalTrades, entries, journalTradesByEntry, journalFilters]);
+
+  // When options shrink from cascading, clear any selected value that is no longer in the list
+  useEffect(() => {
+    const { symbol, position, timeframe, entry_type, exit_type, outcome } = journalFilters;
+    const symSet = new Set(journalFilterOptions.symbols.map((s) => s.toLowerCase()));
+    const posSet = new Set(journalFilterOptions.positions.map((p) => p.toLowerCase()));
+    const tfSet = new Set(journalFilterOptions.timeframes.map((t) => t.toLowerCase()));
+    const etSet = new Set(journalFilterOptions.entryTypes.map((e) => e.toLowerCase()));
+    const xtSet = new Set(journalFilterOptions.exitTypes.map((x) => x.toLowerCase()));
+    const outSet = new Set(journalFilterOptions.outcomes.map((o) => o.toLowerCase()));
+    const updates: Partial<typeof journalFilters> = {};
+    if (symbol && !symSet.has(symbol.toLowerCase())) updates.symbol = "";
+    if (position && !posSet.has(position.toLowerCase())) updates.position = "";
+    if (timeframe && !tfSet.has(timeframe.toLowerCase())) updates.timeframe = "";
+    if (entry_type && !etSet.has(entry_type.toLowerCase())) updates.entry_type = "";
+    if (exit_type && !xtSet.has(exit_type.toLowerCase())) updates.exit_type = "";
+    if (outcome && !outSet.has(outcome.toLowerCase())) updates.outcome = "";
+    if (Object.keys(updates).length > 0) {
+      setJournalFilters((prev) => ({ ...prev, ...updates }));
+    }
+  }, [journalFilterOptions, journalFilters.symbol, journalFilters.position, journalFilters.timeframe, journalFilters.entry_type, journalFilters.exit_type, journalFilters.outcome]);
 
   const filteredEntries = useMemo(() => {
     const {
