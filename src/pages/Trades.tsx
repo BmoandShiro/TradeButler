@@ -2068,7 +2068,7 @@ export default function Trades() {
                                                   fontSize: "11px",
                                                   fontWeight: "500",
                                                   backgroundColor:
-                                                    trade.side === "BUY"
+                                                    trade.side.toUpperCase() === "BUY"
                                                       ? "var(--profit)"
                                                       : "var(--loss)",
                                                   color: "white",
@@ -2570,7 +2570,7 @@ export default function Trades() {
                               fontSize: "12px",
                               fontWeight: "500",
                               backgroundColor:
-                                trade.side === "BUY"
+                                trade.side.toUpperCase() === "BUY"
                                   ? "var(--profit)"
                                   : "var(--loss)",
                               color: "white",
