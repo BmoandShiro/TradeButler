@@ -5,6 +5,7 @@ import Trades from "./pages/Trades";
 import Emotions from "./pages/Emotions";
 import Analytics from "./pages/Analytics";
 import { AnalyticsErrorBoundary } from "./components/AnalyticsErrorBoundary";
+import { PageErrorBoundary } from "./components/PageErrorBoundary";
 import CalendarPage from "./pages/Calendar";
 import Strategies from "./pages/Strategies";
 import Journal from "./pages/Journal";
@@ -19,7 +20,7 @@ function App() {
       <Layout>
         <Routes>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/trades" element={<Trades />} />
+          <Route path="/trades" element={<PageErrorBoundary pageName="Trades"><Trades /></PageErrorBoundary>} />
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/journal" element={<Journal />} />

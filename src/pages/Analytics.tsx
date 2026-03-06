@@ -1,13 +1,13 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/tauri";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Brush } from "recharts";
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Brush, Cell } from "recharts";
 import { TrendingUp, TrendingDown, Settings } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { formatWithCommas } from "../utils/formatCompactNumber";
 import { sampleTimeSeries, CHART_MAX_POINTS, xAxisInterval, BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
-import { loadSandboxState } from "../utils/sandboxStore";
+import { loadSandboxState, getSandboxStrategyChecklistItemMetrics, getSandboxStrategyChecklistItemMetricsByOutcome } from "../utils/sandboxStore";
 import {
   EXAMPLE_SYMBOL_PNL,
   EXAMPLE_EQUITY_CURVE,
@@ -107,7 +107,43 @@ interface JournalTrade {
   trade_order: number;
   created_at: string | null;
   updated_at: string | null;
+  r_multiple?: number | null;
 }
+
+interface StrategyPerformanceRow {
+  strategy_id: number | null;
+  strategy_name: string;
+  trade_count: number;
+  winning_trades?: number;
+  total_volume: number;
+  estimated_pnl: number;
+}
+
+interface ChecklistItemMetricRow {
+  checklist_item_id: number;
+  item_text: string;
+  checklist_type: string;
+  times_checked: number;
+  avg_performance: number | null;
+  performance_kind: string;
+}
+
+interface ChecklistItemMetricByOutcomeRow {
+  checklist_item_id: number;
+  item_text: string;
+  checklist_type: string;
+  times_checked_good: number;
+  times_checked_bad: number;
+}
+
+const STRATEGY_CHART_AXIS_PROPS = {
+  tick: { fontSize: 13, fill: "var(--text-secondary)" },
+  angle: -40,
+  textAnchor: "end" as const,
+  height: 72,
+};
+const STRATEGY_CHART_MARGIN = { top: 8, right: 8, left: 0, bottom: 72 };
+const BAR_FILL_OPACITY = 0.5;
 
 export default function Analytics() {
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -151,18 +187,40 @@ export default function Analytics() {
   const equitySettingsButtonRef = useRef<HTMLButtonElement>(null);
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const prevDataModeRef = useRef<DataMode | null>(null);
+  const filtersBarRef = useRef<HTMLDivElement>(null);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
-  // Analytics filters (Strategy, Symbol, Side, Type, Position Size) — drive Equity Curve & Drawdown
-  const [filterStrategyId, setFilterStrategyId] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_strategy") || "");
-  const [filterSymbol, setFilterSymbol] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_symbol") || "");
-  const [filterSide, setFilterSide] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_side") || "");
-  const [filterType, setFilterType] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_type") || "");
-  const [filterPositionSize, setFilterPositionSize] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_position_size") || "");
+  const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformanceRow[]>([]);
+  const [checklistItemMetrics, setChecklistItemMetrics] = useState<ChecklistItemMetricRow[]>([]);
+  const [checklistItemMetricsByOutcome, setChecklistItemMetricsByOutcome] = useState<ChecklistItemMetricByOutcomeRow[]>([]);
+  /** Per-strategy checklist by outcome for branched "top winning" display */
+  const [checklistByOutcomePerStrategy, setChecklistByOutcomePerStrategy] = useState<Array<{ strategyId: number; strategyName: string; items: ChecklistItemMetricByOutcomeRow[] }>>([]);
+  // Analytics filters: multi-select (Strategy, Symbol, Side, Type), Position size $ (min/max), Position/Timeframe/R (journal)
+  const parseStoredArray = (key: string): string[] => {
+    try {
+      const s = localStorage.getItem(key);
+      if (!s) return [];
+      const a = JSON.parse(s) as unknown;
+      return Array.isArray(a) ? a.filter((x): x is string => typeof x === "string") : [];
+    } catch {
+      return [];
+    }
+  };
+  const [filterStrategyIds, setFilterStrategyIds] = useState<string[]>(() => parseStoredArray("tradebutler_analytics_filter_strategy_ids"));
+  const [filterSymbols, setFilterSymbols] = useState<string[]>(() => parseStoredArray("tradebutler_analytics_filter_symbols"));
+  const [filterSides, setFilterSides] = useState<string[]>(() => parseStoredArray("tradebutler_analytics_filter_sides"));
+  const [filterTypes, setFilterTypes] = useState<string[]>(() => parseStoredArray("tradebutler_analytics_filter_types"));
+  const [filterPositionSizeMin, setFilterPositionSizeMin] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_position_size_min") || "");
+  const [filterPositionSizeMax, setFilterPositionSizeMax] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_position_size_max") || "");
+  const [filterPositions, setFilterPositions] = useState<string[]>(() => parseStoredArray("tradebutler_analytics_filter_positions"));
+  const [filterTimeframes, setFilterTimeframes] = useState<string[]>(() => parseStoredArray("tradebutler_analytics_filter_timeframes"));
+  const [filterRMin, setFilterRMin] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_r_min") || "");
+  const [filterRMax, setFilterRMax] = useState<string>(() => localStorage.getItem("tradebutler_analytics_filter_r_max") || "");
+  const [openFilterDropdown, setOpenFilterDropdown] = useState<string | null>(null);
 
 
   useEffect(() => {
     loadData();
-  }, [timeframe, customStartDate, customEndDate, dataMode, filterStrategyId, filterSymbol, filterSide, filterType, filterPositionSize]);
+  }, [timeframe, customStartDate, customEndDate, dataMode, filterStrategyIds, filterSymbols, filterSides, filterTypes, filterPositionSizeMin, filterPositionSizeMax, filterPositions, filterTimeframes, filterRMin, filterRMax]);
 
   useEffect(() => {
     setEquityBrushEnd(0);
@@ -171,7 +229,7 @@ export default function Analytics() {
     setEntriesChartBrushEnd(0);
     setPositionsChartBrushEnd(0);
     setOutcomeChartBrushEnd(0);
-  }, [timeframe, customStartDate, customEndDate, filterStrategyId, filterSymbol, filterSide, filterType, filterPositionSize]);
+  }, [timeframe, customStartDate, customEndDate, filterStrategyIds, filterSymbols, filterSides, filterTypes, filterPositionSizeMin, filterPositionSizeMax, filterPositions, filterTimeframes, filterRMin, filterRMax]);
 
   useEffect(() => {
     const unsubscribe = subscribeToDataMode((mode) => {
@@ -187,16 +245,28 @@ export default function Analytics() {
     const prevMode = prevDataModeRef.current;
     prevDataModeRef.current = dataMode;
     if (prevMode != null && prevMode !== dataMode) {
-      setFilterStrategyId("");
-      setFilterSymbol("");
-      setFilterSide("");
-      setFilterType("");
-      setFilterPositionSize("");
-      localStorage.removeItem("tradebutler_analytics_filter_strategy");
-      localStorage.removeItem("tradebutler_analytics_filter_symbol");
-      localStorage.removeItem("tradebutler_analytics_filter_side");
-      localStorage.removeItem("tradebutler_analytics_filter_type");
-      localStorage.removeItem("tradebutler_analytics_filter_position_size");
+      setFilterStrategyIds([]);
+      setFilterSymbols([]);
+      setFilterSides([]);
+      setFilterTypes([]);
+      setFilterPositionSizeMin("");
+      setFilterPositionSizeMax("");
+      setFilterPositions([]);
+      setFilterTimeframes([]);
+      setFilterRMin("");
+      setFilterRMax("");
+      [
+        "tradebutler_analytics_filter_strategy_ids",
+        "tradebutler_analytics_filter_symbols",
+        "tradebutler_analytics_filter_sides",
+        "tradebutler_analytics_filter_types",
+        "tradebutler_analytics_filter_position_size_min",
+        "tradebutler_analytics_filter_position_size_max",
+        "tradebutler_analytics_filter_positions",
+        "tradebutler_analytics_filter_timeframes",
+        "tradebutler_analytics_filter_r_min",
+        "tradebutler_analytics_filter_r_max",
+      ].forEach((k) => localStorage.removeItem(k));
     }
   }, [dataMode]);
 
@@ -248,25 +318,56 @@ export default function Analytics() {
   }, [customStartDate, customEndDate]);
 
   useEffect(() => {
-    if (filterStrategyId) localStorage.setItem("tradebutler_analytics_filter_strategy", filterStrategyId);
-    else localStorage.removeItem("tradebutler_analytics_filter_strategy");
-  }, [filterStrategyId]);
+    if (filterStrategyIds.length) localStorage.setItem("tradebutler_analytics_filter_strategy_ids", JSON.stringify(filterStrategyIds));
+    else localStorage.removeItem("tradebutler_analytics_filter_strategy_ids");
+  }, [filterStrategyIds]);
   useEffect(() => {
-    if (filterSymbol) localStorage.setItem("tradebutler_analytics_filter_symbol", filterSymbol);
-    else localStorage.removeItem("tradebutler_analytics_filter_symbol");
-  }, [filterSymbol]);
+    if (filterSymbols.length) localStorage.setItem("tradebutler_analytics_filter_symbols", JSON.stringify(filterSymbols));
+    else localStorage.removeItem("tradebutler_analytics_filter_symbols");
+  }, [filterSymbols]);
   useEffect(() => {
-    if (filterSide) localStorage.setItem("tradebutler_analytics_filter_side", filterSide);
-    else localStorage.removeItem("tradebutler_analytics_filter_side");
-  }, [filterSide]);
+    if (filterSides.length) localStorage.setItem("tradebutler_analytics_filter_sides", JSON.stringify(filterSides));
+    else localStorage.removeItem("tradebutler_analytics_filter_sides");
+  }, [filterSides]);
   useEffect(() => {
-    if (filterType) localStorage.setItem("tradebutler_analytics_filter_type", filterType);
-    else localStorage.removeItem("tradebutler_analytics_filter_type");
-  }, [filterType]);
+    if (filterTypes.length) localStorage.setItem("tradebutler_analytics_filter_types", JSON.stringify(filterTypes));
+    else localStorage.removeItem("tradebutler_analytics_filter_types");
+  }, [filterTypes]);
   useEffect(() => {
-    if (filterPositionSize) localStorage.setItem("tradebutler_analytics_filter_position_size", filterPositionSize);
-    else localStorage.removeItem("tradebutler_analytics_filter_position_size");
-  }, [filterPositionSize]);
+    if (filterPositionSizeMin) localStorage.setItem("tradebutler_analytics_filter_position_size_min", filterPositionSizeMin);
+    else localStorage.removeItem("tradebutler_analytics_filter_position_size_min");
+  }, [filterPositionSizeMin]);
+  useEffect(() => {
+    if (filterPositionSizeMax) localStorage.setItem("tradebutler_analytics_filter_position_size_max", filterPositionSizeMax);
+    else localStorage.removeItem("tradebutler_analytics_filter_position_size_max");
+  }, [filterPositionSizeMax]);
+  useEffect(() => {
+    if (filterPositions.length) localStorage.setItem("tradebutler_analytics_filter_positions", JSON.stringify(filterPositions));
+    else localStorage.removeItem("tradebutler_analytics_filter_positions");
+  }, [filterPositions]);
+  useEffect(() => {
+    if (filterTimeframes.length) localStorage.setItem("tradebutler_analytics_filter_timeframes", JSON.stringify(filterTimeframes));
+    else localStorage.removeItem("tradebutler_analytics_filter_timeframes");
+  }, [filterTimeframes]);
+  useEffect(() => {
+    if (filterRMin) localStorage.setItem("tradebutler_analytics_filter_r_min", filterRMin);
+    else localStorage.removeItem("tradebutler_analytics_filter_r_min");
+  }, [filterRMin]);
+  useEffect(() => {
+    if (filterRMax) localStorage.setItem("tradebutler_analytics_filter_r_max", filterRMax);
+    else localStorage.removeItem("tradebutler_analytics_filter_r_max");
+  }, [filterRMax]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (openFilterDropdown && filtersBarRef.current && !filtersBarRef.current.contains(target)) {
+        setOpenFilterDropdown(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [openFilterDropdown]);
 
   // Extract underlying symbol from options contract (defined early so useMemos below can use it)
   const getUnderlyingSymbol = (symbol: string | null | undefined): string => {
@@ -276,35 +377,161 @@ export default function Analytics() {
     return symbol;
   };
 
-  // Filter options from current mode's data (trades + strategies); only truthy values to avoid chart crashes
+  // Helper: trades matching all trade filters except one dimension (so dropdowns only show values that exist for the current selection)
+  const getTradesForOptionDimension = useMemo(() => {
+    const strategyIdNums = filterStrategyIds.map((id) => parseInt(id, 10)).filter((n) => !Number.isNaN(n));
+    const posMinUsd = filterPositionSizeMin !== "" ? parseFloat(filterPositionSizeMin) : null;
+    const posMaxUsd = filterPositionSizeMax !== "" ? parseFloat(filterPositionSizeMax) : null;
+    type Skip = "strategy" | "symbol" | "side" | "type" | "positionSize";
+    return (skip: Skip): Trade[] => {
+      return trades.filter((t) => {
+        if (skip !== "strategy" && filterStrategyIds.length > 0 && (t.strategy_id == null || !strategyIdNums.includes(t.strategy_id))) return false;
+        if (skip !== "symbol" && filterSymbols.length > 0) {
+          const tSym = t.symbol ?? "";
+          if (!filterSymbols.some((s) => tSym === s || getUnderlyingSymbol(tSym) === getUnderlyingSymbol(s))) return false;
+        }
+        if (skip !== "side" && filterSides.length > 0 && filterSides.indexOf(t.side ?? "") === -1) return false;
+        if (skip !== "type" && filterTypes.length > 0 && filterTypes.indexOf(t.order_type ?? "") === -1) return false;
+        if (skip !== "positionSize") {
+          const posUsd = t.quantity * t.price;
+          if (posMinUsd != null && !Number.isNaN(posMinUsd) && posUsd < posMinUsd) return false;
+          if (posMaxUsd != null && !Number.isNaN(posMaxUsd) && posUsd > posMaxUsd) return false;
+        }
+        return true;
+      });
+    };
+  }, [trades, filterStrategyIds, filterSymbols, filterSides, filterTypes, filterPositionSizeMin, filterPositionSizeMax]);
+
+  // Journal trades in scope: entries pass strategy filter, trades pass symbol filter; used to build Position/Timeframe options
+  const journalTradesInScopeForOptions = useMemo(() => {
+    const entryById = new Map(journalEntries.map((e) => [e.id, e]));
+    const strategyIdNums = filterStrategyIds.map((id) => parseInt(id, 10)).filter((n) => !Number.isNaN(n));
+    return journalTrades.filter((t) => {
+      const entry = entryById.get(t.journal_entry_id);
+      if (!entry) return false;
+      if (filterStrategyIds.length > 0 && (entry.strategy_id == null || !strategyIdNums.includes(entry.strategy_id))) return false;
+      if (filterSymbols.length > 0 && (t.symbol == null || !filterSymbols.some((s) => t.symbol === s || getUnderlyingSymbol(t.symbol ?? "") === getUnderlyingSymbol(s)))) return false;
+      return true;
+    });
+  }, [journalTrades, journalEntries, filterStrategyIds, filterSymbols]);
+
+  // Filter options: each dropdown shows only values that exist when other filters are applied (cascading filters)
   const filterOptions = useMemo(() => {
-    const symbols = Array.from(new Set(trades.map((t) => t.symbol).filter((s): s is string => Boolean(s)))).sort();
-    const sides = Array.from(new Set(trades.map((t) => t.side).filter(Boolean))).sort();
-    const types = Array.from(new Set(trades.map((t) => t.order_type).filter(Boolean))).sort();
-    return { strategies, symbols, sides, types };
-  }, [trades, strategies]);
+    const forStrategy = getTradesForOptionDimension("strategy");
+    const forSymbol = getTradesForOptionDimension("symbol");
+    const forSide = getTradesForOptionDimension("side");
+    const forType = getTradesForOptionDimension("type");
+
+    const strategyIds = Array.from(new Set(forStrategy.map((t) => t.strategy_id).filter((id): id is number => id != null)));
+    const strategiesFiltered = strategies.filter((s) => s.id != null && strategyIds.includes(s.id));
+    const symbols = Array.from(new Set(forSymbol.map((t) => t.symbol).filter((s): s is string => Boolean(s)))).sort();
+    const sides = Array.from(new Set(forSide.map((t) => t.side).filter(Boolean))).sort();
+    const types = Array.from(new Set(forType.map((t) => t.order_type).filter(Boolean))).sort();
+
+    const rMin = filterRMin !== "" ? parseFloat(filterRMin) : null;
+    const rMax = filterRMax !== "" ? parseFloat(filterRMax) : null;
+    const hasR = (rMin != null && !Number.isNaN(rMin)) || (rMax != null && !Number.isNaN(rMax));
+    const matchR = (t: JournalTrade) => {
+      if (!hasR || t.r_multiple == null) return true;
+      if (rMin != null && !Number.isNaN(rMin) && t.r_multiple < rMin) return false;
+      if (rMax != null && !Number.isNaN(rMax) && t.r_multiple > rMax) return false;
+      return true;
+    };
+    const matchPosition = (t: JournalTrade) => filterPositions.length === 0 || (t.position != null && t.position.trim() !== "" && filterPositions.includes(t.position.trim()));
+    const matchTimeframe = (t: JournalTrade) => filterTimeframes.length === 0 || (t.timeframe != null && t.timeframe.trim() !== "" && filterTimeframes.includes(t.timeframe.trim()));
+
+    const forPosition = journalTradesInScopeForOptions.filter((t) => matchTimeframe(t) && matchR(t));
+    const forTimeframe = journalTradesInScopeForOptions.filter((t) => matchPosition(t) && matchR(t));
+    const positions = Array.from(new Set(forPosition.map((t) => t.position).filter((p): p is string => p != null && p.trim() !== ""))).sort();
+    const timeframes = Array.from(new Set(forTimeframe.map((t) => t.timeframe).filter((tf): tf is string => tf != null && tf.trim() !== ""))).sort();
+
+    return { strategies: strategiesFiltered, symbols, sides, types, positions, timeframes };
+  }, [getTradesForOptionDimension, strategies, journalTradesInScopeForOptions, filterPositions, filterTimeframes, filterRMin, filterRMax]);
+
+  // When options shrink from cascading, remove any selected value that is no longer in the list
+  useEffect(() => {
+    const stratIds = new Set((filterOptions.strategies ?? []).filter((s) => s.id != null).map((s) => String(s.id)));
+    const symSet = new Set(filterOptions.symbols ?? []);
+    const sideSet = new Set(filterOptions.sides ?? []);
+    const typeSet = new Set(filterOptions.types ?? []);
+    const posSet = new Set(filterOptions.positions ?? []);
+    const tfSet = new Set(filterOptions.timeframes ?? []);
+    setFilterStrategyIds((prev) => (prev.some((id) => !stratIds.has(id)) ? prev.filter((id) => stratIds.has(id)) : prev));
+    setFilterSymbols((prev) => (prev.some((s) => !symSet.has(s)) ? prev.filter((s) => symSet.has(s)) : prev));
+    setFilterSides((prev) => (prev.some((s) => !sideSet.has(s)) ? prev.filter((s) => sideSet.has(s)) : prev));
+    setFilterTypes((prev) => (prev.some((t) => !typeSet.has(t)) ? prev.filter((t) => typeSet.has(t)) : prev));
+    setFilterPositions((prev) => (prev.some((p) => !posSet.has(p)) ? prev.filter((p) => posSet.has(p)) : prev));
+    setFilterTimeframes((prev) => (prev.some((t) => !tfSet.has(t)) ? prev.filter((t) => tfSet.has(t)) : prev));
+  }, [filterOptions]);
 
   // Apply current filters to trades (used for all trade-based charts; works in Demo and Real/Paper)
   const filteredTrades = useMemo(() => {
-    if (!filterStrategyId && !filterSymbol && !filterSide && !filterType && !filterPositionSize) {
+    const hasStrategy = filterStrategyIds.length > 0;
+    const hasSymbol = filterSymbols.length > 0;
+    const hasSide = filterSides.length > 0;
+    const hasType = filterTypes.length > 0;
+    const posMinUsd = filterPositionSizeMin !== "" ? parseFloat(filterPositionSizeMin) : null;
+    const posMaxUsd = filterPositionSizeMax !== "" ? parseFloat(filterPositionSizeMax) : null;
+    const hasPos = posMinUsd != null && !Number.isNaN(posMinUsd) || posMaxUsd != null && !Number.isNaN(posMaxUsd);
+    if (!hasStrategy && !hasSymbol && !hasSide && !hasType && !hasPos) {
       return trades;
     }
-    const strategyIdNum = filterStrategyId ? parseInt(filterStrategyId, 10) : null;
-    const posMin = filterPositionSize === "small" ? 0 : filterPositionSize === "medium" ? 100 : filterPositionSize === "large" ? 500 : null;
-    const posMax = filterPositionSize === "small" ? 100 : filterPositionSize === "medium" ? 500 : null;
+    const strategyIdNums = filterStrategyIds.map((id) => parseInt(id, 10)).filter((n) => !Number.isNaN(n));
     return trades.filter((t) => {
-      if (strategyIdNum != null && (t.strategy_id == null || t.strategy_id !== strategyIdNum)) return false;
-      if (filterSymbol) {
+      if (hasStrategy && (t.strategy_id == null || !strategyIdNums.includes(t.strategy_id))) return false;
+      if (hasSymbol) {
         const tSym = t.symbol ?? "";
-        if (filterSymbol !== tSym && getUnderlyingSymbol(tSym) !== getUnderlyingSymbol(filterSymbol)) return false;
+        const match = filterSymbols.some(
+          (s) => tSym === s || getUnderlyingSymbol(tSym) === getUnderlyingSymbol(s)
+        );
+        if (!match) return false;
       }
-      if (filterSide && filterSide !== (t.side ?? "")) return false;
-      if (filterType && filterType !== (t.order_type ?? "")) return false;
-      if (posMin != null && t.quantity < posMin) return false;
-      if (posMax != null && t.quantity > posMax) return false;
+      if (hasSide && filterSides.indexOf(t.side ?? "") === -1) return false;
+      if (hasType && filterTypes.indexOf(t.order_type ?? "") === -1) return false;
+      const posUsd = t.quantity * t.price;
+      if (posMinUsd != null && !Number.isNaN(posMinUsd) && posUsd < posMinUsd) return false;
+      if (posMaxUsd != null && !Number.isNaN(posMaxUsd) && posUsd > posMaxUsd) return false;
       return true;
     });
-  }, [trades, filterStrategyId, filterSymbol, filterSide, filterType, filterPositionSize]);
+  }, [trades, filterStrategyIds, filterSymbols, filterSides, filterTypes, filterPositionSizeMin, filterPositionSizeMax]);
+
+  const resetFilters = () => {
+    setFilterStrategyIds([]);
+    setFilterSymbols([]);
+    setFilterSides([]);
+    setFilterTypes([]);
+    setFilterPositionSizeMin("");
+    setFilterPositionSizeMax("");
+    setFilterPositions([]);
+    setFilterTimeframes([]);
+    setFilterRMin("");
+    setFilterRMax("");
+    setOpenFilterDropdown(null);
+    [
+      "tradebutler_analytics_filter_strategy_ids",
+      "tradebutler_analytics_filter_symbols",
+      "tradebutler_analytics_filter_sides",
+      "tradebutler_analytics_filter_types",
+      "tradebutler_analytics_filter_position_size_min",
+      "tradebutler_analytics_filter_position_size_max",
+      "tradebutler_analytics_filter_positions",
+      "tradebutler_analytics_filter_timeframes",
+      "tradebutler_analytics_filter_r_min",
+      "tradebutler_analytics_filter_r_max",
+    ].forEach((k) => localStorage.removeItem(k));
+  };
+
+  const hasAnyFilter =
+    filterStrategyIds.length > 0 ||
+    filterSymbols.length > 0 ||
+    filterSides.length > 0 ||
+    filterTypes.length > 0 ||
+    filterPositionSizeMin !== "" ||
+    filterPositionSizeMax !== "" ||
+    filterPositions.length > 0 ||
+    filterTimeframes.length > 0 ||
+    filterRMin !== "" ||
+    filterRMax !== "";
 
   const loadData = async () => {
     try {
@@ -315,23 +542,88 @@ export default function Analytics() {
         setSymbolPnL(EXAMPLE_SYMBOL_PNL as unknown as SymbolPnL[]);
         setJournalEntries(state.journalEntries as unknown as JournalEntry[]);
         setJournalTrades(state.journalTrades as unknown as JournalTrade[]);
-        setStrategies(state.strategies as unknown as Strategy[]);
-        // In Demo, when Strategy or Symbol (or any filter) is set, build equity curve from filtered demo trades
-        const hasFilter = !!(filterStrategyId || filterSymbol || filterSide || filterType || filterPositionSize);
+        const demoStrategies = state.strategies as unknown as Strategy[];
+        setStrategies(demoStrategies);
+        const filteredDemo = (() => {
+          const hasStrategy = filterStrategyIds.length > 0;
+          const hasSymbol = filterSymbols.length > 0;
+          const hasSide = filterSides.length > 0;
+          const hasType = filterTypes.length > 0;
+          const posMinUsd = filterPositionSizeMin !== "" ? parseFloat(filterPositionSizeMin) : null;
+          const posMaxUsd = filterPositionSizeMax !== "" ? parseFloat(filterPositionSizeMax) : null;
+          if (!hasStrategy && !hasSymbol && !hasSide && !hasType && (posMinUsd == null || Number.isNaN(posMinUsd)) && (posMaxUsd == null || Number.isNaN(posMaxUsd))) return demoTrades;
+          const strategyIdNums = filterStrategyIds.map((id) => parseInt(id, 10)).filter((n) => !Number.isNaN(n));
+          return demoTrades.filter((t) => {
+            if (hasStrategy && (t.strategy_id == null || !strategyIdNums.includes(t.strategy_id))) return false;
+            if (hasSymbol && !filterSymbols.some((s) => (t.symbol ?? "") === s || getUnderlyingSymbol(t.symbol ?? "") === getUnderlyingSymbol(s))) return false;
+            if (hasSide && filterSides.indexOf(t.side ?? "") === -1) return false;
+            if (hasType && filterTypes.indexOf(t.order_type ?? "") === -1) return false;
+            const posUsd = t.quantity * t.price;
+            if (posMinUsd != null && !Number.isNaN(posMinUsd) && posUsd < posMinUsd) return false;
+            if (posMaxUsd != null && !Number.isNaN(posMaxUsd) && posUsd > posMaxUsd) return false;
+            return true;
+          });
+        })();
+        const byStrategy = new Map<number | null, { count: number; winning: number; volume: number; pnl: number }>();
+        filteredDemo.forEach((t) => {
+          const sid = t.strategy_id ?? null;
+          const cur = byStrategy.get(sid) ?? { count: 0, winning: 0, volume: 0, pnl: 0 };
+          // Vary P&L by strategy: 1,3,4 positive; 2,5 negative; 6 mixed. Scale for visible disparity.
+          const sign = sid == null ? -0.5 : sid === 2 || sid === 5 ? -1 : sid === 6 ? (t.id ?? 0) % 2 === 0 ? 1 : -1 : 1;
+          const pnl = (t.quantity ?? 0) * (t.price ?? 0) * 0.018 * sign * (1 + (sid ?? 0) * 0.3);
+          byStrategy.set(sid, {
+            count: cur.count + 1,
+            winning: cur.winning + (pnl > 0 ? 1 : 0),
+            volume: cur.volume + (t.quantity ?? 0) * (t.price ?? 0),
+            pnl: cur.pnl + pnl,
+          });
+        });
+        const perf: StrategyPerformanceRow[] = [];
+        byStrategy.forEach((val, sid) => {
+          const name = sid == null ? "Unassigned" : (demoStrategies.find((s) => s.id === sid)?.name ?? `Strategy ${sid}`);
+          perf.push({
+            strategy_id: sid,
+            strategy_name: name,
+            trade_count: val.count,
+            winning_trades: val.winning,
+            total_volume: val.volume,
+            estimated_pnl: val.pnl,
+          });
+        });
+        perf.sort((a, b) => b.trade_count - a.trade_count);
+        setStrategyPerformance(perf);
+        const demoStrategyIds = demoStrategies.filter((s) => s.id != null).map((s) => s.id);
+        const demoChecklistMetrics = demoStrategyIds.flatMap((id) => getSandboxStrategyChecklistItemMetrics(id));
+        const demoByStrategy = demoStrategyIds.map((id) => ({
+          strategyId: id,
+          strategyName: demoStrategies.find((s) => s.id === id)?.name ?? `Strategy ${id}`,
+          items: getSandboxStrategyChecklistItemMetricsByOutcome(id) as ChecklistItemMetricByOutcomeRow[],
+        }));
+        setChecklistItemMetrics(demoChecklistMetrics as ChecklistItemMetricRow[]);
+        setChecklistByOutcomePerStrategy(demoByStrategy);
+        setChecklistItemMetricsByOutcome(demoByStrategy.flatMap((s) => s.items));
+        // In Demo, when any trade filter is set, build equity curve from filtered demo trades
+        const hasStrategy = filterStrategyIds.length > 0;
+        const hasSymbol = filterSymbols.length > 0;
+        const hasSide = filterSides.length > 0;
+        const hasType = filterTypes.length > 0;
+        const posMinUsd = filterPositionSizeMin !== "" ? parseFloat(filterPositionSizeMin) : null;
+        const posMaxUsd = filterPositionSizeMax !== "" ? parseFloat(filterPositionSizeMax) : null;
+        const hasPos = (posMinUsd != null && !Number.isNaN(posMinUsd)) || (posMaxUsd != null && !Number.isNaN(posMaxUsd));
+        const hasFilter = hasStrategy || hasSymbol || hasSide || hasType || hasPos;
         if (hasFilter) {
-          const strategyIdNum = filterStrategyId ? parseInt(filterStrategyId, 10) : null;
-          const posMin = filterPositionSize === "small" ? 0 : filterPositionSize === "medium" ? 100 : filterPositionSize === "large" ? 500 : null;
-          const posMax = filterPositionSize === "small" ? 100 : filterPositionSize === "medium" ? 500 : null;
+          const strategyIdNums = filterStrategyIds.map((id) => parseInt(id, 10)).filter((n) => !Number.isNaN(n));
           const filtered = demoTrades.filter((t) => {
-            if (strategyIdNum != null && (t.strategy_id == null || t.strategy_id !== strategyIdNum)) return false;
-            if (filterSymbol) {
+            if (hasStrategy && (t.strategy_id == null || !strategyIdNums.includes(t.strategy_id))) return false;
+            if (hasSymbol) {
               const tSym = t.symbol ?? "";
-              if (filterSymbol !== tSym && getUnderlyingSymbol(tSym) !== getUnderlyingSymbol(filterSymbol)) return false;
+              if (!filterSymbols.some((s) => tSym === s || getUnderlyingSymbol(tSym) === getUnderlyingSymbol(s))) return false;
             }
-            if (filterSide && filterSide !== (t.side ?? "")) return false;
-            if (filterType && filterType !== (t.order_type ?? "")) return false;
-            if (posMin != null && t.quantity < posMin) return false;
-            if (posMax != null && t.quantity > posMax) return false;
+            if (hasSide && filterSides.indexOf(t.side ?? "") === -1) return false;
+            if (hasType && filterTypes.indexOf(t.order_type ?? "") === -1) return false;
+            const posUsd = t.quantity * t.price;
+            if (posMinUsd != null && !Number.isNaN(posMinUsd) && posUsd < posMinUsd) return false;
+            if (posMaxUsd != null && !Number.isNaN(posMaxUsd) && posUsd > posMaxUsd) return false;
             return true;
           });
           const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
@@ -362,13 +654,20 @@ export default function Analytics() {
       const endDate = dateRange.end ? dateRange.end.toISOString() : null;
       
       const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
-      const filters = (filterStrategyId || filterSymbol || filterSide || filterType || filterPositionSize) ? {
-        strategy_id: filterStrategyId ? parseInt(filterStrategyId, 10) : undefined,
-        symbol: filterSymbol || undefined,
-        side: filterSide || undefined,
-        order_type: filterType || undefined,
-        position_size_min: filterPositionSize === "small" ? 0 : filterPositionSize === "medium" ? 100 : filterPositionSize === "large" ? 500 : undefined,
-        position_size_max: filterPositionSize === "small" ? 100 : filterPositionSize === "medium" ? 500 : undefined,
+      const hasStrategy = filterStrategyIds.length > 0;
+      const hasSymbol = filterSymbols.length > 0;
+      const hasSide = filterSides.length > 0;
+      const hasType = filterTypes.length > 0;
+      const posMinUsdVal = filterPositionSizeMin !== "" ? parseFloat(filterPositionSizeMin) : null;
+      const posMaxUsdVal = filterPositionSizeMax !== "" ? parseFloat(filterPositionSizeMax) : null;
+      const hasPosUsd = (posMinUsdVal != null && !Number.isNaN(posMinUsdVal)) || (posMaxUsdVal != null && !Number.isNaN(posMaxUsdVal));
+      const filters = (hasStrategy || hasSymbol || hasSide || hasType || hasPosUsd) ? {
+        strategy_ids: hasStrategy ? filterStrategyIds.map((id) => parseInt(id, 10)).filter((n) => !Number.isNaN(n)) : undefined,
+        symbols: hasSymbol ? filterSymbols : undefined,
+        sides: hasSide ? filterSides : undefined,
+        order_types: hasType ? filterTypes : undefined,
+        position_size_min_usd: posMinUsdVal != null && !Number.isNaN(posMinUsdVal) ? posMinUsdVal : undefined,
+        position_size_max_usd: posMaxUsdVal != null && !Number.isNaN(posMaxUsdVal) ? posMaxUsdVal : undefined,
       } : undefined;
       const [tradesData, pnlData, equityData, journalEntriesData, journalTradesData, strategiesData] = await Promise.all([
         invoke<Trade[]>("get_trades", paperArgs),
@@ -384,6 +683,37 @@ export default function Analytics() {
       setJournalEntries(journalEntriesData);
       setJournalTrades(journalTradesData);
       setStrategies(strategiesData);
+
+      const perf = await invoke<StrategyPerformanceRow[]>("get_strategy_performance", {
+        pairingMethod,
+        startDate,
+        endDate,
+        ...paperArgs,
+      }).catch(() => [] as StrategyPerformanceRow[]);
+      setStrategyPerformance(Array.isArray(perf) ? perf : []);
+
+      const strategyIds = (strategiesData as Strategy[]).filter((s) => s.id != null).map((s) => s.id);
+      const strategiesDataTyped = strategiesData as Strategy[];
+      const [checklistResults, checklistByOutcomeResults] = await Promise.all([
+        Promise.all(
+          strategyIds.map((id) =>
+            invoke<ChecklistItemMetricRow[]>("get_strategy_checklist_item_metrics", { strategyId: id }).catch(() => [])
+          )
+        ),
+        Promise.all(
+          strategyIds.map((id) =>
+            invoke<ChecklistItemMetricByOutcomeRow[]>("get_strategy_checklist_item_metrics_by_outcome", { strategyId: id }).catch(() => [])
+          )
+        ),
+      ]);
+      setChecklistItemMetrics(checklistResults.flat());
+      const byStrategy = strategyIds.map((id, i) => ({
+        strategyId: id,
+        strategyName: strategiesDataTyped.find((s) => s.id === id)?.name ?? `Strategy ${id}`,
+        items: (checklistByOutcomeResults[i] ?? []) as ChecklistItemMetricByOutcomeRow[],
+      }));
+      setChecklistByOutcomePerStrategy(byStrategy);
+      setChecklistItemMetricsByOutcome(byStrategy.flatMap((s) => s.items));
     } catch (error) {
       console.error("Error loading data:", error);
     } finally {
@@ -635,51 +965,54 @@ export default function Analytics() {
     return { symbolData, sideData: [{ name: "BUY", value: sideCounts.BUY }, { name: "SELL", value: sideCounts.SELL }] };
   };
 
-  // Profit & Loss by Symbol: when symbol filter is set, show only that symbol (backend already filters in Real/Paper; client-side filter for consistency and Demo)
+  // Profit & Loss by Symbol: when symbol filter is set, show only selected symbols (backend filters in Real/Paper; client-side for consistency and Demo)
   const displaySymbolPnL = useMemo(() => {
-    if (!filterSymbol) return symbolPnL;
-    return (symbolPnL ?? []).filter(
-      (p) =>
-        p.symbol === filterSymbol || getUnderlyingSymbol(p.symbol) === getUnderlyingSymbol(filterSymbol)
+    if (filterSymbols.length === 0) return symbolPnL ?? [];
+    return (symbolPnL ?? []).filter((p) =>
+      filterSymbols.some(
+        (s) => p.symbol === s || getUnderlyingSymbol(p.symbol) === getUnderlyingSymbol(s)
+      )
     );
-  }, [symbolPnL, filterSymbol]);
+  }, [symbolPnL, filterSymbols]);
 
-  // Journal entries/trades filtered by strategy and/or symbol
-  const filteredJournalEntries = useMemo(() => {
-    let entries = journalEntries;
-    if (filterStrategyId) {
-      const sid = parseInt(filterStrategyId, 10);
-      if (!Number.isNaN(sid)) {
-        entries = entries.filter((e) => e.strategy_id != null && e.strategy_id === sid);
-      }
-    }
-    if (filterSymbol) {
-      const entryIdsWithSymbol = new Set(
-        journalTrades
-          .filter(
-            (t) =>
-              t.symbol != null &&
-              (t.symbol === filterSymbol || getUnderlyingSymbol(t.symbol) === getUnderlyingSymbol(filterSymbol))
-          )
-          .map((t) => t.journal_entry_id)
-      );
-      entries = entries.filter((e) => entryIdsWithSymbol.has(e.id));
-    }
-    return entries;
-  }, [journalEntries, journalTrades, filterStrategyId, filterSymbol]);
+  // Journal: first filter trades by strategy/symbol/position/timeframe/R, then entries = those that have at least one such trade
   const filteredJournalTrades = useMemo(() => {
-    const entryIds = new Set(filteredJournalEntries.map((e) => e.id));
+    const rMin = filterRMin !== "" ? parseFloat(filterRMin) : null;
+    const rMax = filterRMax !== "" ? parseFloat(filterRMax) : null;
+    const hasR = (rMin != null && !Number.isNaN(rMin)) || (rMax != null && !Number.isNaN(rMax));
+    const entryById = new Map(journalEntries.map((e) => [e.id, e]));
     return journalTrades.filter((t) => {
-      if (!entryIds.has(t.journal_entry_id)) return false;
-      if (filterSymbol) {
-        return (
-          t.symbol != null &&
-          (t.symbol === filterSymbol || getUnderlyingSymbol(t.symbol) === getUnderlyingSymbol(filterSymbol))
+      const entry = entryById.get(t.journal_entry_id);
+      if (!entry) return false;
+      if (filterStrategyIds.length > 0) {
+        const sids = filterStrategyIds.map((id) => parseInt(id, 10)).filter((n) => !Number.isNaN(n));
+        if (sids.length > 0 && (entry.strategy_id == null || !sids.includes(entry.strategy_id))) return false;
+      }
+      if (filterSymbols.length > 0) {
+        const match = t.symbol != null && filterSymbols.some(
+          (s) => t.symbol === s || getUnderlyingSymbol(t.symbol) === getUnderlyingSymbol(s)
         );
+        if (!match) return false;
+      }
+      if (filterPositions.length > 0) {
+        const pos = (t.position ?? "").trim();
+        if (!pos || !filterPositions.includes(pos)) return false;
+      }
+      if (filterTimeframes.length > 0) {
+        const tf = (t.timeframe ?? "").trim();
+        if (!tf || !filterTimeframes.includes(tf)) return false;
+      }
+      if (hasR && t.r_multiple != null) {
+        if (rMin != null && !Number.isNaN(rMin) && t.r_multiple < rMin) return false;
+        if (rMax != null && !Number.isNaN(rMax) && t.r_multiple > rMax) return false;
       }
       return true;
     });
-  }, [journalTrades, filteredJournalEntries, filterSymbol]);
+  }, [journalTrades, journalEntries, filterStrategyIds, filterSymbols, filterPositions, filterTimeframes, filterRMin, filterRMax]);
+  const filteredJournalEntries = useMemo(() => {
+    const entryIds = new Set(filteredJournalTrades.map((t) => t.journal_entry_id));
+    return journalEntries.filter((e) => entryIds.has(e.id));
+  }, [journalEntries, filteredJournalTrades]);
 
   const processJournalData = () => {
     if (filteredJournalEntries.length === 0 && filteredJournalTrades.length === 0) {
@@ -740,6 +1073,58 @@ export default function Analytics() {
     return { entriesByMonth, positionsData, outcomeData };
   };
 
+  const strategyFindingsData = useMemo(() => {
+    const tradesByStrategy = (strategyPerformance ?? [])
+      .filter((p) => p.trade_count > 0)
+      .map((p) => ({ name: p.strategy_name || "Unassigned", count: p.trade_count }))
+      .sort((a, b) => b.count - a.count);
+    const profitableTradesByStrategy = (strategyPerformance ?? [])
+      .filter((p) => p.trade_count > 0)
+      .map((p) => ({
+        name: p.strategy_name || "Unassigned",
+        winning: p.winning_trades ?? 0,
+        losing: (p.trade_count ?? 0) - (p.winning_trades ?? 0),
+      }))
+      .sort((a, b) => b.winning + b.losing - (a.winning + a.losing));
+    const profitByStrategy = (strategyPerformance ?? [])
+      .filter((p) => p.trade_count > 0)
+      .map((p) => ({ name: p.strategy_name || "Unassigned", profit: p.estimated_pnl ?? 0 }))
+      .sort((a, b) => Math.abs(b.profit) - Math.abs(a.profit));
+    const byChecklistType = new Map<string, number>();
+    (checklistItemMetrics ?? []).forEach((row) => {
+      const type = row.checklist_type || "other";
+      byChecklistType.set(type, (byChecklistType.get(type) ?? 0) + (row.times_checked ?? 0));
+    });
+    const checklistTypeData = Array.from(byChecklistType.entries())
+      .map(([checklist_type, count]) => ({
+        name: checklist_type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
+        count,
+      }))
+      .sort((a, b) => b.count - a.count);
+    const topWinningSubItemsByStrategy: Array<{ strategyName: string; checklists: Array<{ checklistTypeDisplay: string; topItemText: string; good: number }> }> = [];
+    (checklistByOutcomePerStrategy ?? []).forEach(({ strategyName, items }) => {
+      const byType = new Map<string, ChecklistItemMetricByOutcomeRow[]>();
+      items.forEach((row) => {
+        const type = row.checklist_type || "other";
+        if (!byType.has(type)) byType.set(type, []);
+        byType.get(type)!.push(row);
+      });
+      const checklists: Array<{ checklistTypeDisplay: string; topItemText: string; good: number }> = [];
+      byType.forEach((rows, type) => {
+        const top = rows.reduce((best, r) => ((r.times_checked_good ?? 0) > (best.times_checked_good ?? 0) ? r : best), rows[0]);
+        if (top && (top.times_checked_good ?? 0) > 0) {
+          checklists.push({
+            checklistTypeDisplay: type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
+            topItemText: (top.item_text || `Item ${top.checklist_item_id}`).trim(),
+            good: top.times_checked_good ?? 0,
+          });
+        }
+      });
+      if (checklists.length > 0) topWinningSubItemsByStrategy.push({ strategyName, checklists });
+    });
+    return { tradesByStrategy, profitableTradesByStrategy, profitByStrategy, checklistTypeData, topWinningSubItemsByStrategy };
+  }, [strategyPerformance, checklistItemMetrics, checklistByOutcomePerStrategy]);
+
   if (loading) {
     return (
       <div style={{ padding: "40px", textAlign: "center" }}>
@@ -797,114 +1182,236 @@ export default function Analytics() {
         />
       </div>
 
-      {/* Analytics filters: drive Equity Curve & Drawdown (and other sections); options from current mode's data */}
-      <div style={{ marginBottom: "24px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px 20px" }}>
-        <span style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-secondary)", marginRight: "4px" }}>Filters:</span>
-        <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Strategy</span>
-          <select
-            value={filterStrategyId}
-            onChange={(e) => setFilterStrategyId(e.target.value)}
-            style={{
-              padding: "6px 10px",
-              fontSize: "13px",
-              background: "var(--bg-tertiary)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "6px",
-              color: "var(--text-primary)",
-              minWidth: "120px",
-            }}
-          >
-            <option value="">All</option>
-            {(filterOptions.strategies ?? []).filter((s) => s.id != null).map((s) => (
-              <option key={s.id} value={String(s.id)}>{s.name ?? ""}</option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Symbol</span>
-          <select
-            value={filterSymbol}
-            onChange={(e) => setFilterSymbol(e.target.value)}
-            style={{
-              padding: "6px 10px",
-              fontSize: "13px",
-              background: "var(--bg-tertiary)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "6px",
-              color: "var(--text-primary)",
-              minWidth: "120px",
-            }}
-          >
-            <option value="">All</option>
-            {(filterOptions.symbols ?? []).map((sym) => (
-              <option key={String(sym)} value={String(sym)}>{String(sym)}</option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Side</span>
-          <select
-            value={filterSide}
-            onChange={(e) => setFilterSide(e.target.value)}
-            style={{
-              padding: "6px 10px",
-              fontSize: "13px",
-              background: "var(--bg-tertiary)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "6px",
-              color: "var(--text-primary)",
-              minWidth: "100px",
-            }}
-          >
-            <option value="">All</option>
-            {filterOptions.sides.map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Type</span>
-          <select
-            value={filterType}
-            onChange={(e) => setFilterType(e.target.value)}
-            style={{
-              padding: "6px 10px",
-              fontSize: "13px",
-              background: "var(--bg-tertiary)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "6px",
-              color: "var(--text-primary)",
-              minWidth: "100px",
-            }}
-          >
-            <option value="">All</option>
-            {filterOptions.types.map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Position size</span>
-          <select
-            value={filterPositionSize}
-            onChange={(e) => setFilterPositionSize(e.target.value)}
-            style={{
-              padding: "6px 10px",
-              fontSize: "13px",
-              background: "var(--bg-tertiary)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "6px",
-              color: "var(--text-primary)",
-              minWidth: "140px",
-            }}
-          >
-            <option value="">All</option>
-            <option value="small">Small (0–100)</option>
-            <option value="medium">Medium (100–500)</option>
-            <option value="large">Large (500+)</option>
-          </select>
-        </label>
+      {/* Filters section: card-style container, Trade and Journal side-by-side to use horizontal space */}
+      <div
+        ref={filtersBarRef}
+        style={{
+          marginBottom: "30px",
+          backgroundColor: "var(--bg-secondary)",
+          border: "1px solid var(--border-color)",
+          borderRadius: "8px",
+          padding: "12px 14px",
+          position: "relative",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px", marginBottom: "10px" }}>
+          <h2 style={{ fontSize: "16px", fontWeight: "600", margin: 0, color: "var(--text-primary)" }}>Filters</h2>
+          {hasAnyFilter && (
+            <button
+              type="button"
+              onClick={resetFilters}
+              style={{
+                padding: "4px 10px",
+                fontSize: "12px",
+                color: "var(--text-secondary)",
+                background: "transparent",
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                cursor: "pointer",
+              }}
+            >
+              Reset
+            </button>
+          )}
+        </div>
+        {(() => {
+          const dropdownStyle: React.CSSProperties = {
+            padding: "5px 8px",
+            fontSize: "12px",
+            background: "var(--bg-tertiary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "6px",
+            color: "var(--text-primary)",
+            minWidth: "90px",
+            cursor: "pointer",
+            textAlign: "left",
+          };
+          const popoverStyle: React.CSSProperties = {
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            marginTop: "2px",
+            background: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "8px",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+            padding: "6px",
+            maxHeight: "200px",
+            overflowY: "auto",
+            zIndex: 20,
+          };
+          const inputGroupStyle: React.CSSProperties = {
+            display: "flex",
+            alignItems: "center",
+            gap: "4px",
+          };
+          const numInputStyle: React.CSSProperties = {
+            width: "56px",
+            padding: "5px 6px",
+            backgroundColor: "var(--bg-tertiary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "6px",
+            color: "var(--text-primary)",
+            fontSize: "12px",
+            outline: "none",
+          };
+          const renderMultiSelect = (
+            key: string,
+            label: string,
+            options: { value: string; label: string }[],
+            selected: string[],
+            toggle: (value: string) => void
+          ) => (
+            <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                onClick={() => setOpenFilterDropdown((k) => (k === key ? null : key))}
+                style={dropdownStyle}
+              >
+                {label}{selected.length > 0 ? ` (${selected.length})` : ""}
+              </button>
+              {openFilterDropdown === key && (
+                <div style={popoverStyle}>
+                  {options.map((opt) => (
+                    <label key={opt.value} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", padding: "2px 0" }}>
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(opt.value)}
+                        onChange={() => toggle(opt.value)}
+                      />
+                      <span style={{ fontSize: "12px" }}>{opt.label}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+          const renderMulti = (
+            key: string,
+            label: string,
+            options: string[],
+            selected: string[],
+            toggle: (value: string) => void
+          ) => (
+            <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                onClick={() => setOpenFilterDropdown((k) => (k === key ? null : key))}
+                style={dropdownStyle}
+              >
+                {label}{selected.length > 0 ? ` (${selected.length})` : ""}
+              </button>
+              {openFilterDropdown === key && (
+                <div style={popoverStyle}>
+                  {options.map((opt) => (
+                    <label key={opt} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", padding: "2px 0" }}>
+                      <input type="checkbox" checked={selected.includes(opt)} onChange={() => toggle(opt)} />
+                      <span style={{ fontSize: "12px" }}>{opt}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+          const sectionLabelStyle: React.CSSProperties = {
+            fontSize: "11px",
+            fontWeight: "600",
+            color: "var(--text-secondary)",
+            marginBottom: "6px",
+            textTransform: "uppercase",
+            letterSpacing: "0.04em",
+          };
+          const rowStyle: React.CSSProperties = {
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: "8px 12px",
+          };
+          return (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "16px 24px", alignItems: "flex-start" }}>
+              <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+                <div style={sectionLabelStyle}>Trade</div>
+                <div style={rowStyle}>
+                  {renderMultiSelect(
+                    "strategy",
+                    "Strategy",
+                    (filterOptions.strategies ?? []).filter((s) => s.id != null).map((s) => ({ value: String(s.id), label: s.name ?? "" })),
+                    filterStrategyIds,
+                    (val) => setFilterStrategyIds((prev) => (prev.includes(val) ? prev.filter((x) => x !== val) : [...prev, val]))
+                  )}
+                  {renderMultiSelect(
+                    "symbol",
+                    "Symbol",
+                    (filterOptions.symbols ?? []).map((s) => ({ value: s, label: s })),
+                    filterSymbols,
+                    (val) => setFilterSymbols((prev) => (prev.includes(val) ? prev.filter((x) => x !== val) : [...prev, val]))
+                  )}
+                  {renderMultiSelect(
+                    "side",
+                    "Side",
+                    filterOptions.sides.map((s) => ({ value: s, label: s })),
+                    filterSides,
+                    (val) => setFilterSides((prev) => (prev.includes(val) ? prev.filter((x) => x !== val) : [...prev, val]))
+                  )}
+                  {renderMultiSelect(
+                    "type",
+                    "Type",
+                    filterOptions.types.map((t) => ({ value: t, label: t })),
+                    filterTypes,
+                    (val) => setFilterTypes((prev) => (prev.includes(val) ? prev.filter((x) => x !== val) : [...prev, val]))
+                  )}
+                  <div style={inputGroupStyle}>
+                    <span style={{ fontSize: "11px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>Size $</span>
+                    <input
+                      type="number"
+                      placeholder="Min"
+                      value={filterPositionSizeMin}
+                      onChange={(e) => setFilterPositionSizeMin(e.target.value)}
+                      style={numInputStyle}
+                      step="any"
+                    />
+                    <span style={{ color: "var(--text-secondary)", fontSize: "11px" }}>–</span>
+                    <input
+                      type="number"
+                      placeholder="Max"
+                      value={filterPositionSizeMax}
+                      onChange={(e) => setFilterPositionSizeMax(e.target.value)}
+                      style={numInputStyle}
+                      step="any"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+                <div style={sectionLabelStyle}>Journal</div>
+                <div style={rowStyle}>
+                  {renderMulti("position", "Position", filterOptions.positions ?? [], filterPositions, (val) => setFilterPositions((prev) => (prev.includes(val) ? prev.filter((x) => x !== val) : [...prev, val])))}
+                  {renderMulti("timeframe", "Timeframe", filterOptions.timeframes ?? [], filterTimeframes, (val) => setFilterTimeframes((prev) => (prev.includes(val) ? prev.filter((x) => x !== val) : [...prev, val])))}
+                  <div style={inputGroupStyle}>
+                    <span style={{ fontSize: "11px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>R</span>
+                    <input
+                      type="number"
+                      placeholder="Min"
+                      value={filterRMin}
+                      onChange={(e) => setFilterRMin(e.target.value)}
+                      style={{ ...numInputStyle, width: "48px" }}
+                      step="any"
+                    />
+                    <span style={{ color: "var(--text-secondary)", fontSize: "11px" }}>–</span>
+                    <input
+                      type="number"
+                      placeholder="Max"
+                      value={filterRMax}
+                      onChange={(e) => setFilterRMax(e.target.value)}
+                      style={{ ...numInputStyle, width: "48px" }}
+                      step="any"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {trades.length === 0 ? (
@@ -1391,6 +1898,174 @@ export default function Analytics() {
             </ResponsiveContainer>
               );
             })()}
+          </div>
+
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              padding: "20px",
+            }}
+          >
+            <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "16px" }}>
+              Strategy findings
+            </h2>
+            <p style={{ color: "var(--text-secondary)", fontSize: "13px", marginBottom: "16px" }}>
+              Patterns from strategy parameters and checklist usage compared to your trades.
+            </p>
+            {strategyPerformance.length === 0 && checklistItemMetrics.length === 0 ? (
+              <p style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
+                Assign strategies to trades and use checklists in journal entries to see findings here.
+              </p>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "24px" }}>
+                <div>
+                  <h3 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "8px" }}>
+                    Trades by strategy
+                  </h3>
+                  {strategyFindingsData.tradesByStrategy.length === 0 ? (
+                    <p style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
+                      No trades with strategies in the selected timeframe.
+                    </p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <BarChart data={strategyFindingsData.tradesByStrategy} margin={STRATEGY_CHART_MARGIN}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={STRATEGY_CHART_AXIS_PROPS.tick} angle={STRATEGY_CHART_AXIS_PROPS.angle} textAnchor={STRATEGY_CHART_AXIS_PROPS.textAnchor} height={STRATEGY_CHART_AXIS_PROPS.height} interval={0} />
+                        <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
+                        <Tooltip
+                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
+                          contentStyle={{
+                            backgroundColor: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            color: "var(--text-primary)",
+                          }}
+                          formatter={(value: unknown) => [value, "Trades"]}
+                        />
+                        <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+
+                <div>
+                  <h3 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "8px" }}>
+                    Checklist usage in journals
+                  </h3>
+                  {strategyFindingsData.checklistTypeData.length === 0 ? (
+                    <p style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
+                      No checklist usage recorded in journal entries for this timeframe.
+                    </p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <BarChart data={strategyFindingsData.checklistTypeData} margin={STRATEGY_CHART_MARGIN}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={STRATEGY_CHART_AXIS_PROPS.tick} angle={STRATEGY_CHART_AXIS_PROPS.angle} textAnchor={STRATEGY_CHART_AXIS_PROPS.textAnchor} height={STRATEGY_CHART_AXIS_PROPS.height} interval={0} />
+                        <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
+                        <Tooltip
+                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
+                          contentStyle={{
+                            backgroundColor: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            color: "var(--text-primary)",
+                          }}
+                          formatter={(value: unknown) => [value, "Times used"]}
+                        />
+                        <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+
+                <div>
+                  <h3 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "8px" }}>
+                    Profitable trades by strategy
+                  </h3>
+                  {strategyFindingsData.profitableTradesByStrategy.length === 0 ? (
+                    <p style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
+                      No profitable trades in the selected timeframe.
+                    </p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <BarChart data={strategyFindingsData.profitableTradesByStrategy} margin={STRATEGY_CHART_MARGIN}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={STRATEGY_CHART_AXIS_PROPS.tick} angle={STRATEGY_CHART_AXIS_PROPS.angle} textAnchor={STRATEGY_CHART_AXIS_PROPS.textAnchor} height={STRATEGY_CHART_AXIS_PROPS.height} interval={0} />
+                        <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
+                        <Tooltip
+                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
+                          contentStyle={{
+                            backgroundColor: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            color: "var(--text-primary)",
+                          }}
+                          formatter={(value: unknown) => [value, ""]}
+                          labelFormatter={(label) => `${label} (Winning / Losing)`}
+                        />
+                        <Bar dataKey="winning" fill="var(--success, #22c55e)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--success, #22c55e)" strokeWidth={1} />
+                        <Bar dataKey="losing" fill="var(--danger, #ef4444)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--danger, #ef4444)" strokeWidth={1} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+
+                <div>
+                  <h3 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "8px" }}>
+                    Profit by strategy
+                  </h3>
+                  {strategyFindingsData.profitByStrategy.length === 0 ? (
+                    <p style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
+                      No profit data in the selected timeframe.
+                    </p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <BarChart data={strategyFindingsData.profitByStrategy} margin={STRATEGY_CHART_MARGIN}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={STRATEGY_CHART_AXIS_PROPS.tick} angle={STRATEGY_CHART_AXIS_PROPS.angle} textAnchor={STRATEGY_CHART_AXIS_PROPS.textAnchor} height={STRATEGY_CHART_AXIS_PROPS.height} interval={0} />
+                        <YAxis stroke="var(--text-secondary)" tickFormatter={(v) => typeof v === "number" ? (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v)) : String(v)} />
+                        <Tooltip
+                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
+                          contentStyle={{
+                            backgroundColor: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            color: "var(--text-primary)",
+                          }}
+                          formatter={(value: unknown) => [typeof value === "number" ? formatWithCommas(value) : value, "Profit"]}
+                        />
+                        <Bar dataKey="profit" fillOpacity={BAR_FILL_OPACITY} strokeWidth={1}>
+                          {strategyFindingsData.profitByStrategy.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.profit >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} stroke={entry.profit >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              </div>
+            )}
+            {strategyFindingsData.topWinningSubItemsByStrategy.length > 0 && (
+              <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: "1px solid var(--border-color)" }}>
+                <h3 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>
+                  Top winning sub checklist item from this checklist from this strategy
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                  {strategyFindingsData.topWinningSubItemsByStrategy.map(({ strategyName, checklists }) => (
+                    <div key={strategyName} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      <div style={{ fontWeight: "600", fontSize: "13px", color: "var(--accent)" }}>{strategyName}</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "12px 20px", paddingLeft: "12px", borderLeft: "2px solid var(--border-color)" }}>
+                        {checklists.map(({ checklistTypeDisplay, topItemText, good }) => (
+                          <div key={`${strategyName}-${checklistTypeDisplay}`} style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                            <span style={{ color: "var(--text-primary)", marginRight: "6px" }}>{checklistTypeDisplay}:</span>
+                            <span style={{ color: "var(--success, #22c55e)" }}>{topItemText}</span>
+                            <span style={{ marginLeft: "6px", opacity: 0.9 }}>({good} with winning trades)</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           <div

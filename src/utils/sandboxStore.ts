@@ -19,7 +19,7 @@ import { getDemoEmotionSurveys, type DemoEmotionSurvey } from "../data/sandboxSu
 
 const STORAGE_KEY = "tradebutler_sandbox_store_v2";
 const STORAGE_VERSION_KEY = "tradebutler_sandbox_store_version";
-const SANDBOX_STORE_VERSION = 4; // Bump to re-seed with more extreme demo metrics (reds/greens, 0-10 scale)
+const SANDBOX_STORE_VERSION = 5; // Bump to re-seed with fuller Strategy findings demo (disparity, good/bad)
 const LEGACY_KEY = "tradebutler_sandbox_store_v1";
 const EXAMPLE_STORE_KEY = "tradebutler_example_store_v1";
 
@@ -530,14 +530,36 @@ export function getSandboxStrategySurveyMetricsWithValues(strategyId: number) {
 
 export function getSandboxStrategyChecklistItemMetrics(strategyId: number) {
   const items = SANDBOX_STRATEGY_CHECKLIST_ITEMS.filter((i) => i.strategy_id === strategyId && i.checklist_type !== "survey");
-  return items.map((i) => ({
-    checklist_item_id: i.id,
-    item_text: i.item_text,
-    checklist_type: i.checklist_type,
-    times_checked: 12 + (i.id % 5),
-    avg_performance: 1.2 + (i.id % 3) * 0.5,
-    performance_kind: "r_multiple",
-  }));
+  return items.map((i, idx) => {
+    const base = 20 + (strategyId * 7) + (i.id % 11);
+    const times_checked = base * (3 + (idx % 4));
+    return {
+      checklist_item_id: i.id,
+      item_text: i.item_text,
+      checklist_type: i.checklist_type,
+      times_checked,
+      avg_performance: 1.2 + (i.id % 3) * 0.5,
+      performance_kind: "r_multiple",
+    };
+  });
+}
+
+/** Checklist item metrics split by outcome: times used with winning vs losing trades (demo data). */
+export function getSandboxStrategyChecklistItemMetricsByOutcome(strategyId: number) {
+  const items = SANDBOX_STRATEGY_CHECKLIST_ITEMS.filter((i) => i.strategy_id === strategyId && i.checklist_type !== "survey");
+  return items.map((i, idx) => {
+    const total = 25 + (strategyId * 8) + (i.id % 13);
+    const goodShare = 0.25 + (idx % 7) * 0.12;
+    const good = Math.max(0, Math.min(total, Math.floor(total * goodShare)));
+    const bad = total - good;
+    return {
+      checklist_item_id: i.id,
+      item_text: i.item_text,
+      checklist_type: i.checklist_type,
+      times_checked_good: good,
+      times_checked_bad: bad,
+    };
+  });
 }
 
 export function getSandboxCustomSurveyMetrics(strategyId: number) {

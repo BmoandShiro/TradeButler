@@ -1,20 +1,8 @@
 import React, { Component, type ReactNode } from "react";
 
-const FILTER_KEYS = [
-  "tradebutler_analytics_filter_strategy_ids",
-  "tradebutler_analytics_filter_symbols",
-  "tradebutler_analytics_filter_sides",
-  "tradebutler_analytics_filter_types",
-  "tradebutler_analytics_filter_position_size_min",
-  "tradebutler_analytics_filter_position_size_max",
-  "tradebutler_analytics_filter_positions",
-  "tradebutler_analytics_filter_timeframes",
-  "tradebutler_analytics_filter_r_min",
-  "tradebutler_analytics_filter_r_max",
-];
-
 interface Props {
   children: ReactNode;
+  pageName?: string;
 }
 
 interface State {
@@ -23,7 +11,7 @@ interface State {
   remountKey: number;
 }
 
-export class AnalyticsErrorBoundary extends Component<Props, State> {
+export class PageErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props);
     this.state = { hasError: false, error: null, remountKey: 0 };
@@ -34,28 +22,28 @@ export class AnalyticsErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error("Analytics error:", error, errorInfo);
+    console.error("Page error:", error, errorInfo);
   }
 
-  clearFiltersAndRetry = () => {
-    FILTER_KEYS.forEach((key) => localStorage.removeItem(key));
+  retry = () => {
     this.setState((prev: State) => ({ ...prev, hasError: false, error: null, remountKey: prev.remountKey + 1 }));
   };
 
   render() {
     if (this.state.hasError && this.state.error) {
+      const pageName = this.props.pageName ?? "This page";
       return (
         <div style={{ padding: "30px", maxWidth: "560px" }}>
           <h1 style={{ fontSize: "24px", fontWeight: "600", marginBottom: "12px" }}>Something went wrong</h1>
           <p style={{ color: "var(--text-secondary)", marginBottom: "16px", fontSize: "14px" }}>
-            The analytics page hit an error, often when a filter (e.g. Symbol) is applied. Clearing filters and retrying usually fixes it.
+            {pageName} hit an error. Try retrying or switching data mode (Demo / Real / Paper).
           </p>
           <pre style={{ background: "var(--bg-tertiary)", padding: "12px", borderRadius: "8px", fontSize: "12px", overflow: "auto", marginBottom: "16px" }}>
             {this.state.error.message}
           </pre>
           <button
             type="button"
-            onClick={this.clearFiltersAndRetry}
+            onClick={this.retry}
             style={{
               padding: "10px 20px",
               fontSize: "14px",
@@ -67,7 +55,7 @@ export class AnalyticsErrorBoundary extends Component<Props, State> {
               cursor: "pointer",
             }}
           >
-            Clear filters and retry
+            Retry
           </button>
         </div>
       );

@@ -1212,12 +1212,18 @@ pub fn get_symbol_pnl(
         paired_trades
     };
     
-    // Apply strategy/symbol/side/order_type/position_size filters (same as get_equity_curve)
+    // Apply strategy/symbol/side/order_type/position_size filters (same as get_equity_curve; multi-select + position size USD)
     if let Some(ref f) = filters {
-        let has_filter = f.strategy_id.is_some() || f.symbol.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+        let has_multi = f.strategy_ids.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+            || f.symbols.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+            || f.sides.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+            || f.order_types.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+        let has_single = f.strategy_id.is_some() || f.symbol.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
             || f.side.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
-            || f.order_type.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
-            || f.position_size_min.is_some() || f.position_size_max.is_some();
+            || f.order_type.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+        let has_pos = f.position_size_min.is_some() || f.position_size_max.is_some()
+            || f.position_size_min_usd.is_some() || f.position_size_max_usd.is_some();
+        let has_filter = has_multi || has_single || has_pos;
         if has_filter {
             let entry_ids: Vec<i64> = filtered_paired_trades.iter().map(|p| p.entry_trade_id).collect();
             let entry_trades = get_trades_by_ids(&entry_ids).map_err(|e| e.to_string())?;
@@ -1225,12 +1231,29 @@ pub fn get_symbol_pnl(
                 .into_iter()
                 .filter(|pair| {
                     if let Some(entry) = entry_trades.get(&pair.entry_trade_id) {
-                        if let Some(sid) = f.strategy_id {
+                        if let Some(ref ids) = f.strategy_ids {
+                            if !ids.is_empty() {
+                                let ok = pair.strategy_id.map_or(false, |id| ids.contains(&id));
+                                if !ok {
+                                    return false;
+                                }
+                            }
+                        } else if let Some(sid) = f.strategy_id {
                             if pair.strategy_id != Some(sid) {
                                 return false;
                             }
                         }
-                        if let Some(ref sym) = f.symbol {
+                        if let Some(ref syms) = f.symbols {
+                            if !syms.is_empty() {
+                                let pair_underlying = get_underlying_symbol(&pair.symbol);
+                                let match_ = syms.iter().any(|s| {
+                                    pair.symbol == *s || pair_underlying == get_underlying_symbol(s)
+                                });
+                                if !match_ {
+                                    return false;
+                                }
+                            }
+                        } else if let Some(ref sym) = f.symbol {
                             if !sym.is_empty() {
                                 let pair_underlying = get_underlying_symbol(&pair.symbol);
                                 let filter_underlying = get_underlying_symbol(sym);
@@ -1239,24 +1262,46 @@ pub fn get_symbol_pnl(
                                 }
                             }
                         }
-                        if let Some(ref side) = f.side {
+                        if let Some(ref sides) = f.sides {
+                            if !sides.is_empty() && !sides.iter().any(|s| entry.side.eq_ignore_ascii_case(s)) {
+                                return false;
+                            }
+                        } else if let Some(ref side) = f.side {
                             if !side.is_empty() && !entry.side.eq_ignore_ascii_case(side) {
                                 return false;
                             }
                         }
-                        if let Some(ref ot) = f.order_type {
+                        if let Some(ref ots) = f.order_types {
+                            if !ots.is_empty() && !ots.iter().any(|o| entry.order_type.eq_ignore_ascii_case(o)) {
+                                return false;
+                            }
+                        } else if let Some(ref ot) = f.order_type {
                             if !ot.is_empty() && !entry.order_type.eq_ignore_ascii_case(ot) {
                                 return false;
                             }
                         }
-                        if let Some(min_q) = f.position_size_min {
-                            if pair.quantity < min_q {
-                                return false;
+                        if f.position_size_min_usd.is_some() || f.position_size_max_usd.is_some() {
+                            let pos_usd = pair.quantity * pair.entry_price;
+                            if let Some(min_u) = f.position_size_min_usd {
+                                if pos_usd < min_u {
+                                    return false;
+                                }
                             }
-                        }
-                        if let Some(max_q) = f.position_size_max {
-                            if pair.quantity > max_q {
-                                return false;
+                            if let Some(max_u) = f.position_size_max_usd {
+                                if pos_usd > max_u {
+                                    return false;
+                                }
+                            }
+                        } else {
+                            if let Some(min_q) = f.position_size_min {
+                                if pair.quantity < min_q {
+                                    return false;
+                                }
+                            }
+                            if let Some(max_q) = f.position_size_max {
+                                if pair.quantity > max_q {
+                                    return false;
+                                }
                             }
                         }
                         true
@@ -1265,16 +1310,33 @@ pub fn get_symbol_pnl(
                     }
                 })
                 .collect();
-            // Filter open_trades by same criteria (open_trade has symbol, side, order_type, strategy_id, quantity)
+            // Filter open_trades by same criteria (use quantity*price for USD when position_size_*_usd set)
             open_trades = open_trades
                 .into_iter()
                 .filter(|t| {
-                    if let Some(sid) = f.strategy_id {
+                    if let Some(ref ids) = f.strategy_ids {
+                        if !ids.is_empty() {
+                            let ok = t.strategy_id.map_or(false, |id| ids.contains(&id));
+                            if !ok {
+                                return false;
+                            }
+                        }
+                    } else if let Some(sid) = f.strategy_id {
                         if t.strategy_id != Some(sid) {
                             return false;
                         }
                     }
-                    if let Some(ref sym) = f.symbol {
+                    if let Some(ref syms) = f.symbols {
+                        if !syms.is_empty() {
+                            let t_underlying = get_underlying_symbol(&t.symbol);
+                            let match_ = syms.iter().any(|s| {
+                                t.symbol == *s || t_underlying == get_underlying_symbol(s)
+                            });
+                            if !match_ {
+                                return false;
+                            }
+                        }
+                    } else if let Some(ref sym) = f.symbol {
                         if !sym.is_empty() {
                             let t_underlying = get_underlying_symbol(&t.symbol);
                             let filter_underlying = get_underlying_symbol(sym);
@@ -1283,24 +1345,46 @@ pub fn get_symbol_pnl(
                             }
                         }
                     }
-                    if let Some(ref side) = f.side {
+                    if let Some(ref sides) = f.sides {
+                        if !sides.is_empty() && !sides.iter().any(|s| t.side.eq_ignore_ascii_case(s)) {
+                            return false;
+                        }
+                    } else if let Some(ref side) = f.side {
                         if !side.is_empty() && !t.side.eq_ignore_ascii_case(side) {
                             return false;
                         }
                     }
-                    if let Some(ref ot) = f.order_type {
+                    if let Some(ref ots) = f.order_types {
+                        if !ots.is_empty() && !ots.iter().any(|o| t.order_type.eq_ignore_ascii_case(o)) {
+                            return false;
+                        }
+                    } else if let Some(ref ot) = f.order_type {
                         if !ot.is_empty() && !t.order_type.eq_ignore_ascii_case(ot) {
                             return false;
                         }
                     }
-                    if let Some(min_q) = f.position_size_min {
-                        if t.quantity < min_q {
-                            return false;
+                    if f.position_size_min_usd.is_some() || f.position_size_max_usd.is_some() {
+                        let pos_usd = t.quantity * t.price;
+                        if let Some(min_u) = f.position_size_min_usd {
+                            if pos_usd < min_u {
+                                return false;
+                            }
                         }
-                    }
-                    if let Some(max_q) = f.position_size_max {
-                        if t.quantity > max_q {
-                            return false;
+                        if let Some(max_u) = f.position_size_max_usd {
+                            if pos_usd > max_u {
+                                return false;
+                            }
+                        }
+                    } else {
+                        if let Some(min_q) = f.position_size_min {
+                            if t.quantity < min_q {
+                                return false;
+                            }
+                        }
+                        if let Some(max_q) = f.position_size_max {
+                            if t.quantity > max_q {
+                                return false;
+                            }
                         }
                     }
                     true
@@ -3573,6 +3657,97 @@ pub fn get_strategy_checklist_item_metrics(strategy_id: i64) -> Result<Vec<Check
     Ok(out)
 }
 
+#[derive(serde::Serialize)]
+pub struct ChecklistItemMetricByOutcomeRow {
+    pub checklist_item_id: i64,
+    pub item_text: String,
+    pub checklist_type: String,
+    pub times_checked_good: i64,
+    pub times_checked_bad: i64,
+}
+
+#[tauri::command]
+pub fn get_strategy_checklist_item_metrics_by_outcome(strategy_id: i64) -> Result<Vec<ChecklistItemMetricByOutcomeRow>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let has_jt_ids = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='journal_trade_ids'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let items: Vec<(i64, String, String)> = conn.prepare(
+        "SELECT id, item_text, checklist_type FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id"
+    ).map_err(|e| e.to_string())?
+        .query_map(params![strategy_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    let mut out = Vec::new();
+    for (item_id, item_text, checklist_type) in items {
+        let sql = if has_jt_ids {
+            "SELECT jcr.journal_entry_id, jcr.journal_trade_ids FROM journal_checklist_responses jcr
+             INNER JOIN journal_entries je ON je.id = jcr.journal_entry_id AND je.strategy_id = ?1
+             WHERE jcr.checklist_item_id = ?2 AND jcr.is_checked = 1"
+        } else {
+            "SELECT jcr.journal_entry_id, NULL FROM journal_checklist_responses jcr
+             INNER JOIN journal_entries je ON je.id = jcr.journal_entry_id AND je.strategy_id = ?1
+             WHERE jcr.checklist_item_id = ?2 AND jcr.is_checked = 1"
+        };
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, Option<String>)> = stmt.query_map(params![strategy_id, item_id], |row| {
+            Ok((row.get(0)?, row.get(1).ok()))
+        }).map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        let mut times_good = 0_i64;
+        let mut times_bad = 0_i64;
+        for (journal_entry_id, journal_trade_ids) in rows {
+            let jt_ids: Vec<i64> = if let Some(ref s) = journal_trade_ids {
+                serde_json::from_str(s.as_str()).unwrap_or_default()
+            } else {
+                conn.prepare("SELECT id FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order")
+                    .map_err(|e| e.to_string())?
+                    .query_map(params![journal_entry_id], |row| row.get(0))
+                    .map_err(|e| e.to_string())?
+                    .filter_map(|r| r.ok())
+                    .collect()
+            };
+            if jt_ids.is_empty() {
+                times_bad += 1;
+                continue;
+            }
+            let mut sum = 0.0_f64;
+            let mut n = 0;
+            for jt_id in &jt_ids {
+                if let Ok((v, _)) = get_journal_trade_performance_raw(&conn, *jt_id) {
+                    if let Some(val) = v {
+                        sum += val;
+                        n += 1;
+                    }
+                }
+            }
+            if n > 0 {
+                let avg = sum / n as f64;
+                if avg > 0.0 {
+                    times_good += 1;
+                } else {
+                    times_bad += 1;
+                }
+            } else {
+                times_bad += 1;
+            }
+        }
+        out.push(ChecklistItemMetricByOutcomeRow {
+            checklist_item_id: item_id,
+            item_text: item_text.clone(),
+            checklist_type: checklist_type.clone(),
+            times_checked_good: times_good,
+            times_checked_bad: times_bad,
+        });
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 pub fn clear_all_data() -> Result<(), String> {
     let db_path = get_db_path();
@@ -3701,6 +3876,7 @@ pub struct StrategyPerformance {
     pub strategy_id: Option<i64>,
     pub strategy_name: String,
     pub trade_count: i64,
+    pub winning_trades: i64,
     pub total_volume: f64,
     pub estimated_pnl: f64,
 }
@@ -3823,6 +3999,7 @@ pub fn get_strategy_performance(pairing_method: Option<String>, start_date: Opti
                 strategy_id,
                 strategy_name,
                 trade_count: 0,
+                winning_trades: 0,
                 total_volume: 0.0,
                 estimated_pnl: 0.0,
             }
@@ -3830,6 +4007,9 @@ pub fn get_strategy_performance(pairing_method: Option<String>, start_date: Opti
         
         // Count closed positions (pairs), not individual trades
         entry.trade_count += 1;
+        if paired.net_profit_loss > 0.0 {
+            entry.winning_trades += 1;
+        }
         // Calculate volume from the paired trade
         entry.total_volume += paired.quantity * paired.entry_price;
         // Use actual net_profit_loss from paired trades
@@ -5293,12 +5473,20 @@ pub struct EquityCurveData {
 
 #[derive(Debug, Deserialize)]
 pub struct EquityCurveFilters {
+    /// Single-value (legacy) or use strategy_ids for multi-select
     pub strategy_id: Option<i64>,
+    pub strategy_ids: Option<Vec<i64>>,
     pub symbol: Option<String>,
+    pub symbols: Option<Vec<String>>,
     pub side: Option<String>,
+    pub sides: Option<Vec<String>>,
     pub order_type: Option<String>,
+    pub order_types: Option<Vec<String>>,
     pub position_size_min: Option<f64>,
     pub position_size_max: Option<f64>,
+    /// Position size in USD (quantity * entry_price) — matches Trades page
+    pub position_size_min_usd: Option<f64>,
+    pub position_size_max_usd: Option<f64>,
 }
 
 /// Build equity curve and drawdown metrics from a list of paired trades (sorted by exit timestamp).
@@ -5498,12 +5686,18 @@ pub fn get_equity_curve(
         paired_trades
     };
     
-    // Apply strategy/symbol/side/order_type/position_size filters via entry-trade lookup
+    // Apply strategy/symbol/side/order_type/position_size filters via entry-trade lookup (multi-select + position size USD)
     if let Some(ref f) = filters {
-        let has_filter = f.strategy_id.is_some() || f.symbol.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+        let has_multi = f.strategy_ids.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+            || f.symbols.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+            || f.sides.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+            || f.order_types.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+        let has_single = f.strategy_id.is_some() || f.symbol.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
             || f.side.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
-            || f.order_type.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
-            || f.position_size_min.is_some() || f.position_size_max.is_some();
+            || f.order_type.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+        let has_pos = f.position_size_min.is_some() || f.position_size_max.is_some()
+            || f.position_size_min_usd.is_some() || f.position_size_max_usd.is_some();
+        let has_filter = has_multi || has_single || has_pos;
         if has_filter {
             let entry_ids: Vec<i64> = filtered_paired_trades.iter().map(|p| p.entry_trade_id).collect();
             let entry_trades = get_trades_by_ids(&entry_ids).map_err(|e| e.to_string())?;
@@ -5511,38 +5705,86 @@ pub fn get_equity_curve(
                 .into_iter()
                 .filter(|pair| {
                     if let Some(entry) = entry_trades.get(&pair.entry_trade_id) {
-                        if let Some(sid) = f.strategy_id {
+                        if let Some(ref ids) = f.strategy_ids {
+                            if !ids.is_empty() {
+                                let ok = pair.strategy_id.map_or(false, |id| ids.contains(&id));
+                                if !ok {
+                                    return false;
+                                }
+                            }
+                        } else if let Some(sid) = f.strategy_id {
                             if pair.strategy_id != Some(sid) {
                                 return false;
                             }
                         }
-                        if let Some(ref sym) = f.symbol {
-                            if !sym.is_empty() {
+                        if let Some(ref syms) = f.symbols {
+                            if !syms.is_empty() {
                                 let pair_underlying = get_underlying_symbol(&pair.symbol);
-                                let filter_underlying = get_underlying_symbol(sym);
-                                if pair.symbol != *sym && pair_underlying != filter_underlying {
+                                let match_ = syms.iter().any(|s| {
+                                    pair.symbol == *s || pair_underlying == get_underlying_symbol(s)
+                                });
+                                if !match_ {
                                     return false;
                                 }
                             }
                         }
-                        if let Some(ref side) = f.side {
-                            if !side.is_empty() && !entry.side.eq_ignore_ascii_case(side) {
+                        if f.symbols.as_ref().map(|v| v.is_empty()).unwrap_or(true) {
+                            if let Some(ref sym) = f.symbol {
+                                if !sym.is_empty() {
+                                    let pair_underlying = get_underlying_symbol(&pair.symbol);
+                                    let filter_underlying = get_underlying_symbol(sym);
+                                    if pair.symbol != *sym && pair_underlying != filter_underlying {
+                                        return false;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(ref sides) = f.sides {
+                            if !sides.is_empty() && !sides.iter().any(|s| entry.side.eq_ignore_ascii_case(s)) {
                                 return false;
                             }
                         }
-                        if let Some(ref ot) = f.order_type {
-                            if !ot.is_empty() && !entry.order_type.eq_ignore_ascii_case(ot) {
+                        if f.sides.as_ref().map(|v| v.is_empty()).unwrap_or(true) {
+                            if let Some(ref side) = f.side {
+                                if !side.is_empty() && !entry.side.eq_ignore_ascii_case(side) {
+                                    return false;
+                                }
+                            }
+                        }
+                        if let Some(ref ots) = f.order_types {
+                            if !ots.is_empty() && !ots.iter().any(|o| entry.order_type.eq_ignore_ascii_case(o)) {
                                 return false;
                             }
                         }
-                        if let Some(min_q) = f.position_size_min {
-                            if pair.quantity < min_q {
-                                return false;
+                        if f.order_types.as_ref().map(|v| v.is_empty()).unwrap_or(true) {
+                            if let Some(ref ot) = f.order_type {
+                                if !ot.is_empty() && !entry.order_type.eq_ignore_ascii_case(ot) {
+                                    return false;
+                                }
                             }
                         }
-                        if let Some(max_q) = f.position_size_max {
-                            if pair.quantity > max_q {
-                                return false;
+                        if f.position_size_min_usd.is_some() || f.position_size_max_usd.is_some() {
+                            let pos_usd = pair.quantity * pair.entry_price;
+                            if let Some(min_u) = f.position_size_min_usd {
+                                if pos_usd < min_u {
+                                    return false;
+                                }
+                            }
+                            if let Some(max_u) = f.position_size_max_usd {
+                                if pos_usd > max_u {
+                                    return false;
+                                }
+                            }
+                        } else {
+                            if let Some(min_q) = f.position_size_min {
+                                if pair.quantity < min_q {
+                                    return false;
+                                }
+                            }
+                            if let Some(max_q) = f.position_size_max {
+                                if pair.quantity > max_q {
+                                    return false;
+                                }
                             }
                         }
                         true
@@ -6899,7 +7141,7 @@ pub struct VersionInfo {
     pub latest: String,
     pub is_up_to_date: bool,
     pub download_url: Option<String>,
-    /// Asset filename (e.g. TradeButler-1.2.9.msi) for installer temp file; API URL does not contain it.
+    /// Asset filename (e.g. TradeButler-1.3.0.msi) for installer temp file; API URL does not contain it.
     pub download_filename: Option<String>,
     pub release_notes: Option<String>,
     pub is_installer: bool,

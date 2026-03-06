@@ -94,6 +94,7 @@ fn main() {
             commands::save_journal_trade_actual_trades,
             commands::get_journal_trade_performance,
             commands::get_strategy_checklist_item_metrics,
+            commands::get_strategy_checklist_item_metrics_by_outcome,
             commands::save_journal_checklist_responses,
             commands::get_journal_checklist_responses,
             commands::get_journal_entry_pairs,

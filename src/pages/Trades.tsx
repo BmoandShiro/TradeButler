@@ -252,21 +252,46 @@ export default function Trades() {
     try {
       if (dataMode === "sandbox") {
         // Use sandbox store data and build position groups + pairs client-side
-        const state = loadSandboxState();
-        const { positionGroups: groups, pairs } = buildPositionGroupsAndPairs(
-          state.trades.map((t) => ({
-            id: t.id,
-            symbol: t.symbol,
-            side: t.side,
-            quantity: t.quantity,
-            price: t.price,
-            timestamp: t.timestamp,
-            fees: t.fees,
-            notes: t.notes,
-            strategy_id: t.strategy_id,
-          })),
-          pairingMethod
-        );
+        let state: { trades?: unknown[]; strategies?: { id: number; name: string; color: string | null }[] };
+        try {
+          state = loadSandboxState();
+        } catch (e) {
+          console.error("loadSandboxState failed:", e);
+          state = { trades: [], strategies: [] };
+        }
+        const tradesList = Array.isArray(state?.trades) ? state.trades : [];
+        const strategiesList = Array.isArray(state?.strategies) ? state.strategies : [];
+        let positionGroupsResult: { positionGroups: PositionGroup[]; pairs: PairedTrade[] };
+        try {
+          const built = buildPositionGroupsAndPairs(
+            tradesList.map((t: { id: number; symbol: string; side: string; quantity: number; price: number; timestamp: string; order_type?: string; status?: string; fees: number | null; notes: string | null; strategy_id: number | null }) => ({
+              id: t.id,
+              symbol: t.symbol,
+              side: t.side,
+              quantity: t.quantity,
+              price: t.price,
+              timestamp: t.timestamp,
+              fees: t.fees,
+              notes: t.notes,
+              strategy_id: t.strategy_id,
+            })),
+            pairingMethod
+          );
+          positionGroupsResult = {
+            positionGroups: (built.positionGroups ?? []).map((g) => ({
+              entry_trade: g.entry_trade as Trade,
+              position_trades: (g.position_trades ?? []) as Trade[],
+              total_pnl: g.total_pnl ?? 0,
+              final_quantity: g.final_quantity ?? 0,
+            })),
+            pairs: built.pairs ?? [],
+          };
+        } catch (e) {
+          console.error("buildPositionGroupsAndPairs failed:", e);
+          positionGroupsResult = { positionGroups: [], pairs: [] };
+        }
+        const groups = positionGroupsResult.positionGroups;
+        const pairs = positionGroupsResult.pairs;
         const entryPairsByTrade = new Map<number, PairedTrade[]>();
         const exitPairsByTrade = new Map<number, PairedTrade[]>();
         for (const p of pairs) {
@@ -276,7 +301,7 @@ export default function Trades() {
           if (!exitPairsByTrade.has(p.exit_trade_id)) exitPairsByTrade.set(p.exit_trade_id, []);
           exitPairsByTrade.get(p.exit_trade_id)!.push(pair);
         }
-        const mappedTrades: TradeWithPairing[] = state.trades.map((t) => ({
+        const mappedTrades: TradeWithPairing[] = tradesList.map((t) => ({
           trade: {
             id: t.id,
             symbol: t.symbol,
@@ -294,16 +319,9 @@ export default function Trades() {
           exit_pairs: exitPairsByTrade.get(t.id) ?? [],
         }));
         setTradesWithPairing(mappedTrades);
-        setPositionGroups(
-          groups.map((g) => ({
-            entry_trade: g.entry_trade as Trade,
-            position_trades: g.position_trades as Trade[],
-            total_pnl: g.total_pnl,
-            final_quantity: g.final_quantity,
-          }))
-        );
+        setPositionGroups(groups);
         setStrategies(
-          state.strategies.map((s) => ({
+          strategiesList.map((s) => ({
             id: s.id,
             name: s.name,
             color: s.color,
@@ -528,33 +546,6 @@ export default function Trades() {
     }
   };
 
-  const uniqueOrderTypes = useMemo(() => {
-    const set = new Set<string>();
-    tradesWithPairing.forEach(({ trade }) => {
-      if (trade.order_type) set.add(trade.order_type);
-    });
-    return Array.from(set).sort();
-  }, [tradesWithPairing]);
-
-  const uniqueStatuses = useMemo(() => {
-    const set = new Set<string>();
-    tradesWithPairing.forEach(({ trade }) => {
-      if (trade.status) set.add(trade.status);
-    });
-    return Array.from(set).sort();
-  }, [tradesWithPairing]);
-
-  const uniqueSymbols = useMemo(() => {
-    const set = new Set<string>();
-    tradesWithPairing.forEach(({ trade }) => {
-      if (trade.symbol) set.add(trade.symbol);
-    });
-    positionGroups.forEach((g) => {
-      if (g.entry_trade.symbol) set.add(g.entry_trade.symbol);
-    });
-    return Array.from(set).sort();
-  }, [tradesWithPairing, positionGroups]);
-
   const SortableHeader = ({ column, label, viewMode }: { column: "date" | "symbol" | "pnl" | "price" | "quantity" | "trades" | "type" | "status" | "percent" | "position_size", label: string, viewMode: "Individual" | "Pair" }) => {
     const isActive = sortBy === column;
     const showInView = viewMode === "Pair" || column !== "trades";
@@ -606,27 +597,31 @@ export default function Trades() {
     }
   };
 
+  type FilterSkipDimension = "symbol" | "side" | "type" | "status" | "strategy";
+
   const applyFiltersToTrade = (
     trade: Trade,
-    opts?: { pct?: number | null; pnl?: number; positionSize?: number }
+    opts?: { pct?: number | null; pnl?: number; positionSize?: number },
+    skipDimension?: FilterSkipDimension
   ): boolean => {
-    if (filterSymbol.trim()) {
+    if (!trade) return false;
+    if (skipDimension !== "symbol" && filterSymbol.trim()) {
       const symbols = filterSymbol.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-      if (symbols.length > 0 && !symbols.some((s) => trade.symbol.toLowerCase().includes(s))) return false;
+      if (symbols.length > 0 && !symbols.some((s) => (trade.symbol ?? "").toLowerCase().includes(s))) return false;
     }
-    if (filterSide.trim()) {
+    if (skipDimension !== "side" && filterSide.trim()) {
       const sides = filterSide.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-      if (sides.length > 0 && !sides.includes(trade.side.toUpperCase())) return false;
+      if (sides.length > 0 && !sides.includes((trade.side ?? "").toUpperCase())) return false;
     }
-    if (filterType.trim()) {
+    if (skipDimension !== "type" && filterType.trim()) {
       const types = filterType.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-      if (types.length > 0 && !types.includes((trade.order_type || "").toUpperCase())) return false;
+      if (types.length > 0 && !types.includes((trade.order_type ?? "").toUpperCase())) return false;
     }
-    if (filterStatus.trim()) {
+    if (skipDimension !== "status" && filterStatus.trim()) {
       const statuses = filterStatus.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-      if (statuses.length > 0 && !statuses.includes((trade.status || "").toUpperCase())) return false;
+      if (statuses.length > 0 && !statuses.includes((trade.status ?? "").toUpperCase())) return false;
     }
-    if (filterStrategy.trim()) {
+    if (skipDimension !== "strategy" && filterStrategy.trim()) {
       const strategyVals = filterStrategy.split(",").map((s) => s.trim()).filter(Boolean);
       if (strategyVals.length > 0) {
         const match = strategyVals.some((v) => {
@@ -660,8 +655,9 @@ export default function Trades() {
   };
 
   const getPercentAndPnlForTrade = (item: TradeWithPairing): { pct: number | null; pnl: number } => {
-    const relevantPairs = item.trade.side === "BUY" ? item.exit_pairs : item.entry_pairs;
-    const totalPnl = relevantPairs.reduce((sum, p) => sum + p.net_profit_loss, 0);
+    if (!item?.trade) return { pct: null, pnl: 0 };
+    const relevantPairs = item.trade.side === "BUY" ? (item.exit_pairs ?? []) : (item.entry_pairs ?? []);
+    const totalPnl = relevantPairs.reduce((sum, p) => sum + (p?.net_profit_loss ?? 0), 0);
     let totalCost = 0;
     for (const p of relevantPairs) {
       totalCost += p.entry_price * p.quantity;
@@ -671,25 +667,117 @@ export default function Trades() {
   };
 
   const getPercentAndPnlForGroup = (group: PositionGroup): { pct: number | null; pnl: number } => {
+    if (!group?.entry_trade || !Array.isArray(group.position_trades)) return { pct: null, pnl: group?.total_pnl ?? 0 };
     const pnl = group.total_pnl;
     if (group.final_quantity === 0 && group.position_trades.length >= 2) {
       const entryPrice = group.entry_trade.price;
-      const exitPrice = group.position_trades[group.position_trades.length - 1].price;
+      const lastTrade = group.position_trades[group.position_trades.length - 1];
+      const exitPrice = lastTrade?.price ?? 0;
       const pct = entryPrice > 0 ? ((exitPrice - entryPrice) / entryPrice) * 100 : null;
       return { pct, pnl };
     }
     return { pct: null, pnl };
   };
 
+  // All trades that appear in the table (with pct/pnl/positionSize for filter logic), for cascading filter options
+  const allTradesWithOpts = useMemo(() => {
+    const out: { trade: Trade; pct: number | null; pnl: number; positionSize: number }[] = [];
+    (tradesWithPairing ?? []).forEach((item) => {
+      if (!item?.trade || typeof item.trade.quantity !== "number" || typeof item.trade.price !== "number") return;
+      const { pct, pnl } = getPercentAndPnlForTrade(item);
+      const positionSize = item.trade.quantity * item.trade.price;
+      out.push({ trade: item.trade, pct, pnl, positionSize });
+    });
+    (positionGroups ?? []).forEach((group) => {
+      if (!group?.entry_trade || !Array.isArray(group.position_trades)) return;
+      const { pct, pnl } = getPercentAndPnlForGroup(group);
+      const positionSizeEntry = (group.entry_trade.quantity ?? 0) * (group.entry_trade.price ?? 0);
+      out.push({ trade: group.entry_trade, pct, pnl, positionSize: positionSizeEntry });
+      group.position_trades.forEach((t) => {
+        if (!t) return;
+        const positionSize = (t.quantity ?? 0) * (t.price ?? 0);
+        out.push({ trade: t, pct, pnl, positionSize });
+      });
+    });
+    return out;
+  }, [tradesWithPairing, positionGroups]);
+
+  // Cascading filter options: each dropdown shows only values that exist when other filters are applied
+  const { uniqueSymbols, uniqueOrderTypes, uniqueStatuses, strategiesForFilterOptions, showUnassignedInStrategyFilter } = useMemo(() => {
+    const forSymbol = allTradesWithOpts.filter(({ trade, pct, pnl, positionSize }) =>
+      applyFiltersToTrade(trade, { pct, pnl, positionSize }, "symbol")
+    );
+    const forType = allTradesWithOpts.filter(({ trade, pct, pnl, positionSize }) =>
+      applyFiltersToTrade(trade, { pct, pnl, positionSize }, "type")
+    );
+    const forStatus = allTradesWithOpts.filter(({ trade, pct, pnl, positionSize }) =>
+      applyFiltersToTrade(trade, { pct, pnl, positionSize }, "status")
+    );
+    const forStrategy = allTradesWithOpts.filter(({ trade, pct, pnl, positionSize }) =>
+      applyFiltersToTrade(trade, { pct, pnl, positionSize }, "strategy")
+    );
+    const symbols = new Set<string>();
+    forSymbol.forEach(({ trade }) => { if (trade.symbol) symbols.add(trade.symbol); });
+    const types = new Set<string>();
+    forType.forEach(({ trade }) => { if (trade.order_type) types.add(trade.order_type); });
+    const statuses = new Set<string>();
+    forStatus.forEach(({ trade }) => { if (trade.status) statuses.add(trade.status); });
+    const strategyIds = new Set<number | null>();
+    forStrategy.forEach(({ trade }) => strategyIds.add(trade.strategy_id));
+    const showUnassignedInStrategyFilter = forStrategy.some(({ trade }) => trade.strategy_id === null);
+    return {
+      uniqueSymbols: Array.from(symbols).sort(),
+      uniqueOrderTypes: Array.from(types).sort(),
+      uniqueStatuses: Array.from(statuses).sort(),
+      strategiesForFilterOptions: (Array.isArray(strategies) ? strategies : []).filter((s) => s?.id != null && strategyIds.has(s.id)),
+      showUnassignedInStrategyFilter,
+    };
+  }, [
+    allTradesWithOpts,
+    strategies,
+    filterSymbol,
+    filterSide,
+    filterType,
+    filterStatus,
+    filterStrategy,
+    filterPctMin,
+    filterPctMax,
+    filterPnlMin,
+    filterPnlMax,
+    filterPositionSizeMin,
+    filterPositionSizeMax,
+  ]);
+
+  // When options shrink from cascading, remove any selected value that is no longer in the list
+  useEffect(() => {
+    const symSet = new Set((Array.isArray(uniqueSymbols) ? uniqueSymbols : []).map((s) => String(s).toLowerCase()));
+    const typeSet = new Set((Array.isArray(uniqueOrderTypes) ? uniqueOrderTypes : []).map((t) => String(t).toUpperCase()));
+    const statusSet = new Set((Array.isArray(uniqueStatuses) ? uniqueStatuses : []).map((s) => String(s).toUpperCase()));
+    const stratIds = new Set((Array.isArray(strategiesForFilterOptions) ? strategiesForFilterOptions : []).map((s) => String(s.id)));
+    if (showUnassignedInStrategyFilter) stratIds.add("unassigned");
+    const symbolList = filterSymbol.split(",").map((s) => s.trim()).filter(Boolean);
+    const typeList = filterType.split(",").map((s) => s.trim()).filter(Boolean);
+    const statusList = filterStatus.split(",").map((s) => s.trim()).filter(Boolean);
+    const strategyList = filterStrategy.split(",").map((s) => s.trim()).filter(Boolean);
+    const symbolFiltered = symbolList.filter((s) => symSet.has(s.toLowerCase()));
+    const typeFiltered = typeList.filter((t) => typeSet.has((t || "").toUpperCase()));
+    const statusFiltered = statusList.filter((s) => statusSet.has((s || "").toUpperCase()));
+    const strategyFiltered = strategyList.filter((s) => stratIds.has(s));
+    if (symbolFiltered.length !== symbolList.length) setFilterSymbol(symbolFiltered.join(","));
+    if (typeFiltered.length !== typeList.length) setFilterType(typeFiltered.join(","));
+    if (statusFiltered.length !== statusList.length) setFilterStatus(statusFiltered.join(","));
+    if (strategyFiltered.length !== strategyList.length) setFilterStrategy(strategyFiltered.join(","));
+  }, [uniqueSymbols, uniqueOrderTypes, uniqueStatuses, strategiesForFilterOptions, showUnassignedInStrategyFilter]);
+
   const searchMatchesTrade = (trade: Trade): boolean => {
-    if (!searchQuery.trim()) return true;
+    if (!searchQuery.trim() || !trade) return true;
     const searchLower = searchQuery.toLowerCase();
     return (
-      trade.symbol.toLowerCase().includes(searchLower) ||
-      trade.side.toLowerCase().includes(searchLower) ||
-      trade.order_type.toLowerCase().includes(searchLower) ||
-      trade.status.toLowerCase().includes(searchLower) ||
-      (trade.strategy_id !== null && strategies.find(s => s.id === trade.strategy_id)?.name.toLowerCase().includes(searchLower))
+      (trade.symbol ?? "").toLowerCase().includes(searchLower) ||
+      (trade.side ?? "").toLowerCase().includes(searchLower) ||
+      (trade.order_type ?? "").toLowerCase().includes(searchLower) ||
+      (trade.status ?? "").toLowerCase().includes(searchLower) ||
+      (trade.strategy_id != null && (strategies.find(s => s.id === trade.strategy_id)?.name?.toLowerCase().includes(searchLower) ?? false))
     );
   };
 
@@ -1545,19 +1633,21 @@ export default function Trades() {
                   overflowY: "auto",
                 }}
               >
-                <label style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px 0", fontSize: "13px", cursor: "pointer", color: "var(--text-primary)" }}>
-                  <input
-                    type="checkbox"
-                    checked={filterStrategy.split(",").map((s) => s.trim()).filter(Boolean).includes("unassigned")}
-                    onChange={(e) => {
-                      const list = filterStrategy.split(",").map((s) => s.trim()).filter(Boolean);
-                      if (e.target.checked) setFilterStrategy([...list, "unassigned"].join(","));
-                      else setFilterStrategy(list.filter((x) => x !== "unassigned").join(","));
-                    }}
-                  />
-                  Unassigned
-                </label>
-                {strategies.map((s) => {
+                {showUnassignedInStrategyFilter && (
+                  <label style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px 0", fontSize: "13px", cursor: "pointer", color: "var(--text-primary)" }}>
+                    <input
+                      type="checkbox"
+                      checked={filterStrategy.split(",").map((s) => s.trim()).filter(Boolean).includes("unassigned")}
+                      onChange={(e) => {
+                        const list = filterStrategy.split(",").map((s) => s.trim()).filter(Boolean);
+                        if (e.target.checked) setFilterStrategy([...list, "unassigned"].join(","));
+                        else setFilterStrategy(list.filter((x) => x !== "unassigned").join(","));
+                      }}
+                    />
+                    Unassigned
+                  </label>
+                )}
+                {strategiesForFilterOptions.map((s) => {
                   const selected = filterStrategy.split(",").map((x) => x.trim()).filter(Boolean).includes(String(s.id));
                   return (
                     <label key={s.id} style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px 0", fontSize: "13px", cursor: "pointer", color: "var(--text-primary)" }}>
