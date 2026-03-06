@@ -537,7 +537,7 @@ const metricDescriptions: Record<string, { description: string; calculation: str
   },
 };
 
-function DroppableSlot({ id, children }: { id: string; children: React.ReactNode }) {
+function DroppableSlot({ id, children, style: slotStyle }: { id: string; children: React.ReactNode; style?: React.CSSProperties }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   return (
     <div
@@ -548,6 +548,7 @@ function DroppableSlot({ id, children }: { id: string; children: React.ReactNode
         border: isOver ? "2px dashed var(--accent)" : "1px solid transparent",
         backgroundColor: isOver ? "color-mix(in srgb, var(--accent) 8%, transparent)" : "transparent",
         transition: "border-color 0.15s, background-color 0.15s",
+        ...slotStyle,
       }}
     >
       {children}
@@ -734,7 +735,11 @@ function SortableMetricCard({
           userSelect: "none",
           WebkitUserSelect: "none",
           ...(isGridLayout
-            ? { width: "100%", minWidth: 0 }
+            ? {
+                width: chartWidth ? `${chartWidth}px` : "100%",
+                minWidth: chartWidth ? chartWidth : 0,
+                maxWidth: chartWidth ? 1200 : undefined,
+              }
             : {
                 flex: `0 0 ${chartWidth ? `${chartWidth}px` : "280px"}`,
                 width: chartWidth ? `${chartWidth}px` : "280px",
@@ -2612,8 +2617,12 @@ export default function Dashboard() {
                 >
                   {Array.from({ length: maxSlot + 2 }, (_, i) => {
                     const metric = displayMetrics.find((m: any) => (m.slotIndex ?? 0) === i);
+                    const isWideChart = metric && (metric as any).baseMetricId === "position_size_chart" && (metric as any).chartWidth;
+                    const slotStyle = isWideChart
+                      ? { gridColumn: "span 2" as const, minWidth: (metric as any).chartWidth }
+                      : undefined;
                     return (
-                      <DroppableSlot key={i} id={`metric-slot-${i}`}>
+                      <DroppableSlot key={i} id={`metric-slot-${i}`} style={slotStyle}>
                         {metric ? renderCard(metric) : null}
                       </DroppableSlot>
                     );
