@@ -684,12 +684,13 @@ export default function Trades() {
   const searchMatchesTrade = (trade: Trade): boolean => {
     if (!searchQuery.trim()) return true;
     const searchLower = searchQuery.toLowerCase();
+    const strategyName = trade.strategy_id != null ? strategies.find(s => s.id === trade.strategy_id)?.name : undefined;
     return (
       trade.symbol.toLowerCase().includes(searchLower) ||
       trade.side.toLowerCase().includes(searchLower) ||
       trade.order_type.toLowerCase().includes(searchLower) ||
       trade.status.toLowerCase().includes(searchLower) ||
-      (trade.strategy_id !== null && strategies.find(s => s.id === trade.strategy_id)?.name.toLowerCase().includes(searchLower))
+      (strategyName?.toLowerCase().includes(searchLower) ?? false)
     );
   };
 
