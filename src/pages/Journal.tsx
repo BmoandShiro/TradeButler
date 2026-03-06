@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, BarChart3, Search, LayoutDashboard } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
@@ -240,9 +240,10 @@ export default function Journal() {
     const savedId = localStorage.getItem('journal_selected_entry_id');
     return savedId ? null : null; // Will be loaded by ID in useEffect
   });
-  // If we have a saved entry id to restore, don't show overview until load completes (avoids flash)
+  // If we have a saved entry id to restore, don't show overview until load completes (avoids flash). Skip when URL has ?overview=1 (e.g. from Analytics).
   const [pendingRestoreEntryId, setPendingRestoreEntryId] = useState<number | null>(() => {
     if (typeof window === "undefined") return null;
+    if (new URLSearchParams(window.location.search).get("overview") === "1") return null;
     const savedId = localStorage.getItem("journal_selected_entry_id");
     if (savedId) {
       const id = parseInt(savedId, 10);
@@ -386,12 +387,23 @@ export default function Journal() {
   const titleInputRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
 
   useEffect(() => {
     const unsub = subscribeToDataMode(setDataMode);
     return () => unsub();
   }, []);
+
+  // When navigating from Analytics (e.g. "Journal Overview" link) with ?overview=1, show the overview (no entry selected, no create form)
+  useEffect(() => {
+    if (searchParams.get("overview") === "1") {
+      setSelectedEntry(null);
+      setPendingRestoreEntryId(null);
+      setIsCreating(false);
+      setIsEditing(false);
+    }
+  }, [searchParams]);
 
   // Edit history for undo functionality
   const [editHistory, setEditHistory] = useState<Array<{
@@ -595,9 +607,11 @@ export default function Journal() {
     loadAvailableSymbols();
     loadAllJournalTrades();
     
-    // Restore selected entry if we have a saved ID (skip when opened from Emotions via state)
+    // When URL has ?overview=1 (e.g. from Analytics "Journal Overview" link), do not restore entry or work-in-progress
+    const forceOverview = searchParams.get("overview") === "1";
     const openFromState = (location.state as { openEntryId?: number } | null)?.openEntryId != null;
-    if (!openFromState) {
+    
+    if (!openFromState && !forceOverview) {
       const savedEntryId = localStorage.getItem('journal_selected_entry_id');
       if (savedEntryId) {
         const entryId = parseInt(savedEntryId, 10);
@@ -607,14 +621,15 @@ export default function Journal() {
       }
     }
     
-    // Restore work in progress after loading (only if we have saved state)
-    const hasWorkInProgress = localStorage.getItem('journal_work_in_progress');
-    if (hasWorkInProgress) {
-      setTimeout(() => {
-        restoreWorkInProgress();
-      }, 200);
+    if (!forceOverview) {
+      const hasWorkInProgress = localStorage.getItem('journal_work_in_progress');
+      if (hasWorkInProgress) {
+        setTimeout(() => {
+          restoreWorkInProgress();
+        }, 200);
+      }
     }
-  }, [dataMode]);
+  }, [dataMode, searchParams]);
 
   // Clear pending restore once an entry is selected (so we don't stay in "loading" state)
   useEffect(() => {

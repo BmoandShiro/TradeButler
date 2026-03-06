@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
+import { Link } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Brush, Cell } from "recharts";
-import { TrendingUp, TrendingDown, Settings } from "lucide-react";
+import { TrendingUp, TrendingDown, Settings, ChevronRight } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { formatWithCommas } from "../utils/formatCompactNumber";
@@ -1911,12 +1912,54 @@ export default function Analytics() {
               padding: "20px 20px 12px 20px",
             }}
           >
-            <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "12px" }}>
-              Strategy findings
-            </h2>
-            <p style={{ color: "var(--text-secondary)", fontSize: "13px", marginBottom: "12px" }}>
-              Patterns from strategy parameters and checklist usage compared to your trades.
-            </p>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px", marginBottom: "12px" }}>
+              <div>
+                <h2 style={{ fontSize: "20px", fontWeight: "600", margin: 0, marginBottom: "4px" }}>
+                  Strategy findings
+                </h2>
+                <p style={{ color: "var(--text-secondary)", fontSize: "12px", margin: 0 }}>
+                  Patterns from strategy parameters and checklist usage compared to your trades. For more details, see the{" "}
+                  <Link
+                    to="/strategies"
+                    style={{ color: "var(--accent)", fontWeight: "500", textDecoration: "none" }}
+                    onMouseOver={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
+                    onMouseOut={(e) => { e.currentTarget.style.textDecoration = "none"; }}
+                  >
+                    strategy overview
+                  </Link>
+                  {" "}page.
+                </p>
+              </div>
+              <Link
+                to="/strategies"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  padding: "6px 12px",
+                  borderRadius: "6px",
+                  backgroundColor: "color-mix(in srgb, var(--accent) 18%, transparent)",
+                  color: "var(--accent)",
+                  fontSize: "12px",
+                  fontWeight: "500",
+                  textDecoration: "none",
+                  border: "1px solid color-mix(in srgb, var(--accent) 40%, transparent)",
+                  transition: "background-color 0.15s ease, border-color 0.15s ease",
+                  flexShrink: 0,
+                }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.backgroundColor = "color-mix(in srgb, var(--accent) 28%, transparent)";
+                  e.currentTarget.style.borderColor = "color-mix(in srgb, var(--accent) 55%, transparent)";
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.backgroundColor = "color-mix(in srgb, var(--accent) 18%, transparent)";
+                  e.currentTarget.style.borderColor = "color-mix(in srgb, var(--accent) 40%, transparent)";
+                }}
+              >
+                Strategy overview
+                <ChevronRight size={14} style={{ flexShrink: 0 }} />
+              </Link>
+            </div>
             {strategyPerformance.length === 0 && checklistItemMetrics.length === 0 ? (
               <p style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
                 Assign strategies to trades and use checklists in journal entries to see findings here.
@@ -2027,9 +2070,54 @@ export default function Analytics() {
               padding: "20px",
             }}
           >
-            <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "16px" }}>
-              Journal findings
-            </h2>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px", marginBottom: "12px" }}>
+              <div>
+                <h2 style={{ fontSize: "20px", fontWeight: "600", margin: 0, marginBottom: "4px" }}>
+                  Journal findings
+                </h2>
+                <p style={{ color: "var(--text-secondary)", fontSize: "12px", margin: 0 }}>
+                  For more specific details, visit the{" "}
+                  <Link
+                    to="/journal?overview=1"
+                    style={{ color: "var(--accent)", fontWeight: "500", textDecoration: "none" }}
+                    onMouseOver={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
+                    onMouseOut={(e) => { e.currentTarget.style.textDecoration = "none"; }}
+                  >
+                    Journal Overview
+                  </Link>
+                  {" "}page.
+                </p>
+              </div>
+              <Link
+                to="/journal?overview=1"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  padding: "6px 12px",
+                  borderRadius: "6px",
+                  backgroundColor: "color-mix(in srgb, var(--accent) 18%, transparent)",
+                  color: "var(--accent)",
+                  fontSize: "12px",
+                  fontWeight: "500",
+                  textDecoration: "none",
+                  border: "1px solid color-mix(in srgb, var(--accent) 40%, transparent)",
+                  transition: "background-color 0.15s ease, border-color 0.15s ease",
+                  flexShrink: 0,
+                }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.backgroundColor = "color-mix(in srgb, var(--accent) 28%, transparent)";
+                  e.currentTarget.style.borderColor = "color-mix(in srgb, var(--accent) 55%, transparent)";
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.backgroundColor = "color-mix(in srgb, var(--accent) 18%, transparent)";
+                  e.currentTarget.style.borderColor = "color-mix(in srgb, var(--accent) 40%, transparent)";
+                }}
+              >
+                Journal overview
+                <ChevronRight size={14} style={{ flexShrink: 0 }} />
+              </Link>
+            </div>
             {journalEntries.length === 0 ? (
               <p style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
                 No journal entries found. Create journal entries to see journaling trends alongside your trading analytics.
