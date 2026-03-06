@@ -137,14 +137,48 @@ interface ChecklistItemMetricByOutcomeRow {
   times_not_checked_bad: number;
 }
 
-const STRATEGY_CHART_AXIS_PROPS = {
-  tick: { fontSize: 13, fill: "var(--text-secondary)" },
-  angle: -40,
-  textAnchor: "end" as const,
-  height: 72,
-};
-const STRATEGY_CHART_MARGIN = { top: 8, right: 8, left: 0, bottom: 72 };
+const STRATEGY_CHART_MARGIN = { top: 8, right: 8, left: 0, bottom: 48 };
 const BAR_FILL_OPACITY = 0.5;
+const STRATEGY_CHART_HEIGHT = 460;
+const STRATEGY_XAXIS_HEIGHT = 48;
+
+/** Split label into lines of roughly maxChars, breaking at spaces. */
+function wrapLabel(label: string, maxChars: number = 10): string[] {
+  if (!label || label.length <= maxChars) return [label];
+  const words = label.split(/\s+/);
+  const lines: string[] = [];
+  let current = "";
+  for (const w of words) {
+    if (current.length + (current ? 1 : 0) + w.length <= maxChars) {
+      current = current ? current + " " + w : w;
+    } else {
+      if (current) lines.push(current);
+      current = w.length > maxChars ? w.slice(0, maxChars) : w;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+/** Custom XAxis tick that renders strategy name in multiple lines (horizontal), offset down so labels don't overlap bars. */
+function StrategyChartTick({ x, y, payload }: { x: number; y: number; payload?: { value?: string } }) {
+  const label = payload?.value ?? "";
+  const lines = wrapLabel(label, 10);
+  const fontSize = 11;
+  const lineHeight = fontSize + 2;
+  const topOffset = 14;
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text textAnchor="middle" fill="var(--text-secondary)" fontSize={fontSize}>
+        {lines.map((line, i) => (
+          <tspan key={i} x={0} dy={i === 0 ? topOffset : lineHeight}>
+            {line}
+          </tspan>
+        ))}
+      </text>
+    </g>
+  );
+}
 
 export default function Analytics() {
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -1091,18 +1125,7 @@ export default function Analytics() {
       .filter((p) => p.trade_count > 0)
       .map((p) => ({ name: p.strategy_name || "Unassigned", profit: p.estimated_pnl ?? 0 }))
       .sort((a, b) => Math.abs(b.profit) - Math.abs(a.profit));
-    const byChecklistType = new Map<string, number>();
-    (checklistItemMetrics ?? []).forEach((row) => {
-      const type = row.checklist_type || "other";
-      byChecklistType.set(type, (byChecklistType.get(type) ?? 0) + (row.times_checked ?? 0));
-    });
-    const checklistTypeData = Array.from(byChecklistType.entries())
-      .map(([checklist_type, count]) => ({
-        name: checklist_type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
-        count,
-      }))
-      .sort((a, b) => b.count - a.count);
-    return { tradesByStrategy, profitableTradesByStrategy, profitByStrategy, checklistTypeData };
+    return { tradesByStrategy, profitableTradesByStrategy, profitByStrategy };
   }, [strategyPerformance, checklistItemMetrics]);
 
   if (loading) {
@@ -1885,13 +1908,13 @@ export default function Analytics() {
               backgroundColor: "var(--bg-secondary)",
               border: "1px solid var(--border-color)",
               borderRadius: "8px",
-              padding: "20px",
+              padding: "20px 20px 12px 20px",
             }}
           >
-            <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "16px" }}>
+            <h2 style={{ fontSize: "20px", fontWeight: "600", marginBottom: "12px" }}>
               Strategy findings
             </h2>
-            <p style={{ color: "var(--text-secondary)", fontSize: "13px", marginBottom: "16px" }}>
+            <p style={{ color: "var(--text-secondary)", fontSize: "13px", marginBottom: "12px" }}>
               Patterns from strategy parameters and checklist usage compared to your trades.
             </p>
             {strategyPerformance.length === 0 && checklistItemMetrics.length === 0 ? (
@@ -1899,7 +1922,7 @@ export default function Analytics() {
                 Assign strategies to trades and use checklists in journal entries to see findings here.
               </p>
             ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "24px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "24px" }}>
                 <div>
                   <h3 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "8px" }}>
                     Trades by strategy
@@ -1909,10 +1932,10 @@ export default function Analytics() {
                       No trades with strategies in the selected timeframe.
                     </p>
                   ) : (
-                    <ResponsiveContainer width="100%" height={280}>
+                    <ResponsiveContainer width="100%" height={STRATEGY_CHART_HEIGHT}>
                       <BarChart data={strategyFindingsData.tradesByStrategy} margin={STRATEGY_CHART_MARGIN}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={STRATEGY_CHART_AXIS_PROPS.tick} angle={STRATEGY_CHART_AXIS_PROPS.angle} textAnchor={STRATEGY_CHART_AXIS_PROPS.textAnchor} height={STRATEGY_CHART_AXIS_PROPS.height} interval={0} />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                         <Tooltip
                           cursor={{ fill: "rgba(255,255,255,0.02)" }}
@@ -1931,35 +1954,6 @@ export default function Analytics() {
 
                 <div>
                   <h3 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "8px" }}>
-                    Checklist usage in journals
-                  </h3>
-                  {strategyFindingsData.checklistTypeData.length === 0 ? (
-                    <p style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
-                      No checklist usage recorded in journal entries for this timeframe.
-                    </p>
-                  ) : (
-                    <ResponsiveContainer width="100%" height={280}>
-                      <BarChart data={strategyFindingsData.checklistTypeData} margin={STRATEGY_CHART_MARGIN}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={STRATEGY_CHART_AXIS_PROPS.tick} angle={STRATEGY_CHART_AXIS_PROPS.angle} textAnchor={STRATEGY_CHART_AXIS_PROPS.textAnchor} height={STRATEGY_CHART_AXIS_PROPS.height} interval={0} />
-                        <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                        <Tooltip
-                          cursor={{ fill: "rgba(255,255,255,0.02)" }}
-                          contentStyle={{
-                            backgroundColor: "var(--bg-tertiary)",
-                            border: "1px solid var(--border-color)",
-                            color: "var(--text-primary)",
-                          }}
-                          formatter={(value: unknown) => [value, "Times used"]}
-                        />
-                        <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  )}
-                </div>
-
-                <div>
-                  <h3 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "8px" }}>
                     Profitable trades by strategy
                   </h3>
                   {strategyFindingsData.profitableTradesByStrategy.length === 0 ? (
@@ -1967,10 +1961,10 @@ export default function Analytics() {
                       No profitable trades in the selected timeframe.
                     </p>
                   ) : (
-                    <ResponsiveContainer width="100%" height={280}>
+                    <ResponsiveContainer width="100%" height={STRATEGY_CHART_HEIGHT}>
                       <BarChart data={strategyFindingsData.profitableTradesByStrategy} margin={STRATEGY_CHART_MARGIN}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={STRATEGY_CHART_AXIS_PROPS.tick} angle={STRATEGY_CHART_AXIS_PROPS.angle} textAnchor={STRATEGY_CHART_AXIS_PROPS.textAnchor} height={STRATEGY_CHART_AXIS_PROPS.height} interval={0} />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                         <Tooltip
                           cursor={{ fill: "rgba(255,255,255,0.02)" }}
@@ -1998,10 +1992,10 @@ export default function Analytics() {
                       No profit data in the selected timeframe.
                     </p>
                   ) : (
-                    <ResponsiveContainer width="100%" height={280}>
+                    <ResponsiveContainer width="100%" height={STRATEGY_CHART_HEIGHT}>
                       <BarChart data={strategyFindingsData.profitByStrategy} margin={STRATEGY_CHART_MARGIN}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={STRATEGY_CHART_AXIS_PROPS.tick} angle={STRATEGY_CHART_AXIS_PROPS.angle} textAnchor={STRATEGY_CHART_AXIS_PROPS.textAnchor} height={STRATEGY_CHART_AXIS_PROPS.height} interval={0} />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                         <YAxis stroke="var(--text-secondary)" tickFormatter={(v) => typeof v === "number" ? (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v)) : String(v)} />
                         <Tooltip
                           cursor={{ fill: "rgba(255,255,255,0.02)" }}

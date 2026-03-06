@@ -132,6 +132,14 @@ const METRIC_COLOR_PRESET_LABELS: Record<string, string> = {
   fire: "Fire",
 };
 
+/** Format checklist item avg performance for display (R, %, or $ with 2 decimals). */
+function formatChecklistAvgPerformance(avg: number | null, kind: string): string {
+  if (avg == null || kind === "none") return "—";
+  if (kind === "r") return avg.toFixed(2) + " R";
+  if (kind === "pct") return avg.toFixed(1) + "%";
+  return "$" + avg.toFixed(2);
+}
+
 /** Build CSS linear-gradient string from gradient stops for preview. */
 function metricGradientCss(presetKey: string): string {
   const stops = METRIC_COLOR_GRADIENTS[presetKey];
@@ -5898,9 +5906,6 @@ export default function Strategies() {
                   >
                     {/* Survey metrics – calculation presets and metrics together */}
                     <div style={{ marginBottom: "24px", paddingBottom: "20px", borderBottom: "1px solid var(--border-color)" }}>
-                      <h2 style={{ fontSize: "20px", fontWeight: "700", color: "var(--text-primary)", margin: "0 0 4px 0" }}>
-                        Survey metrics
-                      </h2>
                       <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px", maxWidth: "560px" }}>
                         Tie metrics to survey items (add items in the Surveys tab). Use calculation presets or inline formulas. Choose which items feed each metric and how the score is calculated (average, min, max, or a saved preset).
                       </p>
@@ -5987,6 +5992,10 @@ export default function Strategies() {
                           </button>
                         )}
                       </div>
+                      {/* Survey metrics label above the metric cards */}
+                      <h2 style={{ fontSize: "20px", fontWeight: "700", color: "var(--text-primary)", margin: "0 0 12px 0" }}>
+                        Survey metrics
+                      </h2>
                       {/* Metric cards and Add metric */}
                       {(() => {
                         const surveyItemsForMetrics = (currentChecklist.get("survey") || []).filter((i) => i.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
@@ -6177,13 +6186,7 @@ export default function Strategies() {
                                   <td style={{ padding: "8px", color: "var(--text-secondary)" }}>{row.checklist_type === "survey" ? "Post-Trade Survey" : row.checklist_type === "entry" ? "Entry" : row.checklist_type === "exit" ? "Exit" : row.checklist_type.replace(/^survey_/, "").replace(/_/g, " ")}</td>
                                   <td style={{ padding: "8px", textAlign: "right", color: "var(--text-primary)" }}>{row.times_checked}</td>
                                   <td style={{ padding: "8px", textAlign: "right", color: row.avg_performance != null && row.avg_performance < 0 ? "var(--loss)" : "var(--text-primary)" }}>
-                                    {row.avg_performance != null
-                                      ? row.performance_kind === "r"
-                                        ? row.avg_performance.toFixed(2) + " R"
-                                        : row.performance_kind === "pct"
-                                          ? row.avg_performance.toFixed(1) + "%"
-                                          : "$" + row.avg_performance.toFixed(0)
-                                      : "—"}
+                                    {formatChecklistAvgPerformance(row.avg_performance, row.performance_kind)}
                                   </td>
                                 </tr>
                               ))}
@@ -7135,27 +7138,7 @@ export default function Strategies() {
                 >
                   Specific Strategy Metrics
                 </h2>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "12px",
-                    flexWrap: "wrap",
-                    marginBottom: "10px",
-                  }}
-                >
-                  <h3
-                    style={{
-                      fontSize: "14px",
-                      fontWeight: "600",
-                      margin: 0,
-                      color: "var(--text-primary)",
-                    }}
-                  >
-                    Survey metrics
-                  </h3>
-                </div>
-                <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "4px 0 0 0" }}>
+                <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "0 0 12px 0" }}>
                   Survey metrics, checklist item metrics, and checklist insights are filtered by the Strategies dropdown at the top of the page.
                 </p>
                 {(overviewCustomMetricsByStrategy.size > 0 || overviewChecklistItemMetricsByStrategy.size > 0 || overviewChecklistByOutcomePerStrategy.length > 0) ? (
@@ -7207,14 +7190,18 @@ export default function Strategies() {
                               {s.name}
                             </div>
                             {metrics.length > 0 && (
-                              <div
-                                style={{
-                                  display: "grid",
-                                  gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-                                  gap: "8px",
-                                  marginBottom: (itemMetrics.length > 0 || hasInsights) ? "12px" : 0,
-                                }}
-                              >
+                              <>
+                                <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.02em" }}>
+                                  Survey metrics
+                                </div>
+                                <div
+                                  style={{
+                                    display: "grid",
+                                    gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+                                    gap: "8px",
+                                    marginBottom: (itemMetrics.length > 0 || hasInsights) ? "12px" : 0,
+                                  }}
+                                >
                                 {metrics.map((m) => (
                                   <div
                                     key={m.id}
@@ -7244,40 +7231,37 @@ export default function Strategies() {
                                     )}
                                   </div>
                                 ))}
-                              </div>
+                                </div>
+                              </>
                             )}
                             {itemMetrics.length > 0 && (
-                              <div style={{ overflowX: "auto", marginBottom: hasInsights ? "12px" : 0 }}>
-                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
-                                  <thead>
-                                    <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
-                                      <th style={{ textAlign: "left", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>Item</th>
-                                      <th style={{ textAlign: "right", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>#</th>
-                                      <th style={{ textAlign: "right", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>Avg</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {itemMetrics.slice(0, 6).map((row) => (
-                                      <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
-                                        <td style={{ padding: "6px", color: "var(--text-primary)" }}>{row.item_text}</td>
-                                        <td style={{ padding: "6px", textAlign: "right", color: "var(--text-secondary)" }}>{row.times_checked}</td>
-                                        <td style={{ padding: "6px", textAlign: "right", color: row.avg_performance != null && row.avg_performance < 0 ? "var(--loss)" : "var(--text-primary)" }}>
-                                          {row.avg_performance != null
-                                            ? row.performance_kind === "r"
-                                              ? row.avg_performance.toFixed(2) + " R"
-                                              : row.performance_kind === "pct"
-                                                ? row.avg_performance.toFixed(1) + "%"
-                                                : "$" + row.avg_performance.toFixed(0)
-                                            : "—"}
-                                        </td>
+                              <>
+                                <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.02em" }}>
+                                  Checklist & survey item metrics
+                                </div>
+                                <div style={{ overflowX: "auto", marginBottom: hasInsights ? "12px" : 0 }}>
+                                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                                    <thead>
+                                      <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                        <th style={{ textAlign: "left", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>Item</th>
+                                        <th style={{ textAlign: "right", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>#</th>
+                                        <th style={{ textAlign: "right", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>Avg</th>
                                       </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                                {itemMetrics.length > 6 && (
-                                  <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>+{itemMetrics.length - 6} more</div>
-                                )}
-                              </div>
+                                    </thead>
+                                    <tbody>
+                                      {itemMetrics.map((row) => (
+                                        <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                          <td style={{ padding: "6px", color: "var(--text-primary)" }}>{row.item_text}</td>
+                                          <td style={{ padding: "6px", textAlign: "right", color: "var(--text-secondary)" }}>{row.times_checked}</td>
+                                          <td style={{ padding: "6px", textAlign: "right", color: row.avg_performance != null && row.avg_performance < 0 ? "var(--loss)" : "var(--text-primary)" }}>
+                                            {formatChecklistAvgPerformance(row.avg_performance, row.performance_kind)}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </>
                             )}
                             {hasInsights && (
                               <div
