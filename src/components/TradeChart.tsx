@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { createChart, IChartApi, ISeriesApi, CandlestickData, ColorType, UTCTimestamp, CandlestickSeries, SeriesMarker, createSeriesMarkers } from "lightweight-charts";
+import { createChart, IChartApi, ISeriesApi, CandlestickData, ColorType, UTCTimestamp, CandlestickSeries, LineSeries, SeriesMarker, createSeriesMarkers } from "lightweight-charts";
 import { format } from "date-fns";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Settings } from "lucide-react";
@@ -43,6 +43,10 @@ interface ChartSettings {
   downColor: string;
   buyMarkerColor: string;
   sellMarkerColor: string;
+  showBuySellLines: boolean;
+  showAverageCostLine: boolean;
+  limitBuySellLinesToCandleWidth: boolean;
+  showCurrentPriceLine: boolean;
 }
 
 const CHART_SETTINGS_KEY = "tradebutler_chart_settings";
@@ -52,8 +56,23 @@ const defaultSettings: ChartSettings = {
   gridColor: "#2a2a2a",
   upColor: "#26a69a",
   downColor: "#ef5350",
-  buyMarkerColor: "#26a69a",
+  buyMarkerColor: "#10b981",
   sellMarkerColor: "#ef5350",
+  showBuySellLines: true,
+  showAverageCostLine: true,
+  limitBuySellLinesToCandleWidth: false,
+  showCurrentPriceLine: true,
+};
+
+// Bar duration in seconds per timeframe (for segment lines)
+const BAR_DURATION_SEC: Record<Timeframe, number> = {
+  "1m": 60,
+  "3m": 180,
+  "5m": 300,
+  "15m": 900,
+  "30m": 1800,
+  "1h": 3600,
+  "1d": 86400,
 };
 
 export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, exitPrice, onClose, positionTrades, inline = false, compactHeight = 200 }: TradeChartProps) {
@@ -61,6 +80,9 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const markersRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
+  const priceLinesRef = useRef<any[]>([]);
+  const segmentSeriesRef = useRef<any[]>([]);
+  const avgCostSeriesRef = useRef<any | null>(null);
   const [timeframe, setTimeframe] = useState<Timeframe>("1d");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -269,7 +291,24 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
       console.log(`Setting ${candlestickData.length} data points to chart`);
       seriesRef.current.setData(candlestickData);
       console.log('Data set successfully');
-      
+
+      // Re-apply price scale after layout so vertical drag works without needing to adjust y-axis first
+      const chart = chartRef.current;
+      const applyPriceScaleForDrag = () => {
+        try {
+          chart.priceScale('right').applyOptions({
+            scaleMargins: { top: 0.1, bottom: 0.2 },
+          });
+        } catch (_) {}
+      };
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          applyPriceScaleForDrag();
+          // Second pass after a short delay so chart layout is fully complete
+          setTimeout(applyPriceScaleForDrag, 80);
+        });
+      });
+
       // Note: Markers will be set separately after data is loaded
 
       // Create markers for each trade execution if positionTrades is provided
@@ -277,17 +316,25 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
       
       if (positionTrades && positionTrades.length > 0) {
         // Sort trades by timestamp
-        const sortedTrades = [...positionTrades].sort((a, b) => 
+        const sortedTrades = [...positionTrades].sort((a, b) =>
           new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
         );
-        
+
+        // Compute running position after each trade (for label)
+        let runningPosition = 0;
+        const positionAfterTrade: number[] = [];
+        for (const t of sortedTrades) {
+          const isBuy = t.side.toUpperCase() === "BUY";
+          runningPosition += isBuy ? t.quantity : -t.quantity;
+          positionAfterTrade.push(runningPosition);
+        }
+
         // Find the closest bar time for each trade to ensure markers align with visible bars
         const findClosestBarTime = (tradeTimestamp: number): UTCTimestamp => {
           const tradeTime = Math.floor(tradeTimestamp / 1000);
           let closestTime = tradeTime;
           let minDiff = Infinity;
-          
-          // Find the closest candlestick time
+
           for (const candle of candlestickData) {
             const candleTime = typeof candle.time === 'number' ? candle.time : Math.floor(new Date(candle.time as string).getTime() / 1000);
             const diff = Math.abs(candleTime - tradeTime);
@@ -296,27 +343,33 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
               closestTime = candleTime;
             }
           }
-          
           return closestTime as UTCTimestamp;
         };
-        
-        sortedTrades.forEach((trade) => {
+
+        const buyColor = cleanColor(chartSettings.buyMarkerColor, defaultSettings.buyMarkerColor);
+        const sellColor = cleanColor(chartSettings.sellMarkerColor, defaultSettings.sellMarkerColor);
+        const lastIndex = sortedTrades.length - 1;
+
+        sortedTrades.forEach((trade, i) => {
           const tradeTimestamp = new Date(trade.timestamp).getTime();
           const tradeTime = findClosestBarTime(tradeTimestamp);
           const isBuy = trade.side.toUpperCase() === "BUY";
-          
-          const buyColor = cleanColor(chartSettings.buyMarkerColor, defaultSettings.buyMarkerColor);
-          const sellColor = cleanColor(chartSettings.sellMarkerColor, defaultSettings.sellMarkerColor);
-          
+          const positionAfter = positionAfterTrade[i];
+
+          // Only first trade = "Entry", only last trade = "Exit", others = "Buy" or "Sell"
+          let label: string;
+          if (i === 0) label = "Entry";
+          else if (i === lastIndex) label = "Exit";
+          else label = isBuy ? "Buy" : "Sell";
+
           const marker: SeriesMarker<UTCTimestamp> = {
             time: tradeTime,
             position: isBuy ? 'belowBar' : 'aboveBar',
             color: isBuy ? buyColor : sellColor,
             shape: isBuy ? 'arrowUp' : 'arrowDown',
-            size: 2, // Larger size for better visibility
-            text: `${trade.side} ${trade.quantity.toFixed(2)} @ $${trade.price.toFixed(2)}`, // Show details for both stocks and options
+            size: 2,
+            text: `${label} ${trade.quantity.toFixed(2)} @ $${trade.price.toFixed(2)} (size: ${positionAfter.toFixed(2)})`,
           };
-          
           markers.push(marker);
         });
       } else {
@@ -448,27 +501,127 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
         });
       }
 
-      // Add entry and exit price lines for both stocks and options
+      // Remove existing price lines and segment series before re-creating
+      const series = seriesRef.current;
+      priceLinesRef.current.forEach((line) => {
+        try {
+          series.removePriceLine(line);
+        } catch (_) {}
+      });
+      priceLinesRef.current = [];
+      segmentSeriesRef.current.forEach((segSeries) => {
+        try {
+          chart.removeSeries(segSeries);
+        } catch (_) {}
+      });
+      segmentSeriesRef.current = [];
+      if (avgCostSeriesRef.current) {
+        try {
+          chart.removeSeries(avgCostSeriesRef.current);
+        } catch (_) {}
+        avgCostSeriesRef.current = null;
+      }
+
       const buyColor = cleanColor(chartSettings.buyMarkerColor, defaultSettings.buyMarkerColor);
       const sellColor = cleanColor(chartSettings.sellMarkerColor, defaultSettings.sellMarkerColor);
-      
-      seriesRef.current.createPriceLine({
+      const avgCostColor = "#3b82f6"; // blue
+
+      // Entry and exit lines (always)
+      priceLinesRef.current.push(series.createPriceLine({
         price: entryPrice,
         color: buyColor,
         lineWidth: 2,
-        lineStyle: 0, // Solid
+        lineStyle: 2, // Dashed
         axisLabelVisible: true,
         title: "Entry",
-      });
-
-      seriesRef.current.createPriceLine({
+      }));
+      priceLinesRef.current.push(series.createPriceLine({
         price: exitPrice,
         color: sellColor,
         lineWidth: 2,
-        lineStyle: 0, // Solid
+        lineStyle: 2, // Dashed
         axisLabelVisible: true,
         title: "Exit",
-      });
+      }));
+
+      // Per-trade buy/sell dashed lines (toggleable)
+      const showSegmentsOnly = chartSettings.limitBuySellLinesToCandleWidth && chartSettings.showBuySellLines && positionTrades && positionTrades.length > 0;
+      const showFullWidthLines = chartSettings.showBuySellLines && positionTrades && positionTrades.length > 0 && !chartSettings.limitBuySellLinesToCandleWidth;
+
+      if (showSegmentsOnly) {
+        // Draw one horizontal segment per trade (width = one candle), no axis labels on right
+        const sortedTrades = [...positionTrades].sort((a, b) =>
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+        const barSec = BAR_DURATION_SEC[timeframe];
+        for (const trade of sortedTrades) {
+          const isBuy = trade.side.toUpperCase() === "BUY";
+          const t = Math.floor(new Date(trade.timestamp).getTime() / 1000) as UTCTimestamp;
+          const tEnd = (t + barSec) as UTCTimestamp;
+          const segSeries = chart.addSeries(LineSeries, {
+            color: isBuy ? buyColor : sellColor,
+            lineWidth: 1,
+            lineStyle: 2, // Dashed
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          segSeries.setData([
+            { time: t, value: trade.price },
+            { time: tEnd, value: trade.price },
+          ]);
+          segmentSeriesRef.current.push(segSeries);
+        }
+      } else if (showFullWidthLines) {
+        const sortedTrades = [...positionTrades].sort((a, b) =>
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+        for (const trade of sortedTrades) {
+          const isBuy = trade.side.toUpperCase() === "BUY";
+          const label = isBuy ? `Buy $${trade.price.toFixed(2)}` : `Sell $${trade.price.toFixed(2)}`;
+          priceLinesRef.current.push(series.createPriceLine({
+            price: trade.price,
+            color: isBuy ? buyColor : sellColor,
+            lineWidth: 1,
+            lineStyle: 2, // Dashed
+            axisLabelVisible: true,
+            title: label,
+          }));
+        }
+      }
+
+      // Running average cost line (toggleable) — step-wise, updates after each buy/sell
+      if (chartSettings.showAverageCostLine && positionTrades && positionTrades.length > 0) {
+        const sortedTrades = [...positionTrades].sort((a, b) =>
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+        let netQty = 0;
+        let netCost = 0;
+        const avgCostPoints: { time: UTCTimestamp; value: number }[] = [];
+        for (const t of sortedTrades) {
+          const isBuy = t.side.toUpperCase() === "BUY";
+          const q = t.quantity;
+          const add = isBuy ? 1 : -1;
+          netQty += add * q;
+          netCost += add * q * t.price;
+          if (Math.abs(netQty) > 1e-9) {
+            const avgCost = netCost / netQty;
+            const time = Math.floor(new Date(t.timestamp).getTime() / 1000) as UTCTimestamp;
+            avgCostPoints.push({ time, value: avgCost });
+          }
+        }
+        if (avgCostPoints.length > 0) {
+          const avgSeries = chart.addSeries(LineSeries, {
+            color: avgCostColor,
+            lineWidth: 2,
+            lineStyle: 2, // Dashed
+            lineType: 1, // WithSteps — horizontal then step at each trade
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          avgSeries.setData(avgCostPoints);
+          avgCostSeriesRef.current = avgSeries;
+        }
+      }
 
       // Set visible range to show entry and exit with some padding
       const entryTime = Math.floor(new Date(entryTimestamp).getTime() / 1000) as UTCTimestamp;
@@ -655,9 +808,24 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                 },
                 rightPriceScale: {
                   borderColor: gridColor,
+                  scaleMargins: { top: 0.1, bottom: 0.2 },
                 },
                 timeScale: {
                   borderColor: gridColor,
+                },
+                crosshair: {
+                  mode: 0, // Normal: free-moving, no snap to bars — reads values anywhere
+                },
+                handleScroll: {
+                  pressedMouseMove: true,
+                  mouseWheel: true,
+                  horzTouchDrag: true,
+                  vertTouchDrag: true,
+                },
+                handleScale: {
+                  axisPressedMouseMove: { time: true, price: true },
+                  mouseWheel: true,
+                  pinch: true,
                 },
               });
               console.log('Chart created successfully');
@@ -687,6 +855,7 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
             try {
               console.log('Attempting to add series immediately after chart creation...');
               const chartAny = chart as any;
+              const showPriceLine = chartSettings.showCurrentPriceLine;
               if (typeof chartAny.addCandlestickSeries === 'function') {
                 candlestickSeries = chartAny.addCandlestickSeries({
                   upColor: finalProfitColor,
@@ -694,6 +863,8 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                   borderVisible: false,
                   wickUpColor: finalProfitColor,
                   wickDownColor: finalLossColor,
+                  lastValueVisible: showPriceLine,
+                  priceLineVisible: showPriceLine,
                 });
                 console.log('Series added successfully with addCandlestickSeries');
               } else {
@@ -704,6 +875,8 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                   borderVisible: false,
                   wickUpColor: finalProfitColor,
                   wickDownColor: finalLossColor,
+                  lastValueVisible: showPriceLine,
+                  priceLineVisible: showPriceLine,
                 });
                 console.log('Series added successfully with addSeries');
               }
@@ -812,6 +985,7 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                 
                 console.log('Available methods:', { hasAddCandlestickSeries, hasAddSeries });
                 
+                const showPriceLine = chartSettings.showCurrentPriceLine;
                 if (hasAddCandlestickSeries) {
                   // Try the specific candlestick method if it exists
                   console.log('Using addCandlestickSeries method');
@@ -821,6 +995,8 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                     borderVisible: false,
                     wickUpColor: finalProfitColor,
                     wickDownColor: finalLossColor,
+                    lastValueVisible: showPriceLine,
+                    priceLineVisible: showPriceLine,
                   });
                 } else if (hasAddSeries) {
                   // Use the generic addSeries method
@@ -832,6 +1008,8 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                     borderVisible: false,
                     wickUpColor: finalProfitColor,
                     wickDownColor: finalLossColor,
+                    lastValueVisible: showPriceLine,
+                    priceLineVisible: showPriceLine,
                   });
                 } else {
                   throw new Error('Neither addSeries nor addCandlestickSeries methods are available');
@@ -964,14 +1142,19 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
         timeScale: {
           borderColor: gridColor,
         },
+        crosshair: {
+          mode: 0, // Normal: free-moving, no snap — reads values inside/outside bars
+        },
       });
       
-      // Update series colors
+      // Update series colors and current price line visibility
       seriesRef.current.applyOptions({
         upColor: upColor,
         downColor: downColor,
         wickUpColor: upColor,
         wickDownColor: downColor,
+        lastValueVisible: chartSettings.showCurrentPriceLine,
+        priceLineVisible: chartSettings.showCurrentPriceLine,
       });
     }
   }, [chartSettings, cleanColor]);
@@ -1413,6 +1596,55 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                     placeholder="#ef5350"
                   />
                 </div>
+              </div>
+
+              {/* Show buy/sell price lines */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px", gridColumn: "1 / -1" }}>
+                <label style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500", display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={chartSettings.showBuySellLines}
+                    onChange={(e) => handleSettingsChange({ showBuySellLines: e.target.checked })}
+                    style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                  />
+                  Show buy/sell price lines (dashed at each trade)
+                </label>
+              </div>
+              {/* Show average cost line */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px", gridColumn: "1 / -1" }}>
+                <label style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500", display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={chartSettings.showAverageCostLine}
+                    onChange={(e) => handleSettingsChange({ showAverageCostLine: e.target.checked })}
+                    style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                  />
+                  Show average cost line (blue dashed)
+                </label>
+              </div>
+              {/* Limit buy/sell lines to candle width */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px", gridColumn: "1 / -1" }}>
+                <label style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500", display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={chartSettings.limitBuySellLinesToCandleWidth}
+                    onChange={(e) => handleSettingsChange({ limitBuySellLinesToCandleWidth: e.target.checked })}
+                    style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                  />
+                  Limit buy/sell lines to candle width (no line on right margin)
+                </label>
+              </div>
+              {/* Show current price line on price scale */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px", gridColumn: "1 / -1" }}>
+                <label style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500", display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={chartSettings.showCurrentPriceLine}
+                    onChange={(e) => handleSettingsChange({ showCurrentPriceLine: e.target.checked })}
+                    style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                  />
+                  Show current price line (blue line on price scale)
+                </label>
               </div>
             </div>
           </div>
