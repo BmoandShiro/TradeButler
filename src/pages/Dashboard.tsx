@@ -10,6 +10,7 @@ import {
   useSensor,
   useSensors,
   DragEndEvent,
+  useDroppable,
 } from "@dnd-kit/core";
 import {
   arrayMove,
@@ -346,6 +347,7 @@ interface MetricInstance {
   chartWidth?: number;  // For position_size_chart: resizable chart width in px (default: grid auto)
   positionChartBrushStart?: number; // For position_size_chart: Brush range start index
   positionChartBrushEnd?: number;   // For position_size_chart: Brush range end index
+  slotIndex?: number;               // When layout locked: fixed grid slot (0-based), allows gaps
 }
 
 interface DashboardSections {
@@ -534,6 +536,24 @@ const metricDescriptions: Record<string, { description: string; calculation: str
     calculation: "Maximum consecutive count of strategy trades with net_profit_loss < 0"
   },
 };
+
+function DroppableSlot({ id, children }: { id: string; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        minHeight: "120px",
+        borderRadius: "8px",
+        border: isOver ? "2px dashed var(--accent)" : "1px solid transparent",
+        backgroundColor: isOver ? "color-mix(in srgb, var(--accent) 8%, transparent)" : "transparent",
+        transition: "border-color 0.15s, background-color 0.15s",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
 function SortableMetricCard({
   id,
@@ -1746,23 +1766,65 @@ export default function Dashboard() {
     })
   );
   
+  // When layout is locked, ensure every instance has a slotIndex (init from current order)
+  useEffect(() => {
+    if (!layoutLocked) return;
+    setMetricInstances((prev) => {
+      const order = metricCardOrder.filter(id => prev.some(inst => inst.instanceId === id));
+      const needsInit = prev.some(inst => inst.slotIndex === undefined);
+      if (!needsInit) return prev;
+      const maxSlot = Math.max(-1, ...prev.map((i, idx) => i.slotIndex ?? idx));
+      const next = prev.map((inst) => {
+        if (inst.slotIndex !== undefined) return inst;
+        const idx = order.indexOf(inst.instanceId);
+        return { ...inst, slotIndex: idx >= 0 ? idx : maxSlot + 1 };
+      });
+      localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, [layoutLocked, metricCardOrder]);
+
   // Handle drag end for metrics
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
-    
-    if (over && active.id !== over.id) {
+
+    if (layoutLocked && over && typeof over.id === "string") {
+      const overId = String(over.id);
+      let targetSlot: number | null = null;
+      if (overId.startsWith("metric-slot-")) {
+        const parsed = parseInt(overId.replace("metric-slot-", ""), 10);
+        if (!Number.isNaN(parsed) && parsed >= 0) targetSlot = parsed;
+      } else if (metricInstances.some((inst) => inst.instanceId === overId)) {
+        const targetCard = metricInstances.find((inst) => inst.instanceId === overId);
+        if (targetCard && targetCard.slotIndex !== undefined) targetSlot = targetCard.slotIndex;
+      }
+      if (targetSlot !== null) {
+        const draggedId = active.id as string;
+        setMetricInstances((prev) => {
+          const dragged = prev.find((inst) => inst.instanceId === draggedId);
+          if (!dragged) return prev;
+          const oldSlot = dragged.slotIndex ?? prev.findIndex((i) => i.instanceId === draggedId);
+          const occupant = prev.find((inst) => inst.instanceId !== draggedId && (inst.slotIndex ?? 0) === targetSlot);
+          const updated = prev.map((inst) => {
+            if (inst.instanceId === draggedId) return { ...inst, slotIndex: targetSlot! };
+            if (occupant && inst.instanceId === occupant.instanceId) return { ...inst, slotIndex: oldSlot };
+            return inst;
+          });
+          localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+          return updated;
+        });
+        return;
+      }
+    }
+
+    if (!layoutLocked && over && active.id !== over.id) {
       setMetricCardOrder((items) => {
         const currentInstanceIds = metricInstances.map(inst => inst.instanceId);
         let newOrder = [...items];
         
-        // Ensure all instance IDs are in the order
         currentInstanceIds.forEach(id => {
-          if (!newOrder.includes(id)) {
-            newOrder.push(id);
-          }
+          if (!newOrder.includes(id)) newOrder.push(id);
         });
-        
-        // Remove any IDs that are no longer valid instances
         newOrder = newOrder.filter(id => currentInstanceIds.includes(id));
         
         const oldIndex = newOrder.indexOf(active.id as string);
@@ -1773,7 +1835,6 @@ export default function Dashboard() {
           localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
           return finalOrder;
         }
-        
         return newOrder;
       });
     }
@@ -2028,6 +2089,7 @@ export default function Dashboard() {
           chartWidth: inst.chartWidth ?? undefined,
           positionChartBrushStart: inst.positionChartBrushStart ?? 0,
           positionChartBrushEnd: inst.positionChartBrushEnd ?? 0,
+          slotIndex: inst.slotIndex ?? undefined,
         };
       })
       .filter((m): m is any => m !== null);
@@ -2483,35 +2545,14 @@ export default function Dashboard() {
                 ? maxColumns
                 : layoutLocked ? 4 : 1)
           : 1;
-        return (
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
-      >
-        <SortableContext
-          items={sortedMetrics.map(m => m.id)}
-          strategy={rectSortingStrategy}
-        >
-      <div
-        style={{
-          display: useGridLayout ? "grid" : "flex",
-          flexWrap: useGridLayout ? undefined : "wrap",
-          gridTemplateColumns: useGridLayout ? `repeat(${gridColumns}, 1fr)` : undefined,
-          gap: "20px",
-          marginBottom: "30px",
-          alignItems: "stretch",
-        }}
-      >
-        {sortedMetrics.map((metric) => {
-          // Get base metric ID for value lookup
+
+        const renderCard = (metric: typeof sortedMetrics[0]) => {
           const baseMetricId = (metric as any).baseMetricId || metric.id;
-          const value = filteredStrategyMetrics[metric.id] !== undefined 
+          const value = filteredStrategyMetrics[metric.id] !== undefined
             ? filteredStrategyMetrics[metric.id]
             : (metricValues[baseMetricId] || 0);
           const Icon = metricIcons[baseMetricId] || Activity;
           const color = getMetricColor(baseMetricId, value);
-
           return (
             <SortableMetricCard
               key={metric.id}
@@ -2546,7 +2587,64 @@ export default function Dashboard() {
               isGridLayout={useGridLayout}
             />
           );
-        })}
+        };
+
+        if (layoutLocked) {
+          const maxSlot = Math.max(0, ...displayMetrics.map((m: any, i: number) => m.slotIndex ?? i));
+          return (
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={displayMetrics.map((m: any) => m.id)}
+                strategy={rectSortingStrategy}
+              >
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: `repeat(${gridColumns}, 1fr)`,
+                    gap: "20px",
+                    marginBottom: "30px",
+                    alignItems: "stretch",
+                  }}
+                >
+                  {Array.from({ length: maxSlot + 2 }, (_, i) => {
+                    const metric = displayMetrics.find((m: any) => (m.slotIndex ?? 0) === i);
+                    return (
+                      <DroppableSlot key={i} id={`metric-slot-${i}`}>
+                        {metric ? renderCard(metric) : null}
+                      </DroppableSlot>
+                    );
+                  })}
+                </div>
+              </SortableContext>
+            </DndContext>
+          );
+        }
+
+        return (
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext
+          items={sortedMetrics.map(m => m.id)}
+          strategy={rectSortingStrategy}
+        >
+      <div
+        style={{
+          display: useGridLayout ? "grid" : "flex",
+          flexWrap: useGridLayout ? undefined : "wrap",
+          gridTemplateColumns: useGridLayout ? `repeat(${gridColumns}, 1fr)` : undefined,
+          gap: "20px",
+          marginBottom: "30px",
+          alignItems: "stretch",
+        }}
+      >
+        {sortedMetrics.map((metric) => renderCard(metric))}
       </div>
         </SortableContext>
       </DndContext>
