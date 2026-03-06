@@ -552,12 +552,14 @@ export function getSandboxStrategyChecklistItemMetricsByOutcome(strategyId: numb
     const goodShare = 0.25 + (idx % 7) * 0.12;
     const good = Math.max(0, Math.min(total, Math.floor(total * goodShare)));
     const bad = total - good;
+    const notCheckedBad = 3 + (i.id % 5) + (strategyId % 4);
     return {
       checklist_item_id: i.id,
       item_text: i.item_text,
       checklist_type: i.checklist_type,
       times_checked_good: good,
       times_checked_bad: bad,
+      times_not_checked_bad: notCheckedBad,
     };
   });
 }

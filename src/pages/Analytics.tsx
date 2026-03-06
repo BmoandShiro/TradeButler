@@ -134,6 +134,7 @@ interface ChecklistItemMetricByOutcomeRow {
   checklist_type: string;
   times_checked_good: number;
   times_checked_bad: number;
+  times_not_checked_bad: number;
 }
 
 const STRATEGY_CHART_AXIS_PROPS = {
@@ -1101,29 +1102,8 @@ export default function Analytics() {
         count,
       }))
       .sort((a, b) => b.count - a.count);
-    const topWinningSubItemsByStrategy: Array<{ strategyName: string; checklists: Array<{ checklistTypeDisplay: string; topItemText: string; good: number }> }> = [];
-    (checklistByOutcomePerStrategy ?? []).forEach(({ strategyName, items }) => {
-      const byType = new Map<string, ChecklistItemMetricByOutcomeRow[]>();
-      items.forEach((row) => {
-        const type = row.checklist_type || "other";
-        if (!byType.has(type)) byType.set(type, []);
-        byType.get(type)!.push(row);
-      });
-      const checklists: Array<{ checklistTypeDisplay: string; topItemText: string; good: number }> = [];
-      byType.forEach((rows, type) => {
-        const top = rows.reduce((best, r) => ((r.times_checked_good ?? 0) > (best.times_checked_good ?? 0) ? r : best), rows[0]);
-        if (top && (top.times_checked_good ?? 0) > 0) {
-          checklists.push({
-            checklistTypeDisplay: type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
-            topItemText: (top.item_text || `Item ${top.checklist_item_id}`).trim(),
-            good: top.times_checked_good ?? 0,
-          });
-        }
-      });
-      if (checklists.length > 0) topWinningSubItemsByStrategy.push({ strategyName, checklists });
-    });
-    return { tradesByStrategy, profitableTradesByStrategy, profitByStrategy, checklistTypeData, topWinningSubItemsByStrategy };
-  }, [strategyPerformance, checklistItemMetrics, checklistByOutcomePerStrategy]);
+    return { tradesByStrategy, profitableTradesByStrategy, profitByStrategy, checklistTypeData };
+  }, [strategyPerformance, checklistItemMetrics]);
 
   if (loading) {
     return (
@@ -2040,29 +2020,6 @@ export default function Analytics() {
                       </BarChart>
                     </ResponsiveContainer>
                   )}
-                </div>
-              </div>
-            )}
-            {strategyFindingsData.topWinningSubItemsByStrategy.length > 0 && (
-              <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: "1px solid var(--border-color)" }}>
-                <h3 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>
-                  Top winning sub checklist item from this checklist from this strategy
-                </h3>
-                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                  {strategyFindingsData.topWinningSubItemsByStrategy.map(({ strategyName, checklists }) => (
-                    <div key={strategyName} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                      <div style={{ fontWeight: "600", fontSize: "13px", color: "var(--accent)" }}>{strategyName}</div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: "12px 20px", paddingLeft: "12px", borderLeft: "2px solid var(--border-color)" }}>
-                        {checklists.map(({ checklistTypeDisplay, topItemText, good }) => (
-                          <div key={`${strategyName}-${checklistTypeDisplay}`} style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                            <span style={{ color: "var(--text-primary)", marginRight: "6px" }}>{checklistTypeDisplay}:</span>
-                            <span style={{ color: "var(--success, #22c55e)" }}>{topItemText}</span>
-                            <span style={{ marginLeft: "6px", opacity: 0.9 }}>({good} with winning trades)</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
                 </div>
               </div>
             )}

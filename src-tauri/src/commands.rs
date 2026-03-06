@@ -3664,6 +3664,8 @@ pub struct ChecklistItemMetricByOutcomeRow {
     pub checklist_type: String,
     pub times_checked_good: i64,
     pub times_checked_bad: i64,
+    /// Count of losing journal entries (avg trade performance <= 0) where this checklist item was not checked.
+    pub times_not_checked_bad: i64,
 }
 
 #[tauri::command]
@@ -3682,6 +3684,43 @@ pub fn get_strategy_checklist_item_metrics_by_outcome(strategy_id: i64) -> Resul
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
         .collect();
+    // Journal entry IDs for this strategy that are "losing" (avg trade performance <= 0).
+    let losing_entry_ids: std::collections::HashSet<i64> = {
+        let entry_ids: Vec<i64> = conn.prepare(
+            "SELECT id FROM journal_entries WHERE strategy_id = ?1"
+        ).map_err(|e| e.to_string())?
+            .query_map(params![strategy_id], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        let mut losing = std::collections::HashSet::new();
+        for journal_entry_id in entry_ids {
+            let jt_ids: Vec<i64> = conn.prepare("SELECT id FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order")
+                .map_err(|e| e.to_string())?
+                .query_map(params![journal_entry_id], |row| row.get(0))
+                .map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .collect();
+            if jt_ids.is_empty() {
+                losing.insert(journal_entry_id);
+                continue;
+            }
+            let mut sum = 0.0_f64;
+            let mut n = 0_i32;
+            for jt_id in &jt_ids {
+                if let Ok((v, _)) = get_journal_trade_performance_raw(&conn, *jt_id) {
+                    if let Some(val) = v {
+                        sum += val;
+                        n += 1;
+                    }
+                }
+            }
+            if n == 0 || (sum / n as f64) <= 0.0 {
+                losing.insert(journal_entry_id);
+            }
+        }
+        losing
+    };
     let mut out = Vec::new();
     for (item_id, item_text, checklist_type) in items {
         let sql = if has_jt_ids {
@@ -3701,7 +3740,7 @@ pub fn get_strategy_checklist_item_metrics_by_outcome(strategy_id: i64) -> Resul
             .collect();
         let mut times_good = 0_i64;
         let mut times_bad = 0_i64;
-        for (journal_entry_id, journal_trade_ids) in rows {
+        for (journal_entry_id, journal_trade_ids) in &rows {
             let jt_ids: Vec<i64> = if let Some(ref s) = journal_trade_ids {
                 serde_json::from_str(s.as_str()).unwrap_or_default()
             } else {
@@ -3737,12 +3776,15 @@ pub fn get_strategy_checklist_item_metrics_by_outcome(strategy_id: i64) -> Resul
                 times_bad += 1;
             }
         }
+        let checked_entry_ids: std::collections::HashSet<i64> = rows.iter().map(|(eid, _)| *eid).collect();
+        let times_not_checked_bad = losing_entry_ids.iter().filter(|eid| !checked_entry_ids.contains(eid)).count() as i64;
         out.push(ChecklistItemMetricByOutcomeRow {
             checklist_item_id: item_id,
             item_text: item_text.clone(),
             checklist_type: checklist_type.clone(),
             times_checked_good: times_good,
             times_checked_bad: times_bad,
+            times_not_checked_bad,
         });
     }
     Ok(out)
