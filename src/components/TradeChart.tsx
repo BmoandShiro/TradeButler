@@ -46,6 +46,7 @@ interface ChartSettings {
   showBuySellLines: boolean;
   showAverageCostLine: boolean;
   limitBuySellLinesToCandleWidth: boolean;
+  showCurrentPriceLine: boolean;
 }
 
 const CHART_SETTINGS_KEY = "tradebutler_chart_settings";
@@ -60,6 +61,7 @@ const defaultSettings: ChartSettings = {
   showBuySellLines: true,
   showAverageCostLine: true,
   limitBuySellLinesToCandleWidth: false,
+  showCurrentPriceLine: true,
 };
 
 // Bar duration in seconds per timeframe (for segment lines)
@@ -289,7 +291,24 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
       console.log(`Setting ${candlestickData.length} data points to chart`);
       seriesRef.current.setData(candlestickData);
       console.log('Data set successfully');
-      
+
+      // Re-apply price scale after layout so vertical drag works without needing to adjust y-axis first
+      const chart = chartRef.current;
+      const applyPriceScaleForDrag = () => {
+        try {
+          chart.priceScale('right').applyOptions({
+            scaleMargins: { top: 0.1, bottom: 0.2 },
+          });
+        } catch (_) {}
+      };
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          applyPriceScaleForDrag();
+          // Second pass after a short delay so chart layout is fully complete
+          setTimeout(applyPriceScaleForDrag, 80);
+        });
+      });
+
       // Note: Markers will be set separately after data is loaded
 
       // Create markers for each trade execution if positionTrades is provided
@@ -483,7 +502,6 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
       }
 
       // Remove existing price lines and segment series before re-creating
-      const chart = chartRef.current;
       const series = seriesRef.current;
       priceLinesRef.current.forEach((line) => {
         try {
@@ -790,12 +808,24 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                 },
                 rightPriceScale: {
                   borderColor: gridColor,
+                  scaleMargins: { top: 0.1, bottom: 0.2 },
                 },
                 timeScale: {
                   borderColor: gridColor,
                 },
                 crosshair: {
                   mode: 0, // Normal: free-moving, no snap to bars — reads values anywhere
+                },
+                handleScroll: {
+                  pressedMouseMove: true,
+                  mouseWheel: true,
+                  horzTouchDrag: true,
+                  vertTouchDrag: true,
+                },
+                handleScale: {
+                  axisPressedMouseMove: { time: true, price: true },
+                  mouseWheel: true,
+                  pinch: true,
                 },
               });
               console.log('Chart created successfully');
@@ -825,6 +855,7 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
             try {
               console.log('Attempting to add series immediately after chart creation...');
               const chartAny = chart as any;
+              const showPriceLine = chartSettings.showCurrentPriceLine;
               if (typeof chartAny.addCandlestickSeries === 'function') {
                 candlestickSeries = chartAny.addCandlestickSeries({
                   upColor: finalProfitColor,
@@ -832,6 +863,8 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                   borderVisible: false,
                   wickUpColor: finalProfitColor,
                   wickDownColor: finalLossColor,
+                  lastValueVisible: showPriceLine,
+                  priceLineVisible: showPriceLine,
                 });
                 console.log('Series added successfully with addCandlestickSeries');
               } else {
@@ -842,6 +875,8 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                   borderVisible: false,
                   wickUpColor: finalProfitColor,
                   wickDownColor: finalLossColor,
+                  lastValueVisible: showPriceLine,
+                  priceLineVisible: showPriceLine,
                 });
                 console.log('Series added successfully with addSeries');
               }
@@ -950,6 +985,7 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                 
                 console.log('Available methods:', { hasAddCandlestickSeries, hasAddSeries });
                 
+                const showPriceLine = chartSettings.showCurrentPriceLine;
                 if (hasAddCandlestickSeries) {
                   // Try the specific candlestick method if it exists
                   console.log('Using addCandlestickSeries method');
@@ -959,6 +995,8 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                     borderVisible: false,
                     wickUpColor: finalProfitColor,
                     wickDownColor: finalLossColor,
+                    lastValueVisible: showPriceLine,
+                    priceLineVisible: showPriceLine,
                   });
                 } else if (hasAddSeries) {
                   // Use the generic addSeries method
@@ -970,6 +1008,8 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                     borderVisible: false,
                     wickUpColor: finalProfitColor,
                     wickDownColor: finalLossColor,
+                    lastValueVisible: showPriceLine,
+                    priceLineVisible: showPriceLine,
                   });
                 } else {
                   throw new Error('Neither addSeries nor addCandlestickSeries methods are available');
@@ -1107,12 +1147,14 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
         },
       });
       
-      // Update series colors
+      // Update series colors and current price line visibility
       seriesRef.current.applyOptions({
         upColor: upColor,
         downColor: downColor,
         wickUpColor: upColor,
         wickDownColor: downColor,
+        lastValueVisible: chartSettings.showCurrentPriceLine,
+        priceLineVisible: chartSettings.showCurrentPriceLine,
       });
     }
   }, [chartSettings, cleanColor]);
@@ -1590,6 +1632,18 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
                     style={{ width: "16px", height: "16px", cursor: "pointer" }}
                   />
                   Limit buy/sell lines to candle width (no line on right margin)
+                </label>
+              </div>
+              {/* Show current price line on price scale */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px", gridColumn: "1 / -1" }}>
+                <label style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500", display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={chartSettings.showCurrentPriceLine}
+                    onChange={(e) => handleSettingsChange({ showCurrentPriceLine: e.target.checked })}
+                    style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                  />
+                  Show current price line (blue line on price scale)
                 </label>
               </div>
             </div>
