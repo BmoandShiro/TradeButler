@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import {
   DndContext,
@@ -37,6 +38,18 @@ import {
 import { MetricsConfigPanel, useMetricsConfig } from "../components/MetricsConfig";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { format } from "date-fns";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine,
+  Brush,
+} from "recharts";
+import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { formatCompactNumber, formatWithCommas } from "../utils/formatCompactNumber";
 import { loadSandboxState } from "../utils/sandboxStore";
@@ -143,6 +156,14 @@ interface PairedTrade {
   strategy_id: number | null;
 }
 
+/** Position group from get_position_groups; open when final_quantity !== 0 */
+interface OpenPositionGroup {
+  entry_trade: { id: number; symbol: string; side: string; quantity: number; price: number; timestamp: string };
+  position_trades: Array<{ id: number; symbol: string; side: string; quantity: number; price: number; timestamp: string }>;
+  total_pnl: number;
+  final_quantity: number;
+}
+
 interface RecentTrade {
   symbol: string;
   entry_timestamp: string;
@@ -180,6 +201,7 @@ const metricIcons: Record<string, any> = {
   strategy_consecutive_wins: TrendingUp,
   strategy_consecutive_losses: TrendingDown,
   average_holding_time_seconds: Clock,
+  position_size_chart: BarChart3,
 };
 
 const formatMetricValue = (id: string, value: number, metrics: Metrics | null): string => {
@@ -316,6 +338,11 @@ interface MetricInstance {
   instanceId: string; // e.g., "strategy_win_rate_1", "strategy_win_rate_2"
   baseMetricId: string; // e.g., "strategy_win_rate"
   strategyFilterId: number | null; // Strategy filter for this instance
+  positionEntryId?: number | null; // For position_size_chart: which open position to show
+  chartHeight?: number; // For position_size_chart: resizable chart height (default 200)
+  chartWidth?: number;  // For position_size_chart: resizable chart width in px (default: grid auto)
+  positionChartBrushStart?: number; // For position_size_chart: Brush range start index
+  positionChartBrushEnd?: number;   // For position_size_chart: Brush range end index
 }
 
 interface DashboardSections {
@@ -323,6 +350,7 @@ interface DashboardSections {
   showStrategyPerformance: boolean;
   showRecentTrades: boolean;
   showTrades: boolean;
+  showOpenPositions: boolean;
 }
 
 const defaultDashboardSections: DashboardSections = {
@@ -330,11 +358,12 @@ const defaultDashboardSections: DashboardSections = {
   showStrategyPerformance: true,
   showRecentTrades: true,
   showTrades: true,
+  showOpenPositions: true,
 };
 
-type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades" | "trades";
+type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades" | "trades" | "openPositions";
 
-const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades"];
+const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "openPositions", "trades"];
 
 // Sortable Metric Card Component
 // SortableSection component for dashboard sections
@@ -473,6 +502,10 @@ const metricDescriptions: Record<string, { description: string; calculation: str
     description: "The average amount of time positions are held open before being closed.",
     calculation: "Sum of (exit_timestamp - entry_timestamp) for all paired trades ÷ Number of trades"
   },
+  position_size_chart: {
+    description: "Step chart of position size over time for a selected open position.",
+    calculation: "Running sum of quantity (BUY +, SELL -) by trade timestamp for the chosen position."
+  },
   strategy_win_rate: {
     description: "The win rate for trades assigned to strategies (excluding unassigned trades).",
     calculation: "Strategy winning trades ÷ (Strategy winning trades + Strategy losing trades) × 100%"
@@ -527,6 +560,7 @@ function SortableMetricCard({
   removeMetricInstance,
   setMetricInstances,
   dataMode,
+  openPositionGroups = [],
 }: {
   id: string;
   metric: any;
@@ -555,6 +589,7 @@ function SortableMetricCard({
   removeMetricInstance: (instanceId: string) => void;
   setMetricInstances: React.Dispatch<React.SetStateAction<MetricInstance[]>>;
   dataMode: DataMode;
+  openPositionGroups?: OpenPositionGroup[];
 }) {
   const {
     attributes,
@@ -571,6 +606,397 @@ function SortableMetricCard({
     opacity: isDragging ? 0.5 : 1,
   };
 
+  const baseMetricId = (metric as any).baseMetricId || metric.id;
+  const isPositionSizeChart = baseMetricId === "position_size_chart";
+  const positionEntryId = (metric as MetricInstance).positionEntryId ?? null;
+  const selectedGroup = openPositionGroups.find((g) => g.entry_trade.id === positionEntryId);
+  const chartHeight = Math.min(600, Math.max(160, (metric as MetricInstance).chartHeight ?? 200));
+  const chartWidth = (metric as MetricInstance).chartWidth;
+  const brushStart = (metric as MetricInstance).positionChartBrushStart ?? 0;
+  const brushEnd = (metric as MetricInstance).positionChartBrushEnd ?? 0;
+
+  // Position size chart card: different layout with selector and chart
+  if (isPositionSizeChart) {
+    let chartData: { time: string; positionSize: number; label: string }[] = [];
+    if (selectedGroup && selectedGroup.position_trades.length >= 1) {
+      chartData = [
+        {
+          time: selectedGroup.position_trades[0].timestamp,
+          positionSize: 0,
+          label: format(new Date(selectedGroup.position_trades[0].timestamp), "MMM d, HH:mm"),
+        },
+      ];
+      let running = 0;
+      selectedGroup.position_trades.forEach((t) => {
+        const side = t.side.toUpperCase();
+        if (side === "BUY") running += t.quantity;
+        else if (side === "SELL") running -= t.quantity;
+        chartData.push({
+          time: t.timestamp,
+          positionSize: running,
+          label: format(new Date(t.timestamp), "MMM d, HH:mm"),
+        });
+      });
+    }
+
+    const useBrush = chartData.length > BRUSH_MIN_POINTS;
+    const brushStartClamped = useBrush && brushEnd > 0 ? Math.min(brushStart, chartData.length - 1) : 0;
+    const brushEndClamped = useBrush && brushEnd > 0 ? Math.min(chartData.length - 1, Math.max(brushStartClamped, brushEnd)) : Math.max(0, chartData.length - 1);
+
+    const handleResizeStart = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const startY = e.clientY;
+      const startHeight = chartHeight;
+      const onMove = (e2: MouseEvent) => {
+        const delta = e2.clientY - startY;
+        const newHeight = Math.min(600, Math.max(160, startHeight + delta));
+        setMetricInstances((prev: MetricInstance[]) => {
+          const updated = prev.map((inst: MetricInstance) =>
+            inst.instanceId === metric.id ? { ...inst, chartHeight: newHeight } : inst
+          );
+          localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+          return updated;
+        });
+      };
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    };
+
+    const handleResizeHorizontalStart = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const card = (e.currentTarget as HTMLElement).closest("[data-position-chart-card]") as HTMLElement | null;
+      if (!card) return;
+      const startX = e.clientX;
+      const startWidth = card.getBoundingClientRect().width;
+      const onMove = (e2: MouseEvent) => {
+        const delta = e2.clientX - startX;
+        const newWidth = Math.min(1200, Math.max(280, startWidth + delta));
+        setMetricInstances((prev: MetricInstance[]) => {
+          const updated = prev.map((inst: MetricInstance) =>
+            inst.instanceId === metric.id ? { ...inst, chartWidth: newWidth } : inst
+          );
+          localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+          return updated;
+        });
+      };
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    };
+
+    return (
+      <div
+        ref={setNodeRef}
+        data-position-chart-card
+        style={{
+          backgroundColor: "var(--bg-secondary)",
+          border: "1px solid var(--border-color)",
+          borderRadius: "8px",
+          padding: "20px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+          cursor: isDragging ? "grabbing" : "grab",
+          userSelect: "none",
+          WebkitUserSelect: "none",
+          flex: `0 0 ${chartWidth ? `${chartWidth}px` : "280px"}`,
+          width: chartWidth ? `${chartWidth}px` : "280px",
+          minWidth: 280,
+          maxWidth: chartWidth ? 1200 : undefined,
+          minHeight: "320px",
+          position: "relative",
+          ...style,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "16px", flexShrink: 0, minWidth: 0 }}>
+          <div {...attributes} {...listeners} style={{ cursor: "grab", flexShrink: 0 }}>
+            <GripVertical size={16} color="var(--text-secondary)" />
+          </div>
+          <div
+            style={{
+              width: "48px",
+              height: "48px",
+              borderRadius: "8px",
+              backgroundColor: `${color}20`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: color,
+              flexShrink: 0,
+            }}
+          >
+            <Icon size={24} />
+          </div>
+          <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
+            <p style={{ fontSize: "14px", color: "var(--text-secondary)", marginBottom: "4px" }}>{metric.label}</p>
+            <select
+              value={positionEntryId ?? ""}
+              onChange={(e) => {
+                const val = e.target.value === "" ? null : parseInt(e.target.value, 10);
+                setMetricInstances((prev: MetricInstance[]) => {
+                  const updated = prev.map((inst: MetricInstance) =>
+                    inst.instanceId === metric.id ? { ...inst, positionEntryId: val } : inst
+                  );
+                  localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+                  return updated;
+                });
+              }}
+              onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                padding: "6px 8px",
+                backgroundColor: "var(--bg-tertiary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                color: "var(--text-primary)",
+                fontSize: "13px",
+                width: "100%",
+                maxWidth: "100%",
+                minWidth: 0,
+                cursor: "pointer",
+                boxSizing: "border-box",
+              }}
+            >
+              <option value="">Select position…</option>
+              {openPositionGroups.map((g) => (
+                <option key={g.entry_trade.id} value={g.entry_trade.id}>
+                  {g.entry_trade.symbol} {g.entry_trade.side} {g.entry_trade.quantity >= 0 ? "+" : ""}{formatWithCommas(g.entry_trade.quantity, { maxDecimals: 2 })}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                setMetricMenuPosition({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                setOpenMetricSettings(openMetricSettings === metric.id ? null : metric.id);
+              }}
+              onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
+              style={{
+                background: "transparent",
+                border: "none",
+                padding: "4px",
+                cursor: "pointer",
+                color: "var(--text-secondary)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Settings size={16} />
+            </button>
+            {openMetricSettings === metric.id && createPortal(
+              <div
+                data-settings-menu
+                style={{
+                  position: "fixed",
+                  top: `${metricMenuPosition.top}px`,
+                  right: `${metricMenuPosition.right}px`,
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "0",
+                  boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                  zIndex: 99999,
+                  minWidth: "280px",
+                  maxWidth: "400px",
+                }}
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                  {metricDescriptions[baseMetricId] && (
+                    <div style={{ padding: "12px", borderBottom: "1px solid var(--border-color)", marginBottom: "4px" }}>
+                      <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "8px" }}>{metric.label}</div>
+                      <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: "1.5", marginBottom: "8px" }}>{metricDescriptions[baseMetricId].description}</div>
+                      <div style={{ fontSize: "10px", color: "var(--text-secondary)", fontStyle: "italic", paddingTop: "8px", borderTop: "1px solid var(--border-color)" }}>
+                        <strong>Calculation:</strong> {metricDescriptions[baseMetricId].calculation}
+                      </div>
+                    </div>
+                  )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
+                      if (currentIndex > 0) {
+                        setMetricCardOrder((prevOrder) => {
+                          const currentIds = enabledMetrics.map(m => m.id);
+                          let newOrder = [...prevOrder];
+                          currentIds.forEach(id => { if (!newOrder.includes(id)) newOrder.push(id); });
+                          newOrder = newOrder.filter(id => currentIds.includes(id));
+                          const metricIndex = newOrder.indexOf(metric.id);
+                          if (metricIndex > 0) {
+                            [newOrder[metricIndex - 1], newOrder[metricIndex]] = [newOrder[metricIndex], newOrder[metricIndex - 1]];
+                            localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+                            return newOrder;
+                          }
+                          return prevOrder;
+                        });
+                      }
+                    }}
+                    disabled={sortedMetrics.findIndex(m => m.id === metric.id) === 0}
+                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? 0.3 : 1 }}
+                  >
+                    <ChevronUp size={14} />
+                    <span>Move Up</span>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
+                      if (currentIndex < sortedMetrics.length - 1) {
+                        setMetricCardOrder((prevOrder) => {
+                          const currentIds = enabledMetrics.map(m => m.id);
+                          let newOrder = [...prevOrder];
+                          currentIds.forEach(id => { if (!newOrder.includes(id)) newOrder.push(id); });
+                          newOrder = newOrder.filter(id => currentIds.includes(id));
+                          const metricIndex = newOrder.indexOf(metric.id);
+                          if (metricIndex < newOrder.length - 1) {
+                            [newOrder[metricIndex], newOrder[metricIndex + 1]] = [newOrder[metricIndex + 1], newOrder[metricIndex]];
+                            localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+                            return newOrder;
+                          }
+                          return prevOrder;
+                        });
+                      }
+                    }}
+                    disabled={sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1}
+                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? 0.3 : 1 }}
+                  >
+                    <ChevronDown size={14} />
+                    <span>Move Down</span>
+                  </button>
+                  <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      duplicateMetricInstance(metric.id);
+                      setOpenMetricSettings(null);
+                    }}
+                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                  >
+                    <Copy size={14} />
+                    <span>Duplicate</span>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      removeMetricInstance(metric.id);
+                      setOpenMetricSettings(null);
+                    }}
+                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--loss)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                  >
+                    <Trash2 size={14} />
+                    <span>Remove</span>
+                  </button>
+                </div>
+              </div>,
+              document.body
+            )}
+          </div>
+        </div>
+        <div style={{ flex: 1, minHeight: 160, display: "flex", flexDirection: "column", pointerEvents: "auto" }} onMouseDown={(e) => e.stopPropagation()}>
+          {selectedGroup && chartData.length > 0 ? (
+            <>
+              <ResponsiveContainer width="100%" height={useBrush ? chartHeight - 36 : chartHeight}>
+                <LineChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                  <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} stroke="var(--border-color)" />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: "var(--text-secondary)" }}
+                    stroke="var(--border-color)"
+                    tickFormatter={(v) => (v >= 0 ? `+${formatWithCommas(v, { maxDecimals: 2 })}` : formatWithCommas(v, { maxDecimals: 2 }))}
+                  />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px" }}
+                    labelStyle={{ color: "var(--text-primary)" }}
+                    formatter={(value: number) => [value >= 0 ? `+${formatWithCommas(value, { minDecimals: 4, maxDecimals: 4 })}` : formatWithCommas(value, { minDecimals: 4, maxDecimals: 4 }), "Position size"]}
+                    labelFormatter={(label) => `Time: ${label}`}
+                  />
+                  <ReferenceLine y={0} stroke="var(--text-secondary)" strokeDasharray="2 2" />
+                  <Line type="stepAfter" dataKey="positionSize" stroke="var(--accent)" strokeWidth={2} dot={{ fill: "var(--accent)", r: 3 }} activeDot={{ r: 5 }} isAnimationActive={true} />
+                  {useBrush && (
+                    <Brush
+                      dataKey="label"
+                      height={36}
+                      stroke="var(--border-color)"
+                      fill="var(--bg-tertiary)"
+                      startIndex={brushStartClamped}
+                      endIndex={brushEndClamped}
+                      onDragEnd={(r: { startIndex?: number; endIndex?: number }) => {
+                        if (r.startIndex != null && r.endIndex != null) {
+                          setMetricInstances((prev: MetricInstance[]) => {
+                            const updated = prev.map((inst: MetricInstance) =>
+                              inst.instanceId === metric.id
+                                ? { ...inst, positionChartBrushStart: r.startIndex!, positionChartBrushEnd: r.endIndex! }
+                                : inst
+                            );
+                            localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+                            return updated;
+                          });
+                        }
+                      }}
+                    />
+                  )}
+                </LineChart>
+              </ResponsiveContainer>
+              <div
+                role="separator"
+                aria-label="Resize chart"
+                onMouseDown={handleResizeStart}
+                style={{
+                  height: "8px",
+                  cursor: "ns-resize",
+                  flexShrink: 0,
+                  background: "linear-gradient(to bottom, transparent 0%, var(--border-color) 50%, transparent 100%)",
+                  borderRadius: "4px",
+                  marginTop: "4px",
+                }}
+              />
+            </>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: chartHeight, color: "var(--text-secondary)", fontSize: "14px" }}>
+              {openPositionGroups.length === 0 ? "No open positions" : "Select a position above"}
+            </div>
+          )}
+        </div>
+        <div
+          role="separator"
+          aria-label="Resize chart width"
+          onMouseDown={handleResizeHorizontalStart}
+          style={{
+            position: "absolute",
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: "8px",
+            cursor: "ew-resize",
+            flexShrink: 0,
+            background: "linear-gradient(to right, transparent 0%, var(--border-color) 50%, transparent 100%)",
+            borderRadius: "0 8px 8px 0",
+            pointerEvents: "auto",
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       ref={setNodeRef}
@@ -585,7 +1011,9 @@ function SortableMetricCard({
         cursor: isDragging ? "grabbing" : "grab",
         userSelect: "none",
         WebkitUserSelect: "none",
-        width: "100%",
+        flex: "0 0 280px",
+        width: "280px",
+        minWidth: 280,
         height: "100px",
         ...style,
       }}
@@ -1016,13 +1444,43 @@ export default function Dashboard() {
   const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformance[]>([]);
   const [recentTrades, setRecentTrades] = useState<RecentTrade[]>([]);
   const [trades, setTrades] = useState<RecentTrade[]>([]);
+  const [openPositionGroups, setOpenPositionGroups] = useState<OpenPositionGroup[]>([]);
+  const [openPositionQuotes, setOpenPositionQuotes] = useState<Record<string, number | null>>({});
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
+  const navigate = useNavigate();
 
   useEffect(() => {
     const unsub = subscribeToDataMode(setDataMode);
     return () => unsub();
   }, []);
+
+  // Fetch current prices for open position symbols (Real/Paper only)
+  useEffect(() => {
+    if (dataMode === "sandbox" || openPositionGroups.length === 0) {
+      setOpenPositionQuotes({});
+      return;
+    }
+    const symbols = [...new Set(openPositionGroups.map((g) => g.entry_trade.symbol))];
+    let cancelled = false;
+    const fetchQuotes = async () => {
+      const next: Record<string, number | null> = {};
+      for (const symbol of symbols) {
+        if (cancelled) return;
+        try {
+          const quote = await invoke<{ current_price: number | null }>("fetch_stock_quote", { symbol });
+          if (!cancelled) next[symbol] = quote.current_price;
+        } catch {
+          if (!cancelled) next[symbol] = null;
+        }
+      }
+      if (!cancelled) setOpenPositionQuotes((prev) => ({ ...prev, ...next }));
+    };
+    fetchQuotes();
+    return () => {
+      cancelled = true;
+    };
+  }, [dataMode, openPositionGroups]);
 
   const [strategyFilterForMetrics, setStrategyFilterForMetrics] = useState<Record<string, number | null>>(() => {
     const saved = localStorage.getItem("tradebutler_strategy_filter_for_metrics");
@@ -1110,6 +1568,7 @@ export default function Dashboard() {
       instanceId: newInstanceId,
       baseMetricId: instance.baseMetricId,
       strategyFilterId: instance.strategyFilterId,
+      ...(instance.baseMetricId === "position_size_chart" ? { positionEntryId: (instance as MetricInstance).positionEntryId ?? null } : {}),
     };
     
     const updatedInstances = [...metricInstances, newInstance];
@@ -1195,6 +1654,7 @@ export default function Dashboard() {
       instanceId: newInstanceId,
       baseMetricId: baseMetricId,
       strategyFilterId: null,
+      ...(baseMetricId === "position_size_chart" ? { positionEntryId: null } : {}),
     };
     
     const updatedInstances = [...metricInstances, newInstance];
@@ -1245,7 +1705,7 @@ export default function Dashboard() {
       try {
         const parsed = JSON.parse(saved);
         // Validate that all sections are present - include all possible sections
-        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades"];
+        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions"];
         const validOrder = allSections.filter(id => parsed.includes(id));
         const missing = allSections.filter(id => !parsed.includes(id));
         return [...validOrder, ...missing];
@@ -1338,6 +1798,7 @@ export default function Dashboard() {
     strategyPerformance: { top: 0, right: 0 },
     recentTrades: { top: 0, right: 0 },
     trades: { top: 0, right: 0 },
+    openPositions: { top: 0, right: 0 },
   });
   const [timeframe, setTimeframe] = useState<Timeframe>(() => {
     const saved = localStorage.getItem("tradebutler_dashboard_timeframe");
@@ -1553,6 +2014,12 @@ export default function Dashboard() {
           ...baseMetric,
           id: inst.instanceId, // Use instance ID instead of base ID
           baseMetricId: inst.baseMetricId, // Keep reference to base
+          strategyFilterId: inst.strategyFilterId ?? null,
+          positionEntryId: inst.positionEntryId ?? null,
+          chartHeight: inst.chartHeight ?? 200,
+          chartWidth: inst.chartWidth ?? undefined,
+          positionChartBrushStart: inst.positionChartBrushStart ?? 0,
+          positionChartBrushEnd: inst.positionChartBrushEnd ?? 0,
         };
       })
       .filter((m): m is any => m !== null);
@@ -1627,7 +2094,7 @@ export default function Dashboard() {
         setDashboardSections(newSections);
         
         // Ensure all enabled sections are in the sectionOrder
-        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades"];
+        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions"];
         setSectionOrder(prevOrder => {
           const enabledSections = allSections.filter(id => {
             const key = `show${id.charAt(0).toUpperCase() + id.slice(1)}` as keyof typeof newSections;
@@ -1668,6 +2135,7 @@ export default function Dashboard() {
         setStrategyPerformance(EXAMPLE_STRATEGY_PERFORMANCE as unknown as StrategyPerformance[]);
         setRecentTrades(EXAMPLE_RECENT_TRADES.slice(0, 5) as unknown as RecentTrade[]);
         setTrades(EXAMPLE_RECENT_TRADES as unknown as RecentTrade[]);
+        setOpenPositionGroups([]);
         setLoading(false);
         return;
       }
@@ -1677,16 +2145,20 @@ export default function Dashboard() {
       const startDate = dateRange.start ? dateRange.start.toISOString() : null;
       const endDate = dateRange.end ? dateRange.end.toISOString() : null;
       const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
-      const [metricsData, pnlData, strategiesData, tradesData, allTradesData, strategiesList] = await Promise.all([
+      const [metricsData, pnlData, strategiesData, tradesData, allTradesData, strategiesList, positionGroupsData] = await Promise.all([
         invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate, ...paperArgs }),
         invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate, ...paperArgs }),
         invoke<StrategyPerformance[]>("get_strategy_performance", { pairingMethod, startDate, endDate, ...paperArgs }),
         invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate, ...paperArgs }),
         invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate, ...paperArgs }),
         invoke<Strategy[]>("get_strategies"),
+        invoke<OpenPositionGroup[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null, ...paperArgs }),
       ]);
       setMetrics(metricsData);
       setStrategies(strategiesList);
+      setOpenPositionGroups(
+        (positionGroupsData || []).filter((g) => Math.abs(g.final_quantity) >= 0.0001)
+      );
       
       // Convert SymbolPnL to TopSymbol format for display
       const topSymbolsData = pnlData
@@ -1978,10 +2450,11 @@ export default function Dashboard() {
         >
       <div
         style={{
-          display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+          display: "flex",
+          flexWrap: "wrap",
           gap: "20px",
           marginBottom: "30px",
+          alignItems: "stretch",
         }}
       >
         {sortedMetrics.map((metric) => {
@@ -2023,6 +2496,7 @@ export default function Dashboard() {
               removeMetricInstance={removeMetricInstance}
               setMetricInstances={setMetricInstances}
               dataMode={dataMode}
+              openPositionGroups={openPositionGroups}
             />
           );
         })}
@@ -2893,6 +3367,272 @@ export default function Dashboard() {
               })}
                 </div>
               </div>
+                )}
+              </SortableSection>
+            );
+          }
+
+          // Open Positions
+          if (sectionId === "openPositions" && dashboardSections.showOpenPositions) {
+            return (
+              <SortableSection key="openPositions" id="openPositions">
+                {({ dragHandleProps, isDragging }) => (
+                  <div
+                    style={{
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                      padding: "20px",
+                      cursor: isDragging ? "grabbing" : "grab",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <div {...dragHandleProps} style={{ cursor: "grab" }}>
+                          <GripVertical size={16} color="var(--text-secondary)" />
+                        </div>
+                        <Activity size={20} color="var(--accent)" />
+                        <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Open Positions</h2>
+                      </div>
+                      <div style={{ position: "relative" }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                            setSectionMenuPosition({
+                              ...sectionMenuPosition,
+                              openPositions: {
+                                top: rect.bottom + 4,
+                                right: window.innerWidth - rect.right,
+                              },
+                            });
+                            setOpenSectionSettings(openSectionSettings === "openPositions" ? null : "openPositions");
+                          }}
+                          onMouseDown={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                          }}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            padding: "4px",
+                            cursor: "pointer",
+                            color: "var(--text-secondary)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            borderRadius: "4px",
+                          }}
+                          title="Settings"
+                        >
+                          <Settings size={16} />
+                        </button>
+                        {openSectionSettings === "openPositions" && createPortal(
+                          <div
+                            data-settings-menu
+                            style={{
+                              position: "fixed",
+                              top: `${sectionMenuPosition.openPositions.top}px`,
+                              right: `${sectionMenuPosition.openPositions.right}px`,
+                              backgroundColor: "var(--bg-secondary)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "8px",
+                              padding: "8px",
+                              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                              zIndex: 99999,
+                              minWidth: "120px",
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  const currentIndex = sectionOrder.indexOf("openPositions");
+                                  if (currentIndex > 0) {
+                                    const newOrder = [...sectionOrder];
+                                    [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
+                                    setSectionOrder(newOrder);
+                                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                  }
+                                  setOpenSectionSettings(null);
+                                }}
+                                disabled={sectionOrder.indexOf("openPositions") === 0}
+                                style={{
+                                  background: "transparent",
+                                  border: "1px solid var(--border-color)",
+                                  borderRadius: "4px",
+                                  padding: "6px 8px",
+                                  cursor: sectionOrder.indexOf("openPositions") === 0 ? "not-allowed" : "pointer",
+                                  color: "var(--text-primary)",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  fontSize: "13px",
+                                  opacity: sectionOrder.indexOf("openPositions") === 0 ? 0.3 : 1,
+                                }}
+                              >
+                                <ChevronUp size={14} />
+                                <span>Move Up</span>
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  const currentIndex = sectionOrder.indexOf("openPositions");
+                                  if (currentIndex < sectionOrder.length - 1) {
+                                    const newOrder = [...sectionOrder];
+                                    [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
+                                    setSectionOrder(newOrder);
+                                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                  }
+                                  setOpenSectionSettings(null);
+                                }}
+                                disabled={sectionOrder.indexOf("openPositions") === sectionOrder.length - 1}
+                                style={{
+                                  background: "transparent",
+                                  border: "1px solid var(--border-color)",
+                                  borderRadius: "4px",
+                                  padding: "6px 8px",
+                                  cursor: sectionOrder.indexOf("openPositions") === sectionOrder.length - 1 ? "not-allowed" : "pointer",
+                                  color: "var(--text-primary)",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  fontSize: "13px",
+                                  opacity: sectionOrder.indexOf("openPositions") === sectionOrder.length - 1 ? 0.3 : 1,
+                                }}
+                              >
+                                <ChevronDown size={14} />
+                                <span>Move Down</span>
+                              </button>
+                            </div>
+                          </div>,
+                          document.body
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      {openPositionGroups.length === 0 ? (
+                        <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "20px" }}>
+                          No open positions. Positions are derived from imported trades that are not fully closed.
+                        </p>
+                      ) : (
+                        openPositionGroups.map((group) => {
+                          const isLong = group.final_quantity > 0;
+                          const qty = Math.abs(group.final_quantity);
+                          const qtyDisplay = (isLong ? "+" : "") + formatWithCommas(group.final_quantity, { minDecimals: 4, maxDecimals: 4 });
+                          const costFromTrades = group.position_trades.reduce((sum, t) => {
+                            const side = t.side?.toUpperCase() || "";
+                            if (side === "BUY") return sum + t.quantity * t.price;
+                            if (side === "SELL") return sum - t.quantity * t.price;
+                            return sum;
+                          }, 0);
+                          const avgPrice = qty >= 0.0001 ? Math.abs(costFromTrades) / qty : 0;
+                          const currentPrice = openPositionQuotes[group.entry_trade.symbol] ?? null;
+                          const unrealizedPnl =
+                            currentPrice != null && currentPrice > 0
+                              ? isLong
+                                ? (currentPrice - avgPrice) * qty
+                                : (avgPrice - currentPrice) * qty
+                              : null;
+                          return (
+                            <div
+                              key={group.entry_trade.id}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => {
+                                navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Pair" } });
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Pair" } });
+                                }
+                              }}
+                              style={{
+                                padding: "12px",
+                                backgroundColor: "var(--bg-tertiary)",
+                                borderRadius: "6px",
+                                border: "1px solid var(--border-color)",
+                                cursor: "pointer",
+                              }}
+                            >
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                  <span style={{ fontWeight: "600", fontSize: "15px" }}>{group.entry_trade.symbol}</span>
+                                  <span
+                                    style={{
+                                      fontSize: "12px",
+                                      padding: "2px 6px",
+                                      borderRadius: "4px",
+                                      backgroundColor: isLong ? "color-mix(in srgb, var(--profit) 18%, transparent)" : "color-mix(in srgb, var(--loss) 18%, transparent)",
+                                      color: isLong ? "var(--profit)" : "var(--loss)",
+                                      fontWeight: "600",
+                                    }}
+                                  >
+                                    {isLong ? "Long" : "Short"} {qtyDisplay}
+                                  </span>
+                                </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+                                  {unrealizedPnl != null && (
+                                    <span
+                                      style={{
+                                        fontSize: "14px",
+                                        fontWeight: "600",
+                                        color: unrealizedPnl >= 0 ? "var(--profit)" : "var(--loss)",
+                                      }}
+                                    >
+                                      Unrealized: {unrealizedPnl >= 0 ? "+" : ""}${formatWithCommas(unrealizedPnl, { decimals: 2 })}
+                                    </span>
+                                  )}
+                                  {group.total_pnl !== 0 && (
+                                    <span
+                                      style={{
+                                        fontSize: "13px",
+                                        fontWeight: "500",
+                                        color: group.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                                      }}
+                                    >
+                                      Realized: {group.total_pnl >= 0 ? "+" : ""}${formatWithCommas(group.total_pnl, { decimals: 2 })}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                  <span>Entry start:</span>
+                                  <span style={{ color: "var(--text-primary)" }}>
+                                    {format(new Date(group.entry_trade.timestamp), "MMM d, yyyy")}
+                                  </span>
+                                </div>
+                                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                  <span>Average price:</span>
+                                  <span style={{ color: "var(--text-primary)" }}>${formatWithCommas(avgPrice, { decimals: 2 })}</span>
+                                </div>
+                                {currentPrice != null && currentPrice > 0 && (
+                                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                    <span>Current price:</span>
+                                    <span style={{ color: "var(--text-primary)" }}>${formatWithCommas(currentPrice, { decimals: 2 })}</span>
+                                  </div>
+                                )}
+                                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                  <span>Trades in position:</span>
+                                  <span style={{ color: "var(--text-primary)" }}>{group.position_trades.length}</span>
+                                </div>
+                              </div>
+                              <p style={{ margin: "8px 0 0", fontSize: "11px", color: "var(--text-secondary)" }}>
+                                Click to open in Trades
+                              </p>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
                 )}
               </SortableSection>
             );

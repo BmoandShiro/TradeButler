@@ -46,6 +46,7 @@ const defaultMetrics: MetricConfig[] = [
   { id: "best_day", label: "Best Day", enabled: false, category: "Advanced" },
   { id: "worst_day", label: "Worst Day", enabled: false, category: "Advanced" },
   { id: "average_holding_time_seconds", label: "Avg Holding Time", enabled: true, category: "Performance" },
+  { id: "position_size_chart", label: "Position Size Chart", enabled: false, category: "Charts" },
 ];
 
 const STORAGE_KEY = "tradebutler_metrics_config";
@@ -185,10 +186,10 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       try {
         return JSON.parse(saved);
       } catch {
-        return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true, showTrades: true };
+        return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true, showTrades: true, showOpenPositions: true };
       }
     }
-    return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true, showTrades: true };
+    return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true, showTrades: true, showOpenPositions: true };
   });
   
   const toggleDashboardSection = (section: string) => {
@@ -430,6 +431,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
               { id: "showTopSymbols", label: "Top Symbols" },
               { id: "showStrategyPerformance", label: "Strategy Performance" },
               { id: "showRecentTrades", label: "Recent Trades" },
+              { id: "showOpenPositions", label: "Open Positions" },
               { id: "showTrades", label: "Trades" },
             ].map((section) => (
               <label
