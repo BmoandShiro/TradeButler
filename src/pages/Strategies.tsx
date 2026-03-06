@@ -5,7 +5,9 @@ import { readTextFile } from "@tauri-apps/api/fs";
 import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard, BarChart2 } from "lucide-react";
 import { format } from "date-fns";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
-import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
+import { BRUSH_MIN_POINTS, CHART_BAR_FILL_OPACITY } from "../utils/chartDataSampling";
+/** Margin for overview bar charts so X-axis category labels have room when angled. */
+const OVERVIEW_CHART_MARGIN = { top: 5, right: 5, left: 5, bottom: 72 };
 import RichTextEditor from "../components/RichTextEditor";
 import { ColorPicker } from "../components/ColorPicker";
 import { TradeChart } from "../components/TradeChart";
@@ -1589,7 +1591,7 @@ export default function Strategies() {
   const [strategyPairs, setStrategyPairs] = useState<Map<number, PairedTrade[]>>(new Map());
   const [loadingPairs, setLoadingPairs] = useState<Set<number>>(new Set());
   const [strategyStats, setStrategyStats] = useState<Map<number, { totalTrades: number; totalPnL: number; winRate: number }>>(new Map());
-  const [strategyOverviewTab, setStrategyOverviewTab] = useState<"pnl" | "win_rate" | "trades">("pnl");
+  const [strategyOverviewTab, setStrategyOverviewTab] = useState<"pnl" | "win_rate" | "trades" | "checklist_usage" | "profitable_trades">("pnl");
   const [strategyOverviewBrushStart, setStrategyOverviewBrushStart] = useState(0);
   const [strategyOverviewBrushEnd, setStrategyOverviewBrushEnd] = useState(0);
   const [strategyFilterText, setStrategyFilterText] = useState("");
@@ -1598,8 +1600,6 @@ export default function Strategies() {
   const [overviewFilterStrategyIds, setOverviewFilterStrategyIds] = useState<number[]>([]);
   const [overviewFilterDropdownOpen, setOverviewFilterDropdownOpen] = useState(false);
   const overviewFilterDropdownRef = useRef<HTMLDivElement>(null);
-  /** When true, show one Survey metrics + Checklist item metrics section per strategy in the overview. */
-  const [overviewMetricsPerStrategy, setOverviewMetricsPerStrategy] = useState(false);
   /** Custom metrics with values per strategy, loaded when overview is visible. */
   const [overviewChecklistItemMetricsByStrategy, setOverviewChecklistItemMetricsByStrategy] = useState<Map<number, Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>>(new Map());
   const [overviewCustomMetricsByStrategy, setOverviewCustomMetricsByStrategy] = useState<Map<number, Array<{
@@ -2344,9 +2344,40 @@ export default function Strategies() {
     return data.sort((a, b) => {
       if (strategyOverviewTab === "pnl") return Math.abs(b.pnl) - Math.abs(a.pnl);
       if (strategyOverviewTab === "win_rate") return b.win_rate - a.win_rate;
+      if (strategyOverviewTab === "trades") return b.trades - a.trades;
       return b.trades - a.trades;
     });
   }, [strategiesForOverview, strategyStats, strategyOverviewTab]);
+
+  const overviewChecklistUsageChartData = React.useMemo(() => {
+    const byType = new Map<string, number>();
+    overviewChecklistItemMetricsByStrategy.forEach((rows) => {
+      rows.forEach((row) => {
+        const type = row.checklist_type || "other";
+        byType.set(type, (byType.get(type) ?? 0) + (row.times_checked ?? 0));
+      });
+    });
+    return Array.from(byType.entries())
+      .map(([checklist_type, count]) => ({
+        name: checklist_type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
+        count,
+      }))
+      .sort((a, b) => b.count - a.count);
+  }, [overviewChecklistItemMetricsByStrategy]);
+
+  const overviewProfitableTradesChartData = React.useMemo(() => {
+    const data: { name: string; fullName: string; winning: number; losing: number }[] = [];
+    for (const s of strategiesForOverview) {
+      if (s.id == null) continue;
+      const stats = strategyStats.get(s.id);
+      if (!stats || stats.totalTrades <= 0) continue;
+      const shortName = s.name.length > 14 ? s.name.slice(0, 13) + "…" : s.name;
+      const winning = Math.round(stats.totalTrades * (stats.winRate / 100));
+      const losing = stats.totalTrades - winning;
+      data.push({ name: shortName, fullName: s.name, winning, losing });
+    }
+    return data.sort((a, b) => b.winning + b.losing - (a.winning + a.losing));
+  }, [strategiesForOverview, strategyStats]);
 
   const loadStrategies = async (preserveEditingState = false) => {
     try {
@@ -6989,6 +7020,47 @@ export default function Strategies() {
             )}
             <div style={{ height: 260 }}>
               {(() => {
+                if (strategyOverviewTab === "checklist_usage") {
+                  if (overviewChecklistUsageChartData.length === 0) {
+                    return (
+                      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", fontSize: "13px", textAlign: "center" }}>
+                        No checklist usage in journal entries yet. Use checklists in journals to see usage by type.
+                      </div>
+                    );
+                  }
+                  return (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={overviewChecklistUsageChartData} margin={OVERVIEW_CHART_MARGIN}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} height={56} interval={0} />
+                        <YAxis stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} allowDecimals={false} />
+                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", fontSize: "11px", color: "var(--text-primary)" }} formatter={(value: any) => [value, "Times used"]} />
+                        <Bar dataKey="count" fill="var(--accent)" fillOpacity={CHART_BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  );
+                }
+                if (strategyOverviewTab === "profitable_trades") {
+                  if (overviewProfitableTradesChartData.length === 0) {
+                    return (
+                      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", fontSize: "13px", textAlign: "center" }}>
+                        {strategies.length === 0 ? "Create a strategy to see overview stats." : "No trade stats yet. Link trades to strategies to see winning vs losing by strategy."}
+                      </div>
+                    );
+                  }
+                  return (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={overviewProfitableTradesChartData} margin={OVERVIEW_CHART_MARGIN}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} height={56} interval={0} />
+                        <YAxis stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} allowDecimals={false} />
+                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", fontSize: "11px", color: "var(--text-primary)" }} formatter={(value: any) => [value, ""]} labelFormatter={(label: string) => `${label} (Winning / Losing)`} />
+                        <Bar dataKey="winning" fill="var(--success, #22c55e)" fillOpacity={CHART_BAR_FILL_OPACITY} stroke="var(--success, #22c55e)" strokeWidth={1} stackId="trades" radius={[0, 0, 0, 0]} />
+                        <Bar dataKey="losing" fill="var(--danger, #ef4444)" fillOpacity={CHART_BAR_FILL_OPACITY} stroke="var(--danger, #ef4444)" strokeWidth={1} stackId="trades" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  );
+                }
                 if (strategiesOverviewChartData.length === 0) {
                   return (
                     <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", fontSize: "13px", textAlign: "center" }}>
@@ -7001,12 +7073,12 @@ export default function Strategies() {
                 const end = useBrush && strategyOverviewBrushEnd > 0 ? Math.min(strategiesOverviewChartData.length - 1, Math.max(start, strategyOverviewBrushEnd)) : Math.max(0, strategiesOverviewChartData.length - 1);
                 return (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={strategiesOverviewChartData}>
+                    <BarChart data={strategiesOverviewChartData} margin={OVERVIEW_CHART_MARGIN}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                      <XAxis dataKey="name" stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} interval={strategiesOverviewChartData.length > 20 ? Math.floor(strategiesOverviewChartData.length / 10) : 0} height={36} />
+                      <XAxis dataKey="name" stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} height={56} interval={strategiesOverviewChartData.length > 20 ? Math.floor(strategiesOverviewChartData.length / 10) : 0} />
                       <YAxis stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} tickFormatter={(v: number) => strategyOverviewTab === "win_rate" ? `${v.toFixed(0)}%` : strategyOverviewTab === "trades" ? v.toString() : `$${v.toFixed(0)}`} />
                       <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", fontSize: "11px", color: "var(--text-primary)" }} formatter={(value: any) => { if (strategyOverviewTab === "win_rate") return [`${value.toFixed(1)}%`, "Win rate"]; if (strategyOverviewTab === "trades") return [value, "Trades"]; return [`$${value.toFixed(2)}`, "P&L"]; }} />
-                      <Bar dataKey={strategyOverviewTab === "pnl" ? "pnl" : strategyOverviewTab === "win_rate" ? "win_rate" : "trades"} fill="var(--accent)" fillOpacity={0.5} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} radius={[4, 4, 0, 0]} />
+                      <Bar dataKey={strategyOverviewTab === "pnl" ? "pnl" : strategyOverviewTab === "win_rate" ? "win_rate" : "trades"} fill="var(--accent)" fillOpacity={CHART_BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} radius={[4, 4, 0, 0]} />
                       {useBrush && <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setStrategyOverviewBrushStart(r.startIndex); setStrategyOverviewBrushEnd(r.endIndex); } }} />}
                     </BarChart>
                   </ResponsiveContainer>
@@ -7025,6 +7097,8 @@ export default function Strategies() {
                 { id: "pnl" as const, label: "P&L" },
                 { id: "win_rate" as const, label: "Win rate" },
                 { id: "trades" as const, label: "Trades" },
+                { id: "checklist_usage" as const, label: "Checklist usage" },
+                { id: "profitable_trades" as const, label: "Profitable trades" },
               ].map((tab) => {
                 const isActive = strategyOverviewTab === tab.id;
                 return (
@@ -7080,30 +7154,14 @@ export default function Strategies() {
                   >
                     Survey metrics
                   </h3>
-                  <label
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
-                      fontSize: "12px",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={overviewMetricsPerStrategy}
-                      onChange={(e) => setOverviewMetricsPerStrategy(e.target.checked)}
-                    />
-                    One section per strategy
-                  </label>
                 </div>
                 <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "4px 0 0 0" }}>
                   Survey metrics, checklist item metrics, and checklist insights are filtered by the Strategies dropdown at the top of the page.
                 </p>
-                {overviewMetricsPerStrategy ? (
+                {(overviewCustomMetricsByStrategy.size > 0 || overviewChecklistItemMetricsByStrategy.size > 0 || overviewChecklistByOutcomePerStrategy.length > 0) ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                     {strategies
-                      .filter((s) => s.id != null && (overviewCustomMetricsByStrategy.has(s.id) || overviewChecklistItemMetricsByStrategy.has(s.id) || overviewChecklistByOutcomePerStrategy.some((r) => r.strategyId === s.id)))
+                      .filter((s) => s.id != null && (overviewFilterStrategyIds.length === 0 || overviewFilterStrategyIds.includes(s.id)) && (overviewCustomMetricsByStrategy.has(s.id) || overviewChecklistItemMetricsByStrategy.has(s.id) || overviewChecklistByOutcomePerStrategy.some((r) => r.strategyId === s.id)))
                       .map((s) => {
                         const metrics = overviewCustomMetricsByStrategy.get(s.id!) ?? [];
                         const itemMetrics = overviewChecklistItemMetricsByStrategy.get(s.id!) ?? [];
@@ -7224,103 +7282,70 @@ export default function Strategies() {
                             {hasInsights && (
                               <div
                                 style={{
-                                  padding: "10px 12px",
+                                  padding: "12px",
                                   borderRadius: "6px",
                                   backgroundColor: "var(--bg-primary)",
                                   border: "1px solid var(--border-color)",
                                 }}
                               >
-                                <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                                <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "2px" }}>
                                   Checklist insights
                                 </div>
-                                <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "0 0 8px 0", lineHeight: 1.3 }}>
+                                <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "0 0 10px 0", lineHeight: 1.3 }}>
                                   Top items with winning trades; items often skipped in losing trades.
                                 </p>
-                                <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                                  {winningPerType.map(({ checklistTypeDisplay, topItemText, good }) => (
-                                    <div key={`win-${s.id}-${checklistTypeDisplay}`} style={{ marginBottom: "4px" }}>
-                                      <span style={{ color: "var(--text-primary)", marginRight: "6px" }}>{checklistTypeDisplay}:</span>
-                                      <span style={{ color: "var(--success, #22c55e)" }}>{topItemText}</span>
-                                      <span style={{ marginLeft: "6px", opacity: 0.9 }}>({good} with winning trades)</span>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                                  {winningPerType.length > 0 && (
+                                    <div>
+                                      <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--success, #22c55e)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                                        Winning trades
+                                      </div>
+                                      <div style={{ display: "grid", gap: "6px" }}>
+                                        {winningPerType.map(({ checklistTypeDisplay, topItemText, good }) => (
+                                          <div
+                                            key={`win-${s.id}-${checklistTypeDisplay}`}
+                                            style={{
+                                              padding: "6px 8px",
+                                              borderRadius: "4px",
+                                              backgroundColor: "var(--bg-tertiary)",
+                                              borderLeft: "3px solid var(--success, #22c55e)",
+                                            }}
+                                          >
+                                            <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
+                                            <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText}</span>
+                                            <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({good} trades)</span>
+                                          </div>
+                                        ))}
+                                      </div>
                                     </div>
-                                  ))}
-                                  {notClickedLosingPerType.map(({ checklistTypeDisplay, topItemText, bad }) => (
-                                    <div key={`lose-${s.id}-${checklistTypeDisplay}`} style={{ marginBottom: "4px" }}>
-                                      <span style={{ color: "var(--text-primary)", marginRight: "6px" }}>{checklistTypeDisplay} (not checked in losing):</span>
-                                      <span style={{ color: "var(--danger, #ef4444)" }}>{topItemText}</span>
-                                      <span style={{ marginLeft: "6px", opacity: 0.9 }}>({bad} losing trades)</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                  </div>
-                ) : overviewFilterStrategyIds.some((id) => overviewCustomMetricsByStrategy.has(id) || overviewChecklistItemMetricsByStrategy.has(id) || overviewChecklistByOutcomePerStrategy.some((r) => r.strategyId === id)) ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                    {strategies
-                      .filter((s) => s.id != null && overviewFilterStrategyIds.includes(s.id) && (overviewCustomMetricsByStrategy.has(s.id) || overviewChecklistItemMetricsByStrategy.has(s.id)))
-                      .map((s) => {
-                        const metrics = overviewCustomMetricsByStrategy.get(s.id!) ?? [];
-                        return (
-                          <div
-                            key={s.id}
-                            style={{
-                              padding: "12px 14px",
-                              borderRadius: "8px",
-                              border: "1px solid var(--border-color)",
-                              backgroundColor: "var(--bg-tertiary)",
-                            }}
-                          >
-                            <div
-                              style={{
-                                fontSize: "13px",
-                                fontWeight: "600",
-                                color: "var(--text-primary)",
-                                marginBottom: "8px",
-                              }}
-                            >
-                              {s.name}
-                            </div>
-                            <div
-                              style={{
-                                display: "grid",
-                                gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-                                gap: "8px",
-                              }}
-                            >
-                              {metrics.map((m) => (
-                                <div
-                                  key={m.id}
-                                  style={{
-                                    padding: "8px 10px",
-                                    borderRadius: "6px",
-                                    backgroundColor: "var(--bg-primary)",
-                                    border: "1px solid var(--border-color)",
-                                  }}
-                                >
-                                  <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "2px" }}>
-                                    {m.name}
-                                  </div>
-                                  <div
-                                    style={{
-                                      fontSize: "16px",
-                                      fontWeight: "600",
-                                      color: m.computed_value != null ? getMetricColorFromScale((m.computed_value - 1) / 4, m.color_scale) : "var(--text-primary)",
-                                    }}
-                                  >
-                                    {m.computed_value != null ? m.computed_value.toFixed(2) : "—"}
-                                  </div>
-                                  {m.description && (
-                                    <div style={{ fontSize: "10px", color: "var(--text-secondary)", marginTop: "4px" }}>
-                                      {m.description}
+                                  )}
+                                  {notClickedLosingPerType.length > 0 && (
+                                    <div>
+                                      <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--danger, #ef4444)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                                        Often skipped in losing trades
+                                      </div>
+                                      <div style={{ display: "grid", gap: "6px" }}>
+                                        {notClickedLosingPerType.map(({ checklistTypeDisplay, topItemText, bad }) => (
+                                          <div
+                                            key={`lose-${s.id}-${checklistTypeDisplay}`}
+                                            style={{
+                                              padding: "6px 8px",
+                                              borderRadius: "4px",
+                                              backgroundColor: "var(--bg-tertiary)",
+                                              borderLeft: "3px solid var(--danger, #ef4444)",
+                                            }}
+                                          >
+                                            <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
+                                            <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText}</span>
+                                            <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({bad} losing)</span>
+                                          </div>
+                                        ))}
+                                      </div>
                                     </div>
                                   )}
                                 </div>
-                              ))}
-                            </div>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -7334,156 +7359,6 @@ export default function Strategies() {
                     </p>
                   </div>
                 )}
-                {/* Checklist item metrics – always visible when not "One section per strategy"; blank when no strategy selected */}
-                {!overviewMetricsPerStrategy && (() => {
-                  const hasSelection = overviewFilterStrategyIds.length > 0;
-                  const strategyIds = hasSelection
-                    ? overviewFilterStrategyIds.filter((id) => strategies.some((s) => s.id === id))
-                    : [];
-                  const maxRows = 8;
-                  return (
-                    <div key={hasSelection ? overviewFilterStrategyIds.join(",") : "none"} style={{ marginTop: "20px", paddingTop: "20px", borderTop: "1px solid var(--border-color)" }}>
-                      <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "8px" }}>
-                        Checklist item metrics
-                      </h3>
-                      <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "12px" }}>
-                        Avg performance when each item was checked (R → % → price). Filtered by the Strategies dropdown at the top.
-                      </p>
-                      {!hasSelection ? (
-                        <div style={{ padding: "16px", borderRadius: "8px", border: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)", minHeight: "80px" }}>
-                          <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>Select one or more strategies in the Strategies dropdown at the top to view metrics.</p>
-                        </div>
-                      ) : strategyIds.length === 0 ? (
-                        <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>
-                          No checklist item metrics for the selected strategies.
-                        </p>
-                      ) : (
-                        strategyIds.map((sid) => {
-                          const items = overviewChecklistItemMetricsByStrategy.get(sid) ?? [];
-                          const strategy = strategies.find((s) => s.id === sid);
-                          return (
-                            <div key={sid} style={{ marginBottom: "16px" }}>
-                              {strategy && (
-                                <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "6px" }}>{strategy.name}</div>
-                              )}
-                              {items.length === 0 ? (
-                                <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>No checklist item metrics for this strategy.</p>
-                              ) : (
-                                <>
-                                  <div style={{ overflowX: "auto" }}>
-                                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
-                                      <thead>
-                                        <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
-                                          <th style={{ textAlign: "left", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>Item</th>
-                                          <th style={{ textAlign: "right", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>#</th>
-                                          <th style={{ textAlign: "right", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>Avg</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {items.slice(0, maxRows).map((row) => (
-                                          <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
-                                            <td style={{ padding: "6px", color: "var(--text-primary)" }}>{row.item_text}</td>
-                                            <td style={{ padding: "6px", textAlign: "right", color: "var(--text-secondary)" }}>{row.times_checked}</td>
-                                            <td style={{ padding: "6px", textAlign: "right", color: row.avg_performance != null && row.avg_performance < 0 ? "var(--loss)" : "var(--text-primary)" }}>
-                                              {row.avg_performance != null
-                                                ? row.performance_kind === "r"
-                                                  ? row.avg_performance.toFixed(2) + " R"
-                                                  : row.performance_kind === "pct"
-                                                    ? row.avg_performance.toFixed(1) + "%"
-                                                    : "$" + row.avg_performance.toFixed(0)
-                                                : "—"}
-                                            </td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  </div>
-                                  {items.length > maxRows && (
-                                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>+{items.length - maxRows} more</div>
-                                  )}
-                                </>
-                              )}
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  );
-                })()}
-                {/* Checklist insights – when not "One section per strategy", same pattern as Checklist item metrics */}
-                {!overviewMetricsPerStrategy && overviewChecklistByOutcomePerStrategy.length > 0 && (() => {
-                  const hasSelection = overviewFilterStrategyIds.length > 0;
-                  const strategyIds = hasSelection
-                    ? overviewFilterStrategyIds.filter((id) => overviewChecklistByOutcomePerStrategy.some((r) => r.strategyId === id))
-                    : [];
-                  return (
-                    <div style={{ marginTop: "20px", paddingTop: "20px", borderTop: "1px solid var(--border-color)" }}>
-                      <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "8px" }}>
-                        Checklist insights
-                      </h3>
-                      <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "12px" }}>
-                        Top checklist items with winning trades, and items often not checked in losing trades. Filtered by the Strategies dropdown at the top.
-                      </p>
-                      {!hasSelection ? (
-                        <div style={{ padding: "16px", borderRadius: "8px", border: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)", minHeight: "80px" }}>
-                          <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>Select one or more strategies in the Strategies dropdown at the top to view checklist insights.</p>
-                        </div>
-                      ) : strategyIds.length === 0 ? (
-                        <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>No checklist insights for the selected strategies.</p>
-                      ) : (
-                        strategyIds.map((sid) => {
-                          const row = overviewChecklistByOutcomePerStrategy.find((r) => r.strategyId === sid);
-                          if (!row) return null;
-                          const strategy = strategies.find((s) => s.id === sid);
-                          const byType = new Map<string, ChecklistItemMetricByOutcomeRow[]>();
-                          row.items.forEach((item) => {
-                            const type = item.checklist_type || "other";
-                            if (!byType.has(type)) byType.set(type, []);
-                            byType.get(type)!.push(item);
-                          });
-                          const winningPerType: Array<{ checklistTypeDisplay: string; topItemText: string; good: number }> = [];
-                          const notClickedLosingPerType: Array<{ checklistTypeDisplay: string; topItemText: string; bad: number }> = [];
-                          byType.forEach((rows, type) => {
-                            const typeDisplay = type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-                            const topWinning = rows.reduce((best, r) => ((r.times_checked_good ?? 0) > (best.times_checked_good ?? 0) ? r : best), rows[0]);
-                            if (topWinning && (topWinning.times_checked_good ?? 0) > 0) {
-                              winningPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (topWinning.item_text || `Item ${topWinning.checklist_item_id}`).trim(), good: topWinning.times_checked_good ?? 0 });
-                            }
-                            const topNotClicked = rows.reduce((best, r) => ((r.times_not_checked_bad ?? 0) > (best.times_not_checked_bad ?? 0) ? r : best), rows[0]);
-                            if (topNotClicked && (topNotClicked.times_not_checked_bad ?? 0) > 0) {
-                              notClickedLosingPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (topNotClicked.item_text || `Item ${topNotClicked.checklist_item_id}`).trim(), bad: topNotClicked.times_not_checked_bad ?? 0 });
-                            }
-                          });
-                          const hasInsights = winningPerType.length > 0 || notClickedLosingPerType.length > 0;
-                          if (!hasInsights) return null;
-                          return (
-                            <div key={sid} style={{ marginBottom: "16px" }}>
-                              {strategy && (
-                                <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "6px" }}>{strategy.name}</div>
-                              )}
-                              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", fontSize: "12px", color: "var(--text-secondary)" }}>
-                                {winningPerType.map(({ checklistTypeDisplay, topItemText, good }) => (
-                                  <div key={`w-${sid}-${checklistTypeDisplay}`}>
-                                    <span style={{ color: "var(--text-primary)", marginRight: "4px" }}>{checklistTypeDisplay}:</span>
-                                    <span style={{ color: "var(--success, #22c55e)" }}>{topItemText}</span>
-                                    <span style={{ marginLeft: "4px", opacity: 0.9 }}>({good} winning)</span>
-                                  </div>
-                                ))}
-                                {notClickedLosingPerType.map(({ checklistTypeDisplay, topItemText, bad }) => (
-                                  <div key={`l-${sid}-${checklistTypeDisplay}`}>
-                                    <span style={{ color: "var(--text-primary)", marginRight: "4px" }}>{checklistTypeDisplay} (not checked in losing):</span>
-                                    <span style={{ color: "var(--danger, #ef4444)" }}>{topItemText}</span>
-                                    <span style={{ marginLeft: "4px", opacity: 0.9 }}>({bad} losing)</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  );
-                })()}
               </div>
             )}
 

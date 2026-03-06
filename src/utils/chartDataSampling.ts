@@ -19,6 +19,9 @@ export const CHART_MAX_POINTS = 72;
 /** Minimum data points before showing the Brush (scroll) on a chart. */
 export const BRUSH_MIN_POINTS = 24;
 
+/** Default bar fill opacity for bar charts (use for consistent 50% fill across app). */
+export const CHART_BAR_FILL_OPACITY = 0.5;
+
 /** XAxis interval to show ~8–10 ticks: interval between displayed ticks. */
 export function xAxisInterval(dataLength: number, desiredTicks: number = 10): number {
   if (dataLength <= desiredTicks) return 0;
