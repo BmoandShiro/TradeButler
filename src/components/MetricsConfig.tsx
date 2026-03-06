@@ -46,11 +46,14 @@ const defaultMetrics: MetricConfig[] = [
   { id: "best_day", label: "Best Day", enabled: false, category: "Advanced" },
   { id: "worst_day", label: "Worst Day", enabled: false, category: "Advanced" },
   { id: "average_holding_time_seconds", label: "Avg Holding Time", enabled: true, category: "Performance" },
+  { id: "position_size_chart", label: "Position Size Chart", enabled: false, category: "Charts" },
 ];
 
 const STORAGE_KEY = "tradebutler_metrics_config";
 const COLOR_RANGE_KEY = "tradebutler_color_range";
 const DASHBOARD_SECTIONS_KEY = "tradebutler_dashboard_sections";
+export const DASHBOARD_MAX_METRIC_ROWS_KEY = "tradebutler_dashboard_max_metric_rows";
+export const DASHBOARD_MAX_COLUMNS_KEY = "tradebutler_dashboard_max_columns";
 
 export function useMetricsConfig() {
   const [metrics, setMetrics] = useState<MetricConfig[]>(() => {
@@ -185,11 +188,40 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       try {
         return JSON.parse(saved);
       } catch {
-        return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true, showTrades: true };
+        return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true, showTrades: true, showOpenPositions: true };
       }
     }
-    return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true, showTrades: true };
+    return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true, showTrades: true, showOpenPositions: true };
   });
+
+  // Metric cards layout: max rows (0 = no limit) and columns when layout is locked
+  const [maxMetricRows, setMaxMetricRows] = useState(() => {
+    const saved = localStorage.getItem(DASHBOARD_MAX_METRIC_ROWS_KEY);
+    if (saved !== null) {
+      const n = parseInt(saved, 10);
+      if (n >= 0 && n <= 10) return n;
+    }
+    return 0;
+  });
+  const [maxColumns, setMaxColumns] = useState(() => {
+    const saved = localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY);
+    if (saved !== null) {
+      const n = parseInt(saved, 10);
+      if (n >= 0 && n <= 10) return n;
+    }
+    return 0;
+  });
+
+  const handleMaxMetricRowsChange = (value: number) => {
+    setMaxMetricRows(value);
+    localStorage.setItem(DASHBOARD_MAX_METRIC_ROWS_KEY, String(value));
+    if (onConfigChange) onConfigChange();
+  };
+  const handleMaxColumnsChange = (value: number) => {
+    setMaxColumns(value);
+    localStorage.setItem(DASHBOARD_MAX_COLUMNS_KEY, String(value));
+    if (onConfigChange) onConfigChange();
+  };
   
   const toggleDashboardSection = (section: string) => {
     setDashboardSections((prev: any) => {
@@ -430,6 +462,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
               { id: "showTopSymbols", label: "Top Symbols" },
               { id: "showStrategyPerformance", label: "Strategy Performance" },
               { id: "showRecentTrades", label: "Recent Trades" },
+              { id: "showOpenPositions", label: "Open Positions" },
               { id: "showTrades", label: "Trades" },
             ].map((section) => (
               <label
@@ -459,6 +492,70 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
                 />
               </label>
             ))}
+          </div>
+        </div>
+
+        {/* Metric cards layout */}
+        <div style={{ marginBottom: "24px" }}>
+          <h3
+            style={{
+              fontSize: "16px",
+              fontWeight: "600",
+              marginBottom: "12px",
+              color: "var(--text-primary)",
+            }}
+          >
+            Metric cards layout
+          </h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Max rows</label>
+              <select
+                value={maxMetricRows}
+                onChange={(e) => handleMaxMetricRowsChange(parseInt(e.target.value, 10))}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  cursor: "pointer",
+                }}
+              >
+                <option value={0}>No limit (wrap with window)</option>
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                  <option key={n} value={n}>{n} row{n !== 1 ? "s" : ""}</option>
+                ))}
+              </select>
+              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                When set, metric cards use a fixed grid with at most this many rows. With layout locked, resizing the window won’t change the arrangement.
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Columns</label>
+              <select
+                value={maxColumns}
+                onChange={(e) => handleMaxColumnsChange(parseInt(e.target.value, 10))}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  cursor: "pointer",
+                }}
+              >
+                <option value={0}>No limit (wrap with window)</option>
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                  <option key={n} value={n}>{n} column{n !== 1 ? "s" : ""}</option>
+                ))}
+              </select>
+              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                When set, metric cards use a fixed grid with this many columns. With layout locked, resizing the window won’t change the arrangement.
+              </div>
+            </div>
           </div>
         </div>
 
