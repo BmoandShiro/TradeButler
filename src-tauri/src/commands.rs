@@ -574,8 +574,10 @@ pub fn import_trades_csv(csv_data: String, mark_as_paper: Option<bool>) -> Resul
         for result in reader.deserialize() {
             let webull_trade: WebullCsvTrade = result.map_err(|e| e.to_string())?;
             
-            // Skip cancelled or unfilled trades (Filled can be fractional, e.g. 0.1)
-            if webull_trade.status == "Cancelled" || webull_trade.filled <= 0.0 {
+            // Skip only when there is no filled quantity. Webull sometimes marks orders as
+            // "Cancelled" even when they have a filled quantity (partial fill then cancel);
+            // we import any row with filled > 0 so those trades are not lost.
+            if webull_trade.filled <= 0.0 {
                 continue;
             }
             
@@ -615,6 +617,8 @@ pub fn import_trades_csv(csv_data: String, mark_as_paper: Option<bool>) -> Resul
                     cleaned.parse::<f64>().ok()
                 });
             
+            // Store as Filled so pairing/PnL include this trade (they filter on Filled/FILLED)
+            let status = "Filled".to_string();
             let trade = Trade {
                 id: None,
                 symbol: webull_trade.symbol,
@@ -623,7 +627,7 @@ pub fn import_trades_csv(csv_data: String, mark_as_paper: Option<bool>) -> Resul
                 price,
                 timestamp,
                 order_type: webull_trade.time_in_force.unwrap_or_else(|| "DAY".to_string()),
-                status: webull_trade.status,
+                status,
                 fees,
                 notes: webull_trade.name,
                 strategy_id: None,
@@ -7321,7 +7325,7 @@ pub struct VersionInfo {
     pub latest: String,
     pub is_up_to_date: bool,
     pub download_url: Option<String>,
-    /// Asset filename (e.g. TradeButler-1.3.0.msi) for installer temp file; API URL does not contain it.
+    /// Asset filename (e.g. TradeButler-1.3.1.msi) for installer temp file; API URL does not contain it.
     pub download_filename: Option<String>,
     pub release_notes: Option<String>,
     pub is_installer: bool,

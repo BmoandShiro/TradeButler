@@ -1,10 +1,11 @@
 import { useEffect, useState, useMemo, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
 import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, BarChart3, Lock, Unlock, Search, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Filter } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { TradeChart } from "../components/TradeChart";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { formatWithCommas } from "../utils/formatCompactNumber";
 import { loadSandboxState, deleteSandboxTrade, updateSandboxTradeStrategy, updateSandboxTradeNotes } from "../utils/sandboxStore";
@@ -99,6 +100,7 @@ export default function Trades() {
     return (saved === "Pair" ? "Pair" : "Individual") as "Individual" | "Pair";
   });
   const [expandedTrades, setExpandedTrades] = useState<Set<number>>(new Set());
+  const [chartCollapsedForPosition, setChartCollapsedForPosition] = useState<Set<number>>(new Set());
   const [timeframe, setTimeframe] = useState<Timeframe>(() => {
     const saved = localStorage.getItem("tradebutler_trades_timeframe");
     return (saved as Timeframe) || "all";
@@ -169,6 +171,7 @@ export default function Trades() {
   const [journalEntriesByPairKey, setJournalEntriesByPairKey] = useState<Record<string, JournalEntrySummary[]>>({});
   const [journalPairPage, setJournalPairPage] = useState<number>(0);
   const navigate = useNavigate();
+  const location = useLocation();
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   /** Trade IDs selected for bulk "Mark as paper" / "Remove paper" (checkboxes in Paper column). */
   const [selectedTradeIdsForPaper, setSelectedTradeIdsForPaper] = useState<Set<number>>(new Set());
@@ -214,6 +217,28 @@ export default function Trades() {
   useEffect(() => {
     loadData();
   }, [pairingMethod, viewMode, timeframe, customStartDate, customEndDate, dataMode]);
+
+  // When navigated from Dashboard "Open Positions" with expandPositionEntryId, switch to Pair view and expand that position
+  const expandPositionEntryIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    const state = location.state as { expandPositionEntryId?: number } | null;
+    const entryId = state?.expandPositionEntryId;
+    if (entryId != null) {
+      expandPositionEntryIdRef.current = entryId;
+    }
+  }, [location.state]);
+  useEffect(() => {
+    const entryId = expandPositionEntryIdRef.current;
+    if (entryId == null || positionGroups.length === 0) return;
+    const hasGroup = positionGroups.some((g) => g.entry_trade.id === entryId);
+    if (hasGroup) {
+      setViewMode("Pair");
+      localStorage.setItem(VIEW_MODE_STORAGE_KEY, "Pair");
+      setExpandedTrades((prev) => new Set([...prev, entryId]));
+      expandPositionEntryIdRef.current = null;
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [positionGroups, navigate, location.pathname]);
 
   useEffect(() => {
     const onTradeAdded = () => loadData();
@@ -772,6 +797,7 @@ export default function Trades() {
   const searchMatchesTrade = (trade: Trade): boolean => {
     if (!searchQuery.trim() || !trade) return true;
     const searchLower = searchQuery.toLowerCase();
+    const strategyName = trade.strategy_id != null ? strategies.find(s => s.id === trade.strategy_id)?.name : undefined;
     return (
       (trade.symbol ?? "").toLowerCase().includes(searchLower) ||
       (trade.side ?? "").toLowerCase().includes(searchLower) ||
@@ -2091,6 +2117,89 @@ export default function Trades() {
                                 <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px" }}>
                                   Position Trades ({group.position_trades.length})
                                 </h3>
+                                {group.position_trades.length >= 1 && (() => {
+                                  const entryId = group.entry_trade.id;
+                                  const isChartCollapsed = chartCollapsedForPosition.has(entryId);
+                                  const toggleChart = () => {
+                                    setChartCollapsedForPosition((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(entryId)) next.delete(entryId);
+                                      else next.add(entryId);
+                                      return next;
+                                    });
+                                  };
+                                  let running = 0;
+                                  const chartData: { time: string; positionSize: number; label: string }[] = [
+                                    { time: group.position_trades[0].timestamp, positionSize: 0, label: format(new Date(group.position_trades[0].timestamp), "MMM d, HH:mm") },
+                                  ];
+                                  group.position_trades.forEach((t) => {
+                                    const side = t.side.toUpperCase();
+                                    if (side === "BUY") running += t.quantity;
+                                    else if (side === "SELL") running -= t.quantity;
+                                    chartData.push({
+                                      time: t.timestamp,
+                                      positionSize: running,
+                                      label: format(new Date(t.timestamp), "MMM d, HH:mm"),
+                                    });
+                                  });
+                                  return (
+                                    <div style={{ marginBottom: "20px" }}>
+                                      <h4
+                                        style={{
+                                          fontSize: "13px",
+                                          fontWeight: "600",
+                                          color: "var(--text-secondary)",
+                                          marginBottom: isChartCollapsed ? 0 : "8px",
+                                          textTransform: "uppercase",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          cursor: "pointer",
+                                          userSelect: "none",
+                                        }}
+                                        onClick={toggleChart}
+                                        role="button"
+                                        aria-expanded={!isChartCollapsed}
+                                      >
+                                        {isChartCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                                        Position size over time
+                                      </h4>
+                                      {!isChartCollapsed && (
+                                        <ResponsiveContainer width="100%" height={200}>
+                                          <LineChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+                                            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                                            <XAxis
+                                              dataKey="label"
+                                              tick={{ fontSize: 11, fill: "var(--text-secondary)" }}
+                                              stroke="var(--border-color)"
+                                            />
+                                            <YAxis
+                                              tick={{ fontSize: 11, fill: "var(--text-secondary)" }}
+                                              stroke="var(--border-color)"
+                                              tickFormatter={(v) => (v >= 0 ? `+${formatWithCommas(v, { maxDecimals: 2 })}` : formatWithCommas(v, { maxDecimals: 2 }))}
+                                            />
+                                            <Tooltip
+                                              contentStyle={{ backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px" }}
+                                              labelStyle={{ color: "var(--text-primary)" }}
+                                              formatter={(value: number) => [value >= 0 ? `+${formatWithCommas(value, { minDecimals: 4, maxDecimals: 4 })}` : formatWithCommas(value, { minDecimals: 4, maxDecimals: 4 }), "Position size"]}
+                                              labelFormatter={(label) => `Time: ${label}`}
+                                            />
+                                            <ReferenceLine y={0} stroke="var(--text-secondary)" strokeDasharray="2 2" />
+                                            <Line
+                                              type="stepAfter"
+                                              dataKey="positionSize"
+                                              stroke="var(--accent)"
+                                              strokeWidth={2}
+                                              dot={{ fill: "var(--accent)", r: 3 }}
+                                              activeDot={{ r: 5 }}
+                                              isAnimationActive={true}
+                                            />
+                                          </LineChart>
+                                        </ResponsiveContainer>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                                 <div style={{ overflowX: "auto" }}>
                                   <table style={{ width: "100%", borderCollapse: "collapse" }}>
                                     <thead>
@@ -2158,7 +2267,7 @@ export default function Trades() {
                                                   fontSize: "11px",
                                                   fontWeight: "500",
                                                   backgroundColor:
-                                                    trade.side === "BUY"
+                                                    trade.side.toUpperCase() === "BUY"
                                                       ? "var(--profit)"
                                                       : "var(--loss)",
                                                   color: "white",
@@ -2217,8 +2326,8 @@ export default function Trades() {
                                     </tbody>
                                   </table>
                                 </div>
-                                {/* Add View Chart button and Notes for closed positions */}
-                                {group.final_quantity === 0 && group.position_trades.length >= 2 && (
+                                {/* Add View Chart button and Notes (closed or open positions) */}
+                                {group.position_trades.length >= 1 && (
                                   <div style={{ marginTop: "16px" }}>
                                     <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
                                       <button
@@ -2660,7 +2769,7 @@ export default function Trades() {
                               fontSize: "12px",
                               fontWeight: "500",
                               backgroundColor:
-                                trade.side === "BUY"
+                                trade.side.toUpperCase() === "BUY"
                                   ? "var(--profit)"
                                   : "var(--loss)",
                               color: "white",

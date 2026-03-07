@@ -34,6 +34,7 @@ import {
   deleteSandboxEmotionalState,
   loadSandboxState,
 } from "../utils/sandboxStore";
+import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 
 interface JournalEntry {
   id: number;
@@ -272,6 +273,7 @@ export default function Journal() {
   const [linkedPairs, setLinkedPairs] = useState<PairedTrade[]>([]);
   const [showLinkPairsModal, setShowLinkPairsModal] = useState(false);
   const [selectedPairForChart, setSelectedPairForChart] = useState<PairedTrade | null>(null);
+  const [selectedPositionTrades, setSelectedPositionTrades] = useState<Array<{ id: number; symbol: string; side: string; quantity: number; price: number; timestamp: string; order_type: string; status: string; fees: number | null; notes: string | null; strategy_id: number | null }> | undefined>(undefined);
   const [allPairsForPicker, setAllPairsForPicker] = useState<PairedTrade[]>([]);
   const [linkPickerSelected, setLinkPickerSelected] = useState<Set<string>>(new Set());
   const [linkPairsSearchQuery, setLinkPairsSearchQuery] = useState("");
@@ -1002,6 +1004,79 @@ export default function Journal() {
     } catch (error) {
       console.error("Error loading linked pairs:", error);
       setLinkedPairs([]);
+    }
+  };
+
+  /** Fetch position trades for a pair so the chart can show buy/sell markers and average cost (same as Trades tab). */
+  const fetchPositionTradesForPair = async (pair: PairedTrade): Promise<Array<{ id: number; symbol: string; side: string; quantity: number; price: number; timestamp: string; order_type: string; status: string; fees: number | null; notes: string | null; strategy_id: number | null }> | undefined> => {
+    try {
+      if (dataMode === "sandbox") {
+        const state = loadSandboxState();
+        const trades = state.trades.map((t) => ({
+          id: t.id,
+          symbol: t.symbol,
+          side: t.side,
+          quantity: t.quantity,
+          price: t.price,
+          timestamp: t.timestamp,
+          order_type: t.order_type ?? "",
+          status: t.status ?? "Filled",
+          fees: t.fees ?? null,
+          notes: t.notes ?? null,
+          strategy_id: t.strategy_id ?? null,
+        }));
+        const { positionGroups } = buildPositionGroupsAndPairs(trades, "FIFO");
+        const group = positionGroups.find(
+          (g) =>
+            g.entry_trade.id === pair.entry_trade_id &&
+            g.position_trades.length >= 1 &&
+            g.position_trades[g.position_trades.length - 1].id === pair.exit_trade_id
+        );
+        if (!group) return undefined;
+        return group.position_trades.map((t) => ({
+          id: t.id,
+          symbol: t.symbol,
+          side: t.side,
+          quantity: t.quantity,
+          price: t.price,
+          timestamp: t.timestamp,
+          order_type: t.order_type ?? "",
+          status: t.status ?? "Filled",
+          fees: t.fees ?? null,
+          notes: t.notes ?? null,
+          strategy_id: t.strategy_id ?? null,
+        }));
+      }
+      const start = new Date(pair.entry_timestamp);
+      const end = new Date(pair.exit_timestamp);
+      start.setDate(start.getDate() - 1);
+      end.setDate(end.getDate() + 1);
+      const startDate = start.toISOString();
+      const endDate = end.toISOString();
+      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+      const groups = await invoke<Array<{ entry_trade: { id: number }; position_trades: Array<{ id?: number; symbol: string; side: string; quantity: number; price: number; timestamp: string; order_type?: string; status?: string; fees?: number | null; notes?: string | null; strategy_id?: number | null }> }>>("get_position_groups", { pairing_method: "FIFO", startDate, endDate, ...paperArgs });
+      const group = groups.find(
+        (g) =>
+          g.entry_trade.id === pair.entry_trade_id &&
+          g.position_trades.length >= 1 &&
+          (g.position_trades[g.position_trades.length - 1].id ?? 0) === pair.exit_trade_id
+      );
+      if (!group) return undefined;
+      return group.position_trades.map((t) => ({
+        id: t.id ?? 0,
+        symbol: t.symbol,
+        side: t.side,
+        quantity: t.quantity,
+        price: t.price,
+        timestamp: t.timestamp,
+        order_type: t.order_type ?? "",
+        status: t.status ?? "Filled",
+        fees: t.fees ?? null,
+        notes: t.notes ?? null,
+        strategy_id: t.strategy_id ?? null,
+      }));
+    } catch {
+      return undefined;
     }
   };
 
@@ -3176,7 +3251,11 @@ export default function Journal() {
                           />
                           <div style={{ marginTop: "8px" }}>
                             <button
-                              onClick={() => setSelectedPairForChart(pair)}
+                              onClick={() => {
+                                setSelectedPairForChart(pair);
+                                setSelectedPositionTrades(undefined);
+                                fetchPositionTradesForPair(pair).then(setSelectedPositionTrades);
+                              }}
                               style={{
                                 fontSize: "12px",
                                 padding: "6px 12px",
@@ -3746,7 +3825,11 @@ export default function Journal() {
                             >
                               <button
                                 type="button"
-                                onClick={() => setSelectedPairForChart(pair)}
+                                onClick={() => {
+                                  setSelectedPairForChart(pair);
+                                  setSelectedPositionTrades(undefined);
+                                  fetchPositionTradesForPair(pair).then(setSelectedPositionTrades);
+                                }}
                                 style={{
                                   display: "flex",
                                   alignItems: "center",
@@ -6721,7 +6804,11 @@ export default function Journal() {
           exitTimestamp={selectedPairForChart.exit_timestamp}
           entryPrice={selectedPairForChart.entry_price}
           exitPrice={selectedPairForChart.exit_price}
-          onClose={() => setSelectedPairForChart(null)}
+          onClose={() => {
+            setSelectedPairForChart(null);
+            setSelectedPositionTrades(undefined);
+          }}
+          positionTrades={selectedPositionTrades}
         />
       )}
       </div>
