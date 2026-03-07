@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useMemo } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
@@ -351,6 +351,7 @@ const getMetricColor = (id: string, value: number, colorRange?: { min: number; m
 
 const DASHBOARD_SECTIONS_KEY = "tradebutler_dashboard_sections";
 const DASHBOARD_SECTION_ORDER_KEY = "tradebutler_dashboard_section_order";
+const DASHBOARD_DISPLAY_ORDER_KEY = "tradebutler_dashboard_display_order";
 const DASHBOARD_SECTION_SIZES_KEY = "tradebutler_dashboard_section_sizes";
 const OPEN_POSITIONS_DISPLAY_MODE_KEY = "tradebutler_open_positions_display_mode";
 const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
@@ -2182,6 +2183,19 @@ export default function Dashboard() {
     }
     return [];
   });
+  // Merged order of metric + section ids so users can mix them (e.g. Open Positions among metrics). Null = use default metrics then sections.
+  const [mergedDisplayOrder, setMergedDisplayOrder] = useState<string[] | null>(() => {
+    const saved = localStorage.getItem(DASHBOARD_DISPLAY_ORDER_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
   // @dnd-kit sensors
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -2222,25 +2236,37 @@ export default function Dashboard() {
       if (overId.startsWith("metric-slot-")) {
         const parsed = parseInt(overId.replace("metric-slot-", ""), 10);
         if (!Number.isNaN(parsed) && parsed >= 0) targetSlot = parsed;
-      } else if (metricInstances.some((inst) => inst.instanceId === overId)) {
-        const targetCard = metricInstances.find((inst) => inst.instanceId === overId);
-        if (targetCard && targetCard.slotIndex !== undefined) targetSlot = targetCard.slotIndex;
+      } else {
+        const idx = displayOrder.indexOf(overId);
+        if (idx >= 0) targetSlot = idx;
       }
       if (targetSlot !== null) {
         const draggedId = active.id as string;
-        setMetricInstances((prev) => {
-          const dragged = prev.find((inst) => inst.instanceId === draggedId);
-          if (!dragged) return prev;
-          const oldSlot = dragged.slotIndex ?? prev.findIndex((i) => i.instanceId === draggedId);
-          const occupant = prev.find((inst) => inst.instanceId !== draggedId && (inst.slotIndex ?? 0) === targetSlot);
-          const updated = prev.map((inst) => {
-            if (inst.instanceId === draggedId) return { ...inst, slotIndex: targetSlot! };
-            if (occupant && inst.instanceId === occupant.instanceId) return { ...inst, slotIndex: oldSlot };
-            return inst;
-          });
-          localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
-          return updated;
+        const oldIndex = displayOrder.indexOf(draggedId);
+        if (oldIndex === -1) return;
+        const newOrder = arrayMove([...displayOrder], oldIndex, targetSlot);
+        setMergedDisplayOrder(newOrder);
+        localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(newOrder));
+        setMetricCardOrder((prev) => {
+          const metricIds = newOrder.filter((id) => !isSectionId(id));
+          const kept = prev.filter((id) => !newOrder.includes(id) && !isSectionId(id));
+          const finalOrder = [...metricIds, ...kept];
+          localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
         });
+        setSectionOrder((prev) => {
+          const sectionIds = newOrder.filter((id) => isSectionId(id));
+          const kept = prev.filter((id) => !newOrder.includes(id));
+          const finalOrder = [...sectionIds, ...kept];
+          localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        });
+        setMetricInstances((prev) =>
+          prev.map((inst) => ({
+            ...inst,
+            slotIndex: newOrder.indexOf(inst.instanceId) >= 0 ? newOrder.indexOf(inst.instanceId) : inst.slotIndex,
+          }))
+        );
         return;
       }
     }
@@ -2252,21 +2278,22 @@ export default function Dashboard() {
       const newIndex = displayOrder.indexOf(overId);
       if (oldIndex !== -1 && newIndex !== -1) {
         const newOrder = arrayMove([...displayOrder], oldIndex, newIndex);
+        setMergedDisplayOrder(newOrder);
+        localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(newOrder));
+        const metricIdsInOrder = newOrder.filter((id) => !isSectionId(id));
+        const sectionIdsInOrder = newOrder.filter((id) => isSectionId(id));
         setMetricCardOrder((prev) => {
-          const kept = prev.filter((id) => !newOrder.includes(id));
-          const finalOrder = [...newOrder, ...kept];
+          const kept = prev.filter((id) => !newOrder.includes(id) && !isSectionId(id));
+          const finalOrder = [...metricIdsInOrder, ...kept];
           localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
           return finalOrder;
         });
-        if (newOrder.some((id) => isSectionId(id))) {
-          const newSectionOrder = newOrder.filter((id) => isSectionId(id));
-          setSectionOrder((prev) => {
-            const kept = prev.filter((id) => !newOrder.includes(id));
-            const finalOrder = [...newSectionOrder, ...kept];
-            localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(finalOrder));
-            return finalOrder;
-          });
-        }
+        setSectionOrder((prev) => {
+          const kept = prev.filter((id) => !newOrder.includes(id));
+          const finalOrder = [...sectionIdsInOrder, ...kept];
+          localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        });
         return;
       }
       setMetricCardOrder((items) => {
@@ -2300,6 +2327,12 @@ export default function Dashboard() {
         if (oldIndex !== -1 && newIndex !== -1) {
           const finalOrder = arrayMove(items, oldIndex, newIndex);
           localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(finalOrder));
+          setMergedDisplayOrder((prev) => {
+            if (!prev) return null;
+            return prev.map((id) =>
+              isSectionId(id) ? finalOrder[items.indexOf(id)] : id
+            );
+          });
           return finalOrder;
         }
         
@@ -2565,8 +2598,35 @@ export default function Dashboard() {
     });
   }, [displayMetrics, metricCardOrder]);
 
-  // Unlocked grid shows only metrics (no section placeholders); sections stay in the grid below with full content.
-  const displayOrder = useMemo(() => sortedMetrics.map((m) => m.id), [sortedMetrics]);
+  const sectionVisible = (id: SectionId): boolean => {
+    const key: keyof DashboardSections = id === "topSymbols" ? "showTopSymbols" : id === "strategyPerformance" ? "showStrategyPerformance" : id === "recentTrades" ? "showRecentTrades" : id === "trades" ? "showTrades" : "showOpenPositions";
+    return !!dashboardSections[key];
+  };
+  // Unified order: metrics + sections so users can mix them in one grid when unlocked. Use merged order if saved.
+  const displayOrder = useMemo(() => {
+    const metricIds = sortedMetrics.map((m) => m.id);
+    const sectionIds = sectionOrder.filter((id) => sectionVisible(id));
+    if (mergedDisplayOrder && mergedDisplayOrder.length > 0) {
+      const validIds = new Set([...metricIds, ...sectionIds]);
+      const ordered = mergedDisplayOrder.filter((id) => validIds.has(id));
+      const appended = [...metricIds, ...sectionIds].filter((id) => !ordered.includes(id));
+      return [...ordered, ...appended];
+    }
+    return [...metricIds, ...sectionIds];
+  }, [sortedMetrics, sectionOrder, dashboardSections, mergedDisplayOrder]);
+
+  useEffect(() => {
+    if (mergedDisplayOrder && mergedDisplayOrder.length > 0) {
+      localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(mergedDisplayOrder));
+    }
+  }, [mergedDisplayOrder]);
+
+  // Ref set by section grid so unified grid can render full section cards when mixing.
+  const renderSectionCardRef = useRef<((sectionId: SectionId) => React.ReactNode) | null>(null);
+  const [sectionCardRefReady, setSectionCardRefReady] = useState(0);
+  useLayoutEffect(() => {
+    if (renderSectionCardRef.current && sectionCardRefReady === 0) setSectionCardRefReady(1);
+  });
 
   // Listen for color range changes - use a ref to track previous value
   const prevColorRangeRef = useRef<string>("");
@@ -3067,7 +3127,8 @@ export default function Dashboard() {
         };
 
         if (layoutLocked) {
-          const maxSlot = Math.max(0, ...displayMetrics.map((m: any, i: number) => m.slotIndex ?? i));
+          const numEmptySlots = Math.max(gridColumns, 4);
+          const totalSlots = displayOrder.length + numEmptySlots;
           return (
             <DndContext
               sensors={sensors}
@@ -3075,7 +3136,7 @@ export default function Dashboard() {
               onDragEnd={handleDragEnd}
             >
               <SortableContext
-                items={displayMetrics.map((m: any) => m.id)}
+                items={displayOrder}
                 strategy={rectSortingStrategy}
               >
                 <div
@@ -3089,17 +3150,28 @@ export default function Dashboard() {
                     boxSizing: "border-box",
                   }}
                 >
-                  {Array.from({ length: maxSlot + 2 }, (_, i) => {
-                    const metric = displayMetrics.find((m: any) => (m.slotIndex ?? 0) === i);
-                    const slotSpan = metric
-                      ? (metric as any).baseMetricId === "position_size_chart"
-                        ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).chartColumnSpan ?? ((metric as any).chartWidth ? 2 : 1)))
-                        : Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).cardColumnSpan ?? 1))
-                      : 1;
+                  {Array.from({ length: totalSlots }, (_, i) => {
+                    const id = i < displayOrder.length ? displayOrder[i] : null;
+                    let slotSpan = 1;
+                    if (id) {
+                      if (isSectionId(id)) {
+                        slotSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes[id]?.columnSpan ?? 1));
+                      } else {
+                        const metric = sortedMetrics.find((m) => m.id === id);
+                        if (metric) {
+                          slotSpan = (metric as any).baseMetricId === "position_size_chart"
+                            ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).chartColumnSpan ?? ((metric as any).chartWidth ? 2 : 1)))
+                            : Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).cardColumnSpan ?? 1));
+                        }
+                      }
+                    }
                     const slotStyle = slotSpan > 1 ? { gridColumn: `span ${slotSpan}` as const } : undefined;
                     return (
                       <DroppableSlot key={i} id={`metric-slot-${i}`} style={slotStyle}>
-                        {metric ? renderCard(metric) : null}
+                        {id ? (isSectionId(id) ? (renderSectionCardRef.current ? renderSectionCardRef.current(id) : null) : (() => {
+                          const metric = sortedMetrics.find((m) => m.id === id);
+                          return metric ? renderCard(metric) : null;
+                        })()) : null}
                       </DroppableSlot>
                     );
                   })}
@@ -3133,6 +3205,10 @@ export default function Dashboard() {
         }}
       >
         {displayOrder.map((id) => {
+          if (isSectionId(id)) {
+            const rendered = renderSectionCardRef.current ? renderSectionCardRef.current(id) : null;
+            return rendered;
+          }
           const metric = sortedMetrics.find((m) => m.id === id);
           return metric ? renderCard(metric) : null;
         })}
@@ -3142,7 +3218,8 @@ export default function Dashboard() {
         );
       })()}
 
-      {/* Dashboard Stats Grid - full section content; when locked, extra row below for moving sections */}
+      <div style={{ position: "absolute", left: -9999, width: 1, height: 1, overflow: "hidden", visibility: "hidden", pointerEvents: "none", zIndex: -1 }}>
+      {/* Section card renderer: always run hidden so renderSectionCardRef is set for the unified grid (locked and unlocked). */}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -3163,12 +3240,15 @@ export default function Dashboard() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: `repeat(auto-fit, minmax(${sectionsGridMinWidthPx}px, 1fr))`,
+            gridTemplateColumns: layoutLocked
+              ? `repeat(3, 1fr)`
+              : `repeat(auto-fit, minmax(${sectionsGridMinWidthPx}px, 1fr))`,
             gap: `${sectionsGridGapPx}px`,
             minHeight: 0,
           }}
         >
-        {sectionOrder.map((sectionId) => {
+        {(() => {
+          const renderOne = (sectionId: SectionId): React.ReactNode => {
           // Top Symbols
           if (sectionId === "topSymbols" && dashboardSections.showTopSymbols && topSymbols.length > 0) {
             const topSymbolsSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.topSymbols?.columnSpan ?? 1));
@@ -5173,12 +5253,16 @@ export default function Dashboard() {
             );
           }
           return null;
-        })}
+          };
+          renderSectionCardRef.current = renderOne;
+          return sectionOrder.map((sid) => renderOne(sid));
+        })()}
         </div>
         {layoutLocked && <div style={{ minHeight: 140, width: "100%" }} aria-hidden />}
       </div>
         </SortableContext>
       </DndContext>
+      </div>
 
           <MetricsConfigPanel
             isOpen={showMetricsConfig}
