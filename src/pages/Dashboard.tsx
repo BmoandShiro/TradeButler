@@ -350,6 +350,7 @@ const getMetricColor = (id: string, value: number, colorRange?: { min: number; m
 
 const DASHBOARD_SECTIONS_KEY = "tradebutler_dashboard_sections";
 const DASHBOARD_SECTION_ORDER_KEY = "tradebutler_dashboard_section_order";
+const DASHBOARD_SECTION_SIZES_KEY = "tradebutler_dashboard_section_sizes";
 const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
 const METRIC_INSTANCES_KEY = "tradebutler_metric_instances";
 const LAYOUT_LOCKED_KEY = "tradebutler_dashboard_layout_locked";
@@ -392,14 +393,18 @@ type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades" | "trades
 
 const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "openPositions", "trades"];
 
+export type SectionSizes = Record<SectionId, { columnSpan?: number; height?: number }>;
+
 // Sortable Metric Card Component
 // SortableSection component for dashboard sections
 function SortableSection({
   id,
   children,
+  wrapperStyle,
 }: {
   id: SectionId;
   children: (props: { dragHandleProps: any; isDragging: boolean }) => React.ReactNode;
+  wrapperStyle?: React.CSSProperties;
 }) {
   const {
     attributes,
@@ -411,6 +416,7 @@ function SortableSection({
   } = useSortable({ id });
 
   const style = {
+    ...wrapperStyle,
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
@@ -419,6 +425,121 @@ function SortableSection({
   return (
     <div ref={setNodeRef} style={style}>
       {children({ dragHandleProps: { ...attributes, ...listeners }, isDragging })}
+    </div>
+  );
+}
+
+// Wrapper that adds resize handles (right + bottom) to a dashboard section card
+function SectionCardResizeWrapper({
+  sectionId,
+  sectionSizes,
+  setSectionSizes,
+  children,
+}: {
+  sectionId: SectionId;
+  sectionSizes: SectionSizes;
+  setSectionSizes: React.Dispatch<React.SetStateAction<SectionSizes>>;
+  children: React.ReactNode;
+}) {
+  const size = sectionSizes[sectionId] ?? {};
+  const height = size.height != null ? Math.min(800, Math.max(200, size.height)) : undefined;
+
+  const handleResizeHorizontal = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const card = (e.currentTarget as HTMLElement).closest("[data-section-card]") as HTMLElement | null;
+    if (!card) return;
+    let grid: HTMLElement | null = card.parentElement;
+    while (grid) {
+      const ds = getComputedStyle(grid);
+      if (ds.display === "grid" && ds.gridTemplateColumns && ds.gridTemplateColumns !== "none") break;
+      grid = grid.parentElement;
+    }
+    if (!grid) return;
+    const gs = getComputedStyle(grid);
+    const template = gs.gridTemplateColumns;
+    const columnCount = template.split(" ").filter(Boolean).length || 1;
+    const gapPx = parseFloat(gs.gap) || 20;
+    const gridWidth = grid.clientWidth;
+    const columnWidth = columnCount > 1 ? (gridWidth - (columnCount - 1) * gapPx) / columnCount : gridWidth;
+    const slotWidth = columnWidth + gapPx;
+    const startX = e.clientX;
+    const startWidth = card.getBoundingClientRect().width;
+    const onMove = (e2: MouseEvent) => {
+      const delta = e2.clientX - startX;
+      const rawWidth = Math.max(columnWidth, startWidth + delta);
+      const span = (rawWidth + gapPx) / slotWidth;
+      const newSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, Math.round(span)));
+      setSectionSizes((prev) => {
+        const next = { ...prev, [sectionId]: { ...prev[sectionId], columnSpan: newSpan } };
+        localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+        return next;
+      });
+    };
+    const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const handleResizeVertical = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = height ?? 300;
+    const onMove = (e2: MouseEvent) => {
+      const delta = e2.clientY - startY;
+      const newH = Math.min(800, Math.max(200, startH + delta));
+      setSectionSizes((prev) => {
+        const next = { ...prev, [sectionId]: { ...prev[sectionId], height: newH } };
+        localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+        return next;
+      });
+    };
+    const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  return (
+    <div
+      data-section-card
+      style={{
+        position: "relative",
+        minHeight: height != null ? `${height}px` : undefined,
+        height: height != null ? `${height}px` : undefined,
+      }}
+    >
+      {children}
+      <div
+        role="separator"
+        aria-label="Resize section width"
+        onMouseDown={handleResizeHorizontal}
+        style={{
+          position: "absolute",
+          right: 0,
+          top: 0,
+          bottom: 0,
+          width: "8px",
+          cursor: "ew-resize",
+          background: "transparent",
+          pointerEvents: "auto",
+        }}
+      />
+      <div
+        role="separator"
+        aria-label="Resize section height"
+        onMouseDown={handleResizeVertical}
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: "8px",
+          cursor: "ns-resize",
+          background: "transparent",
+          pointerEvents: "auto",
+        }}
+      />
     </div>
   );
 }
@@ -1966,6 +2087,28 @@ export default function Dashboard() {
     }
     return defaultSectionOrder;
   });
+  const [sectionSizes, setSectionSizes] = useState<SectionSizes>(() => {
+    const saved = localStorage.getItem(DASHBOARD_SECTION_SIZES_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as SectionSizes;
+        const allIds: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions"];
+        const out: SectionSizes = {} as SectionSizes;
+        allIds.forEach((id) => {
+          const s = parsed[id];
+          if (s && typeof s === "object") {
+            const col = s.columnSpan != null ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, s.columnSpan)) : undefined;
+            const h = s.height != null ? Math.min(800, Math.max(200, s.height)) : undefined;
+            out[id] = { columnSpan: col, height: h };
+          }
+        });
+        return out;
+      } catch {
+        return {} as SectionSizes;
+      }
+    }
+    return {} as SectionSizes;
+  });
   const [metricCardOrder, setMetricCardOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem(METRIC_CARDS_ORDER_KEY);
     if (saved) {
@@ -2932,9 +3075,18 @@ export default function Dashboard() {
         {sectionOrder.map((sectionId) => {
           // Top Symbols
           if (sectionId === "topSymbols" && dashboardSections.showTopSymbols && topSymbols.length > 0) {
+            const topSymbolsSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.topSymbols?.columnSpan ?? 1));
             return (
-              <SortableSection key="topSymbols" id="topSymbols">
+              <SortableSection
+                key="topSymbols"
+                id="topSymbols"
+                wrapperStyle={{
+                  ...(topSymbolsSpan > 1 ? { gridColumn: `span ${topSymbolsSpan}` as const } : {}),
+                  ...(sectionSizes.topSymbols?.height != null ? { minHeight: `${sectionSizes.topSymbols.height}px` } : {}),
+                }}
+              >
                 {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper sectionId="topSymbols" sectionSizes={sectionSizes} setSectionSizes={setSectionSizes}>
                   <div
                     style={{
                       backgroundColor: "var(--bg-secondary)",
@@ -3109,6 +3261,7 @@ export default function Dashboard() {
                   ))}
                 </div>
               </div>
+                  </SectionCardResizeWrapper>
                 )}
               </SortableSection>
             );
@@ -3116,9 +3269,18 @@ export default function Dashboard() {
 
           // Strategy Performance
           if (sectionId === "strategyPerformance" && dashboardSections.showStrategyPerformance && strategyPerformance.length > 0) {
+            const stratSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.strategyPerformance?.columnSpan ?? 1));
             return (
-              <SortableSection key="strategyPerformance" id="strategyPerformance">
+              <SortableSection
+                key="strategyPerformance"
+                id="strategyPerformance"
+                wrapperStyle={{
+                  ...(stratSpan > 1 ? { gridColumn: `span ${stratSpan}` as const } : {}),
+                  ...(sectionSizes.strategyPerformance?.height != null ? { minHeight: `${sectionSizes.strategyPerformance.height}px` } : {}),
+                }}
+              >
                 {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper sectionId="strategyPerformance" sectionSizes={sectionSizes} setSectionSizes={setSectionSizes}>
                   <div
                     style={{
                       backgroundColor: "var(--bg-secondary)",
@@ -3544,6 +3706,7 @@ export default function Dashboard() {
               })}
               </div>
                   </div>
+                  </SectionCardResizeWrapper>
                 )}
               </SortableSection>
             );
@@ -3551,9 +3714,18 @@ export default function Dashboard() {
 
           // Recent Trades
           if (sectionId === "recentTrades" && dashboardSections.showRecentTrades && recentTrades.length > 0) {
+            const recentSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.recentTrades?.columnSpan ?? 1));
             return (
-              <SortableSection key="recentTrades" id="recentTrades">
+              <SortableSection
+                key="recentTrades"
+                id="recentTrades"
+                wrapperStyle={{
+                  ...(recentSpan > 1 ? { gridColumn: `span ${recentSpan}` as const } : {}),
+                  ...(sectionSizes.recentTrades?.height != null ? { minHeight: `${sectionSizes.recentTrades.height}px` } : {}),
+                }}
+              >
                 {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper sectionId="recentTrades" sectionSizes={sectionSizes} setSectionSizes={setSectionSizes}>
                   <div
                     style={{
                       backgroundColor: "var(--bg-secondary)",
@@ -3774,6 +3946,7 @@ export default function Dashboard() {
               })}
                 </div>
               </div>
+                  </SectionCardResizeWrapper>
                 )}
               </SortableSection>
             );
@@ -3781,9 +3954,18 @@ export default function Dashboard() {
 
           // Open Positions
           if (sectionId === "openPositions" && dashboardSections.showOpenPositions) {
+            const openSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.openPositions?.columnSpan ?? 1));
             return (
-              <SortableSection key="openPositions" id="openPositions">
+              <SortableSection
+                key="openPositions"
+                id="openPositions"
+                wrapperStyle={{
+                  ...(openSpan > 1 ? { gridColumn: `span ${openSpan}` as const } : {}),
+                  ...(sectionSizes.openPositions?.height != null ? { minHeight: `${sectionSizes.openPositions.height}px` } : {}),
+                }}
+              >
                 {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper sectionId="openPositions" sectionSizes={sectionSizes} setSectionSizes={setSectionSizes}>
                   <div
                     style={{
                       backgroundColor: "var(--bg-secondary)",
@@ -4040,6 +4222,7 @@ export default function Dashboard() {
                       )}
                     </div>
                   </div>
+                  </SectionCardResizeWrapper>
                 )}
               </SortableSection>
             );
@@ -4047,9 +4230,18 @@ export default function Dashboard() {
           
           // Trades Section
           if (sectionId === "trades" && dashboardSections.showTrades) {
+            const tradesSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.trades?.columnSpan ?? 1));
             return (
-              <SortableSection key="trades" id="trades">
+              <SortableSection
+                key="trades"
+                id="trades"
+                wrapperStyle={{
+                  ...(tradesSpan > 1 ? { gridColumn: `span ${tradesSpan}` as const } : {}),
+                  ...(sectionSizes.trades?.height != null ? { minHeight: `${sectionSizes.trades.height}px` } : {}),
+                }}
+              >
                 {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper sectionId="trades" sectionSizes={sectionSizes} setSectionSizes={setSectionSizes}>
                   <div
                     style={{
                       backgroundColor: "var(--bg-secondary)",
@@ -4399,6 +4591,7 @@ export default function Dashboard() {
                   })()}
                 </div>
                   </div>
+                  </SectionCardResizeWrapper>
                 )}
               </SortableSection>
             );
