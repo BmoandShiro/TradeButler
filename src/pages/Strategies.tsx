@@ -81,6 +81,8 @@ interface ChecklistItem {
   item_order: number;
   checklist_type: string;
   parent_id: number | null;
+  /** For survey items: true = high (5) is good, false = low (1) is good. Mirrors emotional survey. */
+  high_is_good?: boolean | null;
 }
 
 /** Checklist item metrics by outcome (winning/losing, checked/not checked) for overview insights. */
@@ -981,7 +983,7 @@ function ChecklistSection({
   startEditingItem: (item: ChecklistItem) => void;
   saveEditedItem: (itemId: number, newText: string) => Promise<void>;
   cancelEditingItem: () => void;
-  addChecklistItem: (strategyId: number, type: string, text: string, parentId?: number | null) => Promise<void>;
+  addChecklistItem: (strategyId: number, type: string, text: string, parentId?: number | null, highIsGood?: boolean) => Promise<void>;
   setPendingGroupAction: Dispatch<SetStateAction<{ strategyId: number; type: string; itemIds: number[] } | null>>;
   setGroupName: Dispatch<SetStateAction<string>>;
   setShowGroupModal: Dispatch<SetStateAction<boolean>>;
@@ -996,6 +998,7 @@ function ChecklistSection({
 }) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState("");
+  const [surveyHighIsGood, setSurveyHighIsGood] = useState(true);
   // Deduplicate by id (first occurrence wins), then hide internal placeholders (used in DB for empty custom checklist types)
   const dedupedById = (() => {
     const byId = new Map<number, ChecklistItem>();
@@ -1510,7 +1513,7 @@ function ChecklistSection({
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  addChecklistItem(selectedStrategy, type, currentValue, null);
+                  addChecklistItem(selectedStrategy, type, currentValue, null, type === "survey" ? surveyHighIsGood : undefined);
                 }
               }}
               placeholder={`Add ${title.toLowerCase()} item...`}
@@ -1528,8 +1531,21 @@ function ChecklistSection({
               onFocus={(e) => e.target.style.borderColor = "var(--accent)"}
               onBlur={(e) => e.target.style.borderColor = "var(--border-color)"}
             />
+            {type === "survey" && (
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+                <span style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>Scale:</span>
+                <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px", color: "var(--text-primary)" }}>
+                  <input type="radio" name={`survey-high-${type}`} checked={surveyHighIsGood === true} onChange={() => setSurveyHighIsGood(true)} />
+                  High is good (e.g. 5 = desirable)
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px", color: "var(--text-primary)" }}>
+                  <input type="radio" name={`survey-high-${type}`} checked={surveyHighIsGood === false} onChange={() => setSurveyHighIsGood(false)} />
+                  Low is good (e.g. 1 = desirable)
+                </label>
+              </div>
+            )}
             <button
-              onClick={() => addChecklistItem(selectedStrategy, type, currentValue, null)}
+              onClick={() => addChecklistItem(selectedStrategy, type, currentValue, null, type === "survey" ? surveyHighIsGood : undefined)}
               style={{
                 background: "var(--accent)",
                 border: "none",
@@ -1670,6 +1686,8 @@ export default function Strategies() {
     errors: number;
   } | null>(null);
   const [customSurveyMetrics, setCustomSurveyMetrics] = useState<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null }>>([]);
+  /** Outcome-based insight items for the selected strategy (used on Surveys tab for Survey Insights). */
+  const [selectedStrategySurveyInsightItems, setSelectedStrategySurveyInsightItems] = useState<ChecklistItemMetricByOutcomeRow[]>([]);
   const [customSurveyMetricDefinitions, setCustomSurveyMetricDefinitions] = useState<Array<{
     id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null; color_scale: string | null;
   }>>([]);
@@ -2200,6 +2218,22 @@ export default function Strategies() {
     load();
   }, [strategies, selectedStrategy, isCreating, dataMode]);
 
+  // Load outcome items for selected strategy (for Survey Insights on Surveys tab)
+  useEffect(() => {
+    if (selectedStrategy == null || isCreating) {
+      setSelectedStrategySurveyInsightItems([]);
+      return;
+    }
+    if (dataMode === "sandbox") {
+      const items = getSandboxStrategyChecklistItemMetricsByOutcome(selectedStrategy) as ChecklistItemMetricByOutcomeRow[];
+      setSelectedStrategySurveyInsightItems(items);
+      return;
+    }
+    invoke<ChecklistItemMetricByOutcomeRow[]>("get_strategy_checklist_item_metrics_by_outcome", { strategyId: selectedStrategy })
+      .then(setSelectedStrategySurveyInsightItems)
+      .catch(() => setSelectedStrategySurveyInsightItems([]));
+  }, [selectedStrategy, isCreating, dataMode]);
+
   useEffect(() => {
     if (!overviewFilterDropdownOpen) return;
     const handleClick = (e: MouseEvent) => {
@@ -2649,7 +2683,7 @@ export default function Strategies() {
     return next;
   };
 
-  const addChecklistItem = async (strategyId: number, type: string, text: string, parentId: number | null = null) => {
+  const addChecklistItem = async (strategyId: number, type: string, text: string, parentId: number | null = null, highIsGood?: boolean) => {
     if (!text.trim()) return;
     
     // If creating (virtual strategy ID), use tempChecklists
@@ -2677,6 +2711,7 @@ export default function Strategies() {
         item_order: itemOrder,
         checklist_type: type,
         parent_id: parentId,
+        ...(type === "survey" && { high_is_good: highIsGood ?? true }),
       };
 
       const updatedChecklist = new Map(currentChecklist);
@@ -2738,6 +2773,7 @@ export default function Strategies() {
         item_order: itemOrder,
         checklist_type: type,
         parent_id: parentId,
+        ...(type === "survey" && { high_is_good: highIsGood ?? true }),
       };
 
       const updatedChecklist = new Map(currentChecklist);
@@ -2783,6 +2819,7 @@ export default function Strategies() {
         itemOrder: itemOrder,
         checklistType: type,
         parentId: parentId,
+        high_is_good: type === "survey" ? (highIsGood ?? true) : undefined,
       });
 
       const newItem: ChecklistItem = {
@@ -2793,6 +2830,7 @@ export default function Strategies() {
         item_order: itemOrder,
         checklist_type: type,
         parent_id: parentId,
+        ...(type === "survey" && { high_is_good: highIsGood ?? true }),
       };
 
       const updatedChecklist = new Map(currentChecklist);
@@ -3148,6 +3186,7 @@ export default function Strategies() {
             itemOrder: newOrder,
             checklistType: checklistType,
             parentId: groupId,
+            high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
           });
           orderOffset++;
         }
@@ -3286,6 +3325,7 @@ export default function Strategies() {
           itemOrder: item.item_order,
           checklistType: item.checklist_type,
           parentId: item.parent_id,
+          high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
         });
         await loadChecklists(selectedStrategy);
       }
@@ -3356,6 +3396,7 @@ export default function Strategies() {
           itemOrder: item.item_order,
           checklistType: type,
           parentId: item.parent_id,
+          high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
         });
       }
     } catch (error) {
@@ -3787,6 +3828,7 @@ export default function Strategies() {
               itemOrder: item.item_order,
               checklistType: type,
               parentId: null,
+              high_is_good: type === "survey" ? (item.high_is_good ?? true) : undefined,
             });
             idMap.set(item.id, newId);
           }
@@ -3806,6 +3848,7 @@ export default function Strategies() {
                 itemOrder: item.item_order,
                 checklistType: type,
                 parentId: newParentId,
+                high_is_good: type === "survey" ? (item.high_is_good ?? true) : undefined,
               });
               idMap.set(item.id, newId);
             }
@@ -4062,6 +4105,7 @@ export default function Strategies() {
             itemOrder: item.item_order,
             checklistType: type,
             parentId: null,
+            high_is_good: type === "survey" ? (item.high_is_good ?? true) : undefined,
           });
           
           // If it's a new item, map the old temporary ID to the new database ID
@@ -4102,6 +4146,7 @@ export default function Strategies() {
             itemOrder: item.item_order,
             checklistType: type,
             parentId: correctParentId,
+            high_is_good: type === "survey" ? (item.high_is_good ?? true) : undefined,
           });
           
           // If it's a new item, map the old temporary ID to the new database ID
@@ -4500,6 +4545,7 @@ export default function Strategies() {
             itemOrder: item.item_order,
             checklistType: item.checklist_type,
             parentId: null,
+            high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
           });
           idMap.set(item.id, newId);
         }
@@ -4517,6 +4563,7 @@ export default function Strategies() {
               itemOrder: item.item_order,
               checklistType: item.checklist_type,
               parentId: newParentId,
+              high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
             });
           }
         }
@@ -6774,6 +6821,71 @@ export default function Strategies() {
                         </div>
                       </div>
                     )}
+                    {!isCreating && selectedStrategy != null && (() => {
+                      const items = selectedStrategySurveyInsightItems;
+                      const insightByType = new Map<string, ChecklistItemMetricByOutcomeRow[]>();
+                      items.forEach((row) => {
+                        const type = row.checklist_type || "other";
+                        if (!insightByType.has(type)) insightByType.set(type, []);
+                        insightByType.get(type)!.push(row);
+                      });
+                      const isSurveyType = (display: string) => display.toLowerCase().startsWith("survey");
+                      const winningSurvey: Array<{ checklistTypeDisplay: string; topItemText: string; good: number; key: string }> = [];
+                      const losingSurvey: Array<{ checklistTypeDisplay: string; topItemText: string; bad: number; key: string }> = [];
+                      insightByType.forEach((rows, type) => {
+                        if (!isSurveyType(type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "))) return;
+                        const typeDisplay = type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+                        // Collect all survey items; we'll take top 4 per category below
+                        const winningRows = rows.filter((r) => (r.times_checked_good ?? 0) > 0).sort((a, b) => (b.times_checked_good ?? 0) - (a.times_checked_good ?? 0));
+                        winningRows.forEach((r) => winningSurvey.push({ checklistTypeDisplay: typeDisplay, topItemText: (r.item_text || `Item ${r.checklist_item_id}`).trim(), good: r.times_checked_good ?? 0, key: `win-${r.checklist_item_id}` }));
+                        const losingRows = rows.filter((r) => (r.times_not_checked_bad ?? 0) > 0).sort((a, b) => (b.times_not_checked_bad ?? 0) - (a.times_not_checked_bad ?? 0));
+                        losingRows.forEach((r) => losingSurvey.push({ checklistTypeDisplay: typeDisplay, topItemText: (r.item_text || `Item ${r.checklist_item_id}`).trim(), bad: r.times_not_checked_bad ?? 0, key: `lose-${r.checklist_item_id}` }));
+                      });
+                      const displayWinningSurvey = [...winningSurvey].sort((a, b) => b.good - a.good).slice(0, 4);
+                      const displayLosingSurvey = [...losingSurvey].sort((a, b) => b.bad - a.bad).slice(0, 4);
+                      const hasSurveyInsights = displayWinningSurvey.length > 0 || displayLosingSurvey.length > 0;
+                      if (!hasSurveyInsights) return null;
+                      return (
+                        <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: "1px solid var(--border-color)" }}>
+                          <h4 style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "12px" }}>
+                            Survey Insights
+                          </h4>
+                          <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: "0 0 12px 0", lineHeight: 1.3 }}>
+                            Survey values that were good for winning trades and bad for losing trades (from journal entries).
+                          </p>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                            {displayWinningSurvey.length > 0 && (
+                              <div>
+                                <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--success, #22c55e)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>These values were good for winning trades</div>
+                                <div style={{ display: "grid", gap: "6px" }}>
+                                  {displayWinningSurvey.slice(0, 4).map(({ checklistTypeDisplay, topItemText, good, key }) => (
+                                    <div key={key} style={{ padding: "6px 8px", borderRadius: "4px", backgroundColor: "var(--bg-tertiary)", borderLeft: "3px solid var(--success, #22c55e)" }}>
+                                      <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
+                                      <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
+                                      <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({good} trades)</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {displayLosingSurvey.length > 0 && (
+                              <div>
+                                <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--danger, #ef4444)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>These values were bad for losing trades</div>
+                                <div style={{ display: "grid", gap: "6px" }}>
+                                  {displayLosingSurvey.slice(0, 4).map(({ checklistTypeDisplay, topItemText, bad, key }) => (
+                                    <div key={key} style={{ padding: "6px 8px", borderRadius: "4px", backgroundColor: "var(--bg-tertiary)", borderLeft: "3px solid var(--danger, #ef4444)" }}>
+                                      <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
+                                      <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
+                                      <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({bad} losing)</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                   )}
                   </>
@@ -7125,7 +7237,7 @@ export default function Strategies() {
               })}
             </div>
 
-            {/* Specific Strategy Metrics: Survey metrics + Checklist item metrics + Checklist insights */}
+            {/* Specific Strategy Metrics: Survey metrics + Checklist item metrics + Checklists and Survey insights */}
             {(overviewCustomMetricsByStrategy.size > 0 || overviewChecklistItemMetricsByStrategy.size > 0 || overviewChecklistByOutcomePerStrategy.length > 0 || strategies.some((s) => s.id != null)) && (
               <div style={{ marginTop: "20px" }}>
                 <h2
@@ -7139,13 +7251,14 @@ export default function Strategies() {
                   Specific Strategy Metrics
                 </h2>
                 <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "0 0 12px 0" }}>
-                  Survey metrics, checklist item metrics, and checklist insights are filtered by the Strategies dropdown at the top of the page.
+                  Survey metrics, checklist item metrics, and checklists and survey insights are filtered by the Strategies dropdown at the top of the page.
                 </p>
                 {(overviewCustomMetricsByStrategy.size > 0 || overviewChecklistItemMetricsByStrategy.size > 0 || overviewChecklistByOutcomePerStrategy.length > 0) ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                    {strategies
-                      .filter((s) => s.id != null && (overviewFilterStrategyIds.length === 0 || overviewFilterStrategyIds.includes(s.id)) && (overviewCustomMetricsByStrategy.has(s.id) || overviewChecklistItemMetricsByStrategy.has(s.id) || overviewChecklistByOutcomePerStrategy.some((r) => r.strategyId === s.id)))
-                      .map((s) => {
+                    {(() => {
+                      const filteredStrategies = strategies.filter((s) => s.id != null && (overviewFilterStrategyIds.length === 0 || overviewFilterStrategyIds.includes(s.id)) && (overviewCustomMetricsByStrategy.has(s.id) || overviewChecklistItemMetricsByStrategy.has(s.id) || overviewChecklistByOutcomePerStrategy.some((r) => r.strategyId === s.id)));
+                      const isSurveyType = (display: string) => display.toLowerCase().startsWith("survey");
+                      return filteredStrategies.map((s) => {
                         const metrics = overviewCustomMetricsByStrategy.get(s.id!) ?? [];
                         const itemMetrics = overviewChecklistItemMetricsByStrategy.get(s.id!) ?? [];
                         const insightItems = overviewChecklistByOutcomePerStrategy.find((r) => r.strategyId === s.id!)?.items ?? [];
@@ -7159,16 +7272,30 @@ export default function Strategies() {
                         const notClickedLosingPerType: Array<{ checklistTypeDisplay: string; topItemText: string; bad: number }> = [];
                         insightByType.forEach((rows, type) => {
                           const typeDisplay = type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-                          const topWinning = rows.reduce((best, r) => ((r.times_checked_good ?? 0) > (best.times_checked_good ?? 0) ? r : best), rows[0]);
-                          if (topWinning && (topWinning.times_checked_good ?? 0) > 0) {
-                            winningPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (topWinning.item_text || `Item ${topWinning.checklist_item_id}`).trim(), good: topWinning.times_checked_good ?? 0 });
-                          }
-                          const topNotClicked = rows.reduce((best, r) => ((r.times_not_checked_bad ?? 0) > (best.times_not_checked_bad ?? 0) ? r : best), rows[0]);
-                          if (topNotClicked && (topNotClicked.times_not_checked_bad ?? 0) > 0) {
-                            notClickedLosingPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (topNotClicked.item_text || `Item ${topNotClicked.checklist_item_id}`).trim(), bad: topNotClicked.times_not_checked_bad ?? 0 });
+                          const surveyType = isSurveyType(typeDisplay);
+                          if (surveyType) {
+                            const winningRows = rows.filter((r) => (r.times_checked_good ?? 0) > 0).sort((a, b) => (b.times_checked_good ?? 0) - (a.times_checked_good ?? 0));
+                            winningRows.forEach((r) => winningPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (r.item_text || `Item ${r.checklist_item_id}`).trim(), good: r.times_checked_good ?? 0 }));
+                            const losingRows = rows.filter((r) => (r.times_not_checked_bad ?? 0) > 0).sort((a, b) => (b.times_not_checked_bad ?? 0) - (a.times_not_checked_bad ?? 0));
+                            losingRows.forEach((r) => notClickedLosingPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (r.item_text || `Item ${r.checklist_item_id}`).trim(), bad: r.times_not_checked_bad ?? 0 }));
+                          } else {
+                            const topWinning = rows.reduce((best, r) => ((r.times_checked_good ?? 0) > (best.times_checked_good ?? 0) ? r : best), rows[0]);
+                            if (topWinning && (topWinning.times_checked_good ?? 0) > 0) winningPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (topWinning.item_text || `Item ${topWinning.checklist_item_id}`).trim(), good: topWinning.times_checked_good ?? 0 });
+                            const topNotClicked = rows.reduce((best, r) => ((r.times_not_checked_bad ?? 0) > (best.times_not_checked_bad ?? 0) ? r : best), rows[0]);
+                            if (topNotClicked && (topNotClicked.times_not_checked_bad ?? 0) > 0) notClickedLosingPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (topNotClicked.item_text || `Item ${topNotClicked.checklist_item_id}`).trim(), bad: topNotClicked.times_not_checked_bad ?? 0 });
                           }
                         });
+                        const winningChecklist = winningPerType.filter((x) => !isSurveyType(x.checklistTypeDisplay));
+                        const winningSurvey = winningPerType.filter((x) => isSurveyType(x.checklistTypeDisplay));
+                        const losingChecklist = notClickedLosingPerType.filter((x) => !isSurveyType(x.checklistTypeDisplay));
+                        const losingSurvey = notClickedLosingPerType.filter((x) => isSurveyType(x.checklistTypeDisplay));
+                        const TOP_INSIGHTS = 4;
+                        const displayWinningChecklist = [...winningChecklist].sort((a, b) => b.good - a.good).slice(0, TOP_INSIGHTS);
+                        const displayLosingChecklist = [...losingChecklist].sort((a, b) => b.bad - a.bad).slice(0, TOP_INSIGHTS);
+                        const displayWinningSurvey = [...winningSurvey].sort((a, b) => b.good - a.good).slice(0, TOP_INSIGHTS);
+                        const displayLosingSurvey = [...losingSurvey].sort((a, b) => b.bad - a.bad).slice(0, TOP_INSIGHTS);
                         const hasInsights = winningPerType.length > 0 || notClickedLosingPerType.length > 0;
+                        const showInsightsBlock = hasInsights || metrics.length > 0;
                         return (
                           <div
                             key={s.id}
@@ -7189,57 +7316,12 @@ export default function Strategies() {
                             >
                               {s.name}
                             </div>
-                            {metrics.length > 0 && (
-                              <>
-                                <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.02em" }}>
-                                  Survey metrics
-                                </div>
-                                <div
-                                  style={{
-                                    display: "grid",
-                                    gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-                                    gap: "8px",
-                                    marginBottom: (itemMetrics.length > 0 || hasInsights) ? "12px" : 0,
-                                  }}
-                                >
-                                {metrics.map((m) => (
-                                  <div
-                                    key={m.id}
-                                    style={{
-                                      padding: "8px 10px",
-                                      borderRadius: "6px",
-                                      backgroundColor: "var(--bg-primary)",
-                                      border: "1px solid var(--border-color)",
-                                    }}
-                                  >
-                                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "2px" }}>
-                                      {m.name}
-                                    </div>
-                                    <div
-                                      style={{
-                                        fontSize: "16px",
-                                        fontWeight: "600",
-                                        color: m.computed_value != null ? getMetricColorFromScale((m.computed_value - 1) / 4, m.color_scale) : "var(--text-primary)",
-                                      }}
-                                    >
-                                      {m.computed_value != null ? m.computed_value.toFixed(2) : "—"}
-                                    </div>
-                                    {m.description && (
-                                      <div style={{ fontSize: "10px", color: "var(--text-secondary)", marginTop: "4px" }}>
-                                        {m.description}
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                                </div>
-                              </>
-                            )}
                             {itemMetrics.length > 0 && (
                               <>
                                 <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.02em" }}>
                                   Checklist & survey item metrics
                                 </div>
-                                <div style={{ overflowX: "auto", marginBottom: hasInsights ? "12px" : 0 }}>
+                                <div style={{ overflowX: "auto", marginBottom: (hasInsights || metrics.length > 0) ? "12px" : 0 }}>
                                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
                                     <thead>
                                       <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
@@ -7263,7 +7345,7 @@ export default function Strategies() {
                                 </div>
                               </>
                             )}
-                            {hasInsights && (
+                            {showInsightsBlock && (hasInsights || metrics.length > 0) && (
                               <div
                                 style={{
                                   padding: "12px",
@@ -7273,66 +7355,211 @@ export default function Strategies() {
                                 }}
                               >
                                 <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "2px" }}>
-                                  Checklist insights
+                                  Checklists and Survey Insights
                                 </div>
                                 <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "0 0 10px 0", lineHeight: 1.3 }}>
-                                  Top items with winning trades; items often skipped in losing trades.
+                                  Checklist and survey items: top in winning trades and often skipped in losing trades.{filteredStrategies.length > 1 ? " For this strategy." : ""}
                                 </p>
-                                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                                  {winningPerType.length > 0 && (
-                                    <div>
-                                      <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--success, #22c55e)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
-                                        Winning trades
+                                {/* Key stats: checklist stats on the left, Survey Insights on the right */}
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "12px", marginBottom: "12px" }}>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                                    {winningPerType.length > 0 && (
+                                      <div
+                                        style={{
+                                          padding: "6px 10px",
+                                          borderRadius: "6px",
+                                          backgroundColor: "rgba(34, 197, 94, 0.12)",
+                                          border: "1px solid rgba(34, 197, 94, 0.35)",
+                                          minWidth: "60px",
+                                          textAlign: "center",
+                                        }}
+                                      >
+                                        <div style={{ fontSize: "9px", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: "2px" }}>Winning</div>
+                                        <div style={{ fontSize: "16px", fontWeight: "700", color: "var(--success, #22c55e)" }}>
+                                          {winningPerType.reduce((sum, x) => sum + x.good, 0)}
+                                        </div>
+                                        <div style={{ fontSize: "9px", color: "var(--text-secondary)" }}>trades</div>
                                       </div>
-                                      <div style={{ display: "grid", gap: "6px" }}>
-                                        {winningPerType.map(({ checklistTypeDisplay, topItemText, good }) => (
-                                          <div
-                                            key={`win-${s.id}-${checklistTypeDisplay}`}
-                                            style={{
-                                              padding: "6px 8px",
-                                              borderRadius: "4px",
-                                              backgroundColor: "var(--bg-tertiary)",
-                                              borderLeft: "3px solid var(--success, #22c55e)",
-                                            }}
-                                          >
-                                            <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
-                                            <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText}</span>
-                                            <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({good} trades)</span>
-                                          </div>
-                                        ))}
+                                    )}
+                                    {notClickedLosingPerType.length > 0 && (
+                                      <div
+                                        style={{
+                                          padding: "6px 10px",
+                                          borderRadius: "6px",
+                                          backgroundColor: "rgba(239, 68, 68, 0.12)",
+                                          border: "1px solid rgba(239, 68, 68, 0.35)",
+                                          minWidth: "60px",
+                                          textAlign: "center",
+                                        }}
+                                      >
+                                        <div style={{ fontSize: "9px", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: "2px" }}>Skipped</div>
+                                        <div style={{ fontSize: "16px", fontWeight: "700", color: "var(--danger, #ef4444)" }}>
+                                          {notClickedLosingPerType.reduce((sum, x) => sum + x.bad, 0)}
+                                        </div>
+                                        <div style={{ fontSize: "9px", color: "var(--text-secondary)" }}>in losing</div>
                                       </div>
+                                    )}
+                                    {itemMetrics.length > 0 && (
+                                      <div
+                                        style={{
+                                          padding: "6px 10px",
+                                          borderRadius: "6px",
+                                          backgroundColor: "var(--bg-tertiary)",
+                                          border: "1px solid var(--border-color)",
+                                          minWidth: "60px",
+                                          textAlign: "center",
+                                        }}
+                                      >
+                                        <div style={{ fontSize: "9px", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: "2px" }}>Items</div>
+                                        <div style={{ fontSize: "16px", fontWeight: "700", color: "var(--text-primary)" }}>{itemMetrics.filter((r) => r.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER).length}</div>
+                                        <div style={{ fontSize: "9px", color: "var(--text-secondary)" }}>tracked</div>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {(metrics.length > 0 || (showInsightsBlock && (displayWinningSurvey.length > 0 || displayLosingSurvey.length > 0))) && (
+                                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px" }}>
+                                      <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Survey Insights</div>
+                                      {metrics.length > 0 ? (
+                                        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", justifyContent: "flex-end" }}>
+                                          {metrics.map((m) => (
+                                            <div
+                                              key={m.id}
+                                              style={{
+                                                padding: "6px 10px",
+                                                borderRadius: "6px",
+                                                backgroundColor: "var(--bg-tertiary)",
+                                                border: "1px solid var(--border-color)",
+                                                minWidth: "60px",
+                                                textAlign: "center",
+                                              }}
+                                            >
+                                              <div style={{ fontSize: "9px", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: "2px", maxWidth: "90px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.name}>{m.name}</div>
+                                              <div style={{ fontSize: "16px", fontWeight: "700", color: m.computed_value != null ? getMetricColorFromScale((m.computed_value - 1) / 4, m.color_scale) : "var(--text-primary)" }}>
+                                                {m.computed_value != null ? m.computed_value.toFixed(2) : "—"}
+                                              </div>
+                                              {m.description && (
+                                                <div style={{ fontSize: "9px", color: "var(--text-secondary)", marginTop: "2px", maxWidth: "90px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.description}>{m.description}</div>
+                                              )}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <div style={{ fontSize: "11px", color: "var(--text-secondary)", textAlign: "right", maxWidth: "200px" }}>
+                                          See values good for winning trades and bad for losing trades in the columns below.
+                                        </div>
+                                      )}
                                     </div>
                                   )}
-                                  {notClickedLosingPerType.length > 0 && (
-                                    <div>
-                                      <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--danger, #ef4444)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
-                                        Often skipped in losing trades
+                                </div>
+                                {/* Left: checklist insights. Right: survey item insights (same card style) */}
+                                <div style={{ display: "flex", gap: "20px", alignItems: "flex-start", flexWrap: "wrap" }}>
+                                  <div style={{ flex: "1 1 280px", minWidth: 0, display: "flex", flexDirection: "column", gap: "10px" }}>
+                                    {displayWinningChecklist.length > 0 && (
+                                      <div>
+                                        <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--success, #22c55e)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                                          Winning trades (checklist)
+                                        </div>
+                                        <div style={{ display: "grid", gap: "6px" }}>
+                                          {displayWinningChecklist.slice(0, 4).map(({ checklistTypeDisplay, topItemText, good }, idx) => (
+                                            <div
+                                              key={`win-c-${s.id}-${idx}-${topItemText}`}
+                                              style={{
+                                                padding: "6px 8px",
+                                                borderRadius: "4px",
+                                                backgroundColor: "var(--bg-tertiary)",
+                                                borderLeft: "3px solid var(--success, #22c55e)",
+                                              }}
+                                            >
+                                              <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
+                                              <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
+                                              <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({good} trades)</span>
+                                            </div>
+                                          ))}
+                                        </div>
                                       </div>
-                                      <div style={{ display: "grid", gap: "6px" }}>
-                                        {notClickedLosingPerType.map(({ checklistTypeDisplay, topItemText, bad }) => (
-                                          <div
-                                            key={`lose-${s.id}-${checklistTypeDisplay}`}
-                                            style={{
-                                              padding: "6px 8px",
-                                              borderRadius: "4px",
-                                              backgroundColor: "var(--bg-tertiary)",
-                                              borderLeft: "3px solid var(--danger, #ef4444)",
-                                            }}
-                                          >
-                                            <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
-                                            <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText}</span>
-                                            <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({bad} losing)</span>
-                                          </div>
-                                        ))}
+                                    )}
+                                    {displayLosingChecklist.length > 0 && (
+                                      <div>
+                                        <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--danger, #ef4444)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                                          Often skipped in losing trades (checklist)
+                                        </div>
+                                        <div style={{ display: "grid", gap: "6px" }}>
+                                          {displayLosingChecklist.slice(0, 4).map(({ checklistTypeDisplay, topItemText, bad }, idx) => (
+                                            <div
+                                              key={`lose-c-${s.id}-${idx}-${topItemText}`}
+                                              style={{
+                                                padding: "6px 8px",
+                                                borderRadius: "4px",
+                                                backgroundColor: "var(--bg-tertiary)",
+                                                borderLeft: "3px solid var(--danger, #ef4444)",
+                                              }}
+                                            >
+                                              <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
+                                              <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
+                                              <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({bad} losing)</span>
+                                            </div>
+                                          ))}
+                                        </div>
                                       </div>
-                                    </div>
-                                  )}
+                                    )}
+                                  </div>
+                                  <div style={{ flex: "1 1 280px", minWidth: 0, display: "flex", flexDirection: "column", gap: "10px" }}>
+                                    {displayWinningSurvey.length > 0 && (
+                                      <div>
+                                        <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--success, #22c55e)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                                          These values were good for winning trades
+                                        </div>
+                                        <div style={{ display: "grid", gap: "6px" }}>
+                                          {displayWinningSurvey.slice(0, 4).map(({ checklistTypeDisplay, topItemText, good }, idx) => (
+                                            <div
+                                              key={`win-s-${s.id}-${idx}-${topItemText}`}
+                                              style={{
+                                                padding: "6px 8px",
+                                                borderRadius: "4px",
+                                                backgroundColor: "var(--bg-tertiary)",
+                                                borderLeft: "3px solid var(--success, #22c55e)",
+                                              }}
+                                            >
+                                              <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
+                                              <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
+                                              <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({good} trades)</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                    {displayLosingSurvey.length > 0 && (
+                                      <div>
+                                        <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--danger, #ef4444)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                                          These values were bad for losing trades
+                                        </div>
+                                        <div style={{ display: "grid", gap: "6px" }}>
+                                          {displayLosingSurvey.slice(0, 4).map(({ checklistTypeDisplay, topItemText, bad }, idx) => (
+                                            <div
+                                              key={`lose-s-${s.id}-${idx}-${topItemText}`}
+                                              style={{
+                                                padding: "6px 8px",
+                                                borderRadius: "4px",
+                                                backgroundColor: "var(--bg-tertiary)",
+                                                borderLeft: "3px solid var(--danger, #ef4444)",
+                                              }}
+                                            >
+                                              <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
+                                              <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
+                                              <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({bad} losing)</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                             )}
                           </div>
                         );
-                      })}
+                      });
+                    })()}
                   </div>
                 ) : (
                   <div style={{ padding: "16px", borderRadius: "8px", border: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)", minHeight: "80px" }}>

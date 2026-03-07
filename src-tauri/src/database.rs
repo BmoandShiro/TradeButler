@@ -386,6 +386,16 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         conn.execute("ALTER TABLE journal_checklist_responses ADD COLUMN response_value INTEGER", [])?;
     }
 
+    // Migration: high_is_good for survey items (1 = high is good, 0 = low is good). Null = non-survey or legacy.
+    let has_high_is_good: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='high_is_good'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_high_is_good {
+        conn.execute("ALTER TABLE strategy_checklists ADD COLUMN high_is_good INTEGER", [])?;
+    }
+
     // Custom survey metrics per strategy (name, description, formula, which survey items) — like Psychological Metrics but user-defined
     conn.execute(
         "CREATE TABLE IF NOT EXISTS strategy_survey_metrics (
