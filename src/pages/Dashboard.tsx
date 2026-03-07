@@ -2550,6 +2550,8 @@ export default function Dashboard() {
                 ? maxColumns
                 : layoutLocked ? 4 : 1)
           : 1;
+        /** Unlocked with no fixed rows/cols: fluid grid so cards resize with container and rows add/remove on resize */
+        const useFluidGrid = !layoutLocked && !useGridLayout;
 
         const renderCard = (metric: typeof sortedMetrics[0]) => {
           const baseMetricId = (metric as any).baseMetricId || metric.id;
@@ -2589,7 +2591,7 @@ export default function Dashboard() {
               setMetricInstances={setMetricInstances}
               dataMode={dataMode}
               openPositionGroups={openPositionGroups}
-              isGridLayout={useGridLayout}
+              isGridLayout={useGridLayout || useFluidGrid}
             />
           );
         };
@@ -2645,9 +2647,10 @@ export default function Dashboard() {
         >
       <div
         style={{
-          display: useGridLayout ? "grid" : "flex",
-          flexWrap: useGridLayout ? undefined : "wrap",
-          gridTemplateColumns: useGridLayout ? `repeat(${gridColumns}, 1fr)` : undefined,
+          display: "grid",
+          gridTemplateColumns: useFluidGrid ? "repeat(auto-fit, minmax(260px, 1fr))" : `repeat(${gridColumns}, 1fr)`,
+          width: "100%",
+          minWidth: 0,
           gap: "20px",
           marginBottom: "30px",
           alignItems: "stretch",
