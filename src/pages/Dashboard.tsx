@@ -38,7 +38,7 @@ import {
   Lock,
   Unlock,
 } from "lucide-react";
-import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY } from "../components/MetricsConfig";
+import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY, DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY, DASHBOARD_METRICS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY, DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY, DASHBOARD_PADDING_KEY } from "../components/MetricsConfig";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { format } from "date-fns";
 import {
@@ -791,6 +791,7 @@ function SortableMetricCard({
             ? {
                 width: "100%",
                 minWidth: 0,
+                boxSizing: "border-box",
                 ...(chartColumnSpan > 1 ? { gridColumn: `span ${chartColumnSpan}` as const } : {}),
               }
             : {
@@ -1098,7 +1099,7 @@ function SortableMetricCard({
         cursor: isDragging ? "grabbing" : "grab",
         userSelect: "none",
         WebkitUserSelect: "none",
-        ...(isGridLayout ? { width: "100%", minWidth: 0 } : { flex: "0 0 280px", width: "280px", minWidth: 280 }),
+        ...(isGridLayout ? { width: "100%", minWidth: 0, boxSizing: "border-box" } : { flex: "0 0 280px", width: "280px", minWidth: 280 }),
         height: "100px",
         ...style,
       }}
@@ -2502,8 +2503,24 @@ export default function Dashboard() {
     largest_loss_pct: metrics?.largest_loss_pct || 0,
   };
 
+  const metricsToSectionsGapPx = Math.min(80, Math.max(0, parseInt(localStorage.getItem(DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY) || "30", 10)) || 30);
+  const metricsGridGapPx = (() => {
+    const n = parseInt(localStorage.getItem(DASHBOARD_METRICS_GRID_GAP_KEY) || "12", 10);
+    return [8, 12, 16, 20, 24].includes(n) ? n : 12;
+  })();
+  const sectionsGridGapPx = Math.min(48, Math.max(0, parseInt(localStorage.getItem(DASHBOARD_SECTIONS_GRID_GAP_KEY) || "20", 10)) || 20);
+  const sectionsGridMinWidthPx = (() => {
+    const n = parseInt(localStorage.getItem(DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY) || "400", 10);
+    return [280, 320, 360, 400, 480].includes(n) ? n : 400;
+  })();
+  const sectionsGridMarginBottomPx = Math.min(80, Math.max(0, parseInt(localStorage.getItem(DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY) || "30", 10)) || 30);
+  const dashboardPaddingPx = (() => {
+    const n = parseInt(localStorage.getItem(DASHBOARD_PADDING_KEY) || "30", 10);
+    return [16, 20, 24, 30, 40, 48].includes(n) ? n : 30;
+  })();
+
   return (
-    <div style={{ padding: "30px" }}>
+    <div style={{ padding: `${dashboardPaddingPx}px` }}>
           <div
             style={{
               display: "flex",
@@ -2666,9 +2683,11 @@ export default function Dashboard() {
                   style={{
                     display: "grid",
                     gridTemplateColumns: `repeat(${gridColumns}, 1fr)`,
-                    gap: "20px",
-                    marginBottom: "30px",
+                    gap: `${metricsGridGapPx}px`,
+                    marginBottom: `${metricsToSectionsGapPx}px`,
                     alignItems: "stretch",
+                    backgroundColor: "var(--bg-primary)",
+                    boxSizing: "border-box",
                   }}
                 >
                   {Array.from({ length: maxSlot + 2 }, (_, i) => {
@@ -2705,9 +2724,11 @@ export default function Dashboard() {
           gridTemplateColumns: useFluidGrid ? "repeat(auto-fit, minmax(260px, 1fr))" : `repeat(${gridColumns}, 1fr)`,
           width: "100%",
           minWidth: 0,
-          gap: "20px",
-          marginBottom: "30px",
+          gap: `${metricsGridGapPx}px`,
+          marginBottom: `${metricsToSectionsGapPx}px`,
           alignItems: "stretch",
+          backgroundColor: "var(--bg-primary)",
+          boxSizing: "border-box",
         }}
       >
         {sortedMetrics.map((metric) => renderCard(metric))}
@@ -2730,9 +2751,9 @@ export default function Dashboard() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))",
-          gap: "20px",
-          marginBottom: "30px",
+          gridTemplateColumns: `repeat(auto-fit, minmax(${sectionsGridMinWidthPx}px, 1fr))`,
+          gap: `${sectionsGridGapPx}px`,
+          marginBottom: `${sectionsGridMarginBottomPx}px`,
         }}
       >
         {sectionOrder.map((sectionId) => {
