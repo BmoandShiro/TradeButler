@@ -337,6 +337,7 @@ const DASHBOARD_SECTION_ORDER_KEY = "tradebutler_dashboard_section_order";
 const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
 const METRIC_INSTANCES_KEY = "tradebutler_metric_instances";
 const LAYOUT_LOCKED_KEY = "tradebutler_dashboard_layout_locked";
+const MAX_POSITION_CHART_COLUMN_SPAN = 12;
 
 interface MetricInstance {
   instanceId: string; // e.g., "strategy_win_rate_1", "strategy_win_rate_2"
@@ -344,7 +345,8 @@ interface MetricInstance {
   strategyFilterId: number | null; // Strategy filter for this instance
   positionEntryId?: number | null; // For position_size_chart: which open position to show
   chartHeight?: number; // For position_size_chart: resizable chart height (default 200)
-  chartWidth?: number;  // For position_size_chart: resizable chart width in px (default: grid auto)
+  chartWidth?: number;  // For position_size_chart: resizable width in px (flex layout only)
+  chartColumnSpan?: number; // For position_size_chart in grid: span 1–MAX_POSITION_CHART_COLUMN_SPAN so it resizes with grid
   positionChartBrushStart?: number; // For position_size_chart: Brush range start index
   positionChartBrushEnd?: number;   // For position_size_chart: Brush range end index
   slotIndex?: number;               // When layout locked: fixed grid slot (0-based), allows gaps
@@ -638,6 +640,7 @@ function SortableMetricCard({
   const selectedGroup = openPositionGroups.find((g) => g.entry_trade.id === positionEntryId);
   const chartHeight = Math.min(600, Math.max(160, (metric as MetricInstance).chartHeight ?? 200));
   const chartWidth = (metric as MetricInstance).chartWidth;
+  const chartColumnSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as MetricInstance).chartColumnSpan ?? 1));
   const brushStart = (metric as MetricInstance).positionChartBrushStart ?? 0;
   const brushEnd = (metric as MetricInstance).positionChartBrushEnd ?? 0;
 
@@ -700,9 +703,59 @@ function SortableMetricCard({
       if (!card) return;
       const startX = e.clientX;
       const startWidth = card.getBoundingClientRect().width;
+
+      if (isGridLayout) {
+        // Snap to grid column edges so chart stays in ratio with other metrics on window resize
+        let grid: HTMLElement | null = card.parentElement;
+        while (grid) {
+          const ds = getComputedStyle(grid);
+          if (ds.display === "grid" && ds.gridTemplateColumns && ds.gridTemplateColumns !== "none") {
+            break;
+          }
+          grid = grid.parentElement;
+        }
+        if (!grid) return;
+        const gs = getComputedStyle(grid);
+        const template = gs.gridTemplateColumns;
+        const columnCount = template.split(" ").filter(Boolean).length || 1;
+        const gapPx = parseFloat(gs.gap) || 20;
+        const gridWidth = grid.clientWidth;
+        const columnWidth = columnCount > 1
+          ? (gridWidth - (columnCount - 1) * gapPx) / columnCount
+          : gridWidth;
+        const slotWidth = columnWidth + gapPx;
+
+        const onMove = (e2: MouseEvent) => {
+          const delta = e2.clientX - startX;
+          const rawWidth = Math.max(columnWidth, startWidth + delta);
+          const span = (rawWidth + gapPx) / slotWidth;
+          const newSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, Math.round(span)));
+          setMetricInstances((prev: MetricInstance[]) => {
+            const updated = prev.map((inst: MetricInstance) =>
+              inst.instanceId === metric.id ? { ...inst, chartColumnSpan: newSpan, chartWidth: undefined } : inst
+            );
+            localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+            return updated;
+          });
+        };
+        const onUp = () => {
+          window.removeEventListener("mousemove", onMove);
+          window.removeEventListener("mouseup", onUp);
+        };
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+        return;
+      }
+
+      // Flex layout: snap to fixed pixel multiples
+      const SNAP_UNIT = 280;
+      const MIN_CHART_WIDTH = 280;
+      const MAX_CHART_WIDTH = 1200;
       const onMove = (e2: MouseEvent) => {
         const delta = e2.clientX - startX;
-        const newWidth = Math.min(1200, Math.max(280, startWidth + delta));
+        const rawWidth = Math.min(MAX_CHART_WIDTH, Math.max(MIN_CHART_WIDTH, startWidth + delta));
+        const snappedWidth = Math.round(rawWidth / SNAP_UNIT) * SNAP_UNIT;
+        const newWidth = Math.min(MAX_CHART_WIDTH, Math.max(MIN_CHART_WIDTH, snappedWidth));
         setMetricInstances((prev: MetricInstance[]) => {
           const updated = prev.map((inst: MetricInstance) =>
             inst.instanceId === metric.id ? { ...inst, chartWidth: newWidth } : inst
@@ -736,9 +789,9 @@ function SortableMetricCard({
           WebkitUserSelect: "none",
           ...(isGridLayout
             ? {
-                width: chartWidth ? `${chartWidth}px` : "100%",
-                minWidth: chartWidth ? chartWidth : 0,
-                maxWidth: chartWidth ? 1200 : undefined,
+                width: "100%",
+                minWidth: 0,
+                ...(chartColumnSpan > 1 ? { gridColumn: `span ${chartColumnSpan}` as const } : {}),
               }
             : {
                 flex: `0 0 ${chartWidth ? `${chartWidth}px` : "280px"}`,
@@ -2092,6 +2145,7 @@ export default function Dashboard() {
           positionEntryId: inst.positionEntryId ?? null,
           chartHeight: inst.chartHeight ?? 200,
           chartWidth: inst.chartWidth ?? undefined,
+          chartColumnSpan: inst.chartColumnSpan ?? (inst.chartWidth ? 2 : undefined),
           positionChartBrushStart: inst.positionChartBrushStart ?? 0,
           positionChartBrushEnd: inst.positionChartBrushEnd ?? 0,
           slotIndex: inst.slotIndex ?? undefined,
@@ -2619,10 +2673,10 @@ export default function Dashboard() {
                 >
                   {Array.from({ length: maxSlot + 2 }, (_, i) => {
                     const metric = displayMetrics.find((m: any) => (m.slotIndex ?? 0) === i);
-                    const isWideChart = metric && (metric as any).baseMetricId === "position_size_chart" && (metric as any).chartWidth;
-                    const slotStyle = isWideChart
-                      ? { gridColumn: "span 2" as const, minWidth: (metric as any).chartWidth }
-                      : undefined;
+                    const posChartSpan = metric && (metric as any).baseMetricId === "position_size_chart"
+                      ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).chartColumnSpan ?? ((metric as any).chartWidth ? 2 : 1)))
+                      : 1;
+                    const slotStyle = posChartSpan > 1 ? { gridColumn: `span ${posChartSpan}` as const } : undefined;
                     return (
                       <DroppableSlot key={i} id={`metric-slot-${i}`} style={slotStyle}>
                         {metric ? renderCard(metric) : null}
