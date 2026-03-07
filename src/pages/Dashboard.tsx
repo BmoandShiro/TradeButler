@@ -393,6 +393,11 @@ const defaultDashboardSections: DashboardSections = {
 
 type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades" | "trades" | "openPositions";
 
+const SECTION_IDS: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions"];
+function isSectionId(id: string): id is SectionId {
+  return SECTION_IDS.includes(id as SectionId);
+}
+
 const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "openPositions", "trades"];
 
 export type SectionSizes = Record<SectionId, { columnSpan?: number; height?: number }>;
@@ -2241,20 +2246,40 @@ export default function Dashboard() {
     }
 
     if (!layoutLocked && over && active.id !== over.id) {
+      const activeId = active.id as string;
+      const overId = over.id as string;
+      const oldIndex = displayOrder.indexOf(activeId);
+      const newIndex = displayOrder.indexOf(overId);
+      if (oldIndex !== -1 && newIndex !== -1) {
+        const newOrder = arrayMove([...displayOrder], oldIndex, newIndex);
+        setMetricCardOrder((prev) => {
+          const kept = prev.filter((id) => !newOrder.includes(id));
+          const finalOrder = [...newOrder, ...kept];
+          localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        });
+        if (newOrder.some((id) => isSectionId(id))) {
+          const newSectionOrder = newOrder.filter((id) => isSectionId(id));
+          setSectionOrder((prev) => {
+            const kept = prev.filter((id) => !newOrder.includes(id));
+            const finalOrder = [...newSectionOrder, ...kept];
+            localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(finalOrder));
+            return finalOrder;
+          });
+        }
+        return;
+      }
       setMetricCardOrder((items) => {
         const currentInstanceIds = metricInstances.map(inst => inst.instanceId);
         let newOrder = [...items];
-        
         currentInstanceIds.forEach(id => {
           if (!newOrder.includes(id)) newOrder.push(id);
         });
         newOrder = newOrder.filter(id => currentInstanceIds.includes(id));
-        
-        const oldIndex = newOrder.indexOf(active.id as string);
-        const newIndex = newOrder.indexOf(over.id as string);
-        
-        if (oldIndex !== -1 && newIndex !== -1) {
-          const finalOrder = arrayMove(newOrder, oldIndex, newIndex);
+        const oi = newOrder.indexOf(activeId);
+        const ni = newOrder.indexOf(overId);
+        if (oi !== -1 && ni !== -1) {
+          const finalOrder = arrayMove(newOrder, oi, ni);
           localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
           return finalOrder;
         }
@@ -2539,7 +2564,10 @@ export default function Dashboard() {
       return 0;
     });
   }, [displayMetrics, metricCardOrder]);
-  
+
+  // Unlocked grid shows only metrics (no section placeholders); sections stay in the grid below with full content.
+  const displayOrder = useMemo(() => sortedMetrics.map((m) => m.id), [sortedMetrics]);
+
   // Listen for color range changes - use a ref to track previous value
   const prevColorRangeRef = useRef<string>("");
   useEffect(() => {
@@ -3088,7 +3116,7 @@ export default function Dashboard() {
         onDragEnd={handleDragEnd}
       >
         <SortableContext
-          items={sortedMetrics.map(m => m.id)}
+          items={displayOrder}
           strategy={rectSortingStrategy}
         >
       <div
@@ -3104,14 +3132,17 @@ export default function Dashboard() {
           boxSizing: "border-box",
         }}
       >
-        {sortedMetrics.map((metric) => renderCard(metric))}
+        {displayOrder.map((id) => {
+          const metric = sortedMetrics.find((m) => m.id === id);
+          return metric ? renderCard(metric) : null;
+        })}
       </div>
         </SortableContext>
       </DndContext>
         );
       })()}
 
-      {/* Dashboard Stats Grid */}
+      {/* Dashboard Stats Grid - full section content; when locked, extra row below for moving sections */}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -3124,11 +3155,19 @@ export default function Dashboard() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: `repeat(auto-fit, minmax(${sectionsGridMinWidthPx}px, 1fr))`,
+          gridTemplateRows: layoutLocked ? "auto minmax(140px, 1fr)" : "auto",
           gap: `${sectionsGridGapPx}px`,
           marginBottom: `${sectionsGridMarginBottomPx}px`,
         }}
       >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: `repeat(auto-fit, minmax(${sectionsGridMinWidthPx}px, 1fr))`,
+            gap: `${sectionsGridGapPx}px`,
+            minHeight: 0,
+          }}
+        >
         {sectionOrder.map((sectionId) => {
           // Top Symbols
           if (sectionId === "topSymbols" && dashboardSections.showTopSymbols && topSymbols.length > 0) {
@@ -3151,9 +3190,13 @@ export default function Dashboard() {
                       borderRadius: "8px",
                       padding: "20px",
                       cursor: isDragging ? "grabbing" : "grab",
+                      display: "flex",
+                      flexDirection: "column",
+                      minHeight: 0,
+                      height: "100%",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px", flexShrink: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <div {...dragHandleProps} style={{ cursor: "grab" }}>
                           <GripVertical size={16} color="var(--text-secondary)" />
@@ -3342,7 +3385,7 @@ export default function Dashboard() {
                     )}
                   </div>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, overflow: "auto" }}>
                   {topSymbols.map((symbol) => (
                     <div
                       key={symbol.symbol}
@@ -3405,9 +3448,13 @@ export default function Dashboard() {
                       borderRadius: "8px",
                       padding: "20px",
                       cursor: isDragging ? "grabbing" : "grab",
+                      display: "flex",
+                      flexDirection: "column",
+                      minHeight: 0,
+                      height: "100%",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px", flexShrink: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <div {...dragHandleProps} style={{ cursor: "grab" }}>
                           <GripVertical size={16} color="var(--text-secondary)" />
@@ -3626,7 +3673,7 @@ export default function Dashboard() {
                     )}
                   </div>
                 </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, overflow: "auto" }}>
               {strategyPerformance.map((strategy) => {
                 const strategyKey = strategy.strategy_id ?? "unassigned";
                 const isExpanded = expandedStrategies.has(strategyKey);
@@ -3910,9 +3957,13 @@ export default function Dashboard() {
                       borderRadius: "8px",
                       padding: "20px",
                       cursor: isDragging ? "grabbing" : "grab",
+                      display: "flex",
+                      flexDirection: "column",
+                      minHeight: 0,
+                      height: "100%",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px", flexShrink: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <div {...dragHandleProps} style={{ cursor: "grab" }}>
                           <GripVertical size={16} color="var(--text-secondary)" />
@@ -4101,7 +4152,7 @@ export default function Dashboard() {
                     )}
                   </div>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, overflow: "auto" }}>
               {recentTrades.map((trade, idx) => {
                 const isExpanded = expandedRecentTrades.has(idx);
                 return (
@@ -4210,9 +4261,13 @@ export default function Dashboard() {
                       borderRadius: "8px",
                       padding: "20px",
                       cursor: isDragging ? "grabbing" : "grab",
+                      display: "flex",
+                      flexDirection: "column",
+                      minHeight: 0,
+                      height: "100%",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px", flexShrink: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <div {...dragHandleProps} style={{ cursor: "grab" }}>
                           <GripVertical size={16} color="var(--text-secondary)" />
@@ -4453,7 +4508,7 @@ export default function Dashboard() {
                         )}
                       </div>
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, overflow: "auto" }}>
                       {openPositionGroups.length === 0 ? (
                         <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "20px" }}>
                           No open positions. Positions are derived from imported trades that are not fully closed.
@@ -4463,7 +4518,7 @@ export default function Dashboard() {
                           <div
                             style={{
                               display: "grid",
-                              gridTemplateColumns: "minmax(60px, 1fr) minmax(70px, auto) minmax(56px, auto) minmax(70px, auto) minmax(70px, auto) minmax(80px, auto) minmax(80px, auto)",
+                              gridTemplateColumns: "minmax(60px, 1fr) minmax(50px, auto) minmax(56px, auto) minmax(70px, auto) minmax(70px, auto) minmax(80px, auto) minmax(80px, auto) minmax(72px, auto) minmax(48px, auto)",
                               gap: "0 12px",
                               alignItems: "center",
                               fontSize: "12px",
@@ -4480,6 +4535,8 @@ export default function Dashboard() {
                             <span>Current</span>
                             <span>Unrealized</span>
                             <span>Realized</span>
+                            <span>Entry</span>
+                            <span>#</span>
                           </div>
                           {openPositionGroups.map((group) => {
                             const isLong = group.final_quantity > 0;
@@ -4515,7 +4572,7 @@ export default function Dashboard() {
                                 }}
                                 style={{
                                   display: "grid",
-                                  gridTemplateColumns: "minmax(60px, 1fr) minmax(50px, auto) minmax(56px, auto) minmax(70px, auto) minmax(70px, auto) minmax(80px, auto) minmax(80px, auto)",
+                                  gridTemplateColumns: "minmax(60px, 1fr) minmax(50px, auto) minmax(56px, auto) minmax(70px, auto) minmax(70px, auto) minmax(80px, auto) minmax(80px, auto) minmax(72px, auto) minmax(48px, auto)",
                                   gap: "0 12px",
                                   alignItems: "center",
                                   padding: "8px 12px",
@@ -4556,6 +4613,10 @@ export default function Dashboard() {
                                 >
                                   {group.total_pnl >= 0 ? "+" : ""}${formatWithCommas(group.total_pnl, { decimals: 2 })}
                                 </span>
+                                <span style={{ color: "var(--text-secondary)", fontSize: "11px" }}>
+                                  {format(new Date(group.entry_trade.timestamp), "MMM d")}
+                                </span>
+                                <span style={{ color: "var(--text-primary)" }}>{group.position_trades.length}</span>
                               </div>
                             );
                           })}
@@ -4700,9 +4761,13 @@ export default function Dashboard() {
                       borderRadius: "8px",
                       padding: "20px",
                       cursor: isDragging ? "grabbing" : "grab",
+                      display: "flex",
+                      flexDirection: "column",
+                      minHeight: 0,
+                      height: "100%",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px", flexShrink: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <div {...dragHandleProps} style={{ cursor: "grab" }}>
                           <GripVertical size={16} color="var(--text-secondary)" />
@@ -4920,7 +4985,7 @@ export default function Dashboard() {
                     )}
                   </div>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, overflow: "auto" }}>
                   {trades.length === 0 ? (
                     <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "20px" }}>
                       No trades found for the selected timeframe.
@@ -5109,6 +5174,8 @@ export default function Dashboard() {
           }
           return null;
         })}
+        </div>
+        {layoutLocked && <div style={{ minHeight: 140, width: "100%" }} aria-hidden />}
       </div>
         </SortableContext>
       </DndContext>
