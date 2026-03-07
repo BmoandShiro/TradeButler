@@ -37,6 +37,7 @@ import {
   Trash2,
   Lock,
   Unlock,
+  RotateCcw,
 } from "lucide-react";
 import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY, DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY, DASHBOARD_METRICS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY, DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY, DASHBOARD_PADDING_KEY } from "../components/MetricsConfig";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
@@ -351,6 +352,7 @@ const getMetricColor = (id: string, value: number, colorRange?: { min: number; m
 const DASHBOARD_SECTIONS_KEY = "tradebutler_dashboard_sections";
 const DASHBOARD_SECTION_ORDER_KEY = "tradebutler_dashboard_section_order";
 const DASHBOARD_SECTION_SIZES_KEY = "tradebutler_dashboard_section_sizes";
+const OPEN_POSITIONS_DISPLAY_MODE_KEY = "tradebutler_open_positions_display_mode";
 const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
 const METRIC_INSTANCES_KEY = "tradebutler_metric_instances";
 const LAYOUT_LOCKED_KEY = "tradebutler_dashboard_layout_locked";
@@ -1115,6 +1117,26 @@ function SortableMetricCard({
                     onClick={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
+                      setMetricInstances((prev: MetricInstance[]) => {
+                        const updated = prev.map((inst: MetricInstance) =>
+                          inst.instanceId === metric.id
+                            ? { ...inst, cardWidth: undefined, cardHeight: undefined, cardColumnSpan: undefined }
+                            : inst
+                        );
+                        localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+                        return updated;
+                      });
+                      setOpenMetricSettings(null);
+                    }}
+                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                  >
+                    <RotateCcw size={14} />
+                    <span>Reset size</span>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
                       duplicateMetricInstance(metric.id);
                       setOpenMetricSettings(null);
                     }}
@@ -1647,7 +1669,37 @@ function SortableMetricCard({
                 <span>Move Down</span>
               </button>
               <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
-              <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  setMetricInstances((prev: MetricInstance[]) => {
+                    const updated = prev.map((inst: MetricInstance) =>
+                      inst.instanceId === metric.id
+                        ? { ...inst, cardWidth: undefined, cardHeight: undefined, cardColumnSpan: undefined }
+                        : inst
+                    );
+                    localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+                    return updated;
+                  });
+                  setOpenMetricSettings(null);
+                }}
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "4px",
+                  padding: "6px 8px",
+                  cursor: "pointer",
+                  color: "var(--text-primary)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  fontSize: "13px",
+                }}
+              >
+                <RotateCcw size={14} />
+                <span>Reset size</span>
+              </button>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -2108,6 +2160,11 @@ export default function Dashboard() {
       }
     }
     return {} as SectionSizes;
+  });
+  const [openPositionsDisplayMode, setOpenPositionsDisplayMode] = useState<"card" | "compact">(() => {
+    const saved = localStorage.getItem(OPEN_POSITIONS_DISPLAY_MODE_KEY);
+    if (saved === "compact" || saved === "card") return saved;
+    return "card";
   });
   const [metricCardOrder, setMetricCardOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem(METRIC_CARDS_ORDER_KEY);
@@ -3219,6 +3276,66 @@ export default function Dashboard() {
                             <ChevronDown size={14} />
                             <span>Move Down</span>
                           </button>
+                          <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              setSectionSizes((prev) => {
+                                const next = { ...prev, topSymbols: {} };
+                                localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                return next;
+                              });
+                              setOpenSectionSettings(null);
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: "pointer",
+                              color: "var(--text-primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                            }}
+                          >
+                            <RotateCcw size={14} />
+                            <span>Reset size</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              setDashboardSections((prev) => {
+                                const next = { ...prev, showTopSymbols: false };
+                                localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                return next;
+                              });
+                              setSectionOrder((prev) => {
+                                const newOrder = prev.filter((id) => id !== "topSymbols");
+                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                return newOrder;
+                              });
+                              setOpenSectionSettings(null);
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: "pointer",
+                              color: "var(--loss)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                            }}
+                          >
+                            <Trash2 size={14} />
+                            <span>Remove</span>
+                          </button>
                         </div>
                       </div>,
                       document.body
@@ -3412,6 +3529,66 @@ export default function Dashboard() {
                           >
                             <ChevronDown size={14} />
                             <span>Move Down</span>
+                          </button>
+                          <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              setSectionSizes((prev) => {
+                                const next = { ...prev, strategyPerformance: {} };
+                                localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                return next;
+                              });
+                              setOpenSectionSettings(null);
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: "pointer",
+                              color: "var(--text-primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                            }}
+                          >
+                            <RotateCcw size={14} />
+                            <span>Reset size</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              setDashboardSections((prev) => {
+                                const next = { ...prev, showStrategyPerformance: false };
+                                localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                return next;
+                              });
+                              setSectionOrder((prev) => {
+                                const newOrder = prev.filter((id) => id !== "strategyPerformance");
+                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                return newOrder;
+                              });
+                              setOpenSectionSettings(null);
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: "pointer",
+                              color: "var(--loss)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                            }}
+                          >
+                            <Trash2 size={14} />
+                            <span>Remove</span>
                           </button>
                           <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                           <div style={{ padding: "8px", display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -3858,6 +4035,66 @@ export default function Dashboard() {
                             <ChevronDown size={14} />
                             <span>Move Down</span>
                           </button>
+                          <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              setSectionSizes((prev) => {
+                                const next = { ...prev, recentTrades: {} };
+                                localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                return next;
+                              });
+                              setOpenSectionSettings(null);
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: "pointer",
+                              color: "var(--text-primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                            }}
+                          >
+                            <RotateCcw size={14} />
+                            <span>Reset size</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              setDashboardSections((prev) => {
+                                const next = { ...prev, showRecentTrades: false };
+                                localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                return next;
+                              });
+                              setSectionOrder((prev) => {
+                                const newOrder = prev.filter((id) => id !== "recentTrades");
+                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                return newOrder;
+                              });
+                              setOpenSectionSettings(null);
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: "pointer",
+                              color: "var(--loss)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                            }}
+                          >
+                            <Trash2 size={14} />
+                            <span>Remove</span>
+                          </button>
                         </div>
                       </div>,
                       document.body
@@ -4098,6 +4335,118 @@ export default function Dashboard() {
                                 <ChevronDown size={14} />
                                 <span>Move Down</span>
                               </button>
+                              <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  setSectionSizes((prev) => {
+                                    const next = { ...prev, openPositions: {} };
+                                    localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                    return next;
+                                  });
+                                  setOpenSectionSettings(null);
+                                }}
+                                style={{
+                                  background: "transparent",
+                                  border: "1px solid var(--border-color)",
+                                  borderRadius: "4px",
+                                  padding: "6px 8px",
+                                  cursor: "pointer",
+                                  color: "var(--text-primary)",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  fontSize: "13px",
+                                }}
+                              >
+                                <RotateCcw size={14} />
+                                <span>Reset size</span>
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  setDashboardSections((prev) => {
+                                    const next = { ...prev, showOpenPositions: false };
+                                    localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                    return next;
+                                  });
+                                  setSectionOrder((prev) => {
+                                    const newOrder = prev.filter((id) => id !== "openPositions");
+                                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                    return newOrder;
+                                  });
+                                  setOpenSectionSettings(null);
+                                }}
+                                style={{
+                                  background: "transparent",
+                                  border: "1px solid var(--border-color)",
+                                  borderRadius: "4px",
+                                  padding: "6px 8px",
+                                  cursor: "pointer",
+                                  color: "var(--loss)",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  fontSize: "13px",
+                                }}
+                              >
+                                <Trash2 size={14} />
+                                <span>Remove</span>
+                              </button>
+                              <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                              <div style={{ padding: "4px 0" }}>
+                                <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>Display</div>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      setOpenPositionsDisplayMode("card");
+                                      localStorage.setItem(OPEN_POSITIONS_DISPLAY_MODE_KEY, "card");
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    style={{
+                                      background: openPositionsDisplayMode === "card" ? "var(--accent)" : "transparent",
+                                      color: openPositionsDisplayMode === "card" ? "var(--bg-primary)" : "var(--text-primary)",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "4px",
+                                      padding: "6px 8px",
+                                      cursor: "pointer",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      fontSize: "13px",
+                                    }}
+                                  >
+                                    <span>Card</span>
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      setOpenPositionsDisplayMode("compact");
+                                      localStorage.setItem(OPEN_POSITIONS_DISPLAY_MODE_KEY, "compact");
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    style={{
+                                      background: openPositionsDisplayMode === "compact" ? "var(--accent)" : "transparent",
+                                      color: openPositionsDisplayMode === "compact" ? "var(--bg-primary)" : "var(--text-primary)",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "4px",
+                                      padding: "6px 8px",
+                                      cursor: "pointer",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      fontSize: "13px",
+                                    }}
+                                  >
+                                    <span>Compact (Webull-style)</span>
+                                  </button>
+                                </div>
+                              </div>
                             </div>
                           </div>,
                           document.body
@@ -4109,6 +4458,108 @@ export default function Dashboard() {
                         <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "20px" }}>
                           No open positions. Positions are derived from imported trades that are not fully closed.
                         </p>
+                      ) : openPositionsDisplayMode === "compact" ? (
+                        <div style={{ overflowX: "auto" }}>
+                          <div
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "minmax(60px, 1fr) minmax(70px, auto) minmax(56px, auto) minmax(70px, auto) minmax(70px, auto) minmax(80px, auto) minmax(80px, auto)",
+                              gap: "0 12px",
+                              alignItems: "center",
+                              fontSize: "12px",
+                              borderBottom: "1px solid var(--border-color)",
+                              padding: "8px 12px",
+                              color: "var(--text-secondary)",
+                              fontWeight: "600",
+                            }}
+                          >
+                            <span>Symbol</span>
+                            <span>Side</span>
+                            <span>Qty</span>
+                            <span>Avg</span>
+                            <span>Current</span>
+                            <span>Unrealized</span>
+                            <span>Realized</span>
+                          </div>
+                          {openPositionGroups.map((group) => {
+                            const isLong = group.final_quantity > 0;
+                            const qty = Math.abs(group.final_quantity);
+                            const qtyDisplay = (isLong ? "+" : "") + formatWithCommas(group.final_quantity, { minDecimals: 4, maxDecimals: 4 });
+                            const costFromTrades = group.position_trades.reduce((sum, t) => {
+                              const side = t.side?.toUpperCase() || "";
+                              if (side === "BUY") return sum + t.quantity * t.price;
+                              if (side === "SELL") return sum - t.quantity * t.price;
+                              return sum;
+                            }, 0);
+                            const avgPrice = qty >= 0.0001 ? Math.abs(costFromTrades) / qty : 0;
+                            const currentPrice = openPositionQuotes[group.entry_trade.symbol] ?? null;
+                            const unrealizedPnl =
+                              currentPrice != null && currentPrice > 0
+                                ? isLong
+                                  ? (currentPrice - avgPrice) * qty
+                                  : (avgPrice - currentPrice) * qty
+                                : null;
+                            return (
+                              <div
+                                key={group.entry_trade.id}
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => {
+                                  navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Pair" } });
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Pair" } });
+                                  }
+                                }}
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "minmax(60px, 1fr) minmax(50px, auto) minmax(56px, auto) minmax(70px, auto) minmax(70px, auto) minmax(80px, auto) minmax(80px, auto)",
+                                  gap: "0 12px",
+                                  alignItems: "center",
+                                  padding: "8px 12px",
+                                  fontSize: "12px",
+                                  borderBottom: "1px solid var(--border-color)",
+                                  cursor: "pointer",
+                                  backgroundColor: "var(--bg-tertiary)",
+                                }}
+                              >
+                                <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>{group.entry_trade.symbol}</span>
+                                <span
+                                  style={{
+                                    fontSize: "11px",
+                                    fontWeight: "600",
+                                    color: isLong ? "var(--profit)" : "var(--loss)",
+                                  }}
+                                >
+                                  {isLong ? "Long" : "Short"}
+                                </span>
+                                <span style={{ color: "var(--text-primary)" }}>{qtyDisplay}</span>
+                                <span style={{ color: "var(--text-primary)" }}>${formatWithCommas(avgPrice, { decimals: 2 })}</span>
+                                <span style={{ color: "var(--text-primary)" }}>
+                                  {currentPrice != null && currentPrice > 0 ? `$${formatWithCommas(currentPrice, { decimals: 2 })}` : "—"}
+                                </span>
+                                <span
+                                  style={{
+                                    fontWeight: "600",
+                                    color: unrealizedPnl != null ? (unrealizedPnl >= 0 ? "var(--profit)" : "var(--loss)") : "var(--text-secondary)",
+                                  }}
+                                >
+                                  {unrealizedPnl != null ? (unrealizedPnl >= 0 ? "+" : "") + `$${formatWithCommas(unrealizedPnl, { decimals: 2 })}` : "—"}
+                                </span>
+                                <span
+                                  style={{
+                                    fontWeight: "500",
+                                    color: group.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                                  }}
+                                >
+                                  {group.total_pnl >= 0 ? "+" : ""}${formatWithCommas(group.total_pnl, { decimals: 2 })}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
                       ) : (
                         openPositionGroups.map((group) => {
                           const isLong = group.final_quantity > 0;
@@ -4373,6 +4824,66 @@ export default function Dashboard() {
                           >
                             <ChevronDown size={14} />
                             <span>Move Down</span>
+                          </button>
+                          <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              setSectionSizes((prev) => {
+                                const next = { ...prev, trades: {} };
+                                localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                return next;
+                              });
+                              setOpenSectionSettings(null);
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: "pointer",
+                              color: "var(--text-primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                            }}
+                          >
+                            <RotateCcw size={14} />
+                            <span>Reset size</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              setDashboardSections((prev) => {
+                                const next = { ...prev, showTrades: false };
+                                localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                return next;
+                              });
+                              setSectionOrder((prev) => {
+                                const newOrder = prev.filter((id) => id !== "trades");
+                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                return newOrder;
+                              });
+                              setOpenSectionSettings(null);
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "4px",
+                              padding: "6px 8px",
+                              cursor: "pointer",
+                              color: "var(--loss)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              fontSize: "13px",
+                            }}
+                          >
+                            <Trash2 size={14} />
+                            <span>Remove</span>
                           </button>
                           <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                           <div style={{ padding: "8px", display: "flex", flexDirection: "column", gap: "8px" }}>
