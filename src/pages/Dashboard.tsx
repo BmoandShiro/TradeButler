@@ -541,11 +541,12 @@ const metricDescriptions: Record<string, { description: string; calculation: str
 
 function DroppableSlot({ id, children, style: slotStyle }: { id: string; children: React.ReactNode; style?: React.CSSProperties }) {
   const { setNodeRef, isOver } = useDroppable({ id });
+  const isEmpty = children == null;
   return (
     <div
       ref={setNodeRef}
       style={{
-        minHeight: "120px",
+        minHeight: isEmpty ? 0 : "120px",
         borderRadius: "8px",
         border: isOver ? "2px dashed var(--accent)" : "1px solid transparent",
         backgroundColor: isOver ? "color-mix(in srgb, var(--accent) 8%, transparent)" : "transparent",
@@ -2503,7 +2504,11 @@ export default function Dashboard() {
     largest_loss_pct: metrics?.largest_loss_pct || 0,
   };
 
-  const metricsToSectionsGapPx = Math.min(80, Math.max(0, parseInt(localStorage.getItem(DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY) || "30", 10)) || 30);
+  const metricsToSectionsGapPx = (() => {
+    const n = parseInt(localStorage.getItem(DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY) || "12", 10);
+    if (Number.isNaN(n) || n < 0) return 12;
+    return Math.min(80, n);
+  })();
   const metricsGridGapPx = (() => {
     const n = parseInt(localStorage.getItem(DASHBOARD_METRICS_GRID_GAP_KEY) || "12", 10);
     return [8, 12, 16, 20, 24].includes(n) ? n : 12;

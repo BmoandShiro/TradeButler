@@ -236,7 +236,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       const n = parseInt(saved, 10);
       if (n >= 0 && n <= 80) return n;
     }
-    return 30;
+    return 12;
   });
   const [sectionsGridGap, setSectionsGridGap] = useState(() => {
     const saved = localStorage.getItem(DASHBOARD_SECTIONS_GRID_GAP_KEY);
@@ -670,10 +670,13 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
                   cursor: "pointer",
                 }}
               >
-                {[12, 16, 20, 24, 30, 40, 48, 60, 80].map((n) => (
-                  <option key={n} value={n}>{n} px</option>
+                {[0, 8, 12, 16, 20, 24, 30, 40, 48, 60, 80].map((n) => (
+                  <option key={n} value={n}>{n === 0 ? "0 (snap to metrics)" : `${n} px`}</option>
                 ))}
               </select>
+              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                Use 0 to snap section cards directly under the chart/metric cards with no gap.
+              </div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
               <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Gap between section cards (Trades, Open Positions, etc.)</label>
