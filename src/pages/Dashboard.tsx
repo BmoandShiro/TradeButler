@@ -263,19 +263,35 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
 };
 
 const formatHoldingTime = (seconds: number): string => {
-  if (seconds === 0) return "0s";
-  
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = Math.floor(seconds % 60);
-  
+  if (seconds === 0 || !Number.isFinite(seconds)) return "0s";
+  const s = Math.max(0, Math.floor(seconds));
+
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const secs = Math.floor(s % 60);
+
   const parts: string[] = [];
-  if (days > 0) parts.push(`${days}d`);
-  if (hours > 0) parts.push(`${hours}h`);
-  if (minutes > 0) parts.push(`${minutes}m`);
-  if (secs > 0 && days === 0 && hours === 0) parts.push(`${secs}s`);
-  
+  if (days >= 365) {
+    const years = Math.floor(days / 365);
+    const remainderDays = days % 365;
+    parts.push(`${years}y`);
+    if (remainderDays > 0) parts.push(`${remainderDays}d`);
+  } else if (days > 0) {
+    parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    // Omit seconds when we have days to keep string shorter
+  } else if (hours > 0) {
+    parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (secs > 0) parts.push(`${secs}s`);
+  } else if (minutes > 0) {
+    parts.push(`${minutes}m`);
+    if (secs > 0) parts.push(`${secs}s`);
+  } else {
+    parts.push(`${secs}s`);
+  }
   return parts.join(" ") || "0s";
 };
 
@@ -350,6 +366,10 @@ interface MetricInstance {
   positionChartBrushStart?: number; // For position_size_chart: Brush range start index
   positionChartBrushEnd?: number;   // For position_size_chart: Brush range end index
   slotIndex?: number;               // When layout locked: fixed grid slot (0-based), allows gaps
+  // Resizable metric card (non–position_size_chart)
+  cardWidth?: number;               // Pixel width in flex layout (default 280)
+  cardHeight?: number;              // Card height in px (default 100)
+  cardColumnSpan?: number;          // Grid column span when in grid layout (1–MAX_POSITION_CHART_COLUMN_SPAN)
 }
 
 interface DashboardSections {
@@ -1053,7 +1073,7 @@ function SortableMetricCard({
                   height: "8px",
                   cursor: "ns-resize",
                   flexShrink: 0,
-                  background: "linear-gradient(to bottom, transparent 0%, var(--border-color) 50%, transparent 100%)",
+                  background: "transparent",
                   borderRadius: "4px",
                   marginTop: "4px",
                 }}
@@ -1077,8 +1097,7 @@ function SortableMetricCard({
             width: "8px",
             cursor: "ew-resize",
             flexShrink: 0,
-            background: "linear-gradient(to right, transparent 0%, var(--border-color) 50%, transparent 100%)",
-            borderRadius: "0 8px 8px 0",
+            background: "transparent",
             pointerEvents: "auto",
           }}
         />
@@ -1086,9 +1105,99 @@ function SortableMetricCard({
     );
   }
 
+  const cardHeight = Math.min(400, Math.max(80, (metric as MetricInstance).cardHeight ?? 100));
+  const cardWidth = (metric as MetricInstance).cardWidth;
+  const cardColumnSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as MetricInstance).cardColumnSpan ?? 1));
+
+  const handleCardResizeVertical = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = cardHeight;
+    const onMove = (e2: MouseEvent) => {
+      const delta = e2.clientY - startY;
+      const newH = Math.min(400, Math.max(80, startH + delta));
+      setMetricInstances((prev: MetricInstance[]) => {
+        const updated = prev.map((inst: MetricInstance) =>
+          inst.instanceId === metric.id ? { ...inst, cardHeight: newH } : inst
+        );
+        localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+        return updated;
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const handleCardResizeHorizontal = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const card = (e.currentTarget as HTMLElement).closest("[data-metric-card]") as HTMLElement | null;
+    if (!card) return;
+    const startX = e.clientX;
+    const startWidth = card.getBoundingClientRect().width;
+    if (isGridLayout) {
+      let grid: HTMLElement | null = card.parentElement;
+      while (grid) {
+        const ds = getComputedStyle(grid);
+        if (ds.display === "grid" && ds.gridTemplateColumns && ds.gridTemplateColumns !== "none") break;
+        grid = grid.parentElement;
+      }
+      if (!grid) return;
+      const gs = getComputedStyle(grid);
+      const template = gs.gridTemplateColumns;
+      const columnCount = template.split(" ").filter(Boolean).length || 1;
+      const gapPx = parseFloat(gs.gap) || 20;
+      const gridWidth = grid.clientWidth;
+      const columnWidth = columnCount > 1 ? (gridWidth - (columnCount - 1) * gapPx) / columnCount : gridWidth;
+      const slotWidth = columnWidth + gapPx;
+      const onMove = (e2: MouseEvent) => {
+        const delta = e2.clientX - startX;
+        const rawWidth = Math.max(columnWidth, startWidth + delta);
+        const span = (rawWidth + gapPx) / slotWidth;
+        const newSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, Math.round(span)));
+        setMetricInstances((prev: MetricInstance[]) => {
+          const updated = prev.map((inst: MetricInstance) =>
+            inst.instanceId === metric.id ? { ...inst, cardColumnSpan: newSpan, cardWidth: undefined } : inst
+          );
+          localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+          return updated;
+        });
+      };
+      const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+      return;
+    }
+    const SNAP = 280;
+    const MIN_W = 200;
+    const MAX_W = 1200;
+    const onMove = (e2: MouseEvent) => {
+      const delta = e2.clientX - startX;
+      const raw = Math.min(MAX_W, Math.max(MIN_W, startWidth + delta));
+      const snapped = Math.round(raw / SNAP) * SNAP;
+      const newW = Math.min(MAX_W, Math.max(MIN_W, snapped));
+      setMetricInstances((prev: MetricInstance[]) => {
+        const updated = prev.map((inst: MetricInstance) =>
+          inst.instanceId === metric.id ? { ...inst, cardWidth: newW } : inst
+        );
+        localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+        return updated;
+      });
+    };
+    const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   return (
     <div
       ref={setNodeRef}
+      data-metric-card
       style={{
         backgroundColor: "var(--bg-secondary)",
         border: "1px solid var(--border-color)",
@@ -1100,8 +1209,21 @@ function SortableMetricCard({
         cursor: isDragging ? "grabbing" : "grab",
         userSelect: "none",
         WebkitUserSelect: "none",
-        ...(isGridLayout ? { width: "100%", minWidth: 0, boxSizing: "border-box" } : { flex: "0 0 280px", width: "280px", minWidth: 280 }),
-        height: "100px",
+        position: "relative",
+        ...(isGridLayout
+          ? {
+              width: "100%",
+              minWidth: 0,
+              boxSizing: "border-box",
+              ...(cardColumnSpan > 1 ? { gridColumn: `span ${cardColumnSpan}` as const } : {}),
+            }
+          : {
+              flex: `0 0 ${cardWidth ? `${cardWidth}px` : "280px"}`,
+              width: cardWidth ? `${cardWidth}px` : "280px",
+              minWidth: cardWidth ?? 280,
+              maxWidth: cardWidth ? 1200 : undefined,
+            }),
+        height: `${cardHeight}px`,
         ...style,
       }}
     >
@@ -1127,6 +1249,8 @@ function SortableMetricCard({
       <div 
         style={{ 
           flex: 1, 
+          minWidth: 0,
+          overflow: "hidden",
           pointerEvents: ((metric as any).baseMetricId === "best_day" || (metric as any).baseMetricId === "worst_day" || (metric as any).baseMetricId === "largest_win" || (metric as any).baseMetricId === "largest_loss") ? "auto" : "none",
           cursor: ((metric as any).baseMetricId === "best_day" || (metric as any).baseMetricId === "worst_day" || (metric as any).baseMetricId === "largest_win" || (metric as any).baseMetricId === "largest_loss") ? "pointer" : "default",
         }}
@@ -1201,10 +1325,15 @@ function SortableMetricCard({
           })()}
         </p>
         <p
+          title={formatMetricValue((metric as any).baseMetricId || metric.id, value, metrics)}
           style={{
             fontSize: "24px",
             fontWeight: "bold",
             color: color,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}
         >
           {formatMetricValue((metric as any).baseMetricId || metric.id, value, metrics)}
@@ -1509,6 +1638,40 @@ function SortableMetricCard({
           document.body
         )}
       </div>
+      {/* Resize: right edge (width / column span) - invisible hit area */}
+      <div
+        role="separator"
+        aria-label="Resize card width"
+        onMouseDown={handleCardResizeHorizontal}
+        style={{
+          position: "absolute",
+          right: 0,
+          top: 0,
+          bottom: 0,
+          width: "8px",
+          cursor: "ew-resize",
+          flexShrink: 0,
+          background: "transparent",
+          pointerEvents: "auto",
+        }}
+      />
+      {/* Resize: bottom edge (height) - invisible hit area */}
+      <div
+        role="separator"
+        aria-label="Resize card height"
+        onMouseDown={handleCardResizeVertical}
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: "8px",
+          cursor: "ns-resize",
+          flexShrink: 0,
+          background: "transparent",
+          pointerEvents: "auto",
+        }}
+      />
     </div>
   );
 }
@@ -2151,6 +2314,9 @@ export default function Dashboard() {
           positionChartBrushStart: inst.positionChartBrushStart ?? 0,
           positionChartBrushEnd: inst.positionChartBrushEnd ?? 0,
           slotIndex: inst.slotIndex ?? undefined,
+          cardWidth: inst.cardWidth ?? undefined,
+          cardHeight: inst.cardHeight ?? undefined,
+          cardColumnSpan: inst.cardColumnSpan ?? undefined,
         };
       })
       .filter((m): m is any => m !== null);
@@ -2697,10 +2863,12 @@ export default function Dashboard() {
                 >
                   {Array.from({ length: maxSlot + 2 }, (_, i) => {
                     const metric = displayMetrics.find((m: any) => (m.slotIndex ?? 0) === i);
-                    const posChartSpan = metric && (metric as any).baseMetricId === "position_size_chart"
-                      ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).chartColumnSpan ?? ((metric as any).chartWidth ? 2 : 1)))
+                    const slotSpan = metric
+                      ? (metric as any).baseMetricId === "position_size_chart"
+                        ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).chartColumnSpan ?? ((metric as any).chartWidth ? 2 : 1)))
+                        : Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).cardColumnSpan ?? 1))
                       : 1;
-                    const slotStyle = posChartSpan > 1 ? { gridColumn: `span ${posChartSpan}` as const } : undefined;
+                    const slotStyle = slotSpan > 1 ? { gridColumn: `span ${slotSpan}` as const } : undefined;
                     return (
                       <DroppableSlot key={i} id={`metric-slot-${i}`} style={slotStyle}>
                         {metric ? renderCard(metric) : null}
