@@ -284,12 +284,13 @@ export default function Trades() {
           console.error("loadSandboxState failed:", e);
           state = { trades: [], strategies: [] };
         }
-        const tradesList = Array.isArray(state?.trades) ? state.trades : [];
+        type SandboxTrade = { id: number; symbol: string; side: string; quantity: number; price: number; timestamp: string; order_type?: string; status?: string; fees: number | null; notes: string | null; strategy_id: number | null };
+        const tradesList = (Array.isArray(state?.trades) ? state.trades : []) as SandboxTrade[];
         const strategiesList = Array.isArray(state?.strategies) ? state.strategies : [];
         let positionGroupsResult: { positionGroups: PositionGroup[]; pairs: PairedTrade[] };
         try {
           const built = buildPositionGroupsAndPairs(
-            tradesList.map((t: { id: number; symbol: string; side: string; quantity: number; price: number; timestamp: string; order_type?: string; status?: string; fees: number | null; notes: string | null; strategy_id: number | null }) => ({
+            tradesList.map((t) => ({
               id: t.id,
               symbol: t.symbol,
               side: t.side,
@@ -334,8 +335,8 @@ export default function Trades() {
             quantity: t.quantity,
             price: t.price,
             timestamp: t.timestamp,
-            order_type: t.order_type,
-            status: t.status,
+            order_type: t.order_type ?? "",
+            status: t.status ?? "Filled",
             fees: t.fees,
             notes: t.notes,
             strategy_id: t.strategy_id,
@@ -797,13 +798,13 @@ export default function Trades() {
   const searchMatchesTrade = (trade: Trade): boolean => {
     if (!searchQuery.trim() || !trade) return true;
     const searchLower = searchQuery.toLowerCase();
-    const strategyName = trade.strategy_id != null ? strategies.find(s => s.id === trade.strategy_id)?.name : undefined;
+    const strategyName = trade.strategy_id != null ? strategies.find((s) => s.id === trade.strategy_id)?.name : undefined;
     return (
       (trade.symbol ?? "").toLowerCase().includes(searchLower) ||
       (trade.side ?? "").toLowerCase().includes(searchLower) ||
       (trade.order_type ?? "").toLowerCase().includes(searchLower) ||
       (trade.status ?? "").toLowerCase().includes(searchLower) ||
-      (trade.strategy_id != null && (strategies.find(s => s.id === trade.strategy_id)?.name?.toLowerCase().includes(searchLower) ?? false))
+      (strategyName?.toLowerCase().includes(searchLower) ?? false)
     );
   };
 

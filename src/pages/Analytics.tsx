@@ -1,9 +1,9 @@
-import { useEffect, useState, useRef, useMemo, useCallback } from "react";
+import { useEffect, useState, useRef, useMemo, useCallback, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Brush, Cell } from "recharts";
-import { TrendingUp, TrendingDown, Settings, ChevronRight, Maximize2, Minimize2 } from "lucide-react";
+import { Settings, ChevronRight, Maximize2, Minimize2 } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { formatWithCommas } from "../utils/formatCompactNumber";
@@ -309,9 +309,9 @@ export default function Analytics() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformanceRow[]>([]);
   const [checklistItemMetrics, setChecklistItemMetrics] = useState<ChecklistItemMetricRow[]>([]);
-  const [checklistItemMetricsByOutcome, setChecklistItemMetricsByOutcome] = useState<ChecklistItemMetricByOutcomeRow[]>([]);
+  const [, setChecklistItemMetricsByOutcome] = useState<ChecklistItemMetricByOutcomeRow[]>([]);
   /** Per-strategy checklist by outcome for branched "top winning" display */
-  const [checklistByOutcomePerStrategy, setChecklistByOutcomePerStrategy] = useState<Array<{ strategyId: number; strategyName: string; items: ChecklistItemMetricByOutcomeRow[] }>>([]);
+  const [, setChecklistByOutcomePerStrategy] = useState<Array<{ strategyId: number; strategyName: string; items: ChecklistItemMetricByOutcomeRow[] }>>([]);
   const [emotionalStates, setEmotionalStates] = useState<EmotionalStateRow[]>([]);
   // Analytics filters: multi-select (Strategy, Symbol, Side, Type), Position size $ (min/max), Position/Timeframe/R (journal)
   const parseStoredArray = (key: string): string[] => {
@@ -2119,12 +2119,12 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height={useBrush ? 356 : 320}>
                   <BarChart data={d} margin={{ top: 8, right: 8, left: 0, bottom: 72 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="range" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={56} interval={0} />
+                    <XAxis dataKey="range" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={56} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} label={{ value: "Number of days", angle: -90, position: "insideLeft", style: { fill: "var(--text-secondary)", fontSize: 12 } }} />
                     <Tooltip
                       cursor={{ fill: "rgba(255,255,255,0.02)" }}
                       contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
-                      formatter={(value: unknown) => [value, "Days"]}
+                      formatter={(value: unknown) => [value as ReactNode, "Days"]}
                       labelFormatter={(label) => `P&L range: ${label}`}
                     />
                     <Bar dataKey="count" fillOpacity={BAR_FILL_OPACITY} strokeWidth={1}>
@@ -2188,7 +2188,7 @@ export default function Analytics() {
               <ResponsiveContainer width="100%" height={useBrush ? 316 : 280}>
                 <BarChart data={cov} margin={{ top: 8, right: 8, left: 0, bottom: 48 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                  <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                  <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                   <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
                   <Tooltip
                     cursor={{ fill: "rgba(255,255,255,0.02)" }}
@@ -2197,7 +2197,7 @@ export default function Analytics() {
                       border: "1px solid var(--border-color)",
                       color: "var(--text-primary)",
                     }}
-                    formatter={(value: unknown) => [value, "Count"]}
+                    formatter={(value: unknown) => [value as ReactNode, "Count"]}
                   />
                   <Bar dataKey="value" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
                   {useBrush && (
@@ -2226,9 +2226,9 @@ export default function Analytics() {
                   <ResponsiveContainer width="100%" height={useBrush ? STRATEGY_CHART_HEIGHT + 40 : STRATEGY_CHART_HEIGHT}>
                     <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                      <XAxis dataKey="symbol" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                      <XAxis dataKey="symbol" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                       <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                      <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Trades"]} />
+                      <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, "Trades"]} />
                       <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
                       {useBrush && (
                         <Brush dataKey="symbol" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setTradeSymbolBrushStart(r.startIndex); setTradeSymbolBrushEnd(r.endIndex); } }} />
@@ -2255,9 +2255,9 @@ export default function Analytics() {
                   <ResponsiveContainer width="100%" height={useBrush ? STRATEGY_CHART_HEIGHT + 40 : STRATEGY_CHART_HEIGHT}>
                     <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                      <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                      <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                       <YAxis stroke="var(--text-secondary)" tickFormatter={(v) => typeof v === "number" ? (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v)) : String(v)} />
-                      <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [typeof value === "number" ? formatWithCommas(value) : value, "Net P&L"]} />
+                      <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [(typeof value === "number" ? formatWithCommas(value) : value) as ReactNode, "Net P&L"]} />
                       <Bar dataKey="value" fillOpacity={BAR_FILL_OPACITY} strokeWidth={1}>
                         {visibleSlice.map((entry, index) => (
                           <Cell key={`cell-${index}`} fill={entry.value >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} stroke={entry.value >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} />
@@ -2354,9 +2354,9 @@ export default function Analytics() {
                     <ResponsiveContainer width="100%" height={useBrush ? STRATEGY_CHART_HEIGHT + 40 : STRATEGY_CHART_HEIGHT}>
                       <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Trades"]} />
+                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, "Trades"]} />
                         <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} />
                         {useBrush && (
                           <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setStrategyTradesBrushStart(r.startIndex); setStrategyTradesBrushEnd(r.endIndex); } }} />
@@ -2385,9 +2385,9 @@ export default function Analytics() {
                     <ResponsiveContainer width="100%" height={useBrush ? STRATEGY_CHART_HEIGHT + 40 : STRATEGY_CHART_HEIGHT}>
                       <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, ""]} labelFormatter={(label) => `${label} (Winning / Losing)`} />
+                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, ""]} labelFormatter={(label) => `${label} (Winning / Losing)`} />
                         <Bar dataKey="winning" fill="var(--success, #22c55e)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--success, #22c55e)" strokeWidth={1} />
                         <Bar dataKey="losing" fill="var(--danger, #ef4444)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--danger, #ef4444)" strokeWidth={1} />
                         {useBrush && (
@@ -2418,9 +2418,9 @@ export default function Analytics() {
                     <ResponsiveContainer width="100%" height={useBrush ? STRATEGY_CHART_HEIGHT + 40 : STRATEGY_CHART_HEIGHT}>
                       <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                         <YAxis stroke="var(--text-secondary)" tickFormatter={(v) => typeof v === "number" ? (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v)) : String(v)} />
-                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [typeof value === "number" ? formatWithCommas(value) : value, "Profit"]} />
+                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [(typeof value === "number" ? formatWithCommas(value) : value) as ReactNode, "Profit"]} />
                         <Bar dataKey="profit" fillOpacity={BAR_FILL_OPACITY} strokeWidth={1}>
                           {visibleSlice.map((entry, index) => (
                             <Cell key={`cell-${index}`} fill={entry.profit >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} stroke={entry.profit >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} />
@@ -2703,9 +2703,9 @@ export default function Analytics() {
                     <ResponsiveContainer width="100%" height={useBrush ? STRATEGY_CHART_HEIGHT + 40 : STRATEGY_CHART_HEIGHT}>
                       <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Count"]} />
+                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, "Count"]} />
                         <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
                         {useBrush && (
                           <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setEmotionTypeBrushStart(r.startIndex); setEmotionTypeBrushEnd(r.endIndex); } }} />
@@ -2734,9 +2734,9 @@ export default function Analytics() {
                     <ResponsiveContainer width="100%" height={useBrush ? STRATEGY_CHART_HEIGHT + 40 : STRATEGY_CHART_HEIGHT}>
                       <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis dataKey="month" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                        <XAxis dataKey="month" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                         <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "States"]} />
+                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, "States"]} />
                         <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
                         {useBrush && (
                           <Brush dataKey="month" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setEmotionTimeBrushStart(r.startIndex); setEmotionTimeBrushEnd(r.endIndex); } }} />
@@ -2765,9 +2765,9 @@ export default function Analytics() {
                     <ResponsiveContainer width="100%" height={useBrush ? STRATEGY_CHART_HEIGHT + 40 : STRATEGY_CHART_HEIGHT}>
                       <BarChart data={d} margin={STRATEGY_CHART_MARGIN}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                         <YAxis stroke="var(--text-secondary)" domain={[0, 10]} allowDecimals={true} />
-                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [typeof value === "number" ? value.toFixed(1) : value, "Avg intensity"]} />
+                        <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [(typeof value === "number" ? value.toFixed(1) : value) as ReactNode, "Avg intensity"]} />
                         <Bar dataKey="avgIntensity" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
                         {useBrush && (
                           <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" data={d} gap={1} startIndex={start} endIndex={end} onChange={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setEmotionIntensityBrushStart(r.startIndex); setEmotionIntensityBrushEnd(r.endIndex); } }} />
@@ -2855,9 +2855,9 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height={EXPANDED_CHART_HEIGHT}>
                   <BarChart data={dailyPnlDistributionData} margin={{ top: 8, right: 8, left: 0, bottom: 72 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="range" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={56} interval={0} />
+                    <XAxis dataKey="range" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={56} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} label={{ value: "Number of days", angle: -90, position: "insideLeft", style: { fill: "var(--text-secondary)", fontSize: 12 } }} />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Days"]} labelFormatter={(label) => `P&L range: ${label}`} />
+                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, "Days"]} labelFormatter={(label) => `P&L range: ${label}`} />
                     <Bar dataKey="count" fillOpacity={BAR_FILL_OPACITY} strokeWidth={1}>
                       {dailyPnlDistributionData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.isPositive ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} stroke={entry.isPositive ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} />
@@ -2870,9 +2870,9 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={tradeFindingsData.coverageChartData} margin={{ top: 8, right: 8, left: 0, bottom: 48 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Count"]} />
+                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, "Count"]} />
                     <Bar dataKey="value" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -2900,9 +2900,9 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
                   <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="symbol" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                    <XAxis dataKey="symbol" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Trades"]} />
+                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, "Trades"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -2941,9 +2941,9 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
                   <BarChart data={visibleSlice} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" tickFormatter={(v) => typeof v === "number" ? (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v)) : String(v)} />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [typeof value === "number" ? formatWithCommas(value) : value, "Net P&L"]} />
+                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [(typeof value === "number" ? formatWithCommas(value) : value) as ReactNode, "Net P&L"]} />
                     <Bar dataKey="value" fillOpacity={BAR_FILL_OPACITY} strokeWidth={1}>
                       {visibleSlice.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.value >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} stroke={entry.value >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} />
@@ -2986,9 +2986,9 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
                   <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Trades"]} />
+                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, "Trades"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -3027,9 +3027,9 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
                   <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, ""]} labelFormatter={(label) => `${label} (Winning / Losing)`} />
+                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, ""]} labelFormatter={(label) => `${label} (Winning / Losing)`} />
                     <Bar dataKey="winning" fill="var(--success, #22c55e)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--success, #22c55e)" strokeWidth={1} />
                     <Bar dataKey="losing" fill="var(--danger, #ef4444)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--danger, #ef4444)" strokeWidth={1} />
                   </BarChart>
@@ -3069,9 +3069,9 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
                   <BarChart data={visibleSlice} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" tickFormatter={(v) => typeof v === "number" ? (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v)) : String(v)} />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [typeof value === "number" ? formatWithCommas(value) : value, "Profit"]} />
+                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [(typeof value === "number" ? formatWithCommas(value) : value) as ReactNode, "Profit"]} />
                     <Bar dataKey="profit" fillOpacity={BAR_FILL_OPACITY} strokeWidth={1}>
                       {visibleSlice.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.profit >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} stroke={entry.profit >= 0 ? "var(--success, #22c55e)" : "var(--danger, #ef4444)"} />
@@ -3114,9 +3114,9 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
                   <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="month" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                    <XAxis dataKey="month" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Entries"]} />
+                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, "Entries"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -3155,9 +3155,9 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
                   <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="position" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                    <XAxis dataKey="position" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Trades"]} />
+                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, "Trades"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -3196,9 +3196,9 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
                   <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="outcome" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                    <XAxis dataKey="outcome" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Trades"]} />
+                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, "Trades"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -3237,9 +3237,9 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
                   <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "Count"]} />
+                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, "Count"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -3278,9 +3278,9 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
                   <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="month" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                    <XAxis dataKey="month" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" allowDecimals={false} />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value, "States"]} />
+                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [value as ReactNode, "States"]} />
                     <Bar dataKey="count" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -3319,9 +3319,9 @@ export default function Analytics() {
                 <ResponsiveContainer width="100%" height={useBrush ? EXPANDED_CHART_HEIGHT + 44 : EXPANDED_CHART_HEIGHT}>
                   <BarChart data={displayData} margin={STRATEGY_CHART_MARGIN}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<StrategyChartTick />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
+                    <XAxis dataKey="name" stroke="var(--text-secondary)" tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => <StrategyChartTick x={props.x ?? 0} y={props.y ?? 0} payload={props.payload} />} height={STRATEGY_XAXIS_HEIGHT} interval={0} />
                     <YAxis stroke="var(--text-secondary)" domain={[0, 10]} allowDecimals={true} />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [typeof value === "number" ? value.toFixed(1) : value, "Avg intensity"]} />
+                    <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }} formatter={(value: unknown) => [(typeof value === "number" ? value.toFixed(1) : value) as ReactNode, "Avg intensity"]} />
                     <Bar dataKey="avgIntensity" fill="var(--accent)" fillOpacity={BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} />
                   </BarChart>
                 </ResponsiveContainer>
