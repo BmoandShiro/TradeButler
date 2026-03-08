@@ -3170,12 +3170,13 @@ export default function Dashboard() {
     };
   }, [layoutsMenuOpen, organizeMenuOpen]);
 
-  type OrganizeOption = "metrics-first" | "sections-first" | "default";
+  type OrganizeOption = "metrics-first" | "sections-first" | "default" | "reset-layout";
   const applyOrganizeOrder = (option: OrganizeOption) => {
     const metricIds = sortedMetrics.map((m) => m.id);
     const sectionIds = sectionOrder.filter((id) => sectionVisible(id));
+    let order: string[];
     if (option === "metrics-first") {
-      const order = [...metricIds, ...sectionIds];
+      order = [...metricIds, ...sectionIds];
       setMergedDisplayOrder(order);
       setMetricCardOrder(metricIds);
       setSectionOrder((prev) => {
@@ -3186,7 +3187,7 @@ export default function Dashboard() {
       localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(order));
       localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(metricIds));
     } else if (option === "sections-first") {
-      const order = [...sectionIds, ...metricIds];
+      order = [...sectionIds, ...metricIds];
       setMergedDisplayOrder(order);
       setMetricCardOrder(metricIds);
       setSectionOrder((prev) => {
@@ -3196,13 +3197,37 @@ export default function Dashboard() {
       });
       localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(order));
       localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(metricIds));
-    } else {
+    } else if (option === "reset-layout") {
+      order = [...metricIds, ...defaultSectionOrder.filter((id) => sectionVisible(id))];
       setMergedDisplayOrder(null);
       setMetricCardOrder((prev) => prev.length > 0 ? prev : metricIds);
       setSectionOrder(defaultSectionOrder);
       localStorage.removeItem(DASHBOARD_DISPLAY_ORDER_KEY);
       localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(metricIds));
       localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(defaultSectionOrder));
+      setLockedSlotAssignments(null);
+      localStorage.removeItem(DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY);
+      setLockedPlacements(null);
+      localStorage.removeItem(DASHBOARD_LOCKED_PLACEMENTS_KEY);
+      setOrganizeMenuOpen(false);
+      return;
+    } else {
+      const defaultSectionIds = defaultSectionOrder.filter((id) => sectionVisible(id));
+      order = [...metricIds, ...defaultSectionIds];
+      setMergedDisplayOrder(null);
+      setMetricCardOrder((prev) => prev.length > 0 ? prev : metricIds);
+      setSectionOrder(defaultSectionOrder);
+      localStorage.removeItem(DASHBOARD_DISPLAY_ORDER_KEY);
+      localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(metricIds));
+      localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(defaultSectionOrder));
+    }
+    if (layoutLocked) {
+      const numEmptySlots = Math.max(4, 3 * lockedGridColumns);
+      const newSlots = [...order, ...Array(numEmptySlots).fill(null)];
+      setLockedSlotAssignments(newSlots);
+      localStorage.setItem(DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY, JSON.stringify(newSlots));
+      setLockedPlacements(null);
+      localStorage.removeItem(DASHBOARD_LOCKED_PLACEMENTS_KEY);
     }
     setOrganizeMenuOpen(false);
   };
@@ -3750,14 +3775,17 @@ export default function Dashboard() {
                       left: organizeMenuAnchor.left,
                       backgroundColor: "var(--bg-secondary)",
                       border: "1px solid var(--border-color)",
-                      borderRadius: "8px",
-                      padding: "6px 0",
+                      borderRadius: "10px",
+                      padding: "8px 0",
                       boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                       zIndex: 99999,
-                      minWidth: "240px",
+                      minWidth: "260px",
                     }}
                     onClick={(e) => e.stopPropagation()}
                   >
+                    <div style={{ padding: "6px 12px 4px", fontSize: "11px", fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                      Display order
+                    </div>
                     <button
                       onClick={() => applyOrganizeOrder("metrics-first")}
                       style={{
@@ -3770,6 +3798,8 @@ export default function Dashboard() {
                         color: "var(--text-primary)",
                         fontSize: "13px",
                       }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-tertiary)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
                     >
                       Metrics first, then sections
                     </button>
@@ -3785,6 +3815,8 @@ export default function Dashboard() {
                         color: "var(--text-primary)",
                         fontSize: "13px",
                       }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-tertiary)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
                     >
                       Sections first, then metrics
                     </button>
@@ -3800,8 +3832,61 @@ export default function Dashboard() {
                         color: "var(--text-primary)",
                         fontSize: "13px",
                       }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-tertiary)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
                     >
                       Default order
+                    </button>
+                    {layoutLocked && (
+                      <>
+                        <div style={{ borderTop: "1px solid var(--border-color)", margin: "6px 0" }} />
+                        <div style={{ padding: "6px 12px 4px", fontSize: "11px", fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                          Grid columns
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", padding: "6px 12px 8px" }}>
+                          {[2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                            <button
+                              key={n}
+                              onClick={() => {
+                                setLockedGridColumns(n);
+                                localStorage.setItem(DASHBOARD_MAX_COLUMNS_KEY, String(n));
+                              }}
+                              style={{
+                                minWidth: "28px",
+                                padding: "4px 6px",
+                                fontSize: "12px",
+                                fontWeight: lockedGridColumns === n ? 600 : 400,
+                                background: lockedGridColumns === n ? "color-mix(in srgb, var(--accent) 18%, var(--bg-secondary))" : "var(--bg-tertiary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "6px",
+                                color: lockedGridColumns === n ? "var(--accent)" : "var(--text-primary)",
+                                cursor: "pointer",
+                              }}
+                            >
+                              {n}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                    <div style={{ borderTop: "1px solid var(--border-color)", margin: "6px 0" }} />
+                    <button
+                      onClick={() => applyOrganizeOrder("reset-layout")}
+                      style={{
+                        width: "100%",
+                        textAlign: "left",
+                        background: "transparent",
+                        border: "none",
+                        padding: "8px 12px",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        fontSize: "13px",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-tertiary)"; e.currentTarget.style.color = "var(--text-primary)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--text-secondary)"; }}
+                      title="Clear custom order and grid positions"
+                    >
+                      Reset layout
                     </button>
                   </div>,
                   document.body
