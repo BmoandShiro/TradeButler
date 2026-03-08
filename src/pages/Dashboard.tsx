@@ -2269,6 +2269,9 @@ export default function Dashboard() {
   }, [layoutLocked]);
   const lockedGridRef = useRef<HTMLDivElement | null>(null);
 
+  /** When layout is locked, slot assignments preserve gaps (empty slots). Null = use dense order. */
+  const [lockedSlotAssignments, setLockedSlotAssignments] = useState<(string | null)[] | null>(null);
+
   useEffect(() => {
     if (!layoutLocked) return;
     setLockedColumnWidths((prev) => {
@@ -2337,10 +2340,19 @@ export default function Dashboard() {
       }
       if (targetSlot !== null) {
         const draggedId = active.id as string;
-        const oldIndex = displayOrder.indexOf(draggedId);
-        if (oldIndex === -1) return;
-        const toIndex = Math.min(targetSlot, displayOrder.length - 1);
-        const newOrder = arrayMove([...displayOrder], oldIndex, toIndex);
+        const numEmptySlots = Math.max(lockedGridColumns, 4);
+        const totalSlots = displayOrder.length + numEmptySlots;
+        const effectiveSlots = lockedSlotAssignments && lockedSlotAssignments.length === totalSlots
+          ? lockedSlotAssignments
+          : [...displayOrder, ...Array(numEmptySlots).fill(null)];
+        const clampedTarget = Math.min(targetSlot, totalSlots - 1);
+        const oldSlot = effectiveSlots.indexOf(draggedId);
+        if (oldSlot === -1) return;
+        const newSlots = [...effectiveSlots];
+        newSlots[oldSlot] = null;
+        newSlots[clampedTarget] = draggedId;
+        setLockedSlotAssignments(newSlots);
+        const newOrder = newSlots.filter((id): id is string => id != null);
         setMergedDisplayOrder(newOrder);
         localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(newOrder));
         setMetricCardOrder((prev) => {
@@ -2360,7 +2372,7 @@ export default function Dashboard() {
         setMetricInstances((prev) =>
           prev.map((inst) => ({
             ...inst,
-            slotIndex: newOrder.indexOf(inst.instanceId) >= 0 ? newOrder.indexOf(inst.instanceId) : inst.slotIndex,
+            slotIndex: newSlots.indexOf(inst.instanceId) >= 0 ? newSlots.indexOf(inst.instanceId) : inst.slotIndex,
           }))
         );
         return;
@@ -2425,10 +2437,19 @@ export default function Dashboard() {
       }
       if (targetSlot !== null) {
         const draggedId = active.id as string;
-        const oldIndex = order.indexOf(draggedId);
-        if (oldIndex === -1) return;
-        const toIndex = Math.min(targetSlot, order.length - 1);
-        const newOrder = arrayMove([...order], oldIndex, toIndex);
+        const numEmptySlots = Math.max(lockedGridColumns, 4);
+        const totalSlots = order.length + numEmptySlots;
+        const effectiveSlots = lockedSlotAssignments && lockedSlotAssignments.length === totalSlots
+          ? lockedSlotAssignments
+          : [...order, ...Array(numEmptySlots).fill(null)];
+        const clampedTarget = Math.min(targetSlot, totalSlots - 1);
+        const oldSlot = effectiveSlots.indexOf(draggedId);
+        if (oldSlot === -1) return;
+        const newSlots = [...effectiveSlots];
+        newSlots[oldSlot] = null;
+        newSlots[clampedTarget] = draggedId;
+        setLockedSlotAssignments(newSlots);
+        const newOrder = newSlots.filter((id): id is string => id != null);
         setMetricCardOrder((prev) => {
           const kept = prev.filter((id) => !newOrder.includes(id) && !isSectionId(id));
           const finalOrder = [...newOrder, ...kept];
@@ -2438,7 +2459,7 @@ export default function Dashboard() {
         setMetricInstances((prev) =>
           prev.map((inst) => ({
             ...inst,
-            slotIndex: newOrder.indexOf(inst.instanceId) >= 0 ? newOrder.indexOf(inst.instanceId) : inst.slotIndex,
+            slotIndex: newSlots.indexOf(inst.instanceId) >= 0 ? newSlots.indexOf(inst.instanceId) : inst.slotIndex,
           }))
         );
         return;
@@ -2771,6 +2792,21 @@ export default function Dashboard() {
       localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(mergedDisplayOrder));
     }
   }, [mergedDisplayOrder]);
+
+  useEffect(() => {
+    if (!layoutLocked) {
+      setLockedSlotAssignments(null);
+      return;
+    }
+    const split = localStorage.getItem(DASHBOARD_SPLIT_GRID_KEY) === "true";
+    const numEmptySlots = Math.max(lockedGridColumns, 4);
+    const currentOrder = split ? sortedMetrics.map((m) => m.id) : displayOrder;
+    const totalSlots = currentOrder.length + numEmptySlots;
+    setLockedSlotAssignments((prev) => {
+      if (prev !== null && prev.length === totalSlots) return prev;
+      return [...currentOrder, ...Array(numEmptySlots).fill(null)];
+    });
+  }, [layoutLocked, lockedGridColumns, displayOrder, sortedMetrics]);
 
   useEffect(() => {
     localStorage.setItem(DASHBOARD_LAYOUT_PRESETS_KEY, JSON.stringify(layoutPresets));
@@ -3615,6 +3651,9 @@ export default function Dashboard() {
         if (layoutLocked) {
           const numEmptySlots = Math.max(gridColumns, 4);
           const totalSlots = order.length + numEmptySlots;
+          const effectiveSlotAssignments = lockedSlotAssignments && lockedSlotAssignments.length === totalSlots
+            ? lockedSlotAssignments
+            : [...order, ...Array(numEmptySlots).fill(null)];
           const columnWidths = lockedColumnWidths.length === gridColumns
             ? lockedColumnWidths
             : Array.from({ length: gridColumns }, () => 1);
@@ -3622,7 +3661,7 @@ export default function Dashboard() {
 
           const slotSpans: number[] = [];
           for (let i = 0; i < totalSlots; i++) {
-            const id = i < order.length ? order[i] : null;
+            const id = effectiveSlotAssignments[i] ?? null;
             let span = 1;
             if (id) {
               if (isSectionId(id)) {
@@ -3705,6 +3744,7 @@ export default function Dashboard() {
             window.addEventListener("mouseup", onUp);
           };
 
+          const sortableIds = effectiveSlotAssignments.filter((id): id is string => id != null);
           return (
             <DndContext
               sensors={sensors}
@@ -3712,7 +3752,7 @@ export default function Dashboard() {
               onDragEnd={onDragEnd}
             >
               <SortableContext
-                items={order}
+                items={sortableIds}
                 strategy={rectSortingStrategy}
               >
                 <div
@@ -3758,7 +3798,7 @@ export default function Dashboard() {
                     </div>
                   ))}
                   {Array.from({ length: totalSlots }, (_, i) => {
-                    const id = i < order.length ? order[i] : null;
+                    const id = effectiveSlotAssignments[i] ?? null;
                     const span = slotSpans[i];
                     const { row, col } = placements[i];
                     const slotStyle: React.CSSProperties = {
