@@ -37,8 +37,6 @@ import {
   GripVertical,
   Copy,
   Trash2,
-  Lock,
-  Unlock,
   RotateCcw,
   LayoutDashboard,
   ListOrdered,
@@ -362,7 +360,6 @@ const DASHBOARD_SECTION_SIZES_KEY = "tradebutler_dashboard_section_sizes";
 const OPEN_POSITIONS_DISPLAY_MODE_KEY = "tradebutler_open_positions_display_mode";
 const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
 const METRIC_INSTANCES_KEY = "tradebutler_metric_instances";
-const LAYOUT_LOCKED_KEY = "tradebutler_dashboard_layout_locked";
 const DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY = "tradebutler_dashboard_locked_column_widths";
 const MAX_POSITION_CHART_COLUMN_SPAN = 24;
 const MAX_ROW_SPAN = 32;
@@ -2348,7 +2345,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [showMetricsConfig, setShowMetricsConfig] = useState(false);
   const [configKey, setConfigKey] = useState(0); // Force re-render when config changes
-  const [layoutLocked, setLayoutLocked] = useState(() => localStorage.getItem(LAYOUT_LOCKED_KEY) === "true");
+  const layoutLocked = true;
   const [expandedRecentTrades, setExpandedRecentTrades] = useState<Set<number>>(new Set());
   const [expandedStrategies, setExpandedStrategies] = useState<Set<number | string>>(new Set());
   const [strategyPairs, setStrategyPairs] = useState<Map<number | string, PairedTrade[]>>(new Map());
@@ -3499,59 +3496,32 @@ export default function Dashboard() {
           >
             <h1 style={{ fontSize: "32px", fontWeight: "bold" }}>Dashboard</h1>
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <button
-                onClick={() => {
-                  setLayoutLocked((prev) => {
-                    const next = !prev;
-                    localStorage.setItem(LAYOUT_LOCKED_KEY, next ? "true" : "false");
-                    return next;
-                  });
-                }}
-                title={layoutLocked ? "Unlock layout (allow reflow on resize)" : "Lock layout (keep arrangement on resize)"}
-                style={{
-                  background: layoutLocked ? "color-mix(in srgb, var(--accent) 20%, var(--bg-secondary))" : "var(--bg-secondary)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                  padding: "10px 12px",
-                  color: layoutLocked ? "var(--accent)" : "var(--text-primary)",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                {layoutLocked ? <Lock size={18} /> : <Unlock size={18} />}
-              </button>
-              {layoutLocked && (
-                <>
-                  <div style={{ display: "flex", alignItems: "center", gap: "4px", padding: "0 4px" }}>
-                    <span style={{ fontSize: "12px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>Columns:</span>
-                    {[2, 3, 4, 5, 6, 8, 10].map((n) => (
-                      <button
-                        key={n}
-                        onClick={() => {
-                          setLockedGridColumns(n);
-                          localStorage.setItem(DASHBOARD_MAX_COLUMNS_KEY, String(n));
-                        }}
-                        title={`${n} columns`}
-                        style={{
-                          minWidth: "28px",
-                          padding: "6px 8px",
-                          fontSize: "12px",
-                          fontWeight: lockedGridColumns === n ? "600" : "400",
-                          background: lockedGridColumns === n ? "color-mix(in srgb, var(--accent) 18%, var(--bg-secondary))" : "var(--bg-secondary)",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "6px",
-                          color: lockedGridColumns === n ? "var(--accent)" : "var(--text-primary)",
-                          cursor: "pointer",
-                        }}
-                      >
-                        {n}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
+              <div style={{ display: "flex", alignItems: "center", gap: "4px", padding: "0 4px" }}>
+                <span style={{ fontSize: "12px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>Columns:</span>
+                {[2, 3, 4, 5, 6, 8, 10].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => {
+                      setLockedGridColumns(n);
+                      localStorage.setItem(DASHBOARD_MAX_COLUMNS_KEY, String(n));
+                    }}
+                    title={`${n} columns`}
+                    style={{
+                      minWidth: "28px",
+                      padding: "6px 8px",
+                      fontSize: "12px",
+                      fontWeight: lockedGridColumns === n ? "600" : "400",
+                      background: lockedGridColumns === n ? "color-mix(in srgb, var(--accent) 18%, var(--bg-secondary))" : "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "6px",
+                      color: lockedGridColumns === n ? "var(--accent)" : "var(--text-primary)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
               <div style={{ position: "relative" }}>
                 <button
                   data-layouts-button
