@@ -7187,7 +7187,7 @@ pub struct VersionInfo {
     pub latest: String,
     pub is_up_to_date: bool,
     pub download_url: Option<String>,
-    /// Asset filename (e.g. TradeButler-1.3.2.msi) for installer temp file; API URL does not contain it.
+    /// Asset filename (e.g. TradeButler-1.3.3.msi) for installer temp file; API URL does not contain it.
     pub download_filename: Option<String>,
     pub release_notes: Option<String>,
     pub is_installer: bool,

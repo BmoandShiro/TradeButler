@@ -65,6 +65,15 @@ npm run tauri:build
 
 The built application will be in `src-tauri/target/release/`
 
+### Why does the dashboard look different in dev vs built?
+
+**Dev** (`dev.bat` / `tauri:dev`) loads the app from `http://localhost:1420`. **Built** (e.g. `TradeButler.exe`) loads the bundled app from a different origin (the Tauri WebView). Each origin has its **own `localStorage`**, so:
+
+- Dashboard layout (widget order, columns, locked positions, Organize choices) is stored separately in each.
+- Data mode (Demo / Real / Paper) and other UI preferences are also per-origin.
+
+So the first time you run the built app it uses default layout; dev may have different saved layout from earlier use. To get the same layout in both, use **Organize** in each and pick the same option (e.g. "Metrics first, then sections" or "Default order"), and set the same column count. Layout preferences do not sync between dev and built.
+
 ## CSV Import Format
 
 Your CSV file should have the following columns (headers required):

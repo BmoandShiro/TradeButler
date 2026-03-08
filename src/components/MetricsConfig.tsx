@@ -64,6 +64,20 @@ export const DASHBOARD_LOCKED_ROW_HEIGHT_KEY = "tradebutler_dashboard_locked_row
 export const DASHBOARD_SPLIT_GRID_KEY = "tradebutler_dashboard_split_grid";
 export const DASHBOARD_SECTIONS_ON_TOP_KEY = "tradebutler_dashboard_sections_on_top";
 
+/** Default values applied when "Reset layout" is used (Organize menu). */
+export const DEFAULT_LAYOUT = {
+  maxMetricRows: 0,
+  maxColumns: 5,
+  lockedRowHeight: 100,
+  splitGrid: false,
+  metricsToSectionsGap: 0,
+  sectionsGridGap: 12,
+  sectionsGridMinWidth: 280,
+  metricsGridGap: 0,
+  sectionsGridMarginBottom: 16,
+  dashboardPadding: 30,
+} as const;
+
 export function useMetricsConfig() {
   const [metrics, setMetrics] = useState<MetricConfig[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -172,10 +186,17 @@ interface MetricsConfigPanelProps {
   onClose: () => void;
   onConfigChange?: () => void; // Callback when config changes
   onAddMetricInstance?: (baseMetricId: string) => void; // Callback to add new metric instance
+  /** When provided, use these instead of internal hook so Panel and parent share the same source of truth */
+  metrics?: MetricConfig[];
+  onToggleMetric?: (id: string) => void;
+  onResetToDefaults?: () => void;
 }
 
-export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetricInstance }: MetricsConfigPanelProps) {
-  const { metrics, resetToDefaults } = useMetricsConfig();
+export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetricInstance, metrics: propsMetrics, onToggleMetric: propsToggleMetric, onResetToDefaults: propsResetToDefaults }: MetricsConfigPanelProps) {
+  const hook = useMetricsConfig();
+  const metrics = propsMetrics ?? hook.metrics;
+  const toggleMetric = propsToggleMetric ?? hook.toggleMetric;
+  const resetToDefaults = propsResetToDefaults ?? hook.resetToDefaults;
   
   // Color range state
   const [colorRange, setColorRange] = useState(() => {
@@ -210,7 +231,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       const n = parseInt(saved, 10);
       if (n >= 0 && n <= 10) return n;
     }
-    return 0;
+    return DEFAULT_LAYOUT.maxMetricRows;
   });
   const [maxColumns, setMaxColumns] = useState(() => {
     const saved = localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY);
@@ -218,7 +239,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       const n = parseInt(saved, 10);
       if (n >= 0 && n <= 10) return n;
     }
-    return 0;
+    return DEFAULT_LAYOUT.maxColumns;
   });
 
   const handleMaxMetricRowsChange = (value: number) => {
@@ -238,7 +259,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       const n = parseInt(saved, 10);
       if (n >= 40 && n <= 400) return n;
     }
-    return 100;
+    return DEFAULT_LAYOUT.lockedRowHeight;
   });
   const handleLockedRowHeightChange = (value: number) => {
     setLockedRowHeight(value);
@@ -246,7 +267,11 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
     if (onConfigChange) onConfigChange();
   };
 
-  const [splitGrid, setSplitGrid] = useState(() => localStorage.getItem(DASHBOARD_SPLIT_GRID_KEY) === "true");
+  const [splitGrid, setSplitGrid] = useState(() => {
+    const saved = localStorage.getItem(DASHBOARD_SPLIT_GRID_KEY);
+    if (saved !== null) return saved === "true";
+    return DEFAULT_LAYOUT.splitGrid;
+  });
   const [sectionsOnTop, setSectionsOnTop] = useState(() => localStorage.getItem(DASHBOARD_SECTIONS_ON_TOP_KEY) !== "false");
   const handleSplitGridChange = (value: boolean) => {
     setSplitGrid(value);
@@ -266,7 +291,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       const n = parseInt(saved, 10);
       if (n >= 0 && n <= 80) return n;
     }
-    return 12;
+    return DEFAULT_LAYOUT.metricsToSectionsGap;
   });
   const [sectionsGridGap, setSectionsGridGap] = useState(() => {
     const saved = localStorage.getItem(DASHBOARD_SECTIONS_GRID_GAP_KEY);
@@ -274,7 +299,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       const n = parseInt(saved, 10);
       if (n >= 0 && n <= 48) return n;
     }
-    return 20;
+    return DEFAULT_LAYOUT.sectionsGridGap;
   });
   const [sectionsGridMinWidth, setSectionsGridMinWidth] = useState(() => {
     const saved = localStorage.getItem(DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY);
@@ -282,7 +307,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       const n = parseInt(saved, 10);
       if ([280, 320, 360, 400, 480].includes(n)) return n;
     }
-    return 400;
+    return DEFAULT_LAYOUT.sectionsGridMinWidth;
   });
   const [metricsGridGap, setMetricsGridGap] = useState(() => {
     const saved = localStorage.getItem(DASHBOARD_METRICS_GRID_GAP_KEY);
@@ -290,7 +315,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       const n = parseInt(saved, 10);
       if ([0, 4, 8, 12, 16, 20, 24].includes(n)) return n;
     }
-    return 12;
+    return DEFAULT_LAYOUT.metricsGridGap;
   });
   const [sectionsGridMarginBottom, setSectionsGridMarginBottom] = useState(() => {
     const saved = localStorage.getItem(DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY);
@@ -298,7 +323,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       const n = parseInt(saved, 10);
       if (n >= 0 && n <= 80) return n;
     }
-    return 30;
+    return DEFAULT_LAYOUT.sectionsGridMarginBottom;
   });
   const [dashboardPadding, setDashboardPadding] = useState(() => {
     const saved = localStorage.getItem(DASHBOARD_PADDING_KEY);
@@ -306,7 +331,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       const n = parseInt(saved, 10);
       if ([16, 20, 24, 30, 40, 48].includes(n)) return n;
     }
-    return 30;
+    return DEFAULT_LAYOUT.dashboardPadding;
   });
 
   const handleMetricsToSectionsGap = (value: number) => {
@@ -907,7 +932,19 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
                       gap: "8px",
                     }}
                   >
-                    <span style={{ color: "var(--text-primary)", flex: 1 }}>{metric.label}</span>
+                    <label style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1, cursor: "pointer", minWidth: 0 }}>
+                      <input
+                        type="checkbox"
+                        checked={metric.enabled}
+                        onChange={() => {
+                          toggleMetric(metric.id);
+                          onConfigChange?.();
+                        }}
+                        style={{ width: "18px", height: "18px", accentColor: "var(--accent)", flexShrink: 0 }}
+                        title={metric.enabled ? "Hide from dashboard" : "Show on dashboard"}
+                      />
+                      <span style={{ color: "var(--text-primary)" }}>{metric.label}</span>
+                    </label>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

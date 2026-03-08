@@ -976,6 +976,7 @@ export default function Layout({ children }: LayoutProps) {
         data-galaxy-background={useGalaxyBackground ? "true" : "false"}
         style={{
           flex: 1,
+          minHeight: 0,
           overflow: "auto",
           backgroundColor: useGalaxyBackground 
             ? galaxyBgColor 

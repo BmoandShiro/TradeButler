@@ -43,7 +43,7 @@ import {
   ListOrdered,
   Save,
 } from "lucide-react";
-import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY, DASHBOARD_LOCKED_ROW_HEIGHT_KEY, DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY, DASHBOARD_METRICS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY, DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY, DASHBOARD_PADDING_KEY, DASHBOARD_SPLIT_GRID_KEY, DASHBOARD_SECTIONS_ON_TOP_KEY } from "../components/MetricsConfig";
+import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY, DASHBOARD_LOCKED_ROW_HEIGHT_KEY, DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY, DASHBOARD_METRICS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY, DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY, DASHBOARD_PADDING_KEY, DASHBOARD_SPLIT_GRID_KEY, DASHBOARD_SECTIONS_ON_TOP_KEY, DEFAULT_LAYOUT } from "../components/MetricsConfig";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { format } from "date-fns";
 import {
@@ -600,10 +600,11 @@ function SectionCardResizeWrapper({
           right: 0,
           top: 0,
           bottom: 0,
-          width: "8px",
+          width: "10px",
           cursor: "ew-resize",
           background: "transparent",
           pointerEvents: "auto",
+          zIndex: 10,
         }}
       />
       <div
@@ -615,10 +616,11 @@ function SectionCardResizeWrapper({
           left: 0,
           right: 0,
           bottom: 0,
-          height: "8px",
+          height: "14px",
           cursor: "ns-resize",
           background: "transparent",
           pointerEvents: "auto",
+          zIndex: 10,
         }}
       />
     </div>
@@ -2467,7 +2469,7 @@ export default function Dashboard() {
   const [organizeMenuOpen, setOrganizeMenuOpen] = useState(false);
   const [organizeMenuAnchor, setOrganizeMenuAnchor] = useState<{ top: number; left: number } | null>(null);
   const [lockedGridColumns, setLockedGridColumns] = useState(() =>
-    Math.max(2, Math.min(10, parseInt(localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY) || "4", 10)))
+    Math.max(2, Math.min(10, parseInt(localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY) || String(DEFAULT_LAYOUT.maxColumns), 10)))
   );
   const [lockedColumnWidths, setLockedColumnWidths] = useState<number[]>(() => {
     const saved = localStorage.getItem(DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY);
@@ -2485,7 +2487,7 @@ export default function Dashboard() {
   });
   useEffect(() => {
     if (!layoutLocked) return;
-    const n = parseInt(localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY) || "4", 10);
+    const n = parseInt(localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY) || String(DEFAULT_LAYOUT.maxColumns), 10);
     setLockedGridColumns((prev) => (n >= 2 && n <= 10 ? n : prev));
   }, [layoutLocked]);
   const lockedGridRef = useRef<HTMLDivElement | null>(null);
@@ -3209,7 +3211,19 @@ export default function Dashboard() {
       localStorage.removeItem(DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY);
       setLockedPlacements(null);
       localStorage.removeItem(DASHBOARD_LOCKED_PLACEMENTS_KEY);
+      setLockedGridColumns(DEFAULT_LAYOUT.maxColumns);
+      localStorage.setItem(DASHBOARD_MAX_METRIC_ROWS_KEY, String(DEFAULT_LAYOUT.maxMetricRows));
+      localStorage.setItem(DASHBOARD_MAX_COLUMNS_KEY, String(DEFAULT_LAYOUT.maxColumns));
+      localStorage.setItem(DASHBOARD_LOCKED_ROW_HEIGHT_KEY, String(DEFAULT_LAYOUT.lockedRowHeight));
+      localStorage.setItem(DASHBOARD_SPLIT_GRID_KEY, DEFAULT_LAYOUT.splitGrid ? "true" : "false");
+      localStorage.setItem(DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY, String(DEFAULT_LAYOUT.metricsToSectionsGap));
+      localStorage.setItem(DASHBOARD_SECTIONS_GRID_GAP_KEY, String(DEFAULT_LAYOUT.sectionsGridGap));
+      localStorage.setItem(DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY, String(DEFAULT_LAYOUT.sectionsGridMinWidth));
+      localStorage.setItem(DASHBOARD_METRICS_GRID_GAP_KEY, String(DEFAULT_LAYOUT.metricsGridGap));
+      localStorage.setItem(DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY, String(DEFAULT_LAYOUT.sectionsGridMarginBottom));
+      localStorage.setItem(DASHBOARD_PADDING_KEY, String(DEFAULT_LAYOUT.dashboardPadding));
       setOrganizeMenuOpen(false);
+      setConfigKey((k) => k + 1);
       return;
     } else {
       const defaultSectionIds = defaultSectionOrder.filter((id) => sectionVisible(id));
@@ -3573,23 +3587,23 @@ export default function Dashboard() {
   const sectionsOnTop = localStorage.getItem(DASHBOARD_SECTIONS_ON_TOP_KEY) !== "false";
 
   const metricsToSectionsGapPx = (() => {
-    const n = parseInt(localStorage.getItem(DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY) || "12", 10);
-    if (Number.isNaN(n) || n < 0) return 12;
+    const n = parseInt(localStorage.getItem(DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY) ?? String(DEFAULT_LAYOUT.metricsToSectionsGap), 10);
+    if (Number.isNaN(n) || n < 0) return DEFAULT_LAYOUT.metricsToSectionsGap;
     return Math.min(80, n);
   })();
   const metricsGridGapPx = (() => {
-    const n = parseInt(localStorage.getItem(DASHBOARD_METRICS_GRID_GAP_KEY) || "12", 10);
-    return [0, 4, 8, 12, 16, 20, 24].includes(n) ? n : 12;
+    const n = parseInt(localStorage.getItem(DASHBOARD_METRICS_GRID_GAP_KEY) ?? String(DEFAULT_LAYOUT.metricsGridGap), 10);
+    return [0, 4, 8, 12, 16, 20, 24].includes(n) ? n : DEFAULT_LAYOUT.metricsGridGap;
   })();
-  const sectionsGridGapPx = Math.min(48, Math.max(0, parseInt(localStorage.getItem(DASHBOARD_SECTIONS_GRID_GAP_KEY) || "20", 10)) || 20);
+  const sectionsGridGapPx = Math.min(48, Math.max(0, parseInt(localStorage.getItem(DASHBOARD_SECTIONS_GRID_GAP_KEY) ?? String(DEFAULT_LAYOUT.sectionsGridGap), 10)) || DEFAULT_LAYOUT.sectionsGridGap);
   const sectionsGridMinWidthPx = (() => {
-    const n = parseInt(localStorage.getItem(DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY) || "400", 10);
-    return [280, 320, 360, 400, 480].includes(n) ? n : 400;
+    const n = parseInt(localStorage.getItem(DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY) ?? String(DEFAULT_LAYOUT.sectionsGridMinWidth), 10);
+    return [280, 320, 360, 400, 480].includes(n) ? n : DEFAULT_LAYOUT.sectionsGridMinWidth;
   })();
-  const sectionsGridMarginBottomPx = Math.min(80, Math.max(0, parseInt(localStorage.getItem(DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY) || "30", 10)) || 30);
+  const sectionsGridMarginBottomPx = Math.min(80, Math.max(0, parseInt(localStorage.getItem(DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY) ?? String(DEFAULT_LAYOUT.sectionsGridMarginBottom), 10)) || DEFAULT_LAYOUT.sectionsGridMarginBottom);
   const dashboardPaddingPx = (() => {
-    const n = parseInt(localStorage.getItem(DASHBOARD_PADDING_KEY) || "30", 10);
-    return [16, 20, 24, 30, 40, 48].includes(n) ? n : 30;
+    const n = parseInt(localStorage.getItem(DASHBOARD_PADDING_KEY) ?? String(DEFAULT_LAYOUT.dashboardPadding), 10);
+    return [16, 20, 24, 30, 40, 48].includes(n) ? n : DEFAULT_LAYOUT.dashboardPadding;
   })();
 
   return (
@@ -3952,8 +3966,8 @@ export default function Dashboard() {
       <div style={{ ...(splitGrid ? { order: 1 } : {}), minWidth: 0 }}>
       {((order: string[], onDragEnd: (e: DragEndEvent) => void) => {
         moveInLockedGridRef.current = null;
-        const maxMetricRows = Math.max(0, parseInt(localStorage.getItem(DASHBOARD_MAX_METRIC_ROWS_KEY) || "0", 10));
-        const maxColumns = Math.max(0, Math.min(10, parseInt(localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY) || "0", 10)));
+        const maxMetricRows = Math.max(0, parseInt(localStorage.getItem(DASHBOARD_MAX_METRIC_ROWS_KEY) ?? String(DEFAULT_LAYOUT.maxMetricRows), 10));
+        const maxColumns = Math.max(0, Math.min(10, parseInt(localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY) ?? String(DEFAULT_LAYOUT.maxColumns), 10)));
         const useGridLayout = layoutLocked || maxMetricRows > 0 || maxColumns > 0;
         const gridColumns = useGridLayout
           ? (layoutLocked
@@ -6419,6 +6433,15 @@ export default function Dashboard() {
             }}
             onConfigChange={() => setConfigKey(prev => prev + 1)}
             onAddMetricInstance={addMetricInstance}
+            metrics={metricsConfigHook.metrics}
+            onToggleMetric={(id) => {
+              metricsConfigHook.toggleMetric(id);
+              setConfigKey(prev => prev + 1);
+            }}
+            onResetToDefaults={() => {
+              metricsConfigHook.resetToDefaults();
+              setConfigKey(prev => prev + 1);
+            }}
           />
         
         {/* Position Group Detail Modal */}
