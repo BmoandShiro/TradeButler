@@ -365,7 +365,7 @@ const LAYOUT_LOCKED_KEY = "tradebutler_dashboard_layout_locked";
 const DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY = "tradebutler_dashboard_locked_column_widths";
 const MAX_POSITION_CHART_COLUMN_SPAN = 12;
 const MIN_COLUMN_FR = 0.2;
-const MIN_ROW_HEIGHT_PX = 60;
+const MIN_ROW_HEIGHT_PX = 40;
 const MAX_ROW_HEIGHT_PX = 400;
 
 function parseGridColumnCount(template: string): number {
@@ -725,14 +725,14 @@ const metricDescriptions: Record<string, { description: string; calculation: str
   },
 };
 
-function DroppableSlot({ id, children, style: slotStyle }: { id: string; children: React.ReactNode; style?: React.CSSProperties }) {
+function DroppableSlot({ id, children, style: slotStyle, fillCell }: { id: string; children: React.ReactNode; style?: React.CSSProperties; fillCell?: boolean }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   const isEmpty = children == null;
   return (
     <div
       ref={setNodeRef}
       style={{
-        minHeight: isEmpty ? "100px" : "120px",
+        ...(fillCell ? { minHeight: 0, height: "100%" } : { minHeight: isEmpty ? "100px" : "120px" }),
         borderRadius: "8px",
         border: isOver ? "2px dashed var(--accent)" : isEmpty ? "1px dashed var(--border-color)" : "1px solid transparent",
         backgroundColor: isOver ? "color-mix(in srgb, var(--accent) 8%, transparent)" : isEmpty ? "color-mix(in srgb, var(--bg-secondary) 0.5, transparent)" : "transparent",
@@ -3350,7 +3350,7 @@ export default function Dashboard() {
   })();
   const metricsGridGapPx = (() => {
     const n = parseInt(localStorage.getItem(DASHBOARD_METRICS_GRID_GAP_KEY) || "12", 10);
-    return [8, 12, 16, 20, 24].includes(n) ? n : 12;
+    return [0, 4, 8, 12, 16, 20, 24].includes(n) ? n : 12;
   })();
   const sectionsGridGapPx = Math.min(48, Math.max(0, parseInt(localStorage.getItem(DASHBOARD_SECTIONS_GRID_GAP_KEY) || "20", 10)) || 20);
   const sectionsGridMinWidthPx = (() => {
@@ -3968,7 +3968,7 @@ export default function Dashboard() {
                     gridTemplateColumns: gridTemplateCols,
                     gridTemplateRows: `6px repeat(${totalRows}, minmax(${lockedRowHeight}px, auto)) 6px`,
                     gap: `${metricsGridGapPx}px`,
-                    marginBottom: `${metricsToSectionsGapPx}px`,
+                    marginBottom: `${Math.max(0, metricsToSectionsGapPx - 6)}px`,
                     alignItems: "stretch",
                     backgroundColor: "var(--bg-primary)",
                     boxSizing: "border-box",
@@ -4013,7 +4013,7 @@ export default function Dashboard() {
                       gridColumn: `${col + 1} / span ${span}`,
                     };
                     return (
-                      <DroppableSlot key={i} id={`metric-slot-${i}`} style={slotStyle}>
+                      <DroppableSlot key={i} id={`metric-slot-${i}`} style={slotStyle} fillCell>
                         {id ? (isSectionId(id) ? (renderSectionCardRef.current ? renderSectionCardRef.current(id) : null) : (() => {
                           const metric = sortedMetrics.find((m) => m.id === id);
                           return metric ? renderCard(metric) : null;

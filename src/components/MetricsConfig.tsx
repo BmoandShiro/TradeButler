@@ -236,7 +236,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
     const saved = localStorage.getItem(DASHBOARD_LOCKED_ROW_HEIGHT_KEY);
     if (saved !== null) {
       const n = parseInt(saved, 10);
-      if (n >= 60 && n <= 400) return n;
+      if (n >= 40 && n <= 400) return n;
     }
     return 100;
   });
@@ -288,7 +288,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
     const saved = localStorage.getItem(DASHBOARD_METRICS_GRID_GAP_KEY);
     if (saved !== null) {
       const n = parseInt(saved, 10);
-      if ([8, 12, 16, 20, 24].includes(n)) return n;
+      if ([0, 4, 8, 12, 16, 20, 24].includes(n)) return n;
     }
     return 12;
   });
@@ -688,12 +688,12 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
                   cursor: "pointer",
                 }}
               >
-                {[60, 80, 100, 120, 140, 160, 200, 240, 280, 320, 400].map((n) => (
+                {[40, 48, 56, 64, 72, 80, 100, 120, 140, 160, 200, 240, 280, 320, 400].map((n) => (
                   <option key={n} value={n}>{n} px</option>
                 ))}
               </select>
               <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
-                Minimum height of each row in the grid when layout is locked. You can also drag the bar at the bottom of the grid to adjust.
+                Minimum height of each row; use 40–56 px for tighter vertical spacing. You can also drag the bar at the bottom of the grid to adjust.
               </div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -764,7 +764,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
                 ))}
               </select>
               <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
-                Use 0 to snap section cards directly under the chart/metric cards with no gap.
+                Use 0 to snap section cards directly under the chart/metric cards with no gap. Same in locked and unlocked layout.
               </div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -811,7 +811,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
               </div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Gap between metric cards (top row)</label>
+              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Gap between metric cards (locked &amp; unlocked)</label>
               <select
                 value={metricsGridGap}
                 onChange={(e) => handleMetricsGridGap(parseInt(e.target.value, 10))}
@@ -825,10 +825,13 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
                   cursor: "pointer",
                 }}
               >
-                {[8, 12, 16, 20, 24].map((n) => (
-                  <option key={n} value={n}>{n} px</option>
+                {[0, 4, 8, 12, 16, 20, 24].map((n) => (
+                  <option key={n} value={n}>{n === 0 ? "0 (tight)" : `${n} px`}</option>
                 ))}
               </select>
+              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                Use 0 or 4 px for minimal spacing between cards in both locked and unlocked layout.
+              </div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
               <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Space below section cards (Trades, Open Positions row)</label>
