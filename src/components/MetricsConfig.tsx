@@ -60,6 +60,9 @@ export const DASHBOARD_SECTIONS_GRID_GAP_KEY = "tradebutler_dashboard_sections_g
 export const DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY = "tradebutler_dashboard_sections_grid_min_width";
 export const DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY = "tradebutler_dashboard_sections_grid_margin_bottom";
 export const DASHBOARD_PADDING_KEY = "tradebutler_dashboard_padding";
+export const DASHBOARD_LOCKED_ROW_HEIGHT_KEY = "tradebutler_dashboard_locked_row_height";
+export const DASHBOARD_SPLIT_GRID_KEY = "tradebutler_dashboard_split_grid";
+export const DASHBOARD_SECTIONS_ON_TOP_KEY = "tradebutler_dashboard_sections_on_top";
 
 export function useMetricsConfig() {
   const [metrics, setMetrics] = useState<MetricConfig[]>(() => {
@@ -226,6 +229,33 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
   const handleMaxColumnsChange = (value: number) => {
     setMaxColumns(value);
     localStorage.setItem(DASHBOARD_MAX_COLUMNS_KEY, String(value));
+    if (onConfigChange) onConfigChange();
+  };
+
+  const [lockedRowHeight, setLockedRowHeight] = useState(() => {
+    const saved = localStorage.getItem(DASHBOARD_LOCKED_ROW_HEIGHT_KEY);
+    if (saved !== null) {
+      const n = parseInt(saved, 10);
+      if (n >= 60 && n <= 400) return n;
+    }
+    return 100;
+  });
+  const handleLockedRowHeightChange = (value: number) => {
+    setLockedRowHeight(value);
+    localStorage.setItem(DASHBOARD_LOCKED_ROW_HEIGHT_KEY, String(value));
+    if (onConfigChange) onConfigChange();
+  };
+
+  const [splitGrid, setSplitGrid] = useState(() => localStorage.getItem(DASHBOARD_SPLIT_GRID_KEY) === "true");
+  const [sectionsOnTop, setSectionsOnTop] = useState(() => localStorage.getItem(DASHBOARD_SECTIONS_ON_TOP_KEY) !== "false");
+  const handleSplitGridChange = (value: boolean) => {
+    setSplitGrid(value);
+    localStorage.setItem(DASHBOARD_SPLIT_GRID_KEY, value ? "true" : "false");
+    if (onConfigChange) onConfigChange();
+  };
+  const handleSectionsOnTopChange = (value: boolean) => {
+    setSectionsOnTop(value);
+    localStorage.setItem(DASHBOARD_SECTIONS_ON_TOP_KEY, value ? "true" : "false");
     if (onConfigChange) onConfigChange();
   };
 
@@ -642,6 +672,65 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
               <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
                 When set, metric cards use a fixed grid with this many columns. With layout locked, resizing the window won’t change the arrangement.
               </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Row height when locked (px)</label>
+              <select
+                value={lockedRowHeight}
+                onChange={(e) => handleLockedRowHeightChange(parseInt(e.target.value, 10))}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  cursor: "pointer",
+                }}
+              >
+                {[60, 80, 100, 120, 140, 160, 200, 240, 280, 320, 400].map((n) => (
+                  <option key={n} value={n}>{n} px</option>
+                ))}
+              </select>
+              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                Minimum height of each row in the grid when layout is locked. You can also drag the bar at the bottom of the grid to adjust.
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Split grid (metrics and sections separate)</label>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={splitGrid}
+                  onChange={(e) => handleSplitGridChange(e.target.checked)}
+                  style={{ width: "18px", height: "18px", accentColor: "var(--accent)" }}
+                />
+                <span style={{ fontSize: "14px", color: "var(--text-primary)" }}>Use separate grids for metrics and sections</span>
+              </label>
+              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                When on, metric cards and section blocks (Top Symbols, Strategy Performance, etc.) are in two independent areas so you can size each without affecting the other.
+              </div>
+              {splitGrid && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "4px" }}>
+                  <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Which area on top?</label>
+                  <select
+                    value={sectionsOnTop ? "sections" : "metrics"}
+                    onChange={(e) => handleSectionsOnTopChange(e.target.value === "sections")}
+                    style={{
+                      padding: "8px 12px",
+                      backgroundColor: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "6px",
+                      color: "var(--text-primary)",
+                      fontSize: "14px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <option value="metrics">Metrics on top</option>
+                    <option value="sections">Sections on top</option>
+                  </select>
+                </div>
+              )}
             </div>
           </div>
         </div>

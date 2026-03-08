@@ -42,7 +42,7 @@ import {
   ListOrdered,
   Save,
 } from "lucide-react";
-import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY, DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY, DASHBOARD_METRICS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY, DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY, DASHBOARD_PADDING_KEY } from "../components/MetricsConfig";
+import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY, DASHBOARD_LOCKED_ROW_HEIGHT_KEY, DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY, DASHBOARD_METRICS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY, DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY, DASHBOARD_PADDING_KEY, DASHBOARD_SPLIT_GRID_KEY, DASHBOARD_SECTIONS_ON_TOP_KEY } from "../components/MetricsConfig";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { format } from "date-fns";
 import {
@@ -362,7 +362,6 @@ const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
 const METRIC_INSTANCES_KEY = "tradebutler_metric_instances";
 const LAYOUT_LOCKED_KEY = "tradebutler_dashboard_layout_locked";
 const DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY = "tradebutler_dashboard_locked_column_widths";
-const DASHBOARD_LOCKED_ROW_HEIGHT_KEY = "tradebutler_dashboard_locked_row_height";
 const MAX_POSITION_CHART_COLUMN_SPAN = 12;
 const MIN_COLUMN_FR = 0.2;
 const MIN_ROW_HEIGHT_PX = 60;
@@ -765,6 +764,7 @@ function SortableMetricCard({
   dataMode,
   openPositionGroups = [],
   isGridLayout = false,
+  isFluidGrid = false,
 }: {
   id: string;
   metric: any;
@@ -795,6 +795,7 @@ function SortableMetricCard({
   dataMode: DataMode;
   openPositionGroups?: OpenPositionGroup[];
   isGridLayout?: boolean;
+  isFluidGrid?: boolean;
 }) {
   const {
     attributes,
@@ -1323,32 +1324,36 @@ function SortableMetricCard({
         if (ds.display === "grid" && ds.gridTemplateColumns && ds.gridTemplateColumns !== "none") break;
         grid = grid.parentElement;
       }
-      if (!grid) return;
-      const gs = getComputedStyle(grid);
-      const template = gs.gridTemplateColumns;
-      const columnCount = parseGridColumnCount(template);
-      const gapPx = parseFloat(gs.gap) || 20;
-      const gridWidth = grid.clientWidth;
-      const columnWidth = columnCount > 1 ? (gridWidth - (columnCount - 1) * gapPx) / columnCount : gridWidth;
-      const slotWidth = columnWidth + gapPx;
-      const minWidth = columnWidth;
-      const onMove = (e2: MouseEvent) => {
-        const delta = e2.clientX - startX;
-        const rawWidth = Math.max(minWidth, startWidth + delta);
-        const span = (rawWidth + gapPx) / slotWidth;
-        const newSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, Math.round(span)));
-        setMetricInstances((prev: MetricInstance[]) => {
-          const updated = prev.map((inst: MetricInstance) =>
-            inst.instanceId === metric.id ? { ...inst, cardColumnSpan: newSpan, cardWidth: undefined } : inst
-          );
-          localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
-          return updated;
-        });
-      };
-      const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
-      return;
+      if (grid) {
+        const gs = getComputedStyle(grid);
+        const template = gs.gridTemplateColumns;
+        const isFluidGrid = template.includes("auto-fit") || template.includes("auto-fill");
+        if (!isFluidGrid) {
+          const columnCount = parseGridColumnCount(template);
+          const gapPx = parseFloat(gs.gap) || 20;
+          const gridWidth = grid.clientWidth;
+          const columnWidth = columnCount > 1 ? (gridWidth - (columnCount - 1) * gapPx) / columnCount : gridWidth;
+          const slotWidth = columnWidth + gapPx;
+          const minWidth = columnWidth;
+          const onMove = (e2: MouseEvent) => {
+            const delta = e2.clientX - startX;
+            const rawWidth = Math.max(minWidth, startWidth + delta);
+            const span = (rawWidth + gapPx) / slotWidth;
+            const newSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, Math.round(span)));
+            setMetricInstances((prev: MetricInstance[]) => {
+              const updated = prev.map((inst: MetricInstance) =>
+                inst.instanceId === metric.id ? { ...inst, cardColumnSpan: newSpan, cardWidth: undefined } : inst
+              );
+              localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+              return updated;
+            });
+          };
+          const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+          window.addEventListener("mousemove", onMove);
+          window.addEventListener("mouseup", onUp);
+          return;
+        }
+      }
     }
     const SNAP = 280;
     const MIN_W = 200;
@@ -1389,9 +1394,9 @@ function SortableMetricCard({
         position: "relative",
         ...(isGridLayout
           ? {
-              width: "100%",
-              minWidth: 0,
-              boxSizing: "border-box",
+              ...(isFluidGrid && cardWidth
+                ? { width: `${cardWidth}px`, minWidth: 200, maxWidth: 1200, boxSizing: "border-box" as const }
+                : { width: "100%", minWidth: 0, boxSizing: "border-box" as const }),
               ...(cardColumnSpan > 1 ? { gridColumn: `span ${cardColumnSpan}` as const } : {}),
             }
           : {
@@ -2406,6 +2411,56 @@ export default function Dashboard() {
     }
   };
 
+  /** When split grid is on, metrics grid only: update metric order and slot indices, never section/merged order. */
+  const handleDragEndMetricsOnly = (event: DragEndEvent, order: string[]) => {
+    const { active, over } = event;
+    if (layoutLocked && over && typeof over.id === "string") {
+      const overId = String(over.id);
+      let targetSlot: number | null = null;
+      if (overId.startsWith("metric-slot-")) {
+        const parsed = parseInt(overId.replace("metric-slot-", ""), 10);
+        if (!Number.isNaN(parsed) && parsed >= 0) targetSlot = parsed;
+      } else if (order.includes(overId)) {
+        targetSlot = order.indexOf(overId);
+      }
+      if (targetSlot !== null) {
+        const draggedId = active.id as string;
+        const oldIndex = order.indexOf(draggedId);
+        if (oldIndex === -1) return;
+        const toIndex = Math.min(targetSlot, order.length - 1);
+        const newOrder = arrayMove([...order], oldIndex, toIndex);
+        setMetricCardOrder((prev) => {
+          const kept = prev.filter((id) => !newOrder.includes(id) && !isSectionId(id));
+          const finalOrder = [...newOrder, ...kept];
+          localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        });
+        setMetricInstances((prev) =>
+          prev.map((inst) => ({
+            ...inst,
+            slotIndex: newOrder.indexOf(inst.instanceId) >= 0 ? newOrder.indexOf(inst.instanceId) : inst.slotIndex,
+          }))
+        );
+        return;
+      }
+    }
+    if (!layoutLocked && over && active.id !== over.id) {
+      const activeId = active.id as string;
+      const overId = over.id as string;
+      const oldIndex = order.indexOf(activeId);
+      const newIndex = order.indexOf(overId);
+      if (oldIndex !== -1 && newIndex !== -1) {
+        const newOrder = arrayMove([...order], oldIndex, newIndex);
+        setMetricCardOrder((prev) => {
+          const kept = prev.filter((id) => !newOrder.includes(id) && !isSectionId(id));
+          const finalOrder = [...newOrder, ...kept];
+          localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        });
+      }
+    }
+  };
+
   // Handle drag end for sections
   const handleSectionDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -2613,6 +2668,11 @@ export default function Dashboard() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configKey]); // Only depend on configKey - metrics are read fresh from hook inside effect
+
+  useEffect(() => {
+    const n = parseInt(localStorage.getItem(DASHBOARD_LOCKED_ROW_HEIGHT_KEY) || "100", 10);
+    setLockedRowHeight(Math.min(MAX_ROW_HEIGHT_PX, Math.max(MIN_ROW_HEIGHT_PX, Number.isNaN(n) ? 100 : n)));
+  }, [configKey]);
 
   // Sync metric card order when instances change
   useEffect(() => {
@@ -3145,6 +3205,9 @@ export default function Dashboard() {
     largest_loss_pct: metrics?.largest_loss_pct || 0,
   };
 
+  const splitGrid = localStorage.getItem(DASHBOARD_SPLIT_GRID_KEY) === "true";
+  const sectionsOnTop = localStorage.getItem(DASHBOARD_SECTIONS_ON_TOP_KEY) !== "false";
+
   const metricsToSectionsGapPx = (() => {
     const n = parseInt(localStorage.getItem(DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY) || "12", 10);
     if (Number.isNaN(n) || n < 0) return 12;
@@ -3225,29 +3288,6 @@ export default function Dashboard() {
                         }}
                       >
                         {n}
-                      </button>
-                    ))}
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "4px", padding: "0 4px" }}>
-                    <span style={{ fontSize: "12px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>Row ht:</span>
-                    {[60, 80, 100, 120, 140, 160].map((px) => (
-                      <button
-                        key={px}
-                        onClick={() => setLockedRowHeight(px)}
-                        title={`Row height ${px}px`}
-                        style={{
-                          minWidth: "32px",
-                          padding: "6px 8px",
-                          fontSize: "12px",
-                          fontWeight: lockedRowHeight === px ? "600" : "400",
-                          background: lockedRowHeight === px ? "color-mix(in srgb, var(--accent) 18%, var(--bg-secondary))" : "var(--bg-secondary)",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "6px",
-                          color: lockedRowHeight === px ? "var(--accent)" : "var(--text-primary)",
-                          cursor: "pointer",
-                        }}
-                      >
-                        {px}
                       </button>
                     ))}
                   </div>
@@ -3509,8 +3549,10 @@ export default function Dashboard() {
             />
           </div>
 
+      <div style={{ display: "flex", flexDirection: "column" }}>
       {/* Metrics Cards */}
-      {(() => {
+      <div style={splitGrid ? { order: 1 } : undefined}>
+      {((order: string[], onDragEnd: (e: DragEndEvent) => void) => {
         const maxMetricRows = Math.max(0, parseInt(localStorage.getItem(DASHBOARD_MAX_METRIC_ROWS_KEY) || "0", 10));
         const maxColumns = Math.max(0, Math.min(10, parseInt(localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY) || "0", 10)));
         const useGridLayout = layoutLocked || maxMetricRows > 0 || maxColumns > 0;
@@ -3565,13 +3607,14 @@ export default function Dashboard() {
               dataMode={dataMode}
               openPositionGroups={openPositionGroups}
               isGridLayout={useGridLayout || useFluidGrid}
+              isFluidGrid={useFluidGrid}
             />
           );
         };
 
         if (layoutLocked) {
           const numEmptySlots = Math.max(gridColumns, 4);
-          const totalSlots = displayOrder.length + numEmptySlots;
+          const totalSlots = order.length + numEmptySlots;
           const columnWidths = lockedColumnWidths.length === gridColumns
             ? lockedColumnWidths
             : Array.from({ length: gridColumns }, () => 1);
@@ -3579,7 +3622,7 @@ export default function Dashboard() {
 
           const slotSpans: number[] = [];
           for (let i = 0; i < totalSlots; i++) {
-            const id = i < displayOrder.length ? displayOrder[i] : null;
+            const id = i < order.length ? order[i] : null;
             let span = 1;
             if (id) {
               if (isSectionId(id)) {
@@ -3666,10 +3709,10 @@ export default function Dashboard() {
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
-              onDragEnd={handleDragEnd}
+              onDragEnd={onDragEnd}
             >
               <SortableContext
-                items={displayOrder}
+                items={order}
                 strategy={rectSortingStrategy}
               >
                 <div
@@ -3715,7 +3758,7 @@ export default function Dashboard() {
                     </div>
                   ))}
                   {Array.from({ length: totalSlots }, (_, i) => {
-                    const id = i < displayOrder.length ? displayOrder[i] : null;
+                    const id = i < order.length ? order[i] : null;
                     const span = slotSpans[i];
                     const { row, col } = placements[i];
                     const slotStyle: React.CSSProperties = {
@@ -3753,10 +3796,10 @@ export default function Dashboard() {
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
+        onDragEnd={onDragEnd}
       >
         <SortableContext
-          items={displayOrder}
+          items={order}
           strategy={rectSortingStrategy}
         >
       <div
@@ -3772,7 +3815,7 @@ export default function Dashboard() {
           boxSizing: "border-box",
         }}
       >
-        {displayOrder.map((id) => {
+        {order.map((id) => {
           if (isSectionId(id)) {
             const rendered = renderSectionCardRef.current ? renderSectionCardRef.current(id) : null;
             return rendered;
@@ -3784,10 +3827,32 @@ export default function Dashboard() {
         </SortableContext>
       </DndContext>
         );
-      })()}
+      })(
+        splitGrid ? sortedMetrics.map((m) => m.id) : displayOrder,
+        splitGrid ? (e: DragEndEvent) => handleDragEndMetricsOnly(e, sortedMetrics.map((m) => m.id)) : handleDragEnd
+      )}
+      </div>
 
-      <div style={{ position: "absolute", left: -9999, width: 1, height: 1, overflow: "hidden", visibility: "hidden", pointerEvents: "none", zIndex: -1 }}>
-      {/* Section card renderer: always run hidden so renderSectionCardRef is set for the unified grid (locked and unlocked). */}
+      <div
+        style={{
+          ...(splitGrid
+            ? {
+                order: sectionsOnTop ? 0 : 2,
+                ...(sectionsOnTop ? { marginBottom: metricsToSectionsGapPx } : { marginTop: metricsToSectionsGapPx }),
+              }
+            : {
+                position: "absolute",
+                left: -9999,
+                width: 1,
+                height: 1,
+                overflow: "hidden",
+                visibility: "hidden",
+                pointerEvents: "none",
+                zIndex: -1,
+              }),
+        }}
+      >
+      {/* Section card renderer: when split, visible above/below metrics; when unified, hidden so renderSectionCardRef is set. */}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -5830,6 +5895,8 @@ export default function Dashboard() {
       </div>
         </SortableContext>
       </DndContext>
+      </div>
+
       </div>
 
           <MetricsConfigPanel
