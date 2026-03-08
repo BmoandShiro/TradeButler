@@ -609,13 +609,10 @@ export default function Layout({ children }: LayoutProps) {
       attributes: true,
     });
     
-    // Also try after a short delay (for cases where MutationObserver doesn't catch it)
-    const timeout1 = setTimeout(() => {
-      if (doRestore() && observer) {
-        observer.disconnect();
-        observer = null;
-      }
-    }, 100);
+    // Delayed restore attempts for async content (Analytics, Dashboard, etc.)
+    const t1 = setTimeout(() => doRestore(), 50);
+    const t2 = setTimeout(() => doRestore(), 150);
+    const t3 = setTimeout(() => doRestore(), 400);
     
     // Disconnect after 3 seconds if content never loads
     const timeout2 = setTimeout(() => {
@@ -627,7 +624,9 @@ export default function Layout({ children }: LayoutProps) {
     
     return () => {
       if (observer) observer.disconnect();
-      clearTimeout(timeout1);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
       clearTimeout(timeout2);
     };
   }, [location.pathname]);
@@ -994,9 +993,6 @@ export default function Layout({ children }: LayoutProps) {
           style={{ 
             position: "relative", 
             zIndex: useGalaxyBackground ? 1 : 0, 
-            flex: 1, 
-            display: "flex", 
-            flexDirection: "column",
             minHeight: "100%",
             backgroundColor: useGalaxyBackground ? "transparent" : undefined,
           }}
