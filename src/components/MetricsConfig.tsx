@@ -54,6 +54,15 @@ const COLOR_RANGE_KEY = "tradebutler_color_range";
 const DASHBOARD_SECTIONS_KEY = "tradebutler_dashboard_sections";
 export const DASHBOARD_MAX_METRIC_ROWS_KEY = "tradebutler_dashboard_max_metric_rows";
 export const DASHBOARD_MAX_COLUMNS_KEY = "tradebutler_dashboard_max_columns";
+export const DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY = "tradebutler_dashboard_metrics_to_sections_gap";
+export const DASHBOARD_METRICS_GRID_GAP_KEY = "tradebutler_dashboard_metrics_grid_gap";
+export const DASHBOARD_SECTIONS_GRID_GAP_KEY = "tradebutler_dashboard_sections_grid_gap";
+export const DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY = "tradebutler_dashboard_sections_grid_min_width";
+export const DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY = "tradebutler_dashboard_sections_grid_margin_bottom";
+export const DASHBOARD_PADDING_KEY = "tradebutler_dashboard_padding";
+export const DASHBOARD_LOCKED_ROW_HEIGHT_KEY = "tradebutler_dashboard_locked_row_height";
+export const DASHBOARD_SPLIT_GRID_KEY = "tradebutler_dashboard_split_grid";
+export const DASHBOARD_SECTIONS_ON_TOP_KEY = "tradebutler_dashboard_sections_on_top";
 
 export function useMetricsConfig() {
   const [metrics, setMetrics] = useState<MetricConfig[]>(() => {
@@ -222,7 +231,115 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
     localStorage.setItem(DASHBOARD_MAX_COLUMNS_KEY, String(value));
     if (onConfigChange) onConfigChange();
   };
-  
+
+  const [lockedRowHeight, setLockedRowHeight] = useState(() => {
+    const saved = localStorage.getItem(DASHBOARD_LOCKED_ROW_HEIGHT_KEY);
+    if (saved !== null) {
+      const n = parseInt(saved, 10);
+      if (n >= 40 && n <= 400) return n;
+    }
+    return 100;
+  });
+  const handleLockedRowHeightChange = (value: number) => {
+    setLockedRowHeight(value);
+    localStorage.setItem(DASHBOARD_LOCKED_ROW_HEIGHT_KEY, String(value));
+    if (onConfigChange) onConfigChange();
+  };
+
+  const [splitGrid, setSplitGrid] = useState(() => localStorage.getItem(DASHBOARD_SPLIT_GRID_KEY) === "true");
+  const [sectionsOnTop, setSectionsOnTop] = useState(() => localStorage.getItem(DASHBOARD_SECTIONS_ON_TOP_KEY) !== "false");
+  const handleSplitGridChange = (value: boolean) => {
+    setSplitGrid(value);
+    localStorage.setItem(DASHBOARD_SPLIT_GRID_KEY, value ? "true" : "false");
+    if (onConfigChange) onConfigChange();
+  };
+  const handleSectionsOnTopChange = (value: boolean) => {
+    setSectionsOnTop(value);
+    localStorage.setItem(DASHBOARD_SECTIONS_ON_TOP_KEY, value ? "true" : "false");
+    if (onConfigChange) onConfigChange();
+  };
+
+  // Spacing: gap between top metric cards and sections below; section grid gap and min width
+  const [metricsToSectionsGap, setMetricsToSectionsGap] = useState(() => {
+    const saved = localStorage.getItem(DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY);
+    if (saved !== null) {
+      const n = parseInt(saved, 10);
+      if (n >= 0 && n <= 80) return n;
+    }
+    return 12;
+  });
+  const [sectionsGridGap, setSectionsGridGap] = useState(() => {
+    const saved = localStorage.getItem(DASHBOARD_SECTIONS_GRID_GAP_KEY);
+    if (saved !== null) {
+      const n = parseInt(saved, 10);
+      if (n >= 0 && n <= 48) return n;
+    }
+    return 20;
+  });
+  const [sectionsGridMinWidth, setSectionsGridMinWidth] = useState(() => {
+    const saved = localStorage.getItem(DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY);
+    if (saved !== null) {
+      const n = parseInt(saved, 10);
+      if ([280, 320, 360, 400, 480].includes(n)) return n;
+    }
+    return 400;
+  });
+  const [metricsGridGap, setMetricsGridGap] = useState(() => {
+    const saved = localStorage.getItem(DASHBOARD_METRICS_GRID_GAP_KEY);
+    if (saved !== null) {
+      const n = parseInt(saved, 10);
+      if ([0, 4, 8, 12, 16, 20, 24].includes(n)) return n;
+    }
+    return 12;
+  });
+  const [sectionsGridMarginBottom, setSectionsGridMarginBottom] = useState(() => {
+    const saved = localStorage.getItem(DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY);
+    if (saved !== null) {
+      const n = parseInt(saved, 10);
+      if (n >= 0 && n <= 80) return n;
+    }
+    return 30;
+  });
+  const [dashboardPadding, setDashboardPadding] = useState(() => {
+    const saved = localStorage.getItem(DASHBOARD_PADDING_KEY);
+    if (saved !== null) {
+      const n = parseInt(saved, 10);
+      if ([16, 20, 24, 30, 40, 48].includes(n)) return n;
+    }
+    return 30;
+  });
+
+  const handleMetricsToSectionsGap = (value: number) => {
+    setMetricsToSectionsGap(value);
+    localStorage.setItem(DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY, String(value));
+    if (onConfigChange) onConfigChange();
+  };
+  const handleSectionsGridGap = (value: number) => {
+    setSectionsGridGap(value);
+    localStorage.setItem(DASHBOARD_SECTIONS_GRID_GAP_KEY, String(value));
+    if (onConfigChange) onConfigChange();
+  };
+  const handleSectionsGridMinWidth = (value: number) => {
+    setSectionsGridMinWidth(value);
+    localStorage.setItem(DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY, String(value));
+    if (onConfigChange) onConfigChange();
+  };
+  const handleMetricsGridGap = (value: number) => {
+    setMetricsGridGap(value);
+    localStorage.setItem(DASHBOARD_METRICS_GRID_GAP_KEY, String(value));
+    if (onConfigChange) onConfigChange();
+  };
+  const handleSectionsGridMarginBottom = (value: number) => {
+    setSectionsGridMarginBottom(value);
+    localStorage.setItem(DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY, String(value));
+    if (onConfigChange) onConfigChange();
+  };
+  const handleDashboardPadding = (value: number) => {
+    setDashboardPadding(value);
+    localStorage.setItem(DASHBOARD_PADDING_KEY, String(value));
+    if (onConfigChange) onConfigChange();
+  };
+
   const toggleDashboardSection = (section: string) => {
     setDashboardSections((prev: any) => {
       const updated = { ...prev, [section]: !prev[section as keyof typeof prev] };
@@ -554,6 +671,209 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
               </select>
               <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
                 When set, metric cards use a fixed grid with this many columns. With layout locked, resizing the window won’t change the arrangement.
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Row height when locked (px)</label>
+              <select
+                value={lockedRowHeight}
+                onChange={(e) => handleLockedRowHeightChange(parseInt(e.target.value, 10))}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  cursor: "pointer",
+                }}
+              >
+                {[40, 48, 56, 64, 72, 80, 100, 120, 140, 160, 200, 240, 280, 320, 400].map((n) => (
+                  <option key={n} value={n}>{n} px</option>
+                ))}
+              </select>
+              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                Minimum height of each row; use 40–56 px for tighter vertical spacing. You can also drag the bar at the bottom of the grid to adjust.
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Split grid (metrics and sections separate)</label>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={splitGrid}
+                  onChange={(e) => handleSplitGridChange(e.target.checked)}
+                  style={{ width: "18px", height: "18px", accentColor: "var(--accent)" }}
+                />
+                <span style={{ fontSize: "14px", color: "var(--text-primary)" }}>Use separate grids for metrics and sections</span>
+              </label>
+              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                When on, metric cards and section blocks (Top Symbols, Strategy Performance, etc.) are in two independent areas so you can size each without affecting the other.
+              </div>
+              {splitGrid && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "4px" }}>
+                  <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Which area on top?</label>
+                  <select
+                    value={sectionsOnTop ? "sections" : "metrics"}
+                    onChange={(e) => handleSectionsOnTopChange(e.target.value === "sections")}
+                    style={{
+                      padding: "8px 12px",
+                      backgroundColor: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "6px",
+                      color: "var(--text-primary)",
+                      fontSize: "14px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <option value="metrics">Metrics on top</option>
+                    <option value="sections">Sections on top</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Spacing: gap between metric cards and sections; section grid options */}
+        <div style={{ marginBottom: "24px", padding: "20px", backgroundColor: "var(--bg-tertiary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+          <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "8px", color: "var(--text-primary)" }}>
+            Spacing &amp; section layout
+          </h3>
+          <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "16px", lineHeight: "1.5" }}>
+            Control spacing between the chart/metric cards, the Trades/Open Positions row, and other dashboard areas.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Space between chart/metric cards and sections below (px)</label>
+              <select
+                value={metricsToSectionsGap}
+                onChange={(e) => handleMetricsToSectionsGap(parseInt(e.target.value, 10))}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  cursor: "pointer",
+                }}
+              >
+                {[0, 8, 12, 16, 20, 24, 30, 40, 48, 60, 80].map((n) => (
+                  <option key={n} value={n}>{n === 0 ? "0 (snap to metrics)" : `${n} px`}</option>
+                ))}
+              </select>
+              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                Use 0 to snap section cards directly under the chart/metric cards with no gap. Same in locked and unlocked layout.
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Gap between section cards (Trades, Open Positions, etc.)</label>
+              <select
+                value={sectionsGridGap}
+                onChange={(e) => handleSectionsGridGap(parseInt(e.target.value, 10))}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  cursor: "pointer",
+                }}
+              >
+                {[12, 16, 20, 24, 28, 32, 40, 48].map((n) => (
+                  <option key={n} value={n}>{n} px</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Section card min width</label>
+              <select
+                value={sectionsGridMinWidth}
+                onChange={(e) => handleSectionsGridMinWidth(parseInt(e.target.value, 10))}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  cursor: "pointer",
+                }}
+              >
+                {[280, 320, 360, 400, 480].map((n) => (
+                  <option key={n} value={n}>{n} px</option>
+                ))}
+              </select>
+              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                Minimum width of each section card before wrapping to the next row.
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Gap between metric cards (locked &amp; unlocked)</label>
+              <select
+                value={metricsGridGap}
+                onChange={(e) => handleMetricsGridGap(parseInt(e.target.value, 10))}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  cursor: "pointer",
+                }}
+              >
+                {[0, 4, 8, 12, 16, 20, 24].map((n) => (
+                  <option key={n} value={n}>{n === 0 ? "0 (tight)" : `${n} px`}</option>
+                ))}
+              </select>
+              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                Use 0 or 4 px for minimal spacing between cards in both locked and unlocked layout.
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Space below section cards (Trades, Open Positions row)</label>
+              <select
+                value={sectionsGridMarginBottom}
+                onChange={(e) => handleSectionsGridMarginBottom(parseInt(e.target.value, 10))}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  cursor: "pointer",
+                }}
+              >
+                {[16, 20, 24, 30, 40, 48, 60, 80].map((n) => (
+                  <option key={n} value={n}>{n} px</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Dashboard page padding</label>
+              <select
+                value={dashboardPadding}
+                onChange={(e) => handleDashboardPadding(parseInt(e.target.value, 10))}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  cursor: "pointer",
+                }}
+              >
+                {[16, 20, 24, 30, 40, 48].map((n) => (
+                  <option key={n} value={n}>{n} px</option>
+                ))}
+              </select>
+              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                Padding around the entire dashboard content.
               </div>
             </div>
           </div>

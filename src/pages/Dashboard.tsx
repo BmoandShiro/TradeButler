@@ -1,16 +1,18 @@
-import { useEffect, useState, useRef, useMemo } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, useMemo, createContext, useContext } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import {
   DndContext,
   closestCenter,
+  pointerWithin,
   KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
   DragEndEvent,
   useDroppable,
+  useDndContext,
 } from "@dnd-kit/core";
 import {
   arrayMove,
@@ -30,15 +32,18 @@ import {
   BarChart3,
   Clock,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronUp,
   GripVertical,
   Copy,
   Trash2,
-  Lock,
-  Unlock,
+  RotateCcw,
+  LayoutDashboard,
+  ListOrdered,
+  Save,
 } from "lucide-react";
-import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY } from "../components/MetricsConfig";
+import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY, DASHBOARD_LOCKED_ROW_HEIGHT_KEY, DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY, DASHBOARD_METRICS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY, DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY, DASHBOARD_PADDING_KEY, DASHBOARD_SPLIT_GRID_KEY, DASHBOARD_SECTIONS_ON_TOP_KEY } from "../components/MetricsConfig";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { format } from "date-fns";
 import {
@@ -263,19 +268,35 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
 };
 
 const formatHoldingTime = (seconds: number): string => {
-  if (seconds === 0) return "0s";
-  
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = Math.floor(seconds % 60);
-  
+  if (seconds === 0 || !Number.isFinite(seconds)) return "0s";
+  const s = Math.max(0, Math.floor(seconds));
+
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const secs = Math.floor(s % 60);
+
   const parts: string[] = [];
-  if (days > 0) parts.push(`${days}d`);
-  if (hours > 0) parts.push(`${hours}h`);
-  if (minutes > 0) parts.push(`${minutes}m`);
-  if (secs > 0 && days === 0 && hours === 0) parts.push(`${secs}s`);
-  
+  if (days >= 365) {
+    const years = Math.floor(days / 365);
+    const remainderDays = days % 365;
+    parts.push(`${years}y`);
+    if (remainderDays > 0) parts.push(`${remainderDays}d`);
+  } else if (days > 0) {
+    parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    // Omit seconds when we have days to keep string shorter
+  } else if (hours > 0) {
+    parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (secs > 0) parts.push(`${secs}s`);
+  } else if (minutes > 0) {
+    parts.push(`${minutes}m`);
+    if (secs > 0) parts.push(`${secs}s`);
+  } else {
+    parts.push(`${secs}s`);
+  }
   return parts.join(" ") || "0s";
 };
 
@@ -334,9 +355,28 @@ const getMetricColor = (id: string, value: number, colorRange?: { min: number; m
 
 const DASHBOARD_SECTIONS_KEY = "tradebutler_dashboard_sections";
 const DASHBOARD_SECTION_ORDER_KEY = "tradebutler_dashboard_section_order";
+const DASHBOARD_DISPLAY_ORDER_KEY = "tradebutler_dashboard_display_order";
+const DASHBOARD_LAYOUT_PRESETS_KEY = "tradebutler_dashboard_layout_presets";
+const DASHBOARD_SECTION_SIZES_KEY = "tradebutler_dashboard_section_sizes";
+const OPEN_POSITIONS_DISPLAY_MODE_KEY = "tradebutler_open_positions_display_mode";
 const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
 const METRIC_INSTANCES_KEY = "tradebutler_metric_instances";
-const LAYOUT_LOCKED_KEY = "tradebutler_dashboard_layout_locked";
+const DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY = "tradebutler_dashboard_locked_column_widths";
+const DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY = "tradebutler_dashboard_locked_slot_assignments";
+const DASHBOARD_LOCKED_PLACEMENTS_KEY = "tradebutler_dashboard_locked_placements";
+const MAX_POSITION_CHART_COLUMN_SPAN = 24;
+const MAX_ROW_SPAN = 32;
+const MIN_COLUMN_FR = 0.2;
+const MIN_ROW_HEIGHT_PX = 40;
+const MAX_ROW_HEIGHT_PX = 400;
+
+function parseGridColumnCount(template: string): number {
+  const trimmed = template.trim();
+  const repeatMatch = trimmed.match(/repeat\s*\(\s*(\d+)\s*,/);
+  if (repeatMatch) return Math.max(1, parseInt(repeatMatch[1], 10));
+  const parts = trimmed.split(" ").filter(Boolean);
+  return parts.length > 0 ? parts.length : 1;
+}
 
 interface MetricInstance {
   instanceId: string; // e.g., "strategy_win_rate_1", "strategy_win_rate_2"
@@ -344,10 +384,16 @@ interface MetricInstance {
   strategyFilterId: number | null; // Strategy filter for this instance
   positionEntryId?: number | null; // For position_size_chart: which open position to show
   chartHeight?: number; // For position_size_chart: resizable chart height (default 200)
-  chartWidth?: number;  // For position_size_chart: resizable chart width in px (default: grid auto)
+  chartWidth?: number;  // For position_size_chart: resizable width in px (flex layout only)
+  chartColumnSpan?: number; // For position_size_chart in grid: span 1–MAX_POSITION_CHART_COLUMN_SPAN so it resizes with grid
   positionChartBrushStart?: number; // For position_size_chart: Brush range start index
   positionChartBrushEnd?: number;   // For position_size_chart: Brush range end index
   slotIndex?: number;               // When layout locked: fixed grid slot (0-based), allows gaps
+  // Resizable metric card (non–position_size_chart)
+  cardWidth?: number;               // Pixel width in flex layout (default 280)
+  cardHeight?: number;              // Card height in px (default 100)
+  cardColumnSpan?: number;          // Grid column span when in grid layout (1–MAX_POSITION_CHART_COLUMN_SPAN)
+  cardRowSpan?: number;             // Grid row span when locked (1–MAX_ROW_SPAN)
 }
 
 interface DashboardSections {
@@ -368,16 +414,44 @@ const defaultDashboardSections: DashboardSections = {
 
 type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades" | "trades" | "openPositions";
 
+const SECTION_IDS: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions"];
+function isSectionId(id: string): id is SectionId {
+  return SECTION_IDS.includes(id as SectionId);
+}
+
 const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "openPositions", "trades"];
+
+export type SectionSizes = Record<SectionId, { columnSpan?: number; height?: number; rowSpan?: number }>;
+
+type MoveInLockedGridDir = "up" | "down" | "left" | "right";
+const MoveInLockedGridContext = createContext<React.MutableRefObject<((id: string, dir: MoveInLockedGridDir) => void) | null> | null>(null);
+
+export interface DashboardLayoutPreset {
+  id: string;
+  name: string;
+  displayOrder: string[];
+  metricCardOrder: string[];
+  sectionOrder: SectionId[];
+  dashboardSections: DashboardSections;
+  sectionSizes?: SectionSizes;
+  /** Locked layout: number of columns (2–10). */
+  lockedGridColumns?: number;
+  /** Locked layout: slot assignments (metric/section ids or null for empty slots). */
+  lockedSlotAssignments?: (string | null)[];
+  /** Locked layout: column width ratios (fr values). */
+  lockedColumnWidths?: number[];
+}
 
 // Sortable Metric Card Component
 // SortableSection component for dashboard sections
 function SortableSection({
   id,
   children,
+  wrapperStyle,
 }: {
   id: SectionId;
   children: (props: { dragHandleProps: any; isDragging: boolean }) => React.ReactNode;
+  wrapperStyle?: React.CSSProperties;
 }) {
   const {
     attributes,
@@ -389,6 +463,7 @@ function SortableSection({
   } = useSortable({ id });
 
   const style = {
+    ...wrapperStyle,
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
@@ -397,6 +472,155 @@ function SortableSection({
   return (
     <div ref={setNodeRef} style={style}>
       {children({ dragHandleProps: { ...attributes, ...listeners }, isDragging })}
+    </div>
+  );
+}
+
+// Wrapper that adds resize handles (right + bottom) to a dashboard section card
+function SectionCardResizeWrapper({
+  sectionId,
+  sectionSizes,
+  setSectionSizes,
+  children,
+  layoutLocked,
+  lockedRowHeight,
+}: {
+  sectionId: SectionId;
+  sectionSizes: SectionSizes;
+  setSectionSizes: React.Dispatch<React.SetStateAction<SectionSizes>>;
+  children: React.ReactNode;
+  layoutLocked?: boolean;
+  lockedRowHeight?: number;
+}) {
+  const size = sectionSizes[sectionId] ?? {};
+  const height = size.height != null ? Math.min(800, Math.max(200, size.height)) : undefined;
+  const rowHeight = typeof lockedRowHeight === "number" && lockedRowHeight > 0 ? lockedRowHeight : 100;
+
+  const handleResizeHorizontal = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const card = (e.currentTarget as HTMLElement).closest("[data-section-card]") as HTMLElement | null;
+    if (!card) return;
+    let grid: HTMLElement | null = card.parentElement;
+    while (grid) {
+      const ds = getComputedStyle(grid);
+      if (ds.display === "grid" && ds.gridTemplateColumns && ds.gridTemplateColumns !== "none") break;
+      grid = grid.parentElement;
+    }
+    if (!grid) return;
+    const gs = getComputedStyle(grid);
+    const template = gs.gridTemplateColumns;
+    const columnCount = parseGridColumnCount(template);
+    const gapPx = parseFloat(gs.gap) || 20;
+    const gridWidth = grid.clientWidth;
+    const columnWidth = columnCount > 1 ? (gridWidth - (columnCount - 1) * gapPx) / columnCount : gridWidth;
+    const slotWidth = columnWidth + gapPx;
+    const startX = e.clientX;
+    const startWidth = card.getBoundingClientRect().width;
+    const onMove = (e2: MouseEvent) => {
+      const delta = e2.clientX - startX;
+      const rawWidth = Math.max(columnWidth, startWidth + delta);
+      const span = (rawWidth + gapPx) / slotWidth;
+      const newSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, Math.round(span)));
+      setSectionSizes((prev) => {
+        const next = { ...prev, [sectionId]: { ...prev[sectionId], columnSpan: newSpan } };
+        localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+        return next;
+      });
+    };
+    const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const handleResizeVertical = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = height ?? 300;
+    if (layoutLocked) {
+      const startSpan = Math.min(MAX_ROW_SPAN, Math.max(1, Math.round(startH / rowHeight)));
+      const onMove = (e2: MouseEvent) => {
+        const delta = e2.clientY - startY;
+        const deltaRows = delta / rowHeight;
+        const newSpan = Math.min(MAX_ROW_SPAN, Math.max(1, Math.round(startSpan + deltaRows)));
+        const newH = newSpan * rowHeight;
+        setSectionSizes((prev) => {
+          const next = { ...prev, [sectionId]: { ...prev[sectionId], height: newH, rowSpan: newSpan } };
+          localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+          return next;
+        });
+      };
+      const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+      return;
+    }
+    const SNAP_STEPS = [200, 240, 280, 320, 360, 400, 480, 560, 640, 720, 800];
+    const snap = (v: number) => {
+      const clamped = Math.min(800, Math.max(200, v));
+      let best = SNAP_STEPS[0];
+      for (const s of SNAP_STEPS) {
+        if (Math.abs(s - clamped) < Math.abs(best - clamped)) best = s;
+      }
+      return best;
+    };
+    const onMove = (e2: MouseEvent) => {
+      const delta = e2.clientY - startY;
+      const rawH = startH + delta;
+      const newH = snap(rawH);
+      setSectionSizes((prev) => {
+        const next = { ...prev, [sectionId]: { ...prev[sectionId], height: newH } };
+        localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+        return next;
+      });
+    };
+    const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  return (
+    <div
+      data-section-card
+      style={{
+        position: "relative",
+        minHeight: height != null ? `${height}px` : undefined,
+        height: height != null ? `${height}px` : undefined,
+        minWidth: 0,
+      }}
+    >
+      {children}
+      <div
+        role="separator"
+        aria-label="Resize section width"
+        onMouseDown={handleResizeHorizontal}
+        style={{
+          position: "absolute",
+          right: 0,
+          top: 0,
+          bottom: 0,
+          width: "8px",
+          cursor: "ew-resize",
+          background: "transparent",
+          pointerEvents: "auto",
+        }}
+      />
+      <div
+        role="separator"
+        aria-label="Resize section height"
+        onMouseDown={handleResizeVertical}
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: "8px",
+          cursor: "ns-resize",
+          background: "transparent",
+          pointerEvents: "auto",
+        }}
+      />
     </div>
   );
 }
@@ -537,16 +761,23 @@ const metricDescriptions: Record<string, { description: string; calculation: str
   },
 };
 
-function DroppableSlot({ id, children, style: slotStyle }: { id: string; children: React.ReactNode; style?: React.CSSProperties }) {
+function DroppableSlot({ id, children, style: slotStyle, fillCell }: { id: string; children: React.ReactNode; style?: React.CSSProperties; fillCell?: boolean }) {
   const { setNodeRef, isOver } = useDroppable({ id });
+  const { active } = useDndContext();
+  const isEmpty = children == null;
+  const showOutline = active != null;
   return (
     <div
       ref={setNodeRef}
       style={{
-        minHeight: "120px",
+        minWidth: 0,
+        maxWidth: "100%",
+        overflow: "hidden",
+        boxSizing: "border-box",
+        ...(fillCell ? { minHeight: 0, height: "100%" } : { minHeight: isEmpty ? "100px" : "120px" }),
         borderRadius: "8px",
-        border: isOver ? "2px dashed var(--accent)" : "1px solid transparent",
-        backgroundColor: isOver ? "color-mix(in srgb, var(--accent) 8%, transparent)" : "transparent",
+        border: showOutline && isOver ? "2px dashed var(--accent)" : showOutline && isEmpty ? "1px dashed var(--border-color)" : "1px solid transparent",
+        backgroundColor: showOutline && isOver ? "color-mix(in srgb, var(--accent) 8%, transparent)" : showOutline && isEmpty ? "color-mix(in srgb, var(--bg-secondary) 0.5, transparent)" : "transparent",
         transition: "border-color 0.15s, background-color 0.15s",
         ...slotStyle,
       }}
@@ -586,6 +817,9 @@ function SortableMetricCard({
   dataMode,
   openPositionGroups = [],
   isGridLayout = false,
+  isFluidGrid = false,
+  layoutLocked = false,
+  lockedRowHeight,
 }: {
   id: string;
   metric: any;
@@ -616,6 +850,9 @@ function SortableMetricCard({
   dataMode: DataMode;
   openPositionGroups?: OpenPositionGroup[];
   isGridLayout?: boolean;
+  isFluidGrid?: boolean;
+  layoutLocked?: boolean;
+  lockedRowHeight?: number;
 }) {
   const {
     attributes,
@@ -625,6 +862,8 @@ function SortableMetricCard({
     transition,
     isDragging,
   } = useSortable({ id });
+
+  const moveInLockedGridRef = useContext(MoveInLockedGridContext);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -638,6 +877,7 @@ function SortableMetricCard({
   const selectedGroup = openPositionGroups.find((g) => g.entry_trade.id === positionEntryId);
   const chartHeight = Math.min(600, Math.max(160, (metric as MetricInstance).chartHeight ?? 200));
   const chartWidth = (metric as MetricInstance).chartWidth;
+  const chartColumnSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as MetricInstance).chartColumnSpan ?? 1));
   const brushStart = (metric as MetricInstance).positionChartBrushStart ?? 0;
   const brushEnd = (metric as MetricInstance).positionChartBrushEnd ?? 0;
 
@@ -669,14 +909,44 @@ function SortableMetricCard({
     const brushStartClamped = useBrush && brushEnd > 0 ? Math.min(brushStart, chartData.length - 1) : 0;
     const brushEndClamped = useBrush && brushEnd > 0 ? Math.min(chartData.length - 1, Math.max(brushStartClamped, brushEnd)) : Math.max(0, chartData.length - 1);
 
+    const rowHeightForChart = typeof lockedRowHeight === "number" && lockedRowHeight > 0 ? lockedRowHeight : 100;
     const handleResizeStart = (e: React.MouseEvent) => {
       e.stopPropagation();
       e.preventDefault();
       const startY = e.clientY;
       const startHeight = chartHeight;
+      if (layoutLocked) {
+        const startSpan = Math.min(MAX_ROW_SPAN, Math.max(1, (metric as MetricInstance).cardRowSpan ?? (Math.round(startHeight / rowHeightForChart) || 1)));
+        const onMove = (e2: MouseEvent) => {
+          const delta = e2.clientY - startY;
+          const deltaRows = delta / rowHeightForChart;
+          const newSpan = Math.min(MAX_ROW_SPAN, Math.max(1, Math.round(startSpan + deltaRows)));
+          const newHeight = newSpan * rowHeightForChart;
+          setMetricInstances((prev: MetricInstance[]) => {
+            const updated = prev.map((inst: MetricInstance) =>
+              inst.instanceId === metric.id ? { ...inst, chartHeight: newHeight, cardRowSpan: newSpan } : inst
+            );
+            localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+            return updated;
+          });
+        };
+        const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+        return;
+      }
+      const SNAP_STEPS = [160, 200, 240, 280, 320, 400, 480, 600];
+      const snap = (v: number) => {
+        const clamped = Math.min(600, Math.max(160, v));
+        let best = SNAP_STEPS[0];
+        for (const s of SNAP_STEPS) {
+          if (Math.abs(s - clamped) < Math.abs(best - clamped)) best = s;
+        }
+        return best;
+      };
       const onMove = (e2: MouseEvent) => {
         const delta = e2.clientY - startY;
-        const newHeight = Math.min(600, Math.max(160, startHeight + delta));
+        const newHeight = snap(startHeight + delta);
         setMetricInstances((prev: MetricInstance[]) => {
           const updated = prev.map((inst: MetricInstance) =>
             inst.instanceId === metric.id ? { ...inst, chartHeight: newHeight } : inst
@@ -685,10 +955,7 @@ function SortableMetricCard({
           return updated;
         });
       };
-      const onUp = () => {
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-      };
+      const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     };
@@ -700,9 +967,59 @@ function SortableMetricCard({
       if (!card) return;
       const startX = e.clientX;
       const startWidth = card.getBoundingClientRect().width;
+
+      if (isGridLayout) {
+        // Snap to grid column edges so chart stays in ratio with other metrics on window resize
+        let grid: HTMLElement | null = card.parentElement;
+        while (grid) {
+          const ds = getComputedStyle(grid);
+          if (ds.display === "grid" && ds.gridTemplateColumns && ds.gridTemplateColumns !== "none") {
+            break;
+          }
+          grid = grid.parentElement;
+        }
+        if (!grid) return;
+        const gs = getComputedStyle(grid);
+        const template = gs.gridTemplateColumns;
+        const columnCount = parseGridColumnCount(template);
+        const gapPx = parseFloat(gs.gap) || 20;
+        const gridWidth = grid.clientWidth;
+        const columnWidth = columnCount > 1
+          ? (gridWidth - (columnCount - 1) * gapPx) / columnCount
+          : gridWidth;
+        const slotWidth = columnWidth + gapPx;
+
+        const onMove = (e2: MouseEvent) => {
+          const delta = e2.clientX - startX;
+          const rawWidth = Math.max(columnWidth, startWidth + delta);
+          const span = (rawWidth + gapPx) / slotWidth;
+          const newSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, Math.round(span)));
+          setMetricInstances((prev: MetricInstance[]) => {
+            const updated = prev.map((inst: MetricInstance) =>
+              inst.instanceId === metric.id ? { ...inst, chartColumnSpan: newSpan, chartWidth: undefined } : inst
+            );
+            localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+            return updated;
+          });
+        };
+        const onUp = () => {
+          window.removeEventListener("mousemove", onMove);
+          window.removeEventListener("mouseup", onUp);
+        };
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+        return;
+      }
+
+      // Flex layout: snap to fixed pixel multiples
+      const SNAP_UNIT = 280;
+      const MIN_CHART_WIDTH = 280;
+      const MAX_CHART_WIDTH = 1200;
       const onMove = (e2: MouseEvent) => {
         const delta = e2.clientX - startX;
-        const newWidth = Math.min(1200, Math.max(280, startWidth + delta));
+        const rawWidth = Math.min(MAX_CHART_WIDTH, Math.max(MIN_CHART_WIDTH, startWidth + delta));
+        const snappedWidth = Math.round(rawWidth / SNAP_UNIT) * SNAP_UNIT;
+        const newWidth = Math.min(MAX_CHART_WIDTH, Math.max(MIN_CHART_WIDTH, snappedWidth));
         setMetricInstances((prev: MetricInstance[]) => {
           const updated = prev.map((inst: MetricInstance) =>
             inst.instanceId === metric.id ? { ...inst, chartWidth: newWidth } : inst
@@ -736,9 +1053,12 @@ function SortableMetricCard({
           WebkitUserSelect: "none",
           ...(isGridLayout
             ? {
-                width: chartWidth ? `${chartWidth}px` : "100%",
-                minWidth: chartWidth ? chartWidth : 0,
-                maxWidth: chartWidth ? 1200 : undefined,
+                width: "100%",
+                minWidth: 0,
+                maxWidth: "100%",
+                overflow: "hidden",
+                boxSizing: "border-box",
+                ...(chartColumnSpan > 1 ? { gridColumn: `span ${chartColumnSpan}` as const } : {}),
               }
             : {
                 flex: `0 0 ${chartWidth ? `${chartWidth}px` : "280px"}`,
@@ -746,7 +1066,7 @@ function SortableMetricCard({
                 minWidth: 280,
                 maxWidth: chartWidth ? 1200 : undefined,
               }),
-          minHeight: "320px",
+          ...(layoutLocked ? { height: "100%", minHeight: 0 } : { minHeight: "320px" }),
           position: "relative",
           ...style,
         }}
@@ -860,61 +1180,116 @@ function SortableMetricCard({
                       </div>
                     </div>
                   )}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      e.preventDefault();
-                      const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
-                      if (currentIndex > 0) {
-                        setMetricCardOrder((prevOrder) => {
-                          const currentIds = enabledMetrics.map(m => m.id);
-                          let newOrder = [...prevOrder];
-                          currentIds.forEach(id => { if (!newOrder.includes(id)) newOrder.push(id); });
-                          newOrder = newOrder.filter(id => currentIds.includes(id));
-                          const metricIndex = newOrder.indexOf(metric.id);
-                          if (metricIndex > 0) {
-                            [newOrder[metricIndex - 1], newOrder[metricIndex]] = [newOrder[metricIndex], newOrder[metricIndex - 1]];
-                            localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
-                            return newOrder;
+                  {layoutLocked && moveInLockedGridRef?.current ? (
+                    <>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.(metric.id, "up"); setOpenMetricSettings(null); }}
+                        style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                      >
+                        <ChevronUp size={14} />
+                        <span>Move up</span>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.(metric.id, "down"); setOpenMetricSettings(null); }}
+                        style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                      >
+                        <ChevronDown size={14} />
+                        <span>Move down</span>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.(metric.id, "left"); setOpenMetricSettings(null); }}
+                        style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                      >
+                        <ChevronLeft size={14} />
+                        <span>Move left</span>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.(metric.id, "right"); setOpenMetricSettings(null); }}
+                        style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                      >
+                        <ChevronRight size={14} />
+                        <span>Move right</span>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
+                          if (currentIndex > 0) {
+                            setMetricCardOrder((prevOrder) => {
+                              const currentIds = enabledMetrics.map(m => m.id);
+                              let newOrder = [...prevOrder];
+                              currentIds.forEach(id => { if (!newOrder.includes(id)) newOrder.push(id); });
+                              newOrder = newOrder.filter(id => currentIds.includes(id));
+                              const metricIndex = newOrder.indexOf(metric.id);
+                              if (metricIndex > 0) {
+                                [newOrder[metricIndex - 1], newOrder[metricIndex]] = [newOrder[metricIndex], newOrder[metricIndex - 1]];
+                                localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+                                return newOrder;
+                              }
+                              return prevOrder;
+                            });
                           }
-                          return prevOrder;
-                        });
-                      }
-                    }}
-                    disabled={sortedMetrics.findIndex(m => m.id === metric.id) === 0}
-                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? 0.3 : 1 }}
-                  >
-                    <ChevronUp size={14} />
-                    <span>Move Up</span>
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      e.preventDefault();
-                      const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
-                      if (currentIndex < sortedMetrics.length - 1) {
-                        setMetricCardOrder((prevOrder) => {
-                          const currentIds = enabledMetrics.map(m => m.id);
-                          let newOrder = [...prevOrder];
-                          currentIds.forEach(id => { if (!newOrder.includes(id)) newOrder.push(id); });
-                          newOrder = newOrder.filter(id => currentIds.includes(id));
-                          const metricIndex = newOrder.indexOf(metric.id);
-                          if (metricIndex < newOrder.length - 1) {
-                            [newOrder[metricIndex], newOrder[metricIndex + 1]] = [newOrder[metricIndex + 1], newOrder[metricIndex]];
-                            localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
-                            return newOrder;
+                        }}
+                        disabled={sortedMetrics.findIndex(m => m.id === metric.id) === 0}
+                        style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? 0.3 : 1 }}
+                      >
+                        <ChevronUp size={14} />
+                        <span>Move Up</span>
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
+                          if (currentIndex < sortedMetrics.length - 1) {
+                            setMetricCardOrder((prevOrder) => {
+                              const currentIds = enabledMetrics.map(m => m.id);
+                              let newOrder = [...prevOrder];
+                              currentIds.forEach(id => { if (!newOrder.includes(id)) newOrder.push(id); });
+                              newOrder = newOrder.filter(id => currentIds.includes(id));
+                              const metricIndex = newOrder.indexOf(metric.id);
+                              if (metricIndex < newOrder.length - 1) {
+                                [newOrder[metricIndex], newOrder[metricIndex + 1]] = [newOrder[metricIndex + 1], newOrder[metricIndex]];
+                                localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+                                return newOrder;
+                              }
+                              return prevOrder;
+                            });
                           }
-                          return prevOrder;
-                        });
-                      }
-                    }}
-                    disabled={sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1}
-                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? 0.3 : 1 }}
-                  >
-                    <ChevronDown size={14} />
-                    <span>Move Down</span>
-                  </button>
+                        }}
+                        disabled={sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1}
+                        style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? 0.3 : 1 }}
+                      >
+                        <ChevronDown size={14} />
+                        <span>Move Down</span>
+                      </button>
+                    </>
+                  )}
                   <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      setMetricInstances((prev: MetricInstance[]) => {
+                        const updated = prev.map((inst: MetricInstance) =>
+                          inst.instanceId === metric.id
+                            ? { ...inst, cardWidth: undefined, cardHeight: undefined, cardColumnSpan: undefined }
+                            : inst
+                        );
+                        localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+                        return updated;
+                      });
+                      setOpenMetricSettings(null);
+                    }}
+                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                  >
+                    <RotateCcw size={14} />
+                    <span>Reset size</span>
+                  </button>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -945,11 +1320,13 @@ function SortableMetricCard({
             )}
           </div>
         </div>
-        <div style={{ flex: 1, minHeight: 160, display: "flex", flexDirection: "column", pointerEvents: "auto" }} onMouseDown={(e) => e.stopPropagation()}>
+        <div style={{ flex: 1, minHeight: layoutLocked ? 0 : 160, display: "flex", flexDirection: "column", pointerEvents: "auto", overflow: "hidden" }} onMouseDown={(e) => e.stopPropagation()}>
           {selectedGroup && chartData.length > 0 ? (
             <>
-              <ResponsiveContainer width="100%" height={useBrush ? chartHeight - 36 : chartHeight}>
-                <LineChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+              {layoutLocked ? (
+                <div style={{ flex: 1, minHeight: 0 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                   <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} stroke="var(--border-color)" />
                   <YAxis
@@ -989,23 +1366,55 @@ function SortableMetricCard({
                     />
                   )}
                 </LineChart>
-              </ResponsiveContainer>
-              <div
-                role="separator"
-                aria-label="Resize chart"
-                onMouseDown={handleResizeStart}
-                style={{
-                  height: "8px",
-                  cursor: "ns-resize",
-                  flexShrink: 0,
-                  background: "linear-gradient(to bottom, transparent 0%, var(--border-color) 50%, transparent 100%)",
-                  borderRadius: "4px",
-                  marginTop: "4px",
-                }}
-              />
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={useBrush ? chartHeight - 36 : chartHeight}>
+                  <LineChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} stroke="var(--border-color)" />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: "var(--text-secondary)" }}
+                      stroke="var(--border-color)"
+                      tickFormatter={(v) => (v >= 0 ? `+${formatWithCommas(v, { maxDecimals: 2 })}` : formatWithCommas(v, { maxDecimals: 2 }))}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px" }}
+                      labelStyle={{ color: "var(--text-primary)" }}
+                      formatter={(value: number) => [value >= 0 ? `+${formatWithCommas(value, { minDecimals: 4, maxDecimals: 4 })}` : formatWithCommas(value, { minDecimals: 4, maxDecimals: 4 }), "Position size"]}
+                      labelFormatter={(label) => `Time: ${label}`}
+                    />
+                    <ReferenceLine y={0} stroke="var(--text-secondary)" strokeDasharray="2 2" />
+                    <Line type="stepAfter" dataKey="positionSize" stroke="var(--accent)" strokeWidth={2} dot={{ fill: "var(--accent)", r: 3 }} activeDot={{ r: 5 }} isAnimationActive={true} />
+                    {useBrush && (
+                      <Brush
+                        dataKey="label"
+                        height={36}
+                        stroke="var(--border-color)"
+                        fill="var(--bg-tertiary)"
+                        startIndex={brushStartClamped}
+                        endIndex={brushEndClamped}
+                        onDragEnd={(r: { startIndex?: number; endIndex?: number }) => {
+                          if (r.startIndex != null && r.endIndex != null) {
+                            setMetricInstances((prev: MetricInstance[]) => {
+                              const updated = prev.map((inst: MetricInstance) =>
+                                inst.instanceId === metric.id
+                                  ? { ...inst, positionChartBrushStart: r.startIndex!, positionChartBrushEnd: r.endIndex! }
+                                  : inst
+                              );
+                              localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+                              return updated;
+                            });
+                          }
+                        }}
+                      />
+                    )}
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </>
           ) : (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: chartHeight, color: "var(--text-secondary)", fontSize: "14px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: 1, minHeight: layoutLocked ? 0 : chartHeight, color: "var(--text-secondary)", fontSize: "14px" }}>
               {openPositionGroups.length === 0 ? "No open positions" : "Select a position above"}
             </div>
           )}
@@ -1022,8 +1431,22 @@ function SortableMetricCard({
             width: "8px",
             cursor: "ew-resize",
             flexShrink: 0,
-            background: "linear-gradient(to right, transparent 0%, var(--border-color) 50%, transparent 100%)",
-            borderRadius: "0 8px 8px 0",
+            background: "transparent",
+            pointerEvents: "auto",
+          }}
+        />
+        <div
+          role="separator"
+          aria-label="Resize chart height"
+          onMouseDown={handleResizeStart}
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: "10px",
+            cursor: "ns-resize",
+            background: "transparent",
             pointerEvents: "auto",
           }}
         />
@@ -1031,9 +1454,131 @@ function SortableMetricCard({
     );
   }
 
+  const cardHeight = Math.min(400, Math.max(80, (metric as MetricInstance).cardHeight ?? 100));
+  const cardWidth = (metric as MetricInstance).cardWidth;
+  const cardColumnSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as MetricInstance).cardColumnSpan ?? 1));
+
+  const handleCardResizeVertical = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = cardHeight;
+    const rowHeight = typeof lockedRowHeight === "number" && lockedRowHeight > 0 ? lockedRowHeight : 100;
+    if (layoutLocked) {
+      const startSpan = Math.min(MAX_ROW_SPAN, Math.max(1, (metric as MetricInstance).cardRowSpan ?? (Math.round(startH / rowHeight) || 1)));
+      const onMove = (e2: MouseEvent) => {
+        const delta = e2.clientY - startY;
+        const deltaRows = delta / rowHeight;
+        const newSpan = Math.min(MAX_ROW_SPAN, Math.max(1, Math.round(startSpan + deltaRows)));
+        const newH = newSpan * rowHeight;
+        setMetricInstances((prev: MetricInstance[]) => {
+          const updated = prev.map((inst: MetricInstance) =>
+            inst.instanceId === metric.id ? { ...inst, cardRowSpan: newSpan, cardHeight: newH } : inst
+          );
+          localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+          return updated;
+        });
+      };
+      const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+      return;
+    }
+    const SNAP_STEPS = [80, 100, 120, 140, 160, 200, 240, 280, 320, 400];
+    const snap = (v: number) => {
+      const clamped = Math.min(400, Math.max(80, v));
+      let best = SNAP_STEPS[0];
+      for (const s of SNAP_STEPS) {
+        if (Math.abs(s - clamped) < Math.abs(best - clamped)) best = s;
+      }
+      return best;
+    };
+    const onMove = (e2: MouseEvent) => {
+      const delta = e2.clientY - startY;
+      const newH = snap(startH + delta);
+      setMetricInstances((prev: MetricInstance[]) => {
+        const updated = prev.map((inst: MetricInstance) =>
+          inst.instanceId === metric.id ? { ...inst, cardHeight: newH } : inst
+        );
+        localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+        return updated;
+      });
+    };
+    const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const handleCardResizeHorizontal = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const card = (e.currentTarget as HTMLElement).closest("[data-metric-card]") as HTMLElement | null;
+    if (!card) return;
+    const startX = e.clientX;
+    const startWidth = card.getBoundingClientRect().width;
+    if (isGridLayout) {
+      let grid: HTMLElement | null = card.parentElement;
+      while (grid) {
+        const ds = getComputedStyle(grid);
+        if (ds.display === "grid" && ds.gridTemplateColumns && ds.gridTemplateColumns !== "none") break;
+        grid = grid.parentElement;
+      }
+      if (grid) {
+        const gs = getComputedStyle(grid);
+        const template = gs.gridTemplateColumns;
+        const isFluidGrid = template.includes("auto-fit") || template.includes("auto-fill");
+        if (!isFluidGrid) {
+          const columnCount = parseGridColumnCount(template);
+          const gapPx = parseFloat(gs.gap) || 20;
+          const gridWidth = grid.clientWidth;
+          const columnWidth = columnCount > 1 ? (gridWidth - (columnCount - 1) * gapPx) / columnCount : gridWidth;
+          const slotWidth = columnWidth + gapPx;
+          const minWidth = columnWidth;
+          const onMove = (e2: MouseEvent) => {
+            const delta = e2.clientX - startX;
+            const rawWidth = Math.max(minWidth, startWidth + delta);
+            const span = (rawWidth + gapPx) / slotWidth;
+            const newSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, Math.round(span)));
+            setMetricInstances((prev: MetricInstance[]) => {
+              const updated = prev.map((inst: MetricInstance) =>
+                inst.instanceId === metric.id ? { ...inst, cardColumnSpan: newSpan, cardWidth: undefined } : inst
+              );
+              localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+              return updated;
+            });
+          };
+          const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+          window.addEventListener("mousemove", onMove);
+          window.addEventListener("mouseup", onUp);
+          return;
+        }
+      }
+    }
+    const SNAP = 280;
+    const MIN_W = 200;
+    const MAX_W = 1200;
+    const onMove = (e2: MouseEvent) => {
+      const delta = e2.clientX - startX;
+      const raw = Math.min(MAX_W, Math.max(MIN_W, startWidth + delta));
+      const snapped = Math.round(raw / SNAP) * SNAP;
+      const newW = Math.min(MAX_W, Math.max(MIN_W, snapped));
+      setMetricInstances((prev: MetricInstance[]) => {
+        const updated = prev.map((inst: MetricInstance) =>
+          inst.instanceId === metric.id ? { ...inst, cardWidth: newW } : inst
+        );
+        localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+        return updated;
+      });
+    };
+    const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   return (
     <div
       ref={setNodeRef}
+      data-metric-card
       style={{
         backgroundColor: "var(--bg-secondary)",
         border: "1px solid var(--border-color)",
@@ -1045,8 +1590,21 @@ function SortableMetricCard({
         cursor: isDragging ? "grabbing" : "grab",
         userSelect: "none",
         WebkitUserSelect: "none",
-        ...(isGridLayout ? { width: "100%", minWidth: 0 } : { flex: "0 0 280px", width: "280px", minWidth: 280 }),
-        height: "100px",
+        position: "relative",
+        ...(isGridLayout
+          ? {
+              ...(isFluidGrid && cardWidth
+                ? { width: `${cardWidth}px`, minWidth: 200, maxWidth: "100%", overflow: "hidden", boxSizing: "border-box" as const }
+                : { width: "100%", minWidth: 0, maxWidth: "100%", overflow: "hidden", boxSizing: "border-box" as const }),
+              ...(cardColumnSpan > 1 ? { gridColumn: `span ${cardColumnSpan}` as const } : {}),
+            }
+          : {
+              flex: `0 0 ${cardWidth ? `${cardWidth}px` : "280px"}`,
+              width: cardWidth ? `${cardWidth}px` : "280px",
+              minWidth: cardWidth ?? 280,
+              maxWidth: cardWidth ? 1200 : undefined,
+            }),
+        height: `${cardHeight}px`,
         ...style,
       }}
     >
@@ -1072,6 +1630,8 @@ function SortableMetricCard({
       <div 
         style={{ 
           flex: 1, 
+          minWidth: 0,
+          overflow: "hidden",
           pointerEvents: ((metric as any).baseMetricId === "best_day" || (metric as any).baseMetricId === "worst_day" || (metric as any).baseMetricId === "largest_win" || (metric as any).baseMetricId === "largest_loss") ? "auto" : "none",
           cursor: ((metric as any).baseMetricId === "best_day" || (metric as any).baseMetricId === "worst_day" || (metric as any).baseMetricId === "largest_win" || (metric as any).baseMetricId === "largest_loss") ? "pointer" : "default",
         }}
@@ -1146,10 +1706,15 @@ function SortableMetricCard({
           })()}
         </p>
         <p
+          title={formatMetricValue((metric as any).baseMetricId || metric.id, value, metrics)}
           style={{
             fontSize: "24px",
             fontWeight: "bold",
             color: color,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}
         >
           {formatMetricValue((metric as any).baseMetricId || metric.id, value, metrics)}
@@ -1249,100 +1814,151 @@ function SortableMetricCard({
                   </div>
                 </div>
               )}
+              {layoutLocked && moveInLockedGridRef?.current ? (
+                <>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.(metric.id, "up"); setOpenMetricSettings(null); }}
+                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                  >
+                    <ChevronUp size={14} />
+                    <span>Move up</span>
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.(metric.id, "down"); setOpenMetricSettings(null); }}
+                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                  >
+                    <ChevronDown size={14} />
+                    <span>Move down</span>
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.(metric.id, "left"); setOpenMetricSettings(null); }}
+                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                  >
+                    <ChevronLeft size={14} />
+                    <span>Move left</span>
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.(metric.id, "right"); setOpenMetricSettings(null); }}
+                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                  >
+                    <ChevronRight size={14} />
+                    <span>Move right</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
+                      if (currentIndex > 0) {
+                        setMetricCardOrder(prevOrder => {
+                          const currentIds = enabledMetrics.map(m => m.id);
+                          let newOrder = [...prevOrder];
+                          currentIds.forEach(id => { if (!newOrder.includes(id)) newOrder.push(id); });
+                          newOrder = newOrder.filter(id => currentIds.includes(id));
+                          const metricIndex = newOrder.indexOf(metric.id);
+                          if (metricIndex > 0) {
+                            [newOrder[metricIndex - 1], newOrder[metricIndex]] = [newOrder[metricIndex], newOrder[metricIndex - 1]];
+                            localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+                            return newOrder;
+                          }
+                          return prevOrder;
+                        });
+                      }
+                    }}
+                    disabled={sortedMetrics.findIndex(m => m.id === metric.id) === 0}
+                    style={{
+                      background: "transparent",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      padding: "6px 8px",
+                      cursor: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? "not-allowed" : "pointer",
+                      color: "var(--text-primary)",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      fontSize: "13px",
+                      opacity: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? 0.3 : 1,
+                    }}
+                  >
+                    <ChevronUp size={14} />
+                    <span>Move Up</span>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
+                      if (currentIndex < sortedMetrics.length - 1) {
+                        setMetricCardOrder(prevOrder => {
+                          const currentIds = enabledMetrics.map(m => m.id);
+                          let newOrder = [...prevOrder];
+                          currentIds.forEach(id => { if (!newOrder.includes(id)) newOrder.push(id); });
+                          newOrder = newOrder.filter(id => currentIds.includes(id));
+                          const metricIndex = newOrder.indexOf(metric.id);
+                          if (metricIndex < newOrder.length - 1) {
+                            [newOrder[metricIndex], newOrder[metricIndex + 1]] = [newOrder[metricIndex + 1], newOrder[metricIndex]];
+                            localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+                            return newOrder;
+                          }
+                          return prevOrder;
+                        });
+                      }
+                    }}
+                    disabled={sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1}
+                    style={{
+                      background: "transparent",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "4px",
+                      padding: "6px 8px",
+                      cursor: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? "not-allowed" : "pointer",
+                      color: "var(--text-primary)",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      fontSize: "13px",
+                      opacity: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? 0.3 : 1,
+                    }}
+                  >
+                    <ChevronDown size={14} />
+                    <span>Move Down</span>
+                  </button>
+                </>
+              )}
+              <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
-                  const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
-                  if (currentIndex > 0) {
-                    setMetricCardOrder(prevOrder => {
-                      const currentIds = enabledMetrics.map(m => m.id);
-                      let newOrder = [...prevOrder];
-                      
-                      currentIds.forEach(id => {
-                        if (!newOrder.includes(id)) {
-                          newOrder.push(id);
-                        }
-                      });
-                      
-                      newOrder = newOrder.filter(id => currentIds.includes(id));
-                      
-                      const metricIndex = newOrder.indexOf(metric.id);
-                      if (metricIndex > 0) {
-                        [newOrder[metricIndex - 1], newOrder[metricIndex]] = [newOrder[metricIndex], newOrder[metricIndex - 1]];
-                        localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
-                        return newOrder;
-                      }
-                      return prevOrder;
-                    });
-                  }
+                  setMetricInstances((prev: MetricInstance[]) => {
+                    const updated = prev.map((inst: MetricInstance) =>
+                      inst.instanceId === metric.id
+                        ? { ...inst, cardWidth: undefined, cardHeight: undefined, cardColumnSpan: undefined }
+                        : inst
+                    );
+                    localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+                    return updated;
+                  });
+                  setOpenMetricSettings(null);
                 }}
-                disabled={sortedMetrics.findIndex(m => m.id === metric.id) === 0}
                 style={{
                   background: "transparent",
                   border: "1px solid var(--border-color)",
                   borderRadius: "4px",
                   padding: "6px 8px",
-                  cursor: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? "not-allowed" : "pointer",
+                  cursor: "pointer",
                   color: "var(--text-primary)",
                   display: "flex",
                   alignItems: "center",
                   gap: "8px",
                   fontSize: "13px",
-                  opacity: sortedMetrics.findIndex(m => m.id === metric.id) === 0 ? 0.3 : 1,
                 }}
               >
-                <ChevronUp size={14} />
-                <span>Move Up</span>
+                <RotateCcw size={14} />
+                <span>Reset size</span>
               </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                  const currentIndex = sortedMetrics.findIndex(m => m.id === metric.id);
-                  if (currentIndex < sortedMetrics.length - 1) {
-                    setMetricCardOrder(prevOrder => {
-                      const currentIds = enabledMetrics.map(m => m.id);
-                      let newOrder = [...prevOrder];
-                      
-                      currentIds.forEach(id => {
-                        if (!newOrder.includes(id)) {
-                          newOrder.push(id);
-                        }
-                      });
-                      
-                      newOrder = newOrder.filter(id => currentIds.includes(id));
-                      
-                      const metricIndex = newOrder.indexOf(metric.id);
-                      if (metricIndex < newOrder.length - 1) {
-                        [newOrder[metricIndex], newOrder[metricIndex + 1]] = [newOrder[metricIndex + 1], newOrder[metricIndex]];
-                        localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
-                        return newOrder;
-                      }
-                      return prevOrder;
-                    });
-                  }
-                }}
-                disabled={sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1}
-                style={{
-                  background: "transparent",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "4px",
-                  padding: "6px 8px",
-                  cursor: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? "not-allowed" : "pointer",
-                  color: "var(--text-primary)",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                  fontSize: "13px",
-                  opacity: sortedMetrics.findIndex(m => m.id === metric.id) === sortedMetrics.length - 1 ? 0.3 : 1,
-                }}
-              >
-                <ChevronDown size={14} />
-                <span>Move Down</span>
-              </button>
-              <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
-              <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1454,6 +2070,40 @@ function SortableMetricCard({
           document.body
         )}
       </div>
+      {/* Resize: right edge (width / column span) - invisible hit area */}
+      <div
+        role="separator"
+        aria-label="Resize card width"
+        onMouseDown={handleCardResizeHorizontal}
+        style={{
+          position: "absolute",
+          right: 0,
+          top: 0,
+          bottom: 0,
+          width: "8px",
+          cursor: "ew-resize",
+          flexShrink: 0,
+          background: "transparent",
+          pointerEvents: "auto",
+        }}
+      />
+      {/* Resize: bottom edge (height) - invisible hit area */}
+      <div
+        role="separator"
+        aria-label="Resize card height"
+        onMouseDown={handleCardResizeVertical}
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: "8px",
+          cursor: "ns-resize",
+          flexShrink: 0,
+          background: "transparent",
+          pointerEvents: "auto",
+        }}
+      />
     </div>
   );
 }
@@ -1711,7 +2361,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [showMetricsConfig, setShowMetricsConfig] = useState(false);
   const [configKey, setConfigKey] = useState(0); // Force re-render when config changes
-  const [layoutLocked, setLayoutLocked] = useState(() => localStorage.getItem(LAYOUT_LOCKED_KEY) === "true");
+  const layoutLocked = true;
   const [expandedRecentTrades, setExpandedRecentTrades] = useState<Set<number>>(new Set());
   const [expandedStrategies, setExpandedStrategies] = useState<Set<number | string>>(new Set());
   const [strategyPairs, setStrategyPairs] = useState<Map<number | string, PairedTrade[]>>(new Map());
@@ -1748,6 +2398,34 @@ export default function Dashboard() {
     }
     return defaultSectionOrder;
   });
+  const [sectionSizes, setSectionSizes] = useState<SectionSizes>(() => {
+    const saved = localStorage.getItem(DASHBOARD_SECTION_SIZES_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as SectionSizes;
+        const allIds: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions"];
+        const out: SectionSizes = {} as SectionSizes;
+        allIds.forEach((id) => {
+          const s = parsed[id];
+          if (s && typeof s === "object") {
+            const col = s.columnSpan != null ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, s.columnSpan)) : undefined;
+            const h = s.height != null ? Math.min(800, Math.max(200, s.height)) : undefined;
+            const rs = s.rowSpan != null ? Math.min(MAX_ROW_SPAN, Math.max(1, s.rowSpan)) : undefined;
+            out[id] = { columnSpan: col, height: h, rowSpan: rs };
+          }
+        });
+        return out;
+      } catch {
+        return {} as SectionSizes;
+      }
+    }
+    return {} as SectionSizes;
+  });
+  const [openPositionsDisplayMode, setOpenPositionsDisplayMode] = useState<"card" | "compact">(() => {
+    const saved = localStorage.getItem(OPEN_POSITIONS_DISPLAY_MODE_KEY);
+    if (saved === "compact" || saved === "card") return saved;
+    return "card";
+  });
   const [metricCardOrder, setMetricCardOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem(METRIC_CARDS_ORDER_KEY);
     if (saved) {
@@ -1759,6 +2437,135 @@ export default function Dashboard() {
     }
     return [];
   });
+  // Merged order of metric + section ids so users can mix them (e.g. Open Positions among metrics). Null = use default metrics then sections.
+  const [mergedDisplayOrder, setMergedDisplayOrder] = useState<string[] | null>(() => {
+    const saved = localStorage.getItem(DASHBOARD_DISPLAY_ORDER_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+  const [layoutPresets, setLayoutPresets] = useState<DashboardLayoutPreset[]>(() => {
+    const saved = localStorage.getItem(DASHBOARD_LAYOUT_PRESETS_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
+  const [layoutsMenuOpen, setLayoutsMenuOpen] = useState(false);
+  const [layoutsMenuAnchor, setLayoutsMenuAnchor] = useState<{ top: number; left: number } | null>(null);
+  const [organizeMenuOpen, setOrganizeMenuOpen] = useState(false);
+  const [organizeMenuAnchor, setOrganizeMenuAnchor] = useState<{ top: number; left: number } | null>(null);
+  const [lockedGridColumns, setLockedGridColumns] = useState(() =>
+    Math.max(2, Math.min(10, parseInt(localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY) || "4", 10)))
+  );
+  const [lockedColumnWidths, setLockedColumnWidths] = useState<number[]>(() => {
+    const saved = localStorage.getItem(DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY);
+    if (saved) {
+      try {
+        const arr = JSON.parse(saved);
+        if (Array.isArray(arr) && arr.every((n) => typeof n === "number" && n >= MIN_COLUMN_FR)) return arr;
+      } catch {}
+    }
+    return [];
+  });
+  const [lockedRowHeight, setLockedRowHeight] = useState(() => {
+    const n = parseInt(localStorage.getItem(DASHBOARD_LOCKED_ROW_HEIGHT_KEY) || "100", 10);
+    return Math.min(MAX_ROW_HEIGHT_PX, Math.max(MIN_ROW_HEIGHT_PX, Number.isNaN(n) ? 100 : n));
+  });
+  useEffect(() => {
+    if (!layoutLocked) return;
+    const n = parseInt(localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY) || "4", 10);
+    setLockedGridColumns((prev) => (n >= 2 && n <= 10 ? n : prev));
+  }, [layoutLocked]);
+  const lockedGridRef = useRef<HTMLDivElement | null>(null);
+  const moveInLockedGridRef = useRef<((id: string, dir: MoveInLockedGridDir) => void) | null>(null);
+
+  /** When layout is locked, slot assignments preserve gaps (empty slots). Null = use dense order. */
+  const [lockedSlotAssignments, setLockedSlotAssignments] = useState<(string | null)[] | null>(() => {
+    const saved = localStorage.getItem(DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
+  /** When layout is locked, fixed (row,col) per slot so shrinking a card leaves gap instead of repacking. */
+  const [lockedPlacements, setLockedPlacements] = useState<{ row: number; col: number }[] | null>(() => {
+    const saved = localStorage.getItem(DASHBOARD_LOCKED_PLACEMENTS_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
+  const needSavePlacementsRef = useRef<{ row: number; col: number }[] | null>(null);
+  /** Previous slot spans to detect expand (repack) vs shrink (leave gap). */
+  const previousSlotSpansRef = useRef<{ colSpan: number; rowSpan: number }[] | null>(null);
+
+  useEffect(() => {
+    if (!layoutLocked) return;
+    setLockedColumnWidths((prev) => {
+      if (prev.length === lockedGridColumns) return prev;
+      if (prev.length < lockedGridColumns) {
+        const next = [...prev];
+        while (next.length < lockedGridColumns) next.push(1);
+        return next;
+      }
+      return prev.slice(0, lockedGridColumns);
+    });
+  }, [layoutLocked, lockedGridColumns]);
+
+  useEffect(() => {
+    if (lockedColumnWidths.length > 0) {
+      localStorage.setItem(DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY, JSON.stringify(lockedColumnWidths));
+    }
+  }, [lockedColumnWidths]);
+
+  useEffect(() => {
+    if (layoutLocked && lockedSlotAssignments != null && lockedSlotAssignments.length > 0) {
+      localStorage.setItem(DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY, JSON.stringify(lockedSlotAssignments));
+    }
+  }, [layoutLocked, lockedSlotAssignments]);
+
+  useEffect(() => {
+    if (needSavePlacementsRef.current) {
+      const placements = needSavePlacementsRef.current;
+      needSavePlacementsRef.current = null;
+      setLockedPlacements(placements);
+    }
+  });
+
+  useEffect(() => {
+    if (layoutLocked && lockedPlacements != null && lockedPlacements.length > 0) {
+      localStorage.setItem(DASHBOARD_LOCKED_PLACEMENTS_KEY, JSON.stringify(lockedPlacements));
+    }
+  }, [layoutLocked, lockedPlacements]);
+
+  useEffect(() => {
+    localStorage.setItem(DASHBOARD_LOCKED_ROW_HEIGHT_KEY, String(lockedRowHeight));
+  }, [lockedRowHeight]);
+
   // @dnd-kit sensors
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -1799,49 +2606,163 @@ export default function Dashboard() {
       if (overId.startsWith("metric-slot-")) {
         const parsed = parseInt(overId.replace("metric-slot-", ""), 10);
         if (!Number.isNaN(parsed) && parsed >= 0) targetSlot = parsed;
-      } else if (metricInstances.some((inst) => inst.instanceId === overId)) {
-        const targetCard = metricInstances.find((inst) => inst.instanceId === overId);
-        if (targetCard && targetCard.slotIndex !== undefined) targetSlot = targetCard.slotIndex;
+      } else {
+        const idx = displayOrder.indexOf(overId);
+        if (idx >= 0) targetSlot = idx;
       }
       if (targetSlot !== null) {
         const draggedId = active.id as string;
-        setMetricInstances((prev) => {
-          const dragged = prev.find((inst) => inst.instanceId === draggedId);
-          if (!dragged) return prev;
-          const oldSlot = dragged.slotIndex ?? prev.findIndex((i) => i.instanceId === draggedId);
-          const occupant = prev.find((inst) => inst.instanceId !== draggedId && (inst.slotIndex ?? 0) === targetSlot);
-          const updated = prev.map((inst) => {
-            if (inst.instanceId === draggedId) return { ...inst, slotIndex: targetSlot! };
-            if (occupant && inst.instanceId === occupant.instanceId) return { ...inst, slotIndex: oldSlot };
-            return inst;
-          });
-          localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
-          return updated;
+        const numEmptySlots = Math.max(4, 3 * lockedGridColumns);
+        const minTotalSlots = displayOrder.length + numEmptySlots;
+        const effectiveSlots = lockedSlotAssignments && lockedSlotAssignments.length >= minTotalSlots
+          ? lockedSlotAssignments
+          : [...displayOrder, ...Array(numEmptySlots).fill(null)];
+        const totalSlots = effectiveSlots.length;
+        const clampedTarget = Math.min(targetSlot, totalSlots - 1);
+        const oldSlot = effectiveSlots.indexOf(draggedId);
+        if (oldSlot === -1) return;
+        const newSlots = [...effectiveSlots];
+        newSlots[oldSlot] = null;
+        newSlots[clampedTarget] = draggedId;
+        const maxFilledIndex = newSlots.reduce((max, id, i) => (id != null ? i : max), -1);
+        const paddedMinSlots = maxFilledIndex + 1 + 3 * lockedGridColumns;
+        const finalSlots = newSlots.length < paddedMinSlots
+          ? [...newSlots, ...Array(paddedMinSlots - newSlots.length).fill(null)]
+          : newSlots;
+        setLockedSlotAssignments(finalSlots);
+        const newOrder = finalSlots.filter((id): id is string => id != null);
+        setMergedDisplayOrder(newOrder);
+        localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(newOrder));
+        setMetricCardOrder((prev) => {
+          const metricIds = newOrder.filter((id) => !isSectionId(id));
+          const kept = prev.filter((id) => !newOrder.includes(id) && !isSectionId(id));
+          const finalOrder = [...metricIds, ...kept];
+          localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
         });
+        setSectionOrder((prev) => {
+          const sectionIds = newOrder.filter((id) => isSectionId(id));
+          const kept = prev.filter((id) => !newOrder.includes(id));
+          const finalOrder = [...sectionIds, ...kept];
+          localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        });
+        setMetricInstances((prev) =>
+          prev.map((inst) => ({
+            ...inst,
+            slotIndex: finalSlots.indexOf(inst.instanceId) >= 0 ? finalSlots.indexOf(inst.instanceId) : inst.slotIndex,
+          }))
+        );
         return;
       }
     }
 
     if (!layoutLocked && over && active.id !== over.id) {
+      const activeId = active.id as string;
+      const overId = over.id as string;
+      const oldIndex = displayOrder.indexOf(activeId);
+      const newIndex = displayOrder.indexOf(overId);
+      if (oldIndex !== -1 && newIndex !== -1) {
+        const newOrder = arrayMove([...displayOrder], oldIndex, newIndex);
+        setMergedDisplayOrder(newOrder);
+        localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(newOrder));
+        const metricIdsInOrder = newOrder.filter((id) => !isSectionId(id));
+        const sectionIdsInOrder = newOrder.filter((id) => isSectionId(id));
+        setMetricCardOrder((prev) => {
+          const kept = prev.filter((id) => !newOrder.includes(id) && !isSectionId(id));
+          const finalOrder = [...metricIdsInOrder, ...kept];
+          localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        });
+        setSectionOrder((prev) => {
+          const kept = prev.filter((id) => !newOrder.includes(id));
+          const finalOrder = [...sectionIdsInOrder, ...kept];
+          localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        });
+        return;
+      }
       setMetricCardOrder((items) => {
         const currentInstanceIds = metricInstances.map(inst => inst.instanceId);
         let newOrder = [...items];
-        
         currentInstanceIds.forEach(id => {
           if (!newOrder.includes(id)) newOrder.push(id);
         });
         newOrder = newOrder.filter(id => currentInstanceIds.includes(id));
-        
-        const oldIndex = newOrder.indexOf(active.id as string);
-        const newIndex = newOrder.indexOf(over.id as string);
-        
-        if (oldIndex !== -1 && newIndex !== -1) {
-          const finalOrder = arrayMove(newOrder, oldIndex, newIndex);
+        const oi = newOrder.indexOf(activeId);
+        const ni = newOrder.indexOf(overId);
+        if (oi !== -1 && ni !== -1) {
+          const finalOrder = arrayMove(newOrder, oi, ni);
           localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
           return finalOrder;
         }
         return newOrder;
       });
+    }
+  };
+
+  /** When split grid is on, metrics grid only: update metric order and slot indices, never section/merged order. */
+  const handleDragEndMetricsOnly = (event: DragEndEvent, order: string[]) => {
+    const { active, over } = event;
+    if (layoutLocked && over && typeof over.id === "string") {
+      const overId = String(over.id);
+      let targetSlot: number | null = null;
+      if (overId.startsWith("metric-slot-")) {
+        const parsed = parseInt(overId.replace("metric-slot-", ""), 10);
+        if (!Number.isNaN(parsed) && parsed >= 0) targetSlot = parsed;
+      } else if (order.includes(overId)) {
+        targetSlot = order.indexOf(overId);
+      }
+      if (targetSlot !== null) {
+        const draggedId = active.id as string;
+        const numEmptySlots = Math.max(4, 3 * lockedGridColumns);
+        const minTotalSlots = order.length + numEmptySlots;
+        const effectiveSlots = lockedSlotAssignments && lockedSlotAssignments.length >= minTotalSlots
+          ? lockedSlotAssignments
+          : [...order, ...Array(numEmptySlots).fill(null)];
+        const totalSlots = effectiveSlots.length;
+        const clampedTarget = Math.min(targetSlot, totalSlots - 1);
+        const oldSlot = effectiveSlots.indexOf(draggedId);
+        if (oldSlot === -1) return;
+        const newSlots = [...effectiveSlots];
+        newSlots[oldSlot] = null;
+        newSlots[clampedTarget] = draggedId;
+        const maxFilledIndex = newSlots.reduce((max, id, i) => (id != null ? i : max), -1);
+        const paddedMinSlots = maxFilledIndex + 1 + 3 * lockedGridColumns;
+        const finalSlots = newSlots.length < paddedMinSlots
+          ? [...newSlots, ...Array(paddedMinSlots - newSlots.length).fill(null)]
+          : newSlots;
+        setLockedSlotAssignments(finalSlots);
+        const newOrder = finalSlots.filter((id): id is string => id != null);
+        setMetricCardOrder((prev) => {
+          const kept = prev.filter((id) => !newOrder.includes(id) && !isSectionId(id));
+          const finalOrder = [...newOrder, ...kept];
+          localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        });
+        setMetricInstances((prev) =>
+          prev.map((inst) => ({
+            ...inst,
+            slotIndex: finalSlots.indexOf(inst.instanceId) >= 0 ? finalSlots.indexOf(inst.instanceId) : inst.slotIndex,
+          }))
+        );
+        return;
+      }
+    }
+    if (!layoutLocked && over && active.id !== over.id) {
+      const activeId = active.id as string;
+      const overId = over.id as string;
+      const oldIndex = order.indexOf(activeId);
+      const newIndex = order.indexOf(overId);
+      if (oldIndex !== -1 && newIndex !== -1) {
+        const newOrder = arrayMove([...order], oldIndex, newIndex);
+        setMetricCardOrder((prev) => {
+          const kept = prev.filter((id) => !newOrder.includes(id) && !isSectionId(id));
+          const finalOrder = [...newOrder, ...kept];
+          localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        });
+      }
     }
   };
 
@@ -1857,6 +2778,12 @@ export default function Dashboard() {
         if (oldIndex !== -1 && newIndex !== -1) {
           const finalOrder = arrayMove(items, oldIndex, newIndex);
           localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(finalOrder));
+          setMergedDisplayOrder((prev) => {
+            if (!prev) return null;
+            return prev.map((id) =>
+              isSectionId(id) ? finalOrder[items.indexOf(id)] : id
+            );
+          });
           return finalOrder;
         }
         
@@ -2047,6 +2974,11 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configKey]); // Only depend on configKey - metrics are read fresh from hook inside effect
 
+  useEffect(() => {
+    const n = parseInt(localStorage.getItem(DASHBOARD_LOCKED_ROW_HEIGHT_KEY) || "100", 10);
+    setLockedRowHeight(Math.min(MAX_ROW_HEIGHT_PX, Math.max(MIN_ROW_HEIGHT_PX, Number.isNaN(n) ? 100 : n)));
+  }, [configKey]);
+
   // Sync metric card order when instances change
   useEffect(() => {
     const instanceIds = metricInstances.map(inst => inst.instanceId);
@@ -2092,9 +3024,14 @@ export default function Dashboard() {
           positionEntryId: inst.positionEntryId ?? null,
           chartHeight: inst.chartHeight ?? 200,
           chartWidth: inst.chartWidth ?? undefined,
+          chartColumnSpan: inst.chartColumnSpan ?? (inst.chartWidth ? 2 : undefined),
           positionChartBrushStart: inst.positionChartBrushStart ?? 0,
           positionChartBrushEnd: inst.positionChartBrushEnd ?? 0,
           slotIndex: inst.slotIndex ?? undefined,
+          cardWidth: inst.cardWidth ?? undefined,
+          cardHeight: inst.cardHeight ?? undefined,
+          cardColumnSpan: inst.cardColumnSpan ?? undefined,
+          cardRowSpan: inst.cardRowSpan ?? undefined,
         };
       })
       .filter((m): m is any => m !== null);
@@ -2117,7 +3054,166 @@ export default function Dashboard() {
       return 0;
     });
   }, [displayMetrics, metricCardOrder]);
-  
+
+  const sectionVisible = (id: SectionId): boolean => {
+    const key: keyof DashboardSections = id === "topSymbols" ? "showTopSymbols" : id === "strategyPerformance" ? "showStrategyPerformance" : id === "recentTrades" ? "showRecentTrades" : id === "trades" ? "showTrades" : "showOpenPositions";
+    return !!dashboardSections[key];
+  };
+  // Unified order: metrics + sections so users can mix them in one grid when unlocked. Use merged order if saved.
+  const displayOrder = useMemo(() => {
+    const metricIds = sortedMetrics.map((m) => m.id);
+    const sectionIds = sectionOrder.filter((id) => sectionVisible(id));
+    if (mergedDisplayOrder && mergedDisplayOrder.length > 0) {
+      const validIds = new Set([...metricIds, ...sectionIds]);
+      const ordered = mergedDisplayOrder.filter((id) => validIds.has(id));
+      const appended = [...metricIds, ...sectionIds].filter((id) => !ordered.includes(id));
+      return [...ordered, ...appended];
+    }
+    return [...metricIds, ...sectionIds];
+  }, [sortedMetrics, sectionOrder, dashboardSections, mergedDisplayOrder]);
+
+  useEffect(() => {
+    if (mergedDisplayOrder && mergedDisplayOrder.length > 0) {
+      localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(mergedDisplayOrder));
+    }
+  }, [mergedDisplayOrder]);
+
+  useEffect(() => {
+    if (!layoutLocked) {
+      setLockedSlotAssignments(null);
+      return;
+    }
+    const split = localStorage.getItem(DASHBOARD_SPLIT_GRID_KEY) === "true";
+    const numEmptySlots = Math.max(4, 3 * lockedGridColumns);
+    const currentOrder = split ? sortedMetrics.map((m) => m.id) : displayOrder;
+    const minTotalSlots = currentOrder.length + numEmptySlots;
+    setLockedSlotAssignments((prev) => {
+      if (prev !== null && prev.length >= minTotalSlots) return prev;
+      return [...currentOrder, ...Array(numEmptySlots).fill(null)];
+    });
+  }, [layoutLocked, lockedGridColumns, displayOrder, sortedMetrics]);
+
+  useEffect(() => {
+    localStorage.setItem(DASHBOARD_LAYOUT_PRESETS_KEY, JSON.stringify(layoutPresets));
+  }, [layoutPresets]);
+
+  const applyLayoutPreset = (preset: DashboardLayoutPreset) => {
+    setMergedDisplayOrder(preset.displayOrder.length > 0 ? preset.displayOrder : null);
+    setMetricCardOrder(preset.metricCardOrder);
+    setSectionOrder(preset.sectionOrder);
+    setDashboardSections(preset.dashboardSections);
+    if (preset.sectionSizes && Object.keys(preset.sectionSizes).length > 0) {
+      setSectionSizes((prev) => ({ ...prev, ...preset.sectionSizes }));
+    }
+    if (preset.lockedGridColumns != null && preset.lockedGridColumns >= 2 && preset.lockedGridColumns <= 10) {
+      setLockedGridColumns(preset.lockedGridColumns);
+      localStorage.setItem(DASHBOARD_MAX_COLUMNS_KEY, String(preset.lockedGridColumns));
+    }
+    if (preset.lockedSlotAssignments != null && preset.lockedSlotAssignments.length > 0) {
+      setLockedSlotAssignments(preset.lockedSlotAssignments);
+      localStorage.setItem(DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY, JSON.stringify(preset.lockedSlotAssignments));
+    }
+    if (preset.lockedColumnWidths != null && preset.lockedColumnWidths.length > 0) {
+      setLockedColumnWidths(preset.lockedColumnWidths);
+      localStorage.setItem(DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY, JSON.stringify(preset.lockedColumnWidths));
+    }
+    localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(preset.displayOrder));
+    localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(preset.metricCardOrder));
+    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(preset.sectionOrder));
+    localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(preset.dashboardSections));
+    if (preset.sectionSizes && Object.keys(preset.sectionSizes).length > 0) {
+      localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(preset.sectionSizes));
+    }
+    setLayoutsMenuOpen(false);
+  };
+
+  const saveCurrentLayoutAsPreset = (name: string) => {
+    const metricIds = sortedMetrics.map((m) => m.id);
+    const sectionIds = sectionOrder.filter((id) => sectionVisible(id));
+    const order = mergedDisplayOrder && mergedDisplayOrder.length > 0
+      ? mergedDisplayOrder.filter((id) => metricIds.includes(id) || sectionIds.includes(id as SectionId))
+      : [...metricIds, ...sectionIds];
+    const preset: DashboardLayoutPreset = {
+      id: `preset-${Date.now()}`,
+      name: name.trim() || "Untitled layout",
+      displayOrder: order,
+      metricCardOrder: [...metricCardOrder],
+      sectionOrder: [...sectionOrder],
+      dashboardSections: { ...dashboardSections },
+      sectionSizes: { ...sectionSizes },
+      lockedGridColumns: layoutLocked ? lockedGridColumns : undefined,
+      lockedSlotAssignments: layoutLocked && lockedSlotAssignments != null && lockedSlotAssignments.length > 0 ? lockedSlotAssignments : undefined,
+      lockedColumnWidths: layoutLocked && lockedColumnWidths.length > 0 ? lockedColumnWidths : undefined,
+    };
+    setLayoutPresets((prev) => [...prev, preset]);
+    setLayoutsMenuOpen(false);
+  };
+
+  const deleteLayoutPreset = (id: string) => {
+    setLayoutPresets((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  useEffect(() => {
+    if (!layoutsMenuOpen && !organizeMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest("[data-layouts-menu]") || target.closest("[data-organize-menu]") || target.closest("[data-layouts-button]") || target.closest("[data-organize-button]")) return;
+      setLayoutsMenuOpen(false);
+      setOrganizeMenuOpen(false);
+    };
+    const t = setTimeout(() => {
+      document.addEventListener("click", close, true);
+    }, 0);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("click", close, true);
+    };
+  }, [layoutsMenuOpen, organizeMenuOpen]);
+
+  type OrganizeOption = "metrics-first" | "sections-first" | "default";
+  const applyOrganizeOrder = (option: OrganizeOption) => {
+    const metricIds = sortedMetrics.map((m) => m.id);
+    const sectionIds = sectionOrder.filter((id) => sectionVisible(id));
+    if (option === "metrics-first") {
+      const order = [...metricIds, ...sectionIds];
+      setMergedDisplayOrder(order);
+      setMetricCardOrder(metricIds);
+      setSectionOrder((prev) => {
+        const next = [...sectionIds, ...prev.filter((id) => !sectionIds.includes(id))];
+        localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(next));
+        return next;
+      });
+      localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(order));
+      localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(metricIds));
+    } else if (option === "sections-first") {
+      const order = [...sectionIds, ...metricIds];
+      setMergedDisplayOrder(order);
+      setMetricCardOrder(metricIds);
+      setSectionOrder((prev) => {
+        const next = [...sectionIds, ...prev.filter((id) => !sectionIds.includes(id))];
+        localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(next));
+        return next;
+      });
+      localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(order));
+      localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(metricIds));
+    } else {
+      setMergedDisplayOrder(null);
+      setMetricCardOrder((prev) => prev.length > 0 ? prev : metricIds);
+      setSectionOrder(defaultSectionOrder);
+      localStorage.removeItem(DASHBOARD_DISPLAY_ORDER_KEY);
+      localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(metricIds));
+      localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(defaultSectionOrder));
+    }
+    setOrganizeMenuOpen(false);
+  };
+
+  // Ref set by section grid so unified grid can render full section cards when mixing.
+  const renderSectionCardRef = useRef<((sectionId: SectionId) => React.ReactNode) | null>(null);
+  const [sectionCardRefReady, setSectionCardRefReady] = useState(0);
+  useLayoutEffect(() => {
+    if (renderSectionCardRef.current && sectionCardRefReady === 0) setSectionCardRefReady(1);
+  });
+
   // Listen for color range changes - use a ref to track previous value
   const prevColorRangeRef = useRef<string>("");
   useEffect(() => {
@@ -2448,8 +3544,32 @@ export default function Dashboard() {
     largest_loss_pct: metrics?.largest_loss_pct || 0,
   };
 
+  const splitGrid = localStorage.getItem(DASHBOARD_SPLIT_GRID_KEY) === "true";
+  const sectionsOnTop = localStorage.getItem(DASHBOARD_SECTIONS_ON_TOP_KEY) !== "false";
+
+  const metricsToSectionsGapPx = (() => {
+    const n = parseInt(localStorage.getItem(DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY) || "12", 10);
+    if (Number.isNaN(n) || n < 0) return 12;
+    return Math.min(80, n);
+  })();
+  const metricsGridGapPx = (() => {
+    const n = parseInt(localStorage.getItem(DASHBOARD_METRICS_GRID_GAP_KEY) || "12", 10);
+    return [0, 4, 8, 12, 16, 20, 24].includes(n) ? n : 12;
+  })();
+  const sectionsGridGapPx = Math.min(48, Math.max(0, parseInt(localStorage.getItem(DASHBOARD_SECTIONS_GRID_GAP_KEY) || "20", 10)) || 20);
+  const sectionsGridMinWidthPx = (() => {
+    const n = parseInt(localStorage.getItem(DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY) || "400", 10);
+    return [280, 320, 360, 400, 480].includes(n) ? n : 400;
+  })();
+  const sectionsGridMarginBottomPx = Math.min(80, Math.max(0, parseInt(localStorage.getItem(DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY) || "30", 10)) || 30);
+  const dashboardPaddingPx = (() => {
+    const n = parseInt(localStorage.getItem(DASHBOARD_PADDING_KEY) || "30", 10);
+    return [16, 20, 24, 30, 40, 48].includes(n) ? n : 30;
+  })();
+
   return (
-    <div style={{ padding: "30px" }}>
+    <MoveInLockedGridContext.Provider value={moveInLockedGridRef}>
+    <div style={{ padding: `${dashboardPaddingPx}px` }}>
           <div
             style={{
               display: "flex",
@@ -2460,29 +3580,233 @@ export default function Dashboard() {
           >
             <h1 style={{ fontSize: "32px", fontWeight: "bold" }}>Dashboard</h1>
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <button
-                onClick={() => {
-                  setLayoutLocked((prev) => {
-                    const next = !prev;
-                    localStorage.setItem(LAYOUT_LOCKED_KEY, next ? "true" : "false");
-                    return next;
-                  });
-                }}
-                title={layoutLocked ? "Unlock layout (allow reflow on resize)" : "Lock layout (keep arrangement on resize)"}
-                style={{
-                  background: layoutLocked ? "color-mix(in srgb, var(--accent) 20%, var(--bg-secondary))" : "var(--bg-secondary)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                  padding: "10px 12px",
-                  color: layoutLocked ? "var(--accent)" : "var(--text-primary)",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                {layoutLocked ? <Lock size={18} /> : <Unlock size={18} />}
-              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: "4px", padding: "0 4px" }}>
+                <span style={{ fontSize: "12px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>Columns:</span>
+                {[2, 3, 4, 5, 6, 8, 10].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => {
+                      setLockedGridColumns(n);
+                      localStorage.setItem(DASHBOARD_MAX_COLUMNS_KEY, String(n));
+                    }}
+                    title={`${n} columns`}
+                    style={{
+                      minWidth: "28px",
+                      padding: "6px 8px",
+                      fontSize: "12px",
+                      fontWeight: lockedGridColumns === n ? "600" : "400",
+                      background: lockedGridColumns === n ? "color-mix(in srgb, var(--accent) 18%, var(--bg-secondary))" : "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "6px",
+                      color: lockedGridColumns === n ? "var(--accent)" : "var(--text-primary)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <div style={{ position: "relative" }}>
+                <button
+                  data-layouts-button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setLayoutsMenuAnchor({ top: rect.bottom + 4, left: rect.left });
+                    setLayoutsMenuOpen((prev) => !prev);
+                  }}
+                  style={{
+                    background: "var(--bg-secondary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "8px",
+                    padding: "10px 12px",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    fontSize: "14px",
+                  }}
+                  title="Layout presets"
+                >
+                  <LayoutDashboard size={16} />
+                  Layouts
+                  <ChevronDown size={14} />
+                </button>
+                {layoutsMenuOpen && layoutsMenuAnchor && createPortal(
+                  <div
+                    data-layouts-menu
+                    style={{
+                      position: "fixed",
+                      top: layoutsMenuAnchor.top,
+                      left: layoutsMenuAnchor.left,
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                      padding: "6px 0",
+                      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                      zIndex: 99999,
+                      minWidth: "200px",
+                      maxWidth: "280px",
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {layoutPresets.length === 0 ? (
+                      <div style={{ padding: "8px 12px", fontSize: "13px", color: "var(--text-secondary)" }}>No saved layouts</div>
+                    ) : (
+                      layoutPresets.map((preset) => (
+                        <div key={preset.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                          <button
+                            onClick={() => applyLayoutPreset(preset)}
+                            style={{
+                              flex: 1,
+                              textAlign: "left",
+                              background: "transparent",
+                              border: "none",
+                              padding: "8px 12px",
+                              cursor: "pointer",
+                              color: "var(--text-primary)",
+                              fontSize: "13px",
+                            }}
+                          >
+                            {preset.name}
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteLayoutPreset(preset.id); }}
+                            title="Delete preset"
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              padding: "4px 8px",
+                              cursor: "pointer",
+                              color: "var(--text-secondary)",
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                    <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                    <button
+                      onClick={() => {
+                        const name = window.prompt("Name this layout", "");
+                        if (name != null) saveCurrentLayoutAsPreset(name);
+                      }}
+                      style={{
+                        width: "100%",
+                        textAlign: "left",
+                        background: "transparent",
+                        border: "none",
+                        padding: "8px 12px",
+                        cursor: "pointer",
+                        color: "var(--text-primary)",
+                        fontSize: "13px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                      }}
+                    >
+                      <Save size={14} />
+                      Save current layout
+                    </button>
+                  </div>,
+                  document.body
+                )}
+              </div>
+              <div style={{ position: "relative" }}>
+                <button
+                  data-organize-button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setOrganizeMenuAnchor({ top: rect.bottom + 4, left: rect.left });
+                    setOrganizeMenuOpen((prev) => !prev);
+                  }}
+                  style={{
+                    background: "var(--bg-secondary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "8px",
+                    padding: "10px 12px",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    fontSize: "14px",
+                  }}
+                  title="Reorder dashboard"
+                >
+                  <ListOrdered size={16} />
+                  Organize
+                  <ChevronDown size={14} />
+                </button>
+                {organizeMenuOpen && organizeMenuAnchor && createPortal(
+                  <div
+                    data-organize-menu
+                    style={{
+                      position: "fixed",
+                      top: organizeMenuAnchor.top,
+                      left: organizeMenuAnchor.left,
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                      padding: "6px 0",
+                      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                      zIndex: 99999,
+                      minWidth: "240px",
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      onClick={() => applyOrganizeOrder("metrics-first")}
+                      style={{
+                        width: "100%",
+                        textAlign: "left",
+                        background: "transparent",
+                        border: "none",
+                        padding: "8px 12px",
+                        cursor: "pointer",
+                        color: "var(--text-primary)",
+                        fontSize: "13px",
+                      }}
+                    >
+                      Metrics first, then sections
+                    </button>
+                    <button
+                      onClick={() => applyOrganizeOrder("sections-first")}
+                      style={{
+                        width: "100%",
+                        textAlign: "left",
+                        background: "transparent",
+                        border: "none",
+                        padding: "8px 12px",
+                        cursor: "pointer",
+                        color: "var(--text-primary)",
+                        fontSize: "13px",
+                      }}
+                    >
+                      Sections first, then metrics
+                    </button>
+                    <button
+                      onClick={() => applyOrganizeOrder("default")}
+                      style={{
+                        width: "100%",
+                        textAlign: "left",
+                        background: "transparent",
+                        border: "none",
+                        padding: "8px 12px",
+                        cursor: "pointer",
+                        color: "var(--text-primary)",
+                        fontSize: "13px",
+                      }}
+                    >
+                      Default order
+                    </button>
+                  </div>,
+                  document.body
+                )}
+              </div>
               <button
                 onClick={() => setShowMetricsConfig(true)}
                 style={{
@@ -2538,18 +3862,25 @@ export default function Dashboard() {
             />
           </div>
 
+      <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
       {/* Metrics Cards */}
-      {(() => {
+      <div style={{ ...(splitGrid ? { order: 1 } : {}), minWidth: 0 }}>
+      {((order: string[], onDragEnd: (e: DragEndEvent) => void) => {
+        moveInLockedGridRef.current = null;
         const maxMetricRows = Math.max(0, parseInt(localStorage.getItem(DASHBOARD_MAX_METRIC_ROWS_KEY) || "0", 10));
         const maxColumns = Math.max(0, Math.min(10, parseInt(localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY) || "0", 10)));
         const useGridLayout = layoutLocked || maxMetricRows > 0 || maxColumns > 0;
         const gridColumns = useGridLayout
-          ? (maxMetricRows > 0
-              ? Math.max(1, Math.ceil(sortedMetrics.length / maxMetricRows))
-              : maxColumns > 0
-                ? maxColumns
-                : layoutLocked ? 4 : 1)
+          ? (layoutLocked
+              ? lockedGridColumns
+              : maxMetricRows > 0
+                ? Math.max(1, Math.ceil(sortedMetrics.length / maxMetricRows))
+                : maxColumns > 0
+                  ? maxColumns
+                  : 1)
           : 1;
+        /** Unlocked with no fixed rows/cols: fluid grid so cards resize with container and rows add/remove on resize */
+        const useFluidGrid = !layoutLocked && !useGridLayout;
 
         const renderCard = (metric: typeof sortedMetrics[0]) => {
           const baseMetricId = (metric as any).baseMetricId || metric.id;
@@ -2589,44 +3920,330 @@ export default function Dashboard() {
               setMetricInstances={setMetricInstances}
               dataMode={dataMode}
               openPositionGroups={openPositionGroups}
-              isGridLayout={useGridLayout}
+              isGridLayout={useGridLayout || useFluidGrid}
+              isFluidGrid={useFluidGrid}
+              layoutLocked={layoutLocked}
+              lockedRowHeight={lockedRowHeight}
             />
           );
         };
 
         if (layoutLocked) {
-          const maxSlot = Math.max(0, ...displayMetrics.map((m: any, i: number) => m.slotIndex ?? i));
+          const numEmptySlots = Math.max(4, 3 * gridColumns);
+          const minTotalSlots = order.length + numEmptySlots;
+          const effectiveSlotAssignments = lockedSlotAssignments && lockedSlotAssignments.length >= minTotalSlots
+            ? lockedSlotAssignments
+            : [...order, ...Array(numEmptySlots).fill(null)];
+          const totalSlots = effectiveSlotAssignments.length;
+          const columnWidths = lockedColumnWidths.length === gridColumns
+            ? lockedColumnWidths
+            : Array.from({ length: gridColumns }, () => 1);
+          const gridTemplateCols = columnWidths.map((w) => `${w}fr`).join(" ");
+
+          const slotSpans: number[] = [];
+          const slotRowSpans: number[] = [];
+          for (let i = 0; i < totalSlots; i++) {
+            const id = effectiveSlotAssignments[i] ?? null;
+            let span = 1;
+            let rowSpan = 1;
+            if (id) {
+              if (isSectionId(id)) {
+                const defaultSectionSpan = id === "openPositions" && openPositionsDisplayMode === "compact" ? 3 : 1;
+                span = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes[id]?.columnSpan ?? defaultSectionSpan));
+                rowSpan = Math.min(MAX_ROW_SPAN, Math.max(1, sectionSizes[id]?.rowSpan ?? 1));
+              } else {
+                const metric = sortedMetrics.find((m) => m.id === id);
+                if (metric) {
+                  span = (metric as any).baseMetricId === "position_size_chart"
+                    ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).chartColumnSpan ?? ((metric as any).chartWidth ? 2 : 1)))
+                    : Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).cardColumnSpan ?? 1));
+                  rowSpan = Math.min(MAX_ROW_SPAN, Math.max(1, (metric as any).cardRowSpan ?? 1));
+                }
+              }
+            }
+            slotSpans.push(Math.min(span, gridColumns));
+            slotRowSpans.push(rowSpan);
+          }
+
+          const placements: { row: number; col: number }[] = [];
+          const used: boolean[][] = [];
+          let didPack = false;
+          const ensureRows = (r: number) => {
+            while (used.length <= r) {
+              used.push(Array.from({ length: gridColumns }, () => false));
+            }
+          };
+          let forceRepack = false;
+          const prev = previousSlotSpansRef.current;
+          if (prev && prev.length === totalSlots) {
+            for (let i = 0; i < totalSlots && !forceRepack; i++) {
+              if (slotSpans[i] > (prev[i]?.colSpan ?? 0) || slotRowSpans[i] > (prev[i]?.rowSpan ?? 0)) forceRepack = true;
+            }
+          }
+          const stored = !forceRepack && lockedPlacements && lockedPlacements.length >= totalSlots ? lockedPlacements : null;
+          for (let i = 0; i < totalSlots; i++) {
+            const colSpan = slotSpans[i];
+            const rowSpan = slotRowSpans[i];
+            if (stored && i < stored.length) {
+              const row = Math.max(0, stored[i].row);
+              const col = Math.max(0, Math.min(stored[i].col, gridColumns - colSpan));
+              ensureRows(row + rowSpan - 1);
+              for (let dr = 0; dr < rowSpan; dr++) {
+                for (let dc = 0; dc < colSpan; dc++) {
+                  const rr = row + dr;
+                  const cc = col + dc;
+                  if (rr < used.length && cc < gridColumns) used[rr][cc] = true;
+                }
+              }
+              placements.push({ row, col });
+            } else {
+              let placed = false;
+              for (let r = 0; r < 200 && !placed; r++) {
+                ensureRows(r + rowSpan - 1);
+                for (let c = 0; c <= gridColumns - colSpan && !placed; c++) {
+                  let fits = true;
+                  for (let dr = 0; dr < rowSpan && fits; dr++) {
+                    for (let dc = 0; dc < colSpan && fits; dc++) {
+                      if (used[r + dr][c + dc]) fits = false;
+                    }
+                  }
+                  if (fits) {
+                    placements.push({ row: r, col: c });
+                    for (let dr = 0; dr < rowSpan; dr++) {
+                      ensureRows(r + dr);
+                      for (let dc = 0; dc < colSpan; dc++) used[r + dr][c + dc] = true;
+                    }
+                    placed = true;
+                    didPack = true;
+                  }
+                }
+              }
+              if (!placed) {
+                placements.push({ row: used.length, col: 0 });
+                didPack = true;
+              }
+            }
+          }
+          if (didPack) needSavePlacementsRef.current = placements;
+          previousSlotSpansRef.current = slotSpans.map((cs, i) => ({ colSpan: cs, rowSpan: slotRowSpans[i] }));
+          let totalRows = 0;
+          for (let i = 0; i < totalSlots; i++) {
+            totalRows = Math.max(totalRows, placements[i].row + slotRowSpans[i]);
+          }
+          const headerRow = 1;
+          const contentStartRow = 2;
+          const rowResizeRow = contentStartRow + totalRows;
+
+          const cellToSlot: (number | undefined)[][] = [];
+          for (let r = 0; r < totalRows; r++) {
+            cellToSlot[r] = [];
+            for (let c = 0; c < gridColumns; c++) cellToSlot[r][c] = undefined;
+          }
+          for (let i = 0; i < totalSlots; i++) {
+            const { row, col } = placements[i];
+            const rs = slotRowSpans[i];
+            const cs = slotSpans[i];
+            for (let dr = 0; dr < rs; dr++) {
+              for (let dc = 0; dc < cs; dc++) {
+                const rr = row + dr, cc = col + dc;
+                if (rr < totalRows && cc < gridColumns) cellToSlot[rr][cc] = i;
+              }
+            }
+          }
+
+          const handleMove = (id: string, dir: MoveInLockedGridDir) => {
+            const currentSlot = effectiveSlotAssignments.indexOf(id);
+            if (currentSlot === -1) return;
+            const { row, col } = placements[currentSlot];
+            let r2 = row, c2 = col;
+            if (dir === "up") r2 = row - 1;
+            else if (dir === "down") r2 = row + 1;
+            else if (dir === "left") c2 = col - 1;
+            else c2 = col + 1;
+            if (r2 < 0 || r2 >= totalRows || c2 < 0 || c2 >= gridColumns) return;
+            const targetSlot = cellToSlot[r2]?.[c2];
+            if (targetSlot === undefined || targetSlot === currentSlot) return;
+            const newSlots = [...effectiveSlotAssignments];
+            newSlots[currentSlot] = effectiveSlotAssignments[targetSlot] ?? null;
+            newSlots[targetSlot] = id;
+            const maxFilledIndex = newSlots.reduce((max, sid, i) => (sid != null ? i : max), -1);
+            const minTotalSlots = maxFilledIndex + 1 + 3 * gridColumns;
+            const finalSlots = newSlots.length < minTotalSlots
+              ? [...newSlots, ...Array(minTotalSlots - newSlots.length).fill(null)]
+              : newSlots;
+            setLockedSlotAssignments(finalSlots);
+            const newOrder = finalSlots.filter((sid): sid is string => sid != null);
+            if (!splitGrid) {
+              setMergedDisplayOrder(newOrder);
+              localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(newOrder));
+              setMetricCardOrder((prev) => {
+                const metricIds = newOrder.filter((sid) => !isSectionId(sid));
+                const kept = prev.filter((sid) => !newOrder.includes(sid) && !isSectionId(sid));
+                const finalOrder = [...metricIds, ...kept];
+                localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
+                return finalOrder;
+              });
+              setSectionOrder((prev) => {
+                const sectionIds = newOrder.filter((sid) => isSectionId(sid));
+                const kept = prev.filter((sid) => !newOrder.includes(sid));
+                const finalOrder = [...sectionIds, ...kept];
+                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(finalOrder));
+                return finalOrder;
+              });
+            } else {
+              setMetricCardOrder((prev) => {
+                const kept = prev.filter((sid) => !newOrder.includes(sid) && !isSectionId(sid));
+                const finalOrder = [...newOrder, ...kept];
+                localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
+                return finalOrder;
+              });
+            }
+            setMetricInstances((prev) =>
+              prev.map((inst) => ({
+                ...inst,
+                slotIndex: finalSlots.indexOf(inst.instanceId) >= 0 ? finalSlots.indexOf(inst.instanceId) : inst.slotIndex,
+              }))
+            );
+          };
+
+          moveInLockedGridRef.current = handleMove;
+
+          const handleColumnResize = (colIndex: number, e: React.MouseEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const startX = e.clientX;
+            const gridEl = lockedGridRef.current;
+            if (!gridEl) return;
+            const startWidths = [...columnWidths];
+            const onMove = (e2: MouseEvent) => {
+              const delta = e2.clientX - startX;
+              const gridWidth = gridEl.clientWidth - metricsGridGapPx * (gridColumns - 1);
+              if (gridWidth <= 0) return;
+              const totalFr = startWidths.reduce((a, b) => a + b, 0);
+              const scale = totalFr / gridWidth;
+              const deltaFr = delta * scale;
+              const leftFr = Math.max(MIN_COLUMN_FR, startWidths[colIndex] + deltaFr);
+              const rightFr = Math.max(MIN_COLUMN_FR, startWidths[colIndex + 1] - deltaFr);
+              setLockedColumnWidths((prev) => {
+                const next = [...prev];
+                next[colIndex] = leftFr;
+                next[colIndex + 1] = rightFr;
+                return next;
+              });
+            };
+            const onUp = () => {
+              window.removeEventListener("mousemove", onMove);
+              window.removeEventListener("mouseup", onUp);
+            };
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp);
+          };
+
+          const handleRowHeightResize = (e: React.MouseEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const startY = e.clientY;
+            const startH = lockedRowHeight;
+            const onMove = (e2: MouseEvent) => {
+              const delta = e2.clientY - startY;
+              const newH = Math.min(MAX_ROW_HEIGHT_PX, Math.max(MIN_ROW_HEIGHT_PX, startH + delta));
+              setLockedRowHeight(newH);
+            };
+            const onUp = () => {
+              window.removeEventListener("mousemove", onMove);
+              window.removeEventListener("mouseup", onUp);
+            };
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp);
+          };
+
+          const sortableIds = effectiveSlotAssignments.filter((id): id is string => id != null);
           return (
             <DndContext
               sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragEnd={handleDragEnd}
+              collisionDetection={pointerWithin}
+              onDragEnd={onDragEnd}
             >
               <SortableContext
-                items={displayMetrics.map((m: any) => m.id)}
+                items={sortableIds}
                 strategy={rectSortingStrategy}
               >
+                <div style={{ width: "100%", minWidth: 0 }}>
                 <div
+                  ref={lockedGridRef}
                   style={{
                     display: "grid",
-                    gridTemplateColumns: `repeat(${gridColumns}, 1fr)`,
-                    gap: "20px",
-                    marginBottom: "30px",
+                    gridTemplateColumns: gridTemplateCols,
+                    gridTemplateRows: `6px repeat(${totalRows}, ${lockedRowHeight}px) 6px`,
+                    gap: `${metricsGridGapPx}px`,
+                    marginBottom: `${Math.max(0, metricsToSectionsGapPx - 6)}px`,
                     alignItems: "stretch",
+                    backgroundColor: "var(--bg-primary)",
+                    boxSizing: "border-box",
+                    width: "100%",
+                    minWidth: 0,
                   }}
                 >
-                  {Array.from({ length: maxSlot + 2 }, (_, i) => {
-                    const metric = displayMetrics.find((m: any) => (m.slotIndex ?? 0) === i);
-                    const isWideChart = metric && (metric as any).baseMetricId === "position_size_chart" && (metric as any).chartWidth;
-                    const slotStyle = isWideChart
-                      ? { gridColumn: "span 2" as const, minWidth: (metric as any).chartWidth }
-                      : undefined;
+                  {columnWidths.map((_, ci) => (
+                    <div
+                      key={`col-resize-${ci}`}
+                      style={{
+                        gridRow: headerRow,
+                        gridColumn: ci + 1,
+                        position: "relative",
+                        minHeight: 0,
+                      }}
+                    >
+                      {ci < gridColumns - 1 && (
+                        <div
+                          role="separator"
+                          aria-label="Resize column"
+                          onMouseDown={(e) => handleColumnResize(ci, e)}
+                          style={{
+                            position: "absolute",
+                            right: -metricsGridGapPx / 2 - 4,
+                            top: 0,
+                            bottom: 0,
+                            width: 8,
+                            cursor: "col-resize",
+                            zIndex: 2,
+                            background: "transparent",
+                          }}
+                        />
+                      )}
+                    </div>
+                  ))}
+                  {Array.from({ length: totalSlots }, (_, i) => {
+                    const id = effectiveSlotAssignments[i] ?? null;
+                    const span = slotSpans[i];
+                    const rowSpan = slotRowSpans[i];
+                    const { row, col } = placements[i];
+                    const slotStyle: React.CSSProperties = {
+                      gridRow: `${contentStartRow + row} / span ${rowSpan}`,
+                      gridColumn: `${col + 1} / span ${span}`,
+                    };
                     return (
-                      <DroppableSlot key={i} id={`metric-slot-${i}`} style={slotStyle}>
-                        {metric ? renderCard(metric) : null}
+                      <DroppableSlot key={i} id={`metric-slot-${i}`} style={slotStyle} fillCell>
+                        {id ? (isSectionId(id) ? (renderSectionCardRef.current ? renderSectionCardRef.current(id) : null) : (() => {
+                          const metric = sortedMetrics.find((m) => m.id === id);
+                          return metric ? renderCard(metric) : null;
+                        })()) : null}
                       </DroppableSlot>
                     );
                   })}
+                  <div
+                    role="separator"
+                    aria-label="Resize row height"
+                    onMouseDown={handleRowHeightResize}
+                    style={{
+                      gridRow: rowResizeRow,
+                      gridColumn: "1 / -1",
+                      cursor: "ns-resize",
+                      zIndex: 2,
+                      background: "transparent",
+                    }}
+                  />
+                </div>
                 </div>
               </SortableContext>
             </DndContext>
@@ -2637,30 +4254,65 @@ export default function Dashboard() {
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
+        onDragEnd={onDragEnd}
       >
         <SortableContext
-          items={sortedMetrics.map(m => m.id)}
+          items={order}
           strategy={rectSortingStrategy}
         >
+      <div style={{ width: "100%", minWidth: 0 }}>
       <div
         style={{
-          display: useGridLayout ? "grid" : "flex",
-          flexWrap: useGridLayout ? undefined : "wrap",
-          gridTemplateColumns: useGridLayout ? `repeat(${gridColumns}, 1fr)` : undefined,
-          gap: "20px",
-          marginBottom: "30px",
+          display: "grid",
+          gridTemplateColumns: useFluidGrid ? "repeat(auto-fit, minmax(260px, 1fr))" : `repeat(${gridColumns}, 1fr)`,
+          width: "100%",
+          minWidth: 0,
+          gap: `${metricsGridGapPx}px`,
+          marginBottom: `${metricsToSectionsGapPx}px`,
           alignItems: "stretch",
+          backgroundColor: "var(--bg-primary)",
+          boxSizing: "border-box",
         }}
       >
-        {sortedMetrics.map((metric) => renderCard(metric))}
+        {order.map((id) => {
+          if (isSectionId(id)) {
+            const rendered = renderSectionCardRef.current ? renderSectionCardRef.current(id) : null;
+            return rendered;
+          }
+          const metric = sortedMetrics.find((m) => m.id === id);
+          return metric ? renderCard(metric) : null;
+        })}
+      </div>
       </div>
         </SortableContext>
       </DndContext>
         );
-      })()}
+      })(
+        splitGrid ? sortedMetrics.map((m) => m.id) : displayOrder,
+        splitGrid ? (e: DragEndEvent) => handleDragEndMetricsOnly(e, sortedMetrics.map((m) => m.id)) : handleDragEnd
+      )}
+      </div>
 
-      {/* Dashboard Stats Grid */}
+      <div
+        style={{
+          ...(splitGrid
+            ? {
+                order: sectionsOnTop ? 0 : 2,
+                ...(sectionsOnTop ? { marginBottom: metricsToSectionsGapPx } : { marginTop: metricsToSectionsGapPx }),
+              }
+            : {
+                position: "absolute",
+                left: -9999,
+                width: 1,
+                height: 1,
+                overflow: "hidden",
+                visibility: "hidden",
+                pointerEvents: "none",
+                zIndex: -1,
+              }),
+        }}
+      >
+      {/* Section card renderer: when split, visible above/below metrics; when unified, hidden so renderSectionCardRef is set. */}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -2673,17 +4325,44 @@ export default function Dashboard() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))",
-          gap: "20px",
-          marginBottom: "30px",
+          gridTemplateRows: layoutLocked ? "auto minmax(140px, 1fr)" : "auto",
+          gap: `${sectionsGridGapPx}px`,
+          marginBottom: `${sectionsGridMarginBottomPx}px`,
+          minWidth: 0,
         }}
       >
-        {sectionOrder.map((sectionId) => {
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: layoutLocked
+              ? `repeat(3, 1fr)`
+              : `repeat(auto-fit, minmax(${sectionsGridMinWidthPx}px, 1fr))`,
+            gap: `${sectionsGridGapPx}px`,
+            minHeight: 0,
+            minWidth: 0,
+          }}
+        >
+        {(() => {
+          const renderOne = (sectionId: SectionId): React.ReactNode => {
           // Top Symbols
           if (sectionId === "topSymbols" && dashboardSections.showTopSymbols && topSymbols.length > 0) {
+            const topSymbolsSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.topSymbols?.columnSpan ?? 1));
             return (
-              <SortableSection key="topSymbols" id="topSymbols">
+              <SortableSection
+                key="topSymbols"
+                id="topSymbols"
+                wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: "hidden",
+                  boxSizing: "border-box",
+                  ...(topSymbolsSpan > 1 ? { gridColumn: `span ${topSymbolsSpan}` as const } : {}),
+                  ...(sectionSizes.topSymbols?.height != null ? { minHeight: `${sectionSizes.topSymbols.height}px` } : {}),
+                }}
+              >
                 {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper sectionId="topSymbols" sectionSizes={sectionSizes} setSectionSizes={setSectionSizes} layoutLocked={layoutLocked} lockedRowHeight={lockedRowHeight}>
                   <div
                     style={{
                       backgroundColor: "var(--bg-secondary)",
@@ -2691,9 +4370,13 @@ export default function Dashboard() {
                       borderRadius: "8px",
                       padding: "20px",
                       cursor: isDragging ? "grabbing" : "grab",
+                      display: "flex",
+                      flexDirection: "column",
+                      minHeight: 0,
+                      height: "100%",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px", flexShrink: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <div {...dragHandleProps} style={{ cursor: "grab" }}>
                           <GripVertical size={16} color="var(--text-secondary)" />
@@ -2754,67 +4437,114 @@ export default function Dashboard() {
                         onMouseDown={(e) => e.stopPropagation()}
                       >
                         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          {layoutLocked && moveInLockedGridRef?.current ? (
+                            <>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("topSymbols", "up"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronUp size={14} /><span>Move up</span></button>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("topSymbols", "down"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronDown size={14} /><span>Move down</span></button>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("topSymbols", "left"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronLeft size={14} /><span>Move left</span></button>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("topSymbols", "right"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronRight size={14} /><span>Move right</span></button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  const currentIndex = sectionOrder.indexOf("topSymbols");
+                                  if (currentIndex > 0) {
+                                    const newOrder = [...sectionOrder];
+                                    [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
+                                    setSectionOrder(newOrder);
+                                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                  }
+                                  setOpenSectionSettings(null);
+                                }}
+                                disabled={sectionOrder.indexOf("topSymbols") === 0}
+                                style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sectionOrder.indexOf("topSymbols") === 0 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sectionOrder.indexOf("topSymbols") === 0 ? 0.3 : 1 }}
+                              >
+                                <ChevronUp size={14} />
+                                <span>Move Up</span>
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  const currentIndex = sectionOrder.indexOf("topSymbols");
+                                  if (currentIndex < sectionOrder.length - 1) {
+                                    const newOrder = [...sectionOrder];
+                                    [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
+                                    setSectionOrder(newOrder);
+                                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                  }
+                                  setOpenSectionSettings(null);
+                                }}
+                                disabled={sectionOrder.indexOf("topSymbols") === sectionOrder.length - 1}
+                                style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sectionOrder.indexOf("topSymbols") === sectionOrder.length - 1 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sectionOrder.indexOf("topSymbols") === sectionOrder.length - 1 ? 0.3 : 1 }}
+                              >
+                                <ChevronDown size={14} />
+                                <span>Move Down</span>
+                              </button>
+                            </>
+                          )}
+                          <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                  e.preventDefault();
-                              const currentIndex = sectionOrder.indexOf("topSymbols");
-                              if (currentIndex > 0) {
-                    const newOrder = [...sectionOrder];
-                                [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
-                    setSectionOrder(newOrder);
-                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                  }
+                              e.preventDefault();
+                              setSectionSizes((prev) => {
+                                const next = { ...prev, topSymbols: {} };
+                                localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                return next;
+                              });
                               setOpenSectionSettings(null);
                             }}
-                            disabled={sectionOrder.indexOf("topSymbols") === 0}
                             style={{
                               background: "transparent",
                               border: "1px solid var(--border-color)",
                               borderRadius: "4px",
                               padding: "6px 8px",
-                              cursor: sectionOrder.indexOf("topSymbols") === 0 ? "not-allowed" : "pointer",
+                              cursor: "pointer",
                               color: "var(--text-primary)",
                               display: "flex",
                               alignItems: "center",
                               gap: "8px",
                               fontSize: "13px",
-                              opacity: sectionOrder.indexOf("topSymbols") === 0 ? 0.3 : 1,
                             }}
                           >
-                            <ChevronUp size={14} />
-                            <span>Move Up</span>
+                            <RotateCcw size={14} />
+                            <span>Reset size</span>
                           </button>
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
-                              const currentIndex = sectionOrder.indexOf("topSymbols");
-                              if (currentIndex < sectionOrder.length - 1) {
-                                const newOrder = [...sectionOrder];
-                                [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
-                                setSectionOrder(newOrder);
+                              setDashboardSections((prev) => {
+                                const next = { ...prev, showTopSymbols: false };
+                                localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                return next;
+                              });
+                              setSectionOrder((prev) => {
+                                const newOrder = prev.filter((id) => id !== "topSymbols");
                                 localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                              }
+                                return newOrder;
+                              });
                               setOpenSectionSettings(null);
-                }}
-                            disabled={sectionOrder.indexOf("topSymbols") === sectionOrder.length - 1}
-                style={{
+                            }}
+                            style={{
                               background: "transparent",
-                  border: "1px solid var(--border-color)",
+                              border: "1px solid var(--border-color)",
                               borderRadius: "4px",
                               padding: "6px 8px",
-                              cursor: sectionOrder.indexOf("topSymbols") === sectionOrder.length - 1 ? "not-allowed" : "pointer",
-                              color: "var(--text-primary)",
+                              cursor: "pointer",
+                              color: "var(--loss)",
                               display: "flex",
                               alignItems: "center",
                               gap: "8px",
                               fontSize: "13px",
-                              opacity: sectionOrder.indexOf("topSymbols") === sectionOrder.length - 1 ? 0.3 : 1,
                             }}
                           >
-                            <ChevronDown size={14} />
-                            <span>Move Down</span>
+                            <Trash2 size={14} />
+                            <span>Remove</span>
                           </button>
                         </div>
                       </div>,
@@ -2822,7 +4552,7 @@ export default function Dashboard() {
                     )}
                   </div>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, overflow: "auto" }}>
                   {topSymbols.map((symbol) => (
                     <div
                       key={symbol.symbol}
@@ -2858,6 +4588,7 @@ export default function Dashboard() {
                   ))}
                 </div>
               </div>
+                  </SectionCardResizeWrapper>
                 )}
               </SortableSection>
             );
@@ -2865,9 +4596,23 @@ export default function Dashboard() {
 
           // Strategy Performance
           if (sectionId === "strategyPerformance" && dashboardSections.showStrategyPerformance && strategyPerformance.length > 0) {
+            const stratSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.strategyPerformance?.columnSpan ?? 1));
             return (
-              <SortableSection key="strategyPerformance" id="strategyPerformance">
+              <SortableSection
+                key="strategyPerformance"
+                id="strategyPerformance"
+                wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: "hidden",
+                  boxSizing: "border-box",
+                  ...(stratSpan > 1 ? { gridColumn: `span ${stratSpan}` as const } : {}),
+                  ...(sectionSizes.strategyPerformance?.height != null ? { minHeight: `${sectionSizes.strategyPerformance.height}px` } : {}),
+                }}
+              >
                 {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper sectionId="strategyPerformance" sectionSizes={sectionSizes} setSectionSizes={setSectionSizes} layoutLocked={layoutLocked} lockedRowHeight={lockedRowHeight}>
                   <div
                     style={{
                       backgroundColor: "var(--bg-secondary)",
@@ -2875,9 +4620,13 @@ export default function Dashboard() {
                       borderRadius: "8px",
                       padding: "20px",
                       cursor: isDragging ? "grabbing" : "grab",
+                      display: "flex",
+                      flexDirection: "column",
+                      minHeight: 0,
+                      height: "100%",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px", flexShrink: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <div {...dragHandleProps} style={{ cursor: "grab" }}>
                           <GripVertical size={16} color="var(--text-secondary)" />
@@ -2938,67 +4687,114 @@ export default function Dashboard() {
                         onMouseDown={(e) => e.stopPropagation()}
                       >
                         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          {layoutLocked && moveInLockedGridRef?.current ? (
+                            <>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("strategyPerformance", "up"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronUp size={14} /><span>Move up</span></button>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("strategyPerformance", "down"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronDown size={14} /><span>Move down</span></button>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("strategyPerformance", "left"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronLeft size={14} /><span>Move left</span></button>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("strategyPerformance", "right"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronRight size={14} /><span>Move right</span></button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  const currentIndex = sectionOrder.indexOf("strategyPerformance");
+                                  if (currentIndex > 0) {
+                                    const newOrder = [...sectionOrder];
+                                    [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
+                                    setSectionOrder(newOrder);
+                                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                  }
+                                  setOpenSectionSettings(null);
+                                }}
+                                disabled={sectionOrder.indexOf("strategyPerformance") === 0}
+                                style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sectionOrder.indexOf("strategyPerformance") === 0 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sectionOrder.indexOf("strategyPerformance") === 0 ? 0.3 : 1 }}
+                              >
+                                <ChevronUp size={14} />
+                                <span>Move Up</span>
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  const currentIndex = sectionOrder.indexOf("strategyPerformance");
+                                  if (currentIndex < sectionOrder.length - 1) {
+                                    const newOrder = [...sectionOrder];
+                                    [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
+                                    setSectionOrder(newOrder);
+                                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                  }
+                                  setOpenSectionSettings(null);
+                                }}
+                                disabled={sectionOrder.indexOf("strategyPerformance") === sectionOrder.length - 1}
+                                style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sectionOrder.indexOf("strategyPerformance") === sectionOrder.length - 1 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sectionOrder.indexOf("strategyPerformance") === sectionOrder.length - 1 ? 0.3 : 1 }}
+                              >
+                                <ChevronDown size={14} />
+                                <span>Move Down</span>
+                              </button>
+                            </>
+                          )}
+                          <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                  e.preventDefault();
-                              const currentIndex = sectionOrder.indexOf("strategyPerformance");
-                              if (currentIndex > 0) {
-                    const newOrder = [...sectionOrder];
-                                [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
-                    setSectionOrder(newOrder);
-                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                  }
+                              e.preventDefault();
+                              setSectionSizes((prev) => {
+                                const next = { ...prev, strategyPerformance: {} };
+                                localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                return next;
+                              });
                               setOpenSectionSettings(null);
                             }}
-                            disabled={sectionOrder.indexOf("strategyPerformance") === 0}
                             style={{
                               background: "transparent",
                               border: "1px solid var(--border-color)",
                               borderRadius: "4px",
                               padding: "6px 8px",
-                              cursor: sectionOrder.indexOf("strategyPerformance") === 0 ? "not-allowed" : "pointer",
+                              cursor: "pointer",
                               color: "var(--text-primary)",
                               display: "flex",
                               alignItems: "center",
                               gap: "8px",
                               fontSize: "13px",
-                              opacity: sectionOrder.indexOf("strategyPerformance") === 0 ? 0.3 : 1,
                             }}
                           >
-                            <ChevronUp size={14} />
-                            <span>Move Up</span>
+                            <RotateCcw size={14} />
+                            <span>Reset size</span>
                           </button>
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
-                              const currentIndex = sectionOrder.indexOf("strategyPerformance");
-                              if (currentIndex < sectionOrder.length - 1) {
-                                const newOrder = [...sectionOrder];
-                                [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
-                                setSectionOrder(newOrder);
+                              setDashboardSections((prev) => {
+                                const next = { ...prev, showStrategyPerformance: false };
+                                localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                return next;
+                              });
+                              setSectionOrder((prev) => {
+                                const newOrder = prev.filter((id) => id !== "strategyPerformance");
                                 localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                              }
+                                return newOrder;
+                              });
                               setOpenSectionSettings(null);
-                }}
-                            disabled={sectionOrder.indexOf("strategyPerformance") === sectionOrder.length - 1}
-                style={{
+                            }}
+                            style={{
                               background: "transparent",
-                  border: "1px solid var(--border-color)",
+                              border: "1px solid var(--border-color)",
                               borderRadius: "4px",
                               padding: "6px 8px",
-                              cursor: sectionOrder.indexOf("strategyPerformance") === sectionOrder.length - 1 ? "not-allowed" : "pointer",
-                              color: "var(--text-primary)",
+                              cursor: "pointer",
+                              color: "var(--loss)",
                               display: "flex",
                               alignItems: "center",
                               gap: "8px",
                               fontSize: "13px",
-                              opacity: sectionOrder.indexOf("strategyPerformance") === sectionOrder.length - 1 ? 0.3 : 1,
                             }}
                           >
-                            <ChevronDown size={14} />
-                            <span>Move Down</span>
+                            <Trash2 size={14} />
+                            <span>Remove</span>
                           </button>
                           <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                           <div style={{ padding: "8px", display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -3036,7 +4832,7 @@ export default function Dashboard() {
                     )}
                   </div>
                 </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, overflow: "auto" }}>
               {strategyPerformance.map((strategy) => {
                 const strategyKey = strategy.strategy_id ?? "unassigned";
                 const isExpanded = expandedStrategies.has(strategyKey);
@@ -3293,6 +5089,7 @@ export default function Dashboard() {
               })}
               </div>
                   </div>
+                  </SectionCardResizeWrapper>
                 )}
               </SortableSection>
             );
@@ -3300,9 +5097,23 @@ export default function Dashboard() {
 
           // Recent Trades
           if (sectionId === "recentTrades" && dashboardSections.showRecentTrades && recentTrades.length > 0) {
+            const recentSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.recentTrades?.columnSpan ?? 1));
             return (
-              <SortableSection key="recentTrades" id="recentTrades">
+              <SortableSection
+                key="recentTrades"
+                id="recentTrades"
+                wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: "hidden",
+                  boxSizing: "border-box",
+                  ...(recentSpan > 1 ? { gridColumn: `span ${recentSpan}` as const } : {}),
+                  ...(sectionSizes.recentTrades?.height != null ? { minHeight: `${sectionSizes.recentTrades.height}px` } : {}),
+                }}
+              >
                 {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper sectionId="recentTrades" sectionSizes={sectionSizes} setSectionSizes={setSectionSizes} layoutLocked={layoutLocked} lockedRowHeight={lockedRowHeight}>
                   <div
                     style={{
                       backgroundColor: "var(--bg-secondary)",
@@ -3310,9 +5121,14 @@ export default function Dashboard() {
                       borderRadius: "8px",
                       padding: "20px",
                       cursor: isDragging ? "grabbing" : "grab",
+                      display: "flex",
+                      flexDirection: "column",
+                      minHeight: 0,
+                      minWidth: 0,
+                      height: "100%",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px", flexShrink: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <div {...dragHandleProps} style={{ cursor: "grab" }}>
                           <GripVertical size={16} color="var(--text-secondary)" />
@@ -3373,67 +5189,114 @@ export default function Dashboard() {
                         onMouseDown={(e) => e.stopPropagation()}
                       >
                         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          {layoutLocked && moveInLockedGridRef?.current ? (
+                            <>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("recentTrades", "up"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronUp size={14} /><span>Move up</span></button>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("recentTrades", "down"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronDown size={14} /><span>Move down</span></button>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("recentTrades", "left"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronLeft size={14} /><span>Move left</span></button>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("recentTrades", "right"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronRight size={14} /><span>Move right</span></button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  const currentIndex = sectionOrder.indexOf("recentTrades");
+                                  if (currentIndex > 0) {
+                                    const newOrder = [...sectionOrder];
+                                    [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
+                                    setSectionOrder(newOrder);
+                                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                  }
+                                  setOpenSectionSettings(null);
+                                }}
+                                disabled={sectionOrder.indexOf("recentTrades") === 0}
+                                style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sectionOrder.indexOf("recentTrades") === 0 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sectionOrder.indexOf("recentTrades") === 0 ? 0.3 : 1 }}
+                              >
+                                <ChevronUp size={14} />
+                                <span>Move Up</span>
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  const currentIndex = sectionOrder.indexOf("recentTrades");
+                                  if (currentIndex < sectionOrder.length - 1) {
+                                    const newOrder = [...sectionOrder];
+                                    [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
+                                    setSectionOrder(newOrder);
+                                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                  }
+                                  setOpenSectionSettings(null);
+                                }}
+                                disabled={sectionOrder.indexOf("recentTrades") === sectionOrder.length - 1}
+                                style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sectionOrder.indexOf("recentTrades") === sectionOrder.length - 1 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sectionOrder.indexOf("recentTrades") === sectionOrder.length - 1 ? 0.3 : 1 }}
+                              >
+                                <ChevronDown size={14} />
+                                <span>Move Down</span>
+                              </button>
+                            </>
+                          )}
+                          <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                  e.preventDefault();
-                              const currentIndex = sectionOrder.indexOf("recentTrades");
-                              if (currentIndex > 0) {
-                    const newOrder = [...sectionOrder];
-                                [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
-                    setSectionOrder(newOrder);
-                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                  }
+                              e.preventDefault();
+                              setSectionSizes((prev) => {
+                                const next = { ...prev, recentTrades: {} };
+                                localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                return next;
+                              });
                               setOpenSectionSettings(null);
                             }}
-                            disabled={sectionOrder.indexOf("recentTrades") === 0}
                             style={{
                               background: "transparent",
                               border: "1px solid var(--border-color)",
                               borderRadius: "4px",
                               padding: "6px 8px",
-                              cursor: sectionOrder.indexOf("recentTrades") === 0 ? "not-allowed" : "pointer",
+                              cursor: "pointer",
                               color: "var(--text-primary)",
                               display: "flex",
                               alignItems: "center",
                               gap: "8px",
                               fontSize: "13px",
-                              opacity: sectionOrder.indexOf("recentTrades") === 0 ? 0.3 : 1,
                             }}
                           >
-                            <ChevronUp size={14} />
-                            <span>Move Up</span>
+                            <RotateCcw size={14} />
+                            <span>Reset size</span>
                           </button>
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
-                              const currentIndex = sectionOrder.indexOf("recentTrades");
-                              if (currentIndex < sectionOrder.length - 1) {
-                                const newOrder = [...sectionOrder];
-                                [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
-                                setSectionOrder(newOrder);
+                              setDashboardSections((prev) => {
+                                const next = { ...prev, showRecentTrades: false };
+                                localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                return next;
+                              });
+                              setSectionOrder((prev) => {
+                                const newOrder = prev.filter((id) => id !== "recentTrades");
                                 localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                              }
+                                return newOrder;
+                              });
                               setOpenSectionSettings(null);
-                }}
-                            disabled={sectionOrder.indexOf("recentTrades") === sectionOrder.length - 1}
-                style={{
+                            }}
+                            style={{
                               background: "transparent",
-                  border: "1px solid var(--border-color)",
+                              border: "1px solid var(--border-color)",
                               borderRadius: "4px",
                               padding: "6px 8px",
-                              cursor: sectionOrder.indexOf("recentTrades") === sectionOrder.length - 1 ? "not-allowed" : "pointer",
-                              color: "var(--text-primary)",
+                              cursor: "pointer",
+                              color: "var(--loss)",
                               display: "flex",
                               alignItems: "center",
                               gap: "8px",
                               fontSize: "13px",
-                              opacity: sectionOrder.indexOf("recentTrades") === sectionOrder.length - 1 ? 0.3 : 1,
                             }}
                           >
-                            <ChevronDown size={14} />
-                            <span>Move Down</span>
+                            <Trash2 size={14} />
+                            <span>Remove</span>
                           </button>
                         </div>
                       </div>,
@@ -3441,7 +5304,7 @@ export default function Dashboard() {
                     )}
                   </div>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, minWidth: 0, overflowX: "hidden", overflowY: "auto" }}>
               {recentTrades.map((trade, idx) => {
                 const isExpanded = expandedRecentTrades.has(idx);
                 return (
@@ -3523,6 +5386,7 @@ export default function Dashboard() {
               })}
                 </div>
               </div>
+                  </SectionCardResizeWrapper>
                 )}
               </SortableSection>
             );
@@ -3530,9 +5394,24 @@ export default function Dashboard() {
 
           // Open Positions
           if (sectionId === "openPositions" && dashboardSections.showOpenPositions) {
+            const defaultOpenSpan = openPositionsDisplayMode === "compact" ? 3 : 1;
+            const openSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.openPositions?.columnSpan ?? defaultOpenSpan));
             return (
-              <SortableSection key="openPositions" id="openPositions">
+              <SortableSection
+                key="openPositions"
+                id="openPositions"
+                wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: "hidden",
+                  boxSizing: "border-box",
+                  ...(openSpan > 1 ? { gridColumn: `span ${openSpan}` as const } : {}),
+                  ...(sectionSizes.openPositions?.height != null ? { minHeight: `${sectionSizes.openPositions.height}px` } : {}),
+                }}
+              >
                 {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper sectionId="openPositions" sectionSizes={sectionSizes} setSectionSizes={setSectionSizes} layoutLocked={layoutLocked} lockedRowHeight={lockedRowHeight}>
                   <div
                     style={{
                       backgroundColor: "var(--bg-secondary)",
@@ -3540,9 +5419,14 @@ export default function Dashboard() {
                       borderRadius: "8px",
                       padding: "20px",
                       cursor: isDragging ? "grabbing" : "grab",
+                      display: "flex",
+                      flexDirection: "column",
+                      minHeight: 0,
+                      minWidth: 0,
+                      height: "100%",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px", flexShrink: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <div {...dragHandleProps} style={{ cursor: "grab" }}>
                           <GripVertical size={16} color="var(--text-secondary)" />
@@ -3603,79 +5487,287 @@ export default function Dashboard() {
                             onMouseDown={(e) => e.stopPropagation()}
                           >
                             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                              {layoutLocked && moveInLockedGridRef?.current ? (
+                                <>
+                                  <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("openPositions", "up"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronUp size={14} /><span>Move up</span></button>
+                                  <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("openPositions", "down"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronDown size={14} /><span>Move down</span></button>
+                                  <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("openPositions", "left"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronLeft size={14} /><span>Move left</span></button>
+                                  <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("openPositions", "right"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronRight size={14} /><span>Move right</span></button>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      const currentIndex = sectionOrder.indexOf("openPositions");
+                                      if (currentIndex > 0) {
+                                        const newOrder = [...sectionOrder];
+                                        [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
+                                        setSectionOrder(newOrder);
+                                        localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                      }
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    disabled={sectionOrder.indexOf("openPositions") === 0}
+                                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sectionOrder.indexOf("openPositions") === 0 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sectionOrder.indexOf("openPositions") === 0 ? 0.3 : 1 }}
+                                  >
+                                    <ChevronUp size={14} />
+                                    <span>Move Up</span>
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      const currentIndex = sectionOrder.indexOf("openPositions");
+                                      if (currentIndex < sectionOrder.length - 1) {
+                                        const newOrder = [...sectionOrder];
+                                        [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
+                                        setSectionOrder(newOrder);
+                                        localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                      }
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    disabled={sectionOrder.indexOf("openPositions") === sectionOrder.length - 1}
+                                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sectionOrder.indexOf("openPositions") === sectionOrder.length - 1 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sectionOrder.indexOf("openPositions") === sectionOrder.length - 1 ? 0.3 : 1 }}
+                                  >
+                                    <ChevronDown size={14} />
+                                    <span>Move Down</span>
+                                  </button>
+                                </>
+                              )}
+                              <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   e.preventDefault();
-                                  const currentIndex = sectionOrder.indexOf("openPositions");
-                                  if (currentIndex > 0) {
-                                    const newOrder = [...sectionOrder];
-                                    [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
-                                    setSectionOrder(newOrder);
-                                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                                  }
+                                  setSectionSizes((prev) => {
+                                    const next = { ...prev, openPositions: {} };
+                                    localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                    return next;
+                                  });
                                   setOpenSectionSettings(null);
                                 }}
-                                disabled={sectionOrder.indexOf("openPositions") === 0}
                                 style={{
                                   background: "transparent",
                                   border: "1px solid var(--border-color)",
                                   borderRadius: "4px",
                                   padding: "6px 8px",
-                                  cursor: sectionOrder.indexOf("openPositions") === 0 ? "not-allowed" : "pointer",
+                                  cursor: "pointer",
                                   color: "var(--text-primary)",
                                   display: "flex",
                                   alignItems: "center",
                                   gap: "8px",
                                   fontSize: "13px",
-                                  opacity: sectionOrder.indexOf("openPositions") === 0 ? 0.3 : 1,
                                 }}
                               >
-                                <ChevronUp size={14} />
-                                <span>Move Up</span>
+                                <RotateCcw size={14} />
+                                <span>Reset size</span>
                               </button>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   e.preventDefault();
-                                  const currentIndex = sectionOrder.indexOf("openPositions");
-                                  if (currentIndex < sectionOrder.length - 1) {
-                                    const newOrder = [...sectionOrder];
-                                    [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
-                                    setSectionOrder(newOrder);
+                                  setDashboardSections((prev) => {
+                                    const next = { ...prev, showOpenPositions: false };
+                                    localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                    return next;
+                                  });
+                                  setSectionOrder((prev) => {
+                                    const newOrder = prev.filter((id) => id !== "openPositions");
                                     localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                                  }
+                                    return newOrder;
+                                  });
                                   setOpenSectionSettings(null);
                                 }}
-                                disabled={sectionOrder.indexOf("openPositions") === sectionOrder.length - 1}
                                 style={{
                                   background: "transparent",
                                   border: "1px solid var(--border-color)",
                                   borderRadius: "4px",
                                   padding: "6px 8px",
-                                  cursor: sectionOrder.indexOf("openPositions") === sectionOrder.length - 1 ? "not-allowed" : "pointer",
-                                  color: "var(--text-primary)",
+                                  cursor: "pointer",
+                                  color: "var(--loss)",
                                   display: "flex",
                                   alignItems: "center",
                                   gap: "8px",
                                   fontSize: "13px",
-                                  opacity: sectionOrder.indexOf("openPositions") === sectionOrder.length - 1 ? 0.3 : 1,
                                 }}
                               >
-                                <ChevronDown size={14} />
-                                <span>Move Down</span>
+                                <Trash2 size={14} />
+                                <span>Remove</span>
                               </button>
+                              <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                              <div style={{ padding: "4px 0" }}>
+                                <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>Display</div>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      setOpenPositionsDisplayMode("card");
+                                      localStorage.setItem(OPEN_POSITIONS_DISPLAY_MODE_KEY, "card");
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    style={{
+                                      background: openPositionsDisplayMode === "card" ? "var(--accent)" : "transparent",
+                                      color: openPositionsDisplayMode === "card" ? "var(--bg-primary)" : "var(--text-primary)",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "4px",
+                                      padding: "6px 8px",
+                                      cursor: "pointer",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      fontSize: "13px",
+                                    }}
+                                  >
+                                    <span>Card</span>
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      setOpenPositionsDisplayMode("compact");
+                                      localStorage.setItem(OPEN_POSITIONS_DISPLAY_MODE_KEY, "compact");
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    style={{
+                                      background: openPositionsDisplayMode === "compact" ? "var(--accent)" : "transparent",
+                                      color: openPositionsDisplayMode === "compact" ? "var(--bg-primary)" : "var(--text-primary)",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "4px",
+                                      padding: "6px 8px",
+                                      cursor: "pointer",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      fontSize: "13px",
+                                    }}
+                                  >
+                                    <span>Compact (Webull-style)</span>
+                                  </button>
+                                </div>
+                              </div>
                             </div>
                           </div>,
                           document.body
                         )}
                       </div>
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, minWidth: 0, overflowX: "hidden", overflowY: "auto" }}>
                       {openPositionGroups.length === 0 ? (
                         <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "20px" }}>
                           No open positions. Positions are derived from imported trades that are not fully closed.
                         </p>
+                      ) : openPositionsDisplayMode === "compact" ? (
+                        <div style={{ overflowX: "auto", overflowY: "hidden", minWidth: 0, width: "100%", maxWidth: "100%" }}>
+                          <div
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "minmax(60px, 1fr) minmax(50px, auto) minmax(56px, auto) minmax(70px, auto) minmax(70px, auto) minmax(80px, auto) minmax(80px, auto) minmax(72px, auto) minmax(48px, auto)",
+                              gap: "0 12px",
+                              alignItems: "center",
+                              fontSize: "12px",
+                              borderBottom: "1px solid var(--border-color)",
+                              padding: "8px 12px",
+                              color: "var(--text-secondary)",
+                              fontWeight: "600",
+                              minWidth: "min-content",
+                            }}
+                          >
+                            <span>Symbol</span>
+                            <span>Side</span>
+                            <span>Qty</span>
+                            <span>Avg</span>
+                            <span>Current</span>
+                            <span>Unrealized</span>
+                            <span>Realized</span>
+                            <span>Entry</span>
+                            <span>#</span>
+                          </div>
+                          {openPositionGroups.map((group) => {
+                            const isLong = group.final_quantity > 0;
+                            const qty = Math.abs(group.final_quantity);
+                            const qtyDisplay = (isLong ? "+" : "") + formatWithCommas(group.final_quantity, { minDecimals: 4, maxDecimals: 4 });
+                            const costFromTrades = group.position_trades.reduce((sum, t) => {
+                              const side = t.side?.toUpperCase() || "";
+                              if (side === "BUY") return sum + t.quantity * t.price;
+                              if (side === "SELL") return sum - t.quantity * t.price;
+                              return sum;
+                            }, 0);
+                            const avgPrice = qty >= 0.0001 ? Math.abs(costFromTrades) / qty : 0;
+                            const currentPrice = openPositionQuotes[group.entry_trade.symbol] ?? null;
+                            const unrealizedPnl =
+                              currentPrice != null && currentPrice > 0
+                                ? isLong
+                                  ? (currentPrice - avgPrice) * qty
+                                  : (avgPrice - currentPrice) * qty
+                                : null;
+                            return (
+                              <div
+                                key={group.entry_trade.id}
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => {
+                                  navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Pair" } });
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Pair" } });
+                                  }
+                                }}
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "minmax(60px, 1fr) minmax(50px, auto) minmax(56px, auto) minmax(70px, auto) minmax(70px, auto) minmax(80px, auto) minmax(80px, auto) minmax(72px, auto) minmax(48px, auto)",
+                                  gap: "0 12px",
+                                  alignItems: "center",
+                                  padding: "8px 12px",
+                                  fontSize: "12px",
+                                  borderBottom: "1px solid var(--border-color)",
+                                  cursor: "pointer",
+                                  backgroundColor: "var(--bg-tertiary)",
+                                }}
+                              >
+                                <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>{group.entry_trade.symbol}</span>
+                                <span
+                                  style={{
+                                    fontSize: "11px",
+                                    fontWeight: "600",
+                                    color: isLong ? "var(--profit)" : "var(--loss)",
+                                  }}
+                                >
+                                  {isLong ? "Long" : "Short"}
+                                </span>
+                                <span style={{ color: "var(--text-primary)" }}>{qtyDisplay}</span>
+                                <span style={{ color: "var(--text-primary)" }}>${formatWithCommas(avgPrice, { decimals: 2 })}</span>
+                                <span style={{ color: "var(--text-primary)" }}>
+                                  {currentPrice != null && currentPrice > 0 ? `$${formatWithCommas(currentPrice, { decimals: 2 })}` : "—"}
+                                </span>
+                                <span
+                                  style={{
+                                    fontWeight: "600",
+                                    color: unrealizedPnl != null ? (unrealizedPnl >= 0 ? "var(--profit)" : "var(--loss)") : "var(--text-secondary)",
+                                  }}
+                                >
+                                  {unrealizedPnl != null ? (unrealizedPnl >= 0 ? "+" : "") + `$${formatWithCommas(unrealizedPnl, { decimals: 2 })}` : "—"}
+                                </span>
+                                <span
+                                  style={{
+                                    fontWeight: "500",
+                                    color: group.total_pnl >= 0 ? "var(--profit)" : "var(--loss)",
+                                  }}
+                                >
+                                  {group.total_pnl >= 0 ? "+" : ""}${formatWithCommas(group.total_pnl, { decimals: 2 })}
+                                </span>
+                                <span style={{ color: "var(--text-secondary)", fontSize: "11px" }}>
+                                  {format(new Date(group.entry_trade.timestamp), "MMM d")}
+                                </span>
+                                <span style={{ color: "var(--text-primary)" }}>{group.position_trades.length}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
                       ) : (
                         openPositionGroups.map((group) => {
                           const isLong = group.final_quantity > 0;
@@ -3789,6 +5881,7 @@ export default function Dashboard() {
                       )}
                     </div>
                   </div>
+                  </SectionCardResizeWrapper>
                 )}
               </SortableSection>
             );
@@ -3796,9 +5889,23 @@ export default function Dashboard() {
           
           // Trades Section
           if (sectionId === "trades" && dashboardSections.showTrades) {
+            const tradesSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.trades?.columnSpan ?? 1));
             return (
-              <SortableSection key="trades" id="trades">
+              <SortableSection
+                key="trades"
+                id="trades"
+                wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: "hidden",
+                  boxSizing: "border-box",
+                  ...(tradesSpan > 1 ? { gridColumn: `span ${tradesSpan}` as const } : {}),
+                  ...(sectionSizes.trades?.height != null ? { minHeight: `${sectionSizes.trades.height}px` } : {}),
+                }}
+              >
                 {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper sectionId="trades" sectionSizes={sectionSizes} setSectionSizes={setSectionSizes} layoutLocked={layoutLocked} lockedRowHeight={lockedRowHeight}>
                   <div
                     style={{
                       backgroundColor: "var(--bg-secondary)",
@@ -3806,9 +5913,14 @@ export default function Dashboard() {
                       borderRadius: "8px",
                       padding: "20px",
                       cursor: isDragging ? "grabbing" : "grab",
+                      display: "flex",
+                      flexDirection: "column",
+                      minHeight: 0,
+                      minWidth: 0,
+                      height: "100%",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px", flexShrink: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <div {...dragHandleProps} style={{ cursor: "grab" }}>
                           <GripVertical size={16} color="var(--text-secondary)" />
@@ -3869,67 +5981,114 @@ export default function Dashboard() {
                         onMouseDown={(e) => e.stopPropagation()}
                       >
                         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          {layoutLocked && moveInLockedGridRef?.current ? (
+                            <>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("trades", "up"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronUp size={14} /><span>Move up</span></button>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("trades", "down"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronDown size={14} /><span>Move down</span></button>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("trades", "left"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronLeft size={14} /><span>Move left</span></button>
+                              <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("trades", "right"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronRight size={14} /><span>Move right</span></button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  const currentIndex = sectionOrder.indexOf("trades");
+                                  if (currentIndex > 0) {
+                                    const newOrder = [...sectionOrder];
+                                    [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
+                                    setSectionOrder(newOrder);
+                                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                  }
+                                  setOpenSectionSettings(null);
+                                }}
+                                disabled={sectionOrder.indexOf("trades") === 0}
+                                style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sectionOrder.indexOf("trades") === 0 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sectionOrder.indexOf("trades") === 0 ? 0.3 : 1 }}
+                              >
+                                <ChevronUp size={14} />
+                                <span>Move Up</span>
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  const currentIndex = sectionOrder.indexOf("trades");
+                                  if (currentIndex < sectionOrder.length - 1) {
+                                    const newOrder = [...sectionOrder];
+                                    [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
+                                    setSectionOrder(newOrder);
+                                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                  }
+                                  setOpenSectionSettings(null);
+                                }}
+                                disabled={sectionOrder.indexOf("trades") === sectionOrder.length - 1}
+                                style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sectionOrder.indexOf("trades") === sectionOrder.length - 1 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sectionOrder.indexOf("trades") === sectionOrder.length - 1 ? 0.3 : 1 }}
+                              >
+                                <ChevronDown size={14} />
+                                <span>Move Down</span>
+                              </button>
+                            </>
+                          )}
+                          <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
-                              const currentIndex = sectionOrder.indexOf("trades");
-                              if (currentIndex > 0) {
-                                const newOrder = [...sectionOrder];
-                                [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
-                                setSectionOrder(newOrder);
-                                localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                              }
+                              setSectionSizes((prev) => {
+                                const next = { ...prev, trades: {} };
+                                localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                return next;
+                              });
                               setOpenSectionSettings(null);
                             }}
-                            disabled={sectionOrder.indexOf("trades") === 0}
                             style={{
                               background: "transparent",
                               border: "1px solid var(--border-color)",
                               borderRadius: "4px",
                               padding: "6px 8px",
-                              cursor: sectionOrder.indexOf("trades") === 0 ? "not-allowed" : "pointer",
+                              cursor: "pointer",
                               color: "var(--text-primary)",
                               display: "flex",
                               alignItems: "center",
                               gap: "8px",
                               fontSize: "13px",
-                              opacity: sectionOrder.indexOf("trades") === 0 ? 0.3 : 1,
                             }}
                           >
-                            <ChevronUp size={14} />
-                            <span>Move Up</span>
+                            <RotateCcw size={14} />
+                            <span>Reset size</span>
                           </button>
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
-                              const currentIndex = sectionOrder.indexOf("trades");
-                              if (currentIndex < sectionOrder.length - 1) {
-                                const newOrder = [...sectionOrder];
-                                [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
-                                setSectionOrder(newOrder);
+                              setDashboardSections((prev) => {
+                                const next = { ...prev, showTrades: false };
+                                localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                return next;
+                              });
+                              setSectionOrder((prev) => {
+                                const newOrder = prev.filter((id) => id !== "trades");
                                 localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
-                              }
+                                return newOrder;
+                              });
                               setOpenSectionSettings(null);
                             }}
-                            disabled={sectionOrder.indexOf("trades") === sectionOrder.length - 1}
                             style={{
                               background: "transparent",
                               border: "1px solid var(--border-color)",
                               borderRadius: "4px",
                               padding: "6px 8px",
-                              cursor: sectionOrder.indexOf("trades") === sectionOrder.length - 1 ? "not-allowed" : "pointer",
-                              color: "var(--text-primary)",
+                              cursor: "pointer",
+                              color: "var(--loss)",
                               display: "flex",
                               alignItems: "center",
                               gap: "8px",
                               fontSize: "13px",
-                              opacity: sectionOrder.indexOf("trades") === sectionOrder.length - 1 ? 0.3 : 1,
                             }}
                           >
-                            <ChevronDown size={14} />
-                            <span>Move Down</span>
+                            <Trash2 size={14} />
+                            <span>Remove</span>
                           </button>
                           <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                           <div style={{ padding: "8px", display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -3966,7 +6125,7 @@ export default function Dashboard() {
                     )}
                   </div>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, minWidth: 0, overflowX: "hidden", overflowY: "auto" }}>
                   {trades.length === 0 ? (
                     <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "20px" }}>
                       No trades found for the selected timeframe.
@@ -4148,15 +6307,24 @@ export default function Dashboard() {
                   })()}
                 </div>
                   </div>
+                  </SectionCardResizeWrapper>
                 )}
               </SortableSection>
             );
           }
           return null;
-        })}
+          };
+          renderSectionCardRef.current = renderOne;
+          return sectionOrder.map((sid) => renderOne(sid));
+        })()}
+        </div>
+        {layoutLocked && <div style={{ minHeight: 140, width: "100%" }} aria-hidden />}
       </div>
         </SortableContext>
       </DndContext>
+      </div>
+
+      </div>
 
           <MetricsConfigPanel
             isOpen={showMetricsConfig}
@@ -4318,5 +6486,6 @@ export default function Dashboard() {
           </div>
         )}
     </div>
+    </MoveInLockedGridContext.Provider>
   );
 }
