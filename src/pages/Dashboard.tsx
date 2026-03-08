@@ -361,6 +361,7 @@ const OPEN_POSITIONS_DISPLAY_MODE_KEY = "tradebutler_open_positions_display_mode
 const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
 const METRIC_INSTANCES_KEY = "tradebutler_metric_instances";
 const DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY = "tradebutler_dashboard_locked_column_widths";
+const DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY = "tradebutler_dashboard_locked_slot_assignments";
 const MAX_POSITION_CHART_COLUMN_SPAN = 24;
 const MAX_ROW_SPAN = 32;
 const MIN_COLUMN_FR = 0.2;
@@ -431,6 +432,12 @@ export interface DashboardLayoutPreset {
   sectionOrder: SectionId[];
   dashboardSections: DashboardSections;
   sectionSizes?: SectionSizes;
+  /** Locked layout: number of columns (2–10). */
+  lockedGridColumns?: number;
+  /** Locked layout: slot assignments (metric/section ids or null for empty slots). */
+  lockedSlotAssignments?: (string | null)[];
+  /** Locked layout: column width ratios (fr values). */
+  lockedColumnWidths?: number[];
 }
 
 // Sortable Metric Card Component
@@ -2483,7 +2490,18 @@ export default function Dashboard() {
   const moveInLockedGridRef = useRef<((id: string, dir: MoveInLockedGridDir) => void) | null>(null);
 
   /** When layout is locked, slot assignments preserve gaps (empty slots). Null = use dense order. */
-  const [lockedSlotAssignments, setLockedSlotAssignments] = useState<(string | null)[] | null>(null);
+  const [lockedSlotAssignments, setLockedSlotAssignments] = useState<(string | null)[] | null>(() => {
+    const saved = localStorage.getItem(DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
 
   useEffect(() => {
     if (!layoutLocked) return;
@@ -2503,6 +2521,13 @@ export default function Dashboard() {
       localStorage.setItem(DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY, JSON.stringify(lockedColumnWidths));
     }
   }, [lockedColumnWidths]);
+
+  useEffect(() => {
+    if (layoutLocked && lockedSlotAssignments != null && lockedSlotAssignments.length > 0) {
+      localStorage.setItem(DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY, JSON.stringify(lockedSlotAssignments));
+    }
+  }, [layoutLocked, lockedSlotAssignments]);
+
   useEffect(() => {
     localStorage.setItem(DASHBOARD_LOCKED_ROW_HEIGHT_KEY, String(lockedRowHeight));
   }, [lockedRowHeight]);
@@ -3046,10 +3071,25 @@ export default function Dashboard() {
     if (preset.sectionSizes && Object.keys(preset.sectionSizes).length > 0) {
       setSectionSizes((prev) => ({ ...prev, ...preset.sectionSizes }));
     }
+    if (preset.lockedGridColumns != null && preset.lockedGridColumns >= 2 && preset.lockedGridColumns <= 10) {
+      setLockedGridColumns(preset.lockedGridColumns);
+      localStorage.setItem(DASHBOARD_MAX_COLUMNS_KEY, String(preset.lockedGridColumns));
+    }
+    if (preset.lockedSlotAssignments != null && preset.lockedSlotAssignments.length > 0) {
+      setLockedSlotAssignments(preset.lockedSlotAssignments);
+      localStorage.setItem(DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY, JSON.stringify(preset.lockedSlotAssignments));
+    }
+    if (preset.lockedColumnWidths != null && preset.lockedColumnWidths.length > 0) {
+      setLockedColumnWidths(preset.lockedColumnWidths);
+      localStorage.setItem(DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY, JSON.stringify(preset.lockedColumnWidths));
+    }
     localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(preset.displayOrder));
     localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(preset.metricCardOrder));
     localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(preset.sectionOrder));
     localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(preset.dashboardSections));
+    if (preset.sectionSizes && Object.keys(preset.sectionSizes).length > 0) {
+      localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(preset.sectionSizes));
+    }
     setLayoutsMenuOpen(false);
   };
 
@@ -3067,6 +3107,9 @@ export default function Dashboard() {
       sectionOrder: [...sectionOrder],
       dashboardSections: { ...dashboardSections },
       sectionSizes: { ...sectionSizes },
+      lockedGridColumns: layoutLocked ? lockedGridColumns : undefined,
+      lockedSlotAssignments: layoutLocked && lockedSlotAssignments != null && lockedSlotAssignments.length > 0 ? lockedSlotAssignments : undefined,
+      lockedColumnWidths: layoutLocked && lockedColumnWidths.length > 0 ? lockedColumnWidths : undefined,
     };
     setLayoutPresets((prev) => [...prev, preset]);
     setLayoutsMenuOpen(false);
