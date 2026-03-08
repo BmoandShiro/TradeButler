@@ -11,6 +11,7 @@ import {
   useSensors,
   DragEndEvent,
   useDroppable,
+  useDndContext,
 } from "@dnd-kit/core";
 import {
   arrayMove,
@@ -755,15 +756,17 @@ const metricDescriptions: Record<string, { description: string; calculation: str
 
 function DroppableSlot({ id, children, style: slotStyle, fillCell }: { id: string; children: React.ReactNode; style?: React.CSSProperties; fillCell?: boolean }) {
   const { setNodeRef, isOver } = useDroppable({ id });
+  const { active } = useDndContext();
   const isEmpty = children == null;
+  const showOutline = active != null;
   return (
     <div
       ref={setNodeRef}
       style={{
         ...(fillCell ? { minHeight: 0, height: "100%" } : { minHeight: isEmpty ? "100px" : "120px" }),
         borderRadius: "8px",
-        border: isOver ? "2px dashed var(--accent)" : isEmpty ? "1px dashed var(--border-color)" : "1px solid transparent",
-        backgroundColor: isOver ? "color-mix(in srgb, var(--accent) 8%, transparent)" : isEmpty ? "color-mix(in srgb, var(--bg-secondary) 0.5, transparent)" : "transparent",
+        border: showOutline && isOver ? "2px dashed var(--accent)" : showOutline && isEmpty ? "1px dashed var(--border-color)" : "1px solid transparent",
+        backgroundColor: showOutline && isOver ? "color-mix(in srgb, var(--accent) 8%, transparent)" : showOutline && isEmpty ? "color-mix(in srgb, var(--bg-secondary) 0.5, transparent)" : "transparent",
         transition: "border-color 0.15s, background-color 0.15s",
         ...slotStyle,
       }}
