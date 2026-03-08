@@ -242,26 +242,8 @@ export default function Journal() {
     const savedId = localStorage.getItem('journal_selected_entry_id');
     return savedId ? null : null; // Will be loaded by ID in useEffect
   });
-  // If we have a saved entry id to restore, don't show overview until load completes (avoids flash). Skip when URL has ?overview=1 (e.g. from Analytics).
-  const [pendingRestoreEntryId, setPendingRestoreEntryId] = useState<number | null>(() => {
-    if (typeof window === "undefined") return null;
-    if (new URLSearchParams(window.location.search).get("overview") === "1") return null;
-    const savedId = localStorage.getItem("journal_selected_entry_id");
-    if (savedId) {
-      const id = parseInt(savedId, 10);
-      if (!Number.isNaN(id)) return id;
-    }
-    try {
-      const wip = localStorage.getItem("journal_work_in_progress");
-      if (wip) {
-        const parsed = JSON.parse(wip) as { selectedEntryId?: number | null; isCreating?: boolean };
-        if (parsed.selectedEntryId != null && !parsed.isCreating) return parsed.selectedEntryId;
-      }
-    } catch {
-      /* ignore */
-    }
-    return null;
-  });
+  // Journal opens to Overview by default; only restore entry when navigating from another page with state (e.g. "Open in Journal").
+  const [pendingRestoreEntryId, setPendingRestoreEntryId] = useState<number | null>(null);
   const [selectedTrades, setSelectedTrades] = useState<JournalTrade[]>([]);
   const [allJournalTrades, setAllJournalTrades] = useState<JournalTrade[]>([]);
   const [isCreating, setIsCreating] = useState(false);
@@ -478,7 +460,7 @@ export default function Journal() {
     }
   };
 
-  // Restore work-in-progress from localStorage
+  // Restore work-in-progress from localStorage (used by "Restore draft" on Overview)
   const restoreWorkInProgress = () => {
     try {
       const saved = localStorage.getItem('journal_work_in_progress');
@@ -610,28 +592,7 @@ export default function Journal() {
     loadAvailableSymbols();
     loadAllJournalTrades();
     
-    // When URL has ?overview=1 (e.g. from Analytics "Journal Overview" link), do not restore entry or work-in-progress
-    const forceOverview = searchParams.get("overview") === "1";
-    const openFromState = (location.state as { openEntryId?: number } | null)?.openEntryId != null;
-    
-    if (!openFromState && !forceOverview) {
-      const savedEntryId = localStorage.getItem('journal_selected_entry_id');
-      if (savedEntryId) {
-        const entryId = parseInt(savedEntryId, 10);
-        if (!isNaN(entryId)) {
-          setTimeout(() => loadEntry(entryId), 300);
-        }
-      }
-    }
-    
-    if (!forceOverview) {
-      const hasWorkInProgress = localStorage.getItem('journal_work_in_progress');
-      if (hasWorkInProgress) {
-        setTimeout(() => {
-          restoreWorkInProgress();
-        }, 200);
-      }
-    }
+    // Open to Overview by default; do not auto-restore last entry or work-in-progress when navigating to Journal.
   }, [dataMode, searchParams]);
 
   // Clear pending restore once an entry is selected (so we don't stay in "loading" state)
@@ -5331,6 +5292,41 @@ export default function Journal() {
               <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px" }}>
                 Review your past journal entries at a glance. Select any entry on the right to dive into full details.
               </p>
+              {typeof window !== "undefined" && localStorage.getItem("journal_work_in_progress") && (
+                <div
+                  style={{
+                    marginBottom: "16px",
+                    padding: "10px 14px",
+                    borderRadius: "6px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-color)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "12px",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                    You have an unsaved draft.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => restoreWorkInProgress()}
+                    style={{
+                      padding: "6px 12px",
+                      fontSize: "12px",
+                      fontWeight: "600",
+                      color: "var(--accent)",
+                      background: "none",
+                      border: "1px solid var(--accent)",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Restore draft
+                  </button>
+                </div>
+              )}
               <div
                 style={{
                   display: "flex",
