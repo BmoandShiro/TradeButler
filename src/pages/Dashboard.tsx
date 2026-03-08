@@ -2605,24 +2605,76 @@ export default function Dashboard() {
     if (layoutLocked && over && typeof over.id === "string") {
       const overId = String(over.id);
       let targetSlot: number | null = null;
-      if (overId.startsWith("metric-slot-")) {
+      let gapDrop: { row: number; col: number } | null = null;
+      if (overId.startsWith("metric-slot-gap-")) {
+        const match = overId.match(/^metric-slot-gap-(\d+)-(\d+)$/);
+        if (match) {
+          const r = parseInt(match[1], 10);
+          const c = parseInt(match[2], 10);
+          if (!Number.isNaN(r) && !Number.isNaN(c) && r >= 0 && c >= 0) gapDrop = { row: r, col: c };
+        }
+      } else if (overId.startsWith("metric-slot-")) {
         const parsed = parseInt(overId.replace("metric-slot-", ""), 10);
         if (!Number.isNaN(parsed) && parsed >= 0) targetSlot = parsed;
       } else {
         const idx = displayOrder.indexOf(overId);
         if (idx >= 0) targetSlot = idx;
       }
-      if (targetSlot !== null) {
-        const draggedId = active.id as string;
-        const numEmptySlots = Math.max(4, 3 * lockedGridColumns);
-        const minTotalSlots = displayOrder.length + numEmptySlots;
-        const effectiveSlots = lockedSlotAssignments && lockedSlotAssignments.length >= minTotalSlots
-          ? lockedSlotAssignments
-          : [...displayOrder, ...Array(numEmptySlots).fill(null)];
-        const totalSlots = effectiveSlots.length;
+      const draggedId = active.id as string;
+      const numEmptySlots = Math.max(4, 3 * lockedGridColumns);
+      const minTotalSlots = displayOrder.length + numEmptySlots;
+      const effectiveSlots = lockedSlotAssignments && lockedSlotAssignments.length >= minTotalSlots
+        ? lockedSlotAssignments
+        : [...displayOrder, ...Array(numEmptySlots).fill(null)];
+      const totalSlots = effectiveSlots.length;
+      const oldSlot = effectiveSlots.indexOf(draggedId);
+
+      if (gapDrop !== null && oldSlot !== -1) {
+        const nullSlot = effectiveSlots.findIndex((id) => id == null);
+        if (nullSlot === -1) return;
+        const newSlots = [...effectiveSlots];
+        newSlots[oldSlot] = null;
+        newSlots[nullSlot] = draggedId;
+        const maxFilledIndex = newSlots.reduce((max, id, i) => (id != null ? i : max), -1);
+        const paddedMinSlots = maxFilledIndex + 1 + 3 * lockedGridColumns;
+        const finalSlots = newSlots.length < paddedMinSlots
+          ? [...newSlots, ...Array(paddedMinSlots - newSlots.length).fill(null)]
+          : newSlots;
+        setLockedSlotAssignments(finalSlots);
+        setLockedPlacements((prev) => {
+          const next = prev && prev.length >= totalSlots ? [...prev] : [];
+          while (next.length < totalSlots) next.push({ row: 0, col: 0 });
+          next[nullSlot] = { row: gapDrop!.row, col: gapDrop!.col };
+          return next;
+        });
+        const newOrder = finalSlots.filter((id): id is string => id != null);
+        setMergedDisplayOrder(newOrder);
+        localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(newOrder));
+        setMetricCardOrder((prev) => {
+          const metricIds = newOrder.filter((id) => !isSectionId(id));
+          const kept = prev.filter((id) => !newOrder.includes(id) && !isSectionId(id));
+          const finalOrder = [...metricIds, ...kept];
+          localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        });
+        setSectionOrder((prev) => {
+          const sectionIds = newOrder.filter((id) => isSectionId(id));
+          const kept = prev.filter((id) => !newOrder.includes(id));
+          const finalOrder = [...sectionIds, ...kept];
+          localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(finalOrder));
+          return finalOrder;
+        });
+        setMetricInstances((prev) =>
+          prev.map((inst) => ({
+            ...inst,
+            slotIndex: finalSlots.indexOf(inst.instanceId) >= 0 ? finalSlots.indexOf(inst.instanceId) : inst.slotIndex,
+          }))
+        );
+        return;
+      }
+
+      if (targetSlot !== null && oldSlot !== -1) {
         const clampedTarget = Math.min(targetSlot, totalSlots - 1);
-        const oldSlot = effectiveSlots.indexOf(draggedId);
-        if (oldSlot === -1) return;
         const newSlots = [...effectiveSlots];
         newSlots[oldSlot] = null;
         newSlots[clampedTarget] = draggedId;
@@ -4330,6 +4382,20 @@ export default function Dashboard() {
                       </DroppableSlot>
                     );
                   })}
+                  {Array.from({ length: totalRows }, (_, r) =>
+                    Array.from({ length: gridColumns }, (_, c) => {
+                      if (cellToSlot[r]?.[c] !== undefined) return null;
+                      const gapSlotStyle: React.CSSProperties = {
+                        gridRow: `${contentStartRow + r} / span 1`,
+                        gridColumn: `${c + 1} / span 1`,
+                      };
+                      return (
+                        <DroppableSlot key={`gap-${r}-${c}`} id={`metric-slot-gap-${r}-${c}`} style={gapSlotStyle} fillCell>
+                          {null}
+                        </DroppableSlot>
+                      );
+                    })
+                  ).flat()}
                   <div
                     role="separator"
                     aria-label="Resize row height"
