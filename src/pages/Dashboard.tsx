@@ -578,6 +578,7 @@ function SectionCardResizeWrapper({
         position: "relative",
         minHeight: height != null ? `${height}px` : undefined,
         height: height != null ? `${height}px` : undefined,
+        minWidth: 0,
       }}
     >
       {children}
@@ -760,6 +761,10 @@ function DroppableSlot({ id, children, style: slotStyle, fillCell }: { id: strin
     <div
       ref={setNodeRef}
       style={{
+        minWidth: 0,
+        maxWidth: "100%",
+        overflow: "hidden",
+        boxSizing: "border-box",
         ...(fillCell ? { minHeight: 0, height: "100%" } : { minHeight: isEmpty ? "100px" : "120px" }),
         borderRadius: "8px",
         border: showOutline && isOver ? "2px dashed var(--accent)" : showOutline && isEmpty ? "1px dashed var(--border-color)" : "1px solid transparent",
@@ -1041,6 +1046,8 @@ function SortableMetricCard({
             ? {
                 width: "100%",
                 minWidth: 0,
+                maxWidth: "100%",
+                overflow: "hidden",
                 boxSizing: "border-box",
                 ...(chartColumnSpan > 1 ? { gridColumn: `span ${chartColumnSpan}` as const } : {}),
               }
@@ -1578,8 +1585,8 @@ function SortableMetricCard({
         ...(isGridLayout
           ? {
               ...(isFluidGrid && cardWidth
-                ? { width: `${cardWidth}px`, minWidth: 200, maxWidth: 1200, boxSizing: "border-box" as const }
-                : { width: "100%", minWidth: 0, boxSizing: "border-box" as const }),
+                ? { width: `${cardWidth}px`, minWidth: 200, maxWidth: "100%", overflow: "hidden", boxSizing: "border-box" as const }
+                : { width: "100%", minWidth: 0, maxWidth: "100%", overflow: "hidden", boxSizing: "border-box" as const }),
               ...(cardColumnSpan > 1 ? { gridColumn: `span ${cardColumnSpan}` as const } : {}),
             }
           : {
@@ -3778,9 +3785,9 @@ export default function Dashboard() {
             />
           </div>
 
-      <div style={{ display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
       {/* Metrics Cards */}
-      <div style={splitGrid ? { order: 1 } : undefined}>
+      <div style={{ ...(splitGrid ? { order: 1 } : {}), minWidth: 0 }}>
       {((order: string[], onDragEnd: (e: DragEndEvent) => void) => {
         moveInLockedGridRef.current = null;
         const maxMetricRows = Math.max(0, parseInt(localStorage.getItem(DASHBOARD_MAX_METRIC_ROWS_KEY) || "0", 10));
@@ -3864,7 +3871,8 @@ export default function Dashboard() {
             let rowSpan = 1;
             if (id) {
               if (isSectionId(id)) {
-                span = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes[id]?.columnSpan ?? 1));
+                const defaultSectionSpan = id === "openPositions" && openPositionsDisplayMode === "compact" ? 3 : 1;
+                span = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes[id]?.columnSpan ?? defaultSectionSpan));
                 rowSpan = Math.min(MAX_ROW_SPAN, Math.max(1, sectionSizes[id]?.rowSpan ?? 1));
               } else {
                 const metric = sortedMetrics.find((m) => m.id === id);
@@ -4054,6 +4062,7 @@ export default function Dashboard() {
                 items={sortableIds}
                 strategy={rectSortingStrategy}
               >
+                <div style={{ width: "100%", minWidth: 0 }}>
                 <div
                   ref={lockedGridRef}
                   style={{
@@ -4129,6 +4138,7 @@ export default function Dashboard() {
                     }}
                   />
                 </div>
+                </div>
               </SortableContext>
             </DndContext>
           );
@@ -4144,6 +4154,7 @@ export default function Dashboard() {
           items={order}
           strategy={rectSortingStrategy}
         >
+      <div style={{ width: "100%", minWidth: 0 }}>
       <div
         style={{
           display: "grid",
@@ -4165,6 +4176,7 @@ export default function Dashboard() {
           const metric = sortedMetrics.find((m) => m.id === id);
           return metric ? renderCard(metric) : null;
         })}
+      </div>
       </div>
         </SortableContext>
       </DndContext>
@@ -4210,6 +4222,7 @@ export default function Dashboard() {
           gridTemplateRows: layoutLocked ? "auto minmax(140px, 1fr)" : "auto",
           gap: `${sectionsGridGapPx}px`,
           marginBottom: `${sectionsGridMarginBottomPx}px`,
+          minWidth: 0,
         }}
       >
         <div
@@ -4220,6 +4233,7 @@ export default function Dashboard() {
               : `repeat(auto-fit, minmax(${sectionsGridMinWidthPx}px, 1fr))`,
             gap: `${sectionsGridGapPx}px`,
             minHeight: 0,
+            minWidth: 0,
           }}
         >
         {(() => {
@@ -4232,6 +4246,11 @@ export default function Dashboard() {
                 key="topSymbols"
                 id="topSymbols"
                 wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: "hidden",
+                  boxSizing: "border-box",
                   ...(topSymbolsSpan > 1 ? { gridColumn: `span ${topSymbolsSpan}` as const } : {}),
                   ...(sectionSizes.topSymbols?.height != null ? { minHeight: `${sectionSizes.topSymbols.height}px` } : {}),
                 }}
@@ -4477,6 +4496,11 @@ export default function Dashboard() {
                 key="strategyPerformance"
                 id="strategyPerformance"
                 wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: "hidden",
+                  boxSizing: "border-box",
                   ...(stratSpan > 1 ? { gridColumn: `span ${stratSpan}` as const } : {}),
                   ...(sectionSizes.strategyPerformance?.height != null ? { minHeight: `${sectionSizes.strategyPerformance.height}px` } : {}),
                 }}
@@ -4973,6 +4997,11 @@ export default function Dashboard() {
                 key="recentTrades"
                 id="recentTrades"
                 wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: "hidden",
+                  boxSizing: "border-box",
                   ...(recentSpan > 1 ? { gridColumn: `span ${recentSpan}` as const } : {}),
                   ...(sectionSizes.recentTrades?.height != null ? { minHeight: `${sectionSizes.recentTrades.height}px` } : {}),
                 }}
@@ -4989,6 +5018,7 @@ export default function Dashboard() {
                       display: "flex",
                       flexDirection: "column",
                       minHeight: 0,
+                      minWidth: 0,
                       height: "100%",
                     }}
                   >
@@ -5168,7 +5198,7 @@ export default function Dashboard() {
                     )}
                   </div>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, overflow: "auto" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, minWidth: 0, overflowX: "hidden", overflowY: "auto" }}>
               {recentTrades.map((trade, idx) => {
                 const isExpanded = expandedRecentTrades.has(idx);
                 return (
@@ -5258,12 +5288,18 @@ export default function Dashboard() {
 
           // Open Positions
           if (sectionId === "openPositions" && dashboardSections.showOpenPositions) {
-            const openSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.openPositions?.columnSpan ?? 1));
+            const defaultOpenSpan = openPositionsDisplayMode === "compact" ? 3 : 1;
+            const openSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.openPositions?.columnSpan ?? defaultOpenSpan));
             return (
               <SortableSection
                 key="openPositions"
                 id="openPositions"
                 wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: "hidden",
+                  boxSizing: "border-box",
                   ...(openSpan > 1 ? { gridColumn: `span ${openSpan}` as const } : {}),
                   ...(sectionSizes.openPositions?.height != null ? { minHeight: `${sectionSizes.openPositions.height}px` } : {}),
                 }}
@@ -5280,6 +5316,7 @@ export default function Dashboard() {
                       display: "flex",
                       flexDirection: "column",
                       minHeight: 0,
+                      minWidth: 0,
                       height: "100%",
                     }}
                   >
@@ -5511,13 +5548,13 @@ export default function Dashboard() {
                         )}
                       </div>
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, overflow: "auto" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, minWidth: 0, overflowX: "hidden", overflowY: "auto" }}>
                       {openPositionGroups.length === 0 ? (
                         <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "20px" }}>
                           No open positions. Positions are derived from imported trades that are not fully closed.
                         </p>
                       ) : openPositionsDisplayMode === "compact" ? (
-                        <div style={{ overflowX: "auto" }}>
+                        <div style={{ overflowX: "auto", overflowY: "hidden", minWidth: 0, width: "100%", maxWidth: "100%" }}>
                           <div
                             style={{
                               display: "grid",
@@ -5529,6 +5566,7 @@ export default function Dashboard() {
                               padding: "8px 12px",
                               color: "var(--text-secondary)",
                               fontWeight: "600",
+                              minWidth: "min-content",
                             }}
                           >
                             <span>Symbol</span>
@@ -5751,6 +5789,11 @@ export default function Dashboard() {
                 key="trades"
                 id="trades"
                 wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: "hidden",
+                  boxSizing: "border-box",
                   ...(tradesSpan > 1 ? { gridColumn: `span ${tradesSpan}` as const } : {}),
                   ...(sectionSizes.trades?.height != null ? { minHeight: `${sectionSizes.trades.height}px` } : {}),
                 }}
@@ -5767,6 +5810,7 @@ export default function Dashboard() {
                       display: "flex",
                       flexDirection: "column",
                       minHeight: 0,
+                      minWidth: 0,
                       height: "100%",
                     }}
                   >
@@ -5975,7 +6019,7 @@ export default function Dashboard() {
                     )}
                   </div>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, overflow: "auto" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minHeight: 0, minWidth: 0, overflowX: "hidden", overflowY: "auto" }}>
                   {trades.length === 0 ? (
                     <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "20px" }}>
                       No trades found for the selected timeframe.

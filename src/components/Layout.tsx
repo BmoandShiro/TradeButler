@@ -525,35 +525,25 @@ export default function Layout({ children }: LayoutProps) {
   };
 
   // Save scroll position when route changes
+  // Important: by the time this effect runs, React has already switched the DOM to the new route,
+  // so mainContentRef.current.scrollTop is the NEW page's scroll (usually 0). Only use the
+  // in-memory map or localStorage for the previous path — never read from DOM here.
   useEffect(() => {
     const currentPath = location.pathname;
     const previousPath = previousPathRef.current;
 
-    // Save the previous route's scroll position
-    // Try to get it from the in-memory map first (most up-to-date)
-    // If not available, try to read from DOM (but it might already be the new page)
     if (previousPath && previousPath !== currentPath) {
       let scrollTop: number;
-      
-      // First, try to get from in-memory map (saved by scroll event handler)
       if (scrollPositions.current.has(previousPath)) {
         scrollTop = scrollPositions.current.get(previousPath)!;
-      } else if (mainContentRef.current) {
-        // Fallback: try to read from DOM
-        scrollTop = mainContentRef.current.scrollTop;
       } else {
-        // Last resort: try localStorage
         const saved = localStorage.getItem(`scroll_${previousPath}`);
         scrollTop = saved ? parseInt(saved, 10) : 0;
       }
-      
-      // Only save if we got a valid value and it's not 0 (unless it was intentionally saved as 0)
-      // Actually, save it anyway - 0 is a valid scroll position
       scrollPositions.current.set(previousPath, scrollTop);
       localStorage.setItem(`scroll_${previousPath}`, scrollTop.toString());
     }
 
-    // Update ref for next time
     previousPathRef.current = currentPath;
   }, [location.pathname]);
 
