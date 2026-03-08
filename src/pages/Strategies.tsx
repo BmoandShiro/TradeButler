@@ -4628,6 +4628,24 @@ export default function Strategies() {
           </button>
         </div>
 
+        <div style={{ padding: "12px", borderBottom: "1px solid var(--border-color)" }}>
+          <input
+            type="text"
+            value={strategyFilterText}
+            onChange={(e) => setStrategyFilterText(e.target.value)}
+            placeholder="Search strategies..."
+            style={{
+              width: "100%",
+              padding: "8px 10px",
+              backgroundColor: "var(--bg-primary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--text-primary)",
+              fontSize: "13px",
+            }}
+          />
+        </div>
+
         <div 
           ref={leftPanelScrollRef}
           style={{ flex: 1, overflowY: "auto", padding: "12px" }}
