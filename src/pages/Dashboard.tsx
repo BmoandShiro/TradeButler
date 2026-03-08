@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 import {
   DndContext,
   closestCenter,
+  pointerWithin,
   KeyboardSensor,
   PointerSensor,
   useSensor,
@@ -4160,7 +4161,7 @@ export default function Dashboard() {
           return (
             <DndContext
               sensors={sensors}
-              collisionDetection={closestCenter}
+              collisionDetection={pointerWithin}
               onDragEnd={onDragEnd}
             >
               <SortableContext
