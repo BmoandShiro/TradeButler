@@ -362,6 +362,7 @@ const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
 const METRIC_INSTANCES_KEY = "tradebutler_metric_instances";
 const DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY = "tradebutler_dashboard_locked_column_widths";
 const DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY = "tradebutler_dashboard_locked_slot_assignments";
+const DASHBOARD_LOCKED_PLACEMENTS_KEY = "tradebutler_dashboard_locked_placements";
 const MAX_POSITION_CHART_COLUMN_SPAN = 24;
 const MAX_ROW_SPAN = 32;
 const MIN_COLUMN_FR = 0.2;
@@ -2503,6 +2504,24 @@ export default function Dashboard() {
     return null;
   });
 
+  /** When layout is locked, fixed (row,col) per slot so shrinking a card leaves gap instead of repacking. */
+  const [lockedPlacements, setLockedPlacements] = useState<{ row: number; col: number }[] | null>(() => {
+    const saved = localStorage.getItem(DASHBOARD_LOCKED_PLACEMENTS_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
+  const needSavePlacementsRef = useRef<{ row: number; col: number }[] | null>(null);
+  /** Previous slot spans to detect expand (repack) vs shrink (leave gap). */
+  const previousSlotSpansRef = useRef<{ colSpan: number; rowSpan: number }[] | null>(null);
+
   useEffect(() => {
     if (!layoutLocked) return;
     setLockedColumnWidths((prev) => {
@@ -2527,6 +2546,20 @@ export default function Dashboard() {
       localStorage.setItem(DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY, JSON.stringify(lockedSlotAssignments));
     }
   }, [layoutLocked, lockedSlotAssignments]);
+
+  useEffect(() => {
+    if (needSavePlacementsRef.current) {
+      const placements = needSavePlacementsRef.current;
+      needSavePlacementsRef.current = null;
+      setLockedPlacements(placements);
+    }
+  });
+
+  useEffect(() => {
+    if (layoutLocked && lockedPlacements != null && lockedPlacements.length > 0) {
+      localStorage.setItem(DASHBOARD_LOCKED_PLACEMENTS_KEY, JSON.stringify(lockedPlacements));
+    }
+  }, [layoutLocked, lockedPlacements]);
 
   useEffect(() => {
     localStorage.setItem(DASHBOARD_LOCKED_ROW_HEIGHT_KEY, String(lockedRowHeight));
@@ -3933,36 +3966,65 @@ export default function Dashboard() {
 
           const placements: { row: number; col: number }[] = [];
           const used: boolean[][] = [];
+          let didPack = false;
           const ensureRows = (r: number) => {
             while (used.length <= r) {
               used.push(Array.from({ length: gridColumns }, () => false));
             }
           };
+          let forceRepack = false;
+          const prev = previousSlotSpansRef.current;
+          if (prev && prev.length === totalSlots) {
+            for (let i = 0; i < totalSlots && !forceRepack; i++) {
+              if (slotSpans[i] > (prev[i]?.colSpan ?? 0) || slotRowSpans[i] > (prev[i]?.rowSpan ?? 0)) forceRepack = true;
+            }
+          }
+          const stored = !forceRepack && lockedPlacements && lockedPlacements.length >= totalSlots ? lockedPlacements : null;
           for (let i = 0; i < totalSlots; i++) {
             const colSpan = slotSpans[i];
             const rowSpan = slotRowSpans[i];
-            let placed = false;
-            for (let r = 0; r < 200 && !placed; r++) {
-              ensureRows(r + rowSpan - 1);
-              for (let c = 0; c <= gridColumns - colSpan && !placed; c++) {
-                let fits = true;
-                for (let dr = 0; dr < rowSpan && fits; dr++) {
-                  for (let dc = 0; dc < colSpan && fits; dc++) {
-                    if (used[r + dr][c + dc]) fits = false;
-                  }
-                }
-                if (fits) {
-                  placements.push({ row: r, col: c });
-                  for (let dr = 0; dr < rowSpan; dr++) {
-                    ensureRows(r + dr);
-                    for (let dc = 0; dc < colSpan; dc++) used[r + dr][c + dc] = true;
-                  }
-                  placed = true;
+            if (stored && i < stored.length) {
+              const row = Math.max(0, stored[i].row);
+              const col = Math.max(0, Math.min(stored[i].col, gridColumns - colSpan));
+              ensureRows(row + rowSpan - 1);
+              for (let dr = 0; dr < rowSpan; dr++) {
+                for (let dc = 0; dc < colSpan; dc++) {
+                  const rr = row + dr;
+                  const cc = col + dc;
+                  if (rr < used.length && cc < gridColumns) used[rr][cc] = true;
                 }
               }
+              placements.push({ row, col });
+            } else {
+              let placed = false;
+              for (let r = 0; r < 200 && !placed; r++) {
+                ensureRows(r + rowSpan - 1);
+                for (let c = 0; c <= gridColumns - colSpan && !placed; c++) {
+                  let fits = true;
+                  for (let dr = 0; dr < rowSpan && fits; dr++) {
+                    for (let dc = 0; dc < colSpan && fits; dc++) {
+                      if (used[r + dr][c + dc]) fits = false;
+                    }
+                  }
+                  if (fits) {
+                    placements.push({ row: r, col: c });
+                    for (let dr = 0; dr < rowSpan; dr++) {
+                      ensureRows(r + dr);
+                      for (let dc = 0; dc < colSpan; dc++) used[r + dr][c + dc] = true;
+                    }
+                    placed = true;
+                    didPack = true;
+                  }
+                }
+              }
+              if (!placed) {
+                placements.push({ row: used.length, col: 0 });
+                didPack = true;
+              }
             }
-            if (!placed) placements.push({ row: used.length, col: 0 });
           }
+          if (didPack) needSavePlacementsRef.current = placements;
+          previousSlotSpansRef.current = slotSpans.map((cs, i) => ({ colSpan: cs, rowSpan: slotRowSpans[i] }));
           let totalRows = 0;
           for (let i = 0; i < totalSlots; i++) {
             totalRows = Math.max(totalRows, placements[i].row + slotRowSpans[i]);
