@@ -2340,7 +2340,7 @@ export default function Dashboard() {
       }
       if (targetSlot !== null) {
         const draggedId = active.id as string;
-        const numEmptySlots = Math.max(lockedGridColumns, 4);
+        const numEmptySlots = Math.max(4, 3 * lockedGridColumns);
         const totalSlots = displayOrder.length + numEmptySlots;
         const effectiveSlots = lockedSlotAssignments && lockedSlotAssignments.length === totalSlots
           ? lockedSlotAssignments
@@ -2351,8 +2351,13 @@ export default function Dashboard() {
         const newSlots = [...effectiveSlots];
         newSlots[oldSlot] = null;
         newSlots[clampedTarget] = draggedId;
-        setLockedSlotAssignments(newSlots);
-        const newOrder = newSlots.filter((id): id is string => id != null);
+        const maxFilledIndex = newSlots.reduce((max, id, i) => (id != null ? i : max), -1);
+        const minTotalSlots = maxFilledIndex + 1 + 3 * lockedGridColumns;
+        const finalSlots = newSlots.length < minTotalSlots
+          ? [...newSlots, ...Array(minTotalSlots - newSlots.length).fill(null)]
+          : newSlots;
+        setLockedSlotAssignments(finalSlots);
+        const newOrder = finalSlots.filter((id): id is string => id != null);
         setMergedDisplayOrder(newOrder);
         localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(newOrder));
         setMetricCardOrder((prev) => {
@@ -2372,7 +2377,7 @@ export default function Dashboard() {
         setMetricInstances((prev) =>
           prev.map((inst) => ({
             ...inst,
-            slotIndex: newSlots.indexOf(inst.instanceId) >= 0 ? newSlots.indexOf(inst.instanceId) : inst.slotIndex,
+            slotIndex: finalSlots.indexOf(inst.instanceId) >= 0 ? finalSlots.indexOf(inst.instanceId) : inst.slotIndex,
           }))
         );
         return;
@@ -2437,7 +2442,7 @@ export default function Dashboard() {
       }
       if (targetSlot !== null) {
         const draggedId = active.id as string;
-        const numEmptySlots = Math.max(lockedGridColumns, 4);
+        const numEmptySlots = Math.max(4, 3 * lockedGridColumns);
         const totalSlots = order.length + numEmptySlots;
         const effectiveSlots = lockedSlotAssignments && lockedSlotAssignments.length === totalSlots
           ? lockedSlotAssignments
@@ -2448,8 +2453,13 @@ export default function Dashboard() {
         const newSlots = [...effectiveSlots];
         newSlots[oldSlot] = null;
         newSlots[clampedTarget] = draggedId;
-        setLockedSlotAssignments(newSlots);
-        const newOrder = newSlots.filter((id): id is string => id != null);
+        const maxFilledIndex = newSlots.reduce((max, id, i) => (id != null ? i : max), -1);
+        const minTotalSlots = maxFilledIndex + 1 + 3 * lockedGridColumns;
+        const finalSlots = newSlots.length < minTotalSlots
+          ? [...newSlots, ...Array(minTotalSlots - newSlots.length).fill(null)]
+          : newSlots;
+        setLockedSlotAssignments(finalSlots);
+        const newOrder = finalSlots.filter((id): id is string => id != null);
         setMetricCardOrder((prev) => {
           const kept = prev.filter((id) => !newOrder.includes(id) && !isSectionId(id));
           const finalOrder = [...newOrder, ...kept];
@@ -2459,7 +2469,7 @@ export default function Dashboard() {
         setMetricInstances((prev) =>
           prev.map((inst) => ({
             ...inst,
-            slotIndex: newSlots.indexOf(inst.instanceId) >= 0 ? newSlots.indexOf(inst.instanceId) : inst.slotIndex,
+            slotIndex: finalSlots.indexOf(inst.instanceId) >= 0 ? finalSlots.indexOf(inst.instanceId) : inst.slotIndex,
           }))
         );
         return;
@@ -2799,11 +2809,11 @@ export default function Dashboard() {
       return;
     }
     const split = localStorage.getItem(DASHBOARD_SPLIT_GRID_KEY) === "true";
-    const numEmptySlots = Math.max(lockedGridColumns, 4);
+    const numEmptySlots = Math.max(4, 3 * lockedGridColumns);
     const currentOrder = split ? sortedMetrics.map((m) => m.id) : displayOrder;
-    const totalSlots = currentOrder.length + numEmptySlots;
+    const minTotalSlots = currentOrder.length + numEmptySlots;
     setLockedSlotAssignments((prev) => {
-      if (prev !== null && prev.length === totalSlots) return prev;
+      if (prev !== null && prev.length >= minTotalSlots) return prev;
       return [...currentOrder, ...Array(numEmptySlots).fill(null)];
     });
   }, [layoutLocked, lockedGridColumns, displayOrder, sortedMetrics]);
@@ -3649,11 +3659,12 @@ export default function Dashboard() {
         };
 
         if (layoutLocked) {
-          const numEmptySlots = Math.max(gridColumns, 4);
-          const totalSlots = order.length + numEmptySlots;
-          const effectiveSlotAssignments = lockedSlotAssignments && lockedSlotAssignments.length === totalSlots
+          const numEmptySlots = Math.max(4, 3 * gridColumns);
+          const minTotalSlots = order.length + numEmptySlots;
+          const effectiveSlotAssignments = lockedSlotAssignments && lockedSlotAssignments.length >= minTotalSlots
             ? lockedSlotAssignments
             : [...order, ...Array(numEmptySlots).fill(null)];
+          const totalSlots = effectiveSlotAssignments.length;
           const columnWidths = lockedColumnWidths.length === gridColumns
             ? lockedColumnWidths
             : Array.from({ length: gridColumns }, () => 1);
