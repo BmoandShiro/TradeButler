@@ -363,7 +363,8 @@ const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
 const METRIC_INSTANCES_KEY = "tradebutler_metric_instances";
 const LAYOUT_LOCKED_KEY = "tradebutler_dashboard_layout_locked";
 const DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY = "tradebutler_dashboard_locked_column_widths";
-const MAX_POSITION_CHART_COLUMN_SPAN = 12;
+const MAX_POSITION_CHART_COLUMN_SPAN = 24;
+const MAX_ROW_SPAN = 32;
 const MIN_COLUMN_FR = 0.2;
 const MIN_ROW_HEIGHT_PX = 40;
 const MAX_ROW_HEIGHT_PX = 400;
@@ -391,7 +392,7 @@ interface MetricInstance {
   cardWidth?: number;               // Pixel width in flex layout (default 280)
   cardHeight?: number;              // Card height in px (default 100)
   cardColumnSpan?: number;          // Grid column span when in grid layout (1–MAX_POSITION_CHART_COLUMN_SPAN)
-  cardRowSpan?: number;             // Grid row span when locked (1–4); 2+ lets 2–4 rows of items sit beside it
+  cardRowSpan?: number;             // Grid row span when locked (1–MAX_ROW_SPAN)
 }
 
 interface DashboardSections {
@@ -530,12 +531,39 @@ function SectionCardResizeWrapper({
     e.preventDefault();
     const startY = e.clientY;
     const startH = height ?? 300;
+    if (layoutLocked) {
+      const startSpan = Math.min(MAX_ROW_SPAN, Math.max(1, Math.round(startH / rowHeight)));
+      const onMove = (e2: MouseEvent) => {
+        const delta = e2.clientY - startY;
+        const deltaRows = delta / rowHeight;
+        const newSpan = Math.min(MAX_ROW_SPAN, Math.max(1, Math.round(startSpan + deltaRows)));
+        const newH = newSpan * rowHeight;
+        setSectionSizes((prev) => {
+          const next = { ...prev, [sectionId]: { ...prev[sectionId], height: newH, rowSpan: newSpan } };
+          localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+          return next;
+        });
+      };
+      const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+      return;
+    }
+    const SNAP_STEPS = [200, 240, 280, 320, 360, 400, 480, 560, 640, 720, 800];
+    const snap = (v: number) => {
+      const clamped = Math.min(800, Math.max(200, v));
+      let best = SNAP_STEPS[0];
+      for (const s of SNAP_STEPS) {
+        if (Math.abs(s - clamped) < Math.abs(best - clamped)) best = s;
+      }
+      return best;
+    };
     const onMove = (e2: MouseEvent) => {
       const delta = e2.clientY - startY;
-      const newH = Math.min(800, Math.max(200, startH + delta));
+      const rawH = startH + delta;
+      const newH = snap(rawH);
       setSectionSizes((prev) => {
-        const rowSpan = layoutLocked ? (newH >= 2 * rowHeight ? Math.min(4, Math.max(2, Math.round(newH / rowHeight))) : 1) : undefined;
-        const next = { ...prev, [sectionId]: { ...prev[sectionId], height: newH, ...(rowSpan != null ? { rowSpan } : {}) } };
+        const next = { ...prev, [sectionId]: { ...prev[sectionId], height: newH } };
         localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
         return next;
       });
@@ -867,14 +895,44 @@ function SortableMetricCard({
     const brushStartClamped = useBrush && brushEnd > 0 ? Math.min(brushStart, chartData.length - 1) : 0;
     const brushEndClamped = useBrush && brushEnd > 0 ? Math.min(chartData.length - 1, Math.max(brushStartClamped, brushEnd)) : Math.max(0, chartData.length - 1);
 
+    const rowHeightForChart = typeof lockedRowHeight === "number" && lockedRowHeight > 0 ? lockedRowHeight : 100;
     const handleResizeStart = (e: React.MouseEvent) => {
       e.stopPropagation();
       e.preventDefault();
       const startY = e.clientY;
       const startHeight = chartHeight;
+      if (layoutLocked) {
+        const startSpan = Math.min(MAX_ROW_SPAN, Math.max(1, (metric as MetricInstance).cardRowSpan ?? (Math.round(startHeight / rowHeightForChart) || 1)));
+        const onMove = (e2: MouseEvent) => {
+          const delta = e2.clientY - startY;
+          const deltaRows = delta / rowHeightForChart;
+          const newSpan = Math.min(MAX_ROW_SPAN, Math.max(1, Math.round(startSpan + deltaRows)));
+          const newHeight = newSpan * rowHeightForChart;
+          setMetricInstances((prev: MetricInstance[]) => {
+            const updated = prev.map((inst: MetricInstance) =>
+              inst.instanceId === metric.id ? { ...inst, chartHeight: newHeight, cardRowSpan: newSpan } : inst
+            );
+            localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+            return updated;
+          });
+        };
+        const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+        return;
+      }
+      const SNAP_STEPS = [160, 200, 240, 280, 320, 400, 480, 600];
+      const snap = (v: number) => {
+        const clamped = Math.min(600, Math.max(160, v));
+        let best = SNAP_STEPS[0];
+        for (const s of SNAP_STEPS) {
+          if (Math.abs(s - clamped) < Math.abs(best - clamped)) best = s;
+        }
+        return best;
+      };
       const onMove = (e2: MouseEvent) => {
         const delta = e2.clientY - startY;
-        const newHeight = Math.min(600, Math.max(160, startHeight + delta));
+        const newHeight = snap(startHeight + delta);
         setMetricInstances((prev: MetricInstance[]) => {
           const updated = prev.map((inst: MetricInstance) =>
             inst.instanceId === metric.id ? { ...inst, chartHeight: newHeight } : inst
@@ -883,10 +941,7 @@ function SortableMetricCard({
           return updated;
         });
       };
-      const onUp = () => {
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-      };
+      const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     };
@@ -995,7 +1050,7 @@ function SortableMetricCard({
                 minWidth: 280,
                 maxWidth: chartWidth ? 1200 : undefined,
               }),
-          minHeight: "320px",
+          ...(layoutLocked ? { height: "100%", minHeight: 0 } : { minHeight: "320px" }),
           position: "relative",
           ...style,
         }}
@@ -1249,11 +1304,13 @@ function SortableMetricCard({
             )}
           </div>
         </div>
-        <div style={{ flex: 1, minHeight: 160, display: "flex", flexDirection: "column", pointerEvents: "auto" }} onMouseDown={(e) => e.stopPropagation()}>
+        <div style={{ flex: 1, minHeight: layoutLocked ? 0 : 160, display: "flex", flexDirection: "column", pointerEvents: "auto", overflow: "hidden" }} onMouseDown={(e) => e.stopPropagation()}>
           {selectedGroup && chartData.length > 0 ? (
             <>
-              <ResponsiveContainer width="100%" height={useBrush ? chartHeight - 36 : chartHeight}>
-                <LineChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+              {layoutLocked ? (
+                <div style={{ flex: 1, minHeight: 0 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                   <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} stroke="var(--border-color)" />
                   <YAxis
@@ -1293,23 +1350,55 @@ function SortableMetricCard({
                     />
                   )}
                 </LineChart>
-              </ResponsiveContainer>
-              <div
-                role="separator"
-                aria-label="Resize chart"
-                onMouseDown={handleResizeStart}
-                style={{
-                  height: "8px",
-                  cursor: "ns-resize",
-                  flexShrink: 0,
-                  background: "transparent",
-                  borderRadius: "4px",
-                  marginTop: "4px",
-                }}
-              />
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={useBrush ? chartHeight - 36 : chartHeight}>
+                  <LineChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} stroke="var(--border-color)" />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: "var(--text-secondary)" }}
+                      stroke="var(--border-color)"
+                      tickFormatter={(v) => (v >= 0 ? `+${formatWithCommas(v, { maxDecimals: 2 })}` : formatWithCommas(v, { maxDecimals: 2 }))}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px" }}
+                      labelStyle={{ color: "var(--text-primary)" }}
+                      formatter={(value: number) => [value >= 0 ? `+${formatWithCommas(value, { minDecimals: 4, maxDecimals: 4 })}` : formatWithCommas(value, { minDecimals: 4, maxDecimals: 4 }), "Position size"]}
+                      labelFormatter={(label) => `Time: ${label}`}
+                    />
+                    <ReferenceLine y={0} stroke="var(--text-secondary)" strokeDasharray="2 2" />
+                    <Line type="stepAfter" dataKey="positionSize" stroke="var(--accent)" strokeWidth={2} dot={{ fill: "var(--accent)", r: 3 }} activeDot={{ r: 5 }} isAnimationActive={true} />
+                    {useBrush && (
+                      <Brush
+                        dataKey="label"
+                        height={36}
+                        stroke="var(--border-color)"
+                        fill="var(--bg-tertiary)"
+                        startIndex={brushStartClamped}
+                        endIndex={brushEndClamped}
+                        onDragEnd={(r: { startIndex?: number; endIndex?: number }) => {
+                          if (r.startIndex != null && r.endIndex != null) {
+                            setMetricInstances((prev: MetricInstance[]) => {
+                              const updated = prev.map((inst: MetricInstance) =>
+                                inst.instanceId === metric.id
+                                  ? { ...inst, positionChartBrushStart: r.startIndex!, positionChartBrushEnd: r.endIndex! }
+                                  : inst
+                              );
+                              localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+                              return updated;
+                            });
+                          }
+                        }}
+                      />
+                    )}
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </>
           ) : (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: chartHeight, color: "var(--text-secondary)", fontSize: "14px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: 1, minHeight: layoutLocked ? 0 : chartHeight, color: "var(--text-secondary)", fontSize: "14px" }}>
               {openPositionGroups.length === 0 ? "No open positions" : "Select a position above"}
             </div>
           )}
@@ -1330,6 +1419,21 @@ function SortableMetricCard({
             pointerEvents: "auto",
           }}
         />
+        <div
+          role="separator"
+          aria-label="Resize chart height"
+          onMouseDown={handleResizeStart}
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: "10px",
+            cursor: "ns-resize",
+            background: "transparent",
+            pointerEvents: "auto",
+          }}
+        />
       </div>
     );
   }
@@ -1344,31 +1448,47 @@ function SortableMetricCard({
     const startY = e.clientY;
     const startH = cardHeight;
     const rowHeight = typeof lockedRowHeight === "number" && lockedRowHeight > 0 ? lockedRowHeight : 100;
+    if (layoutLocked) {
+      const startSpan = Math.min(MAX_ROW_SPAN, Math.max(1, (metric as MetricInstance).cardRowSpan ?? (Math.round(startH / rowHeight) || 1)));
+      const onMove = (e2: MouseEvent) => {
+        const delta = e2.clientY - startY;
+        const deltaRows = delta / rowHeight;
+        const newSpan = Math.min(MAX_ROW_SPAN, Math.max(1, Math.round(startSpan + deltaRows)));
+        const newH = newSpan * rowHeight;
+        setMetricInstances((prev: MetricInstance[]) => {
+          const updated = prev.map((inst: MetricInstance) =>
+            inst.instanceId === metric.id ? { ...inst, cardRowSpan: newSpan, cardHeight: newH } : inst
+          );
+          localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+          return updated;
+        });
+      };
+      const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+      return;
+    }
+    const SNAP_STEPS = [80, 100, 120, 140, 160, 200, 240, 280, 320, 400];
+    const snap = (v: number) => {
+      const clamped = Math.min(400, Math.max(80, v));
+      let best = SNAP_STEPS[0];
+      for (const s of SNAP_STEPS) {
+        if (Math.abs(s - clamped) < Math.abs(best - clamped)) best = s;
+      }
+      return best;
+    };
     const onMove = (e2: MouseEvent) => {
       const delta = e2.clientY - startY;
-      const newH = Math.min(400, Math.max(80, startH + delta));
+      const newH = snap(startH + delta);
       setMetricInstances((prev: MetricInstance[]) => {
-        const inst = prev.find((i) => i.instanceId === metric.id);
-        const nextInst = inst
-          ? {
-              ...inst,
-              cardHeight: newH,
-              ...(layoutLocked
-                ? { cardRowSpan: newH >= 2 * rowHeight ? Math.min(4, Math.max(2, Math.round(newH / rowHeight))) : 1 }
-                : {}),
-            }
-          : undefined;
-        const updated = nextInst
-          ? prev.map((i) => (i.instanceId === metric.id ? nextInst : i))
-          : prev.map((i) => (i.instanceId === metric.id ? { ...i, cardHeight: newH } : i));
+        const updated = prev.map((inst: MetricInstance) =>
+          inst.instanceId === metric.id ? { ...inst, cardHeight: newH } : inst
+        );
         localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
         return updated;
       });
     };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
+    const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
@@ -2274,7 +2394,7 @@ export default function Dashboard() {
           if (s && typeof s === "object") {
             const col = s.columnSpan != null ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, s.columnSpan)) : undefined;
             const h = s.height != null ? Math.min(800, Math.max(200, s.height)) : undefined;
-            const rs = s.rowSpan != null ? Math.min(4, Math.max(1, s.rowSpan)) : undefined;
+            const rs = s.rowSpan != null ? Math.min(MAX_ROW_SPAN, Math.max(1, s.rowSpan)) : undefined;
             out[id] = { columnSpan: col, height: h, rowSpan: rs };
           }
         });
@@ -3772,18 +3892,18 @@ export default function Dashboard() {
             if (id) {
               if (isSectionId(id)) {
                 span = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes[id]?.columnSpan ?? 1));
-                rowSpan = Math.min(4, Math.max(1, sectionSizes[id]?.rowSpan ?? 1));
+                rowSpan = Math.min(MAX_ROW_SPAN, Math.max(1, sectionSizes[id]?.rowSpan ?? 1));
               } else {
                 const metric = sortedMetrics.find((m) => m.id === id);
                 if (metric) {
                   span = (metric as any).baseMetricId === "position_size_chart"
                     ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).chartColumnSpan ?? ((metric as any).chartWidth ? 2 : 1)))
                     : Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).cardColumnSpan ?? 1));
-                  rowSpan = Math.min(4, Math.max(1, (metric as any).cardRowSpan ?? 1));
+                  rowSpan = Math.min(MAX_ROW_SPAN, Math.max(1, (metric as any).cardRowSpan ?? 1));
                 }
               }
             }
-            slotSpans.push(span);
+            slotSpans.push(Math.min(span, gridColumns));
             slotRowSpans.push(rowSpan);
           }
 
@@ -3966,12 +4086,14 @@ export default function Dashboard() {
                   style={{
                     display: "grid",
                     gridTemplateColumns: gridTemplateCols,
-                    gridTemplateRows: `6px repeat(${totalRows}, minmax(${lockedRowHeight}px, auto)) 6px`,
+                    gridTemplateRows: `6px repeat(${totalRows}, ${lockedRowHeight}px) 6px`,
                     gap: `${metricsGridGapPx}px`,
                     marginBottom: `${Math.max(0, metricsToSectionsGapPx - 6)}px`,
                     alignItems: "stretch",
                     backgroundColor: "var(--bg-primary)",
                     boxSizing: "border-box",
+                    width: "100%",
+                    minWidth: 0,
                   }}
                 >
                   {columnWidths.map((_, ci) => (
