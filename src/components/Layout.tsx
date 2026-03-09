@@ -915,7 +915,11 @@ export default function Layout({ children }: LayoutProps) {
             return (
               <Link
                 key={item.path}
-                to={item.path}
+                to={item.path === "/journal"
+                  ? (typeof localStorage !== "undefined" && (localStorage.getItem("journal_selected_entry_id") || localStorage.getItem("journal_work_in_progress"))
+                    ? "/journal"
+                    : "/journal?overview=1")
+                  : item.path}
                 style={{
                   display: "flex",
                   alignItems: "center",
