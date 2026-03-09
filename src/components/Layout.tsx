@@ -1,4 +1,4 @@
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { 
   LayoutDashboard, 
   TrendingUp, 
@@ -45,6 +45,7 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const [isImporting, setIsImporting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [showAddTradeModal, setShowAddTradeModal] = useState(false);
@@ -912,14 +913,22 @@ export default function Layout({ children }: LayoutProps) {
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
+            const journalTo = (typeof localStorage !== "undefined" && (localStorage.getItem("journal_selected_entry_id") || localStorage.getItem("journal_work_in_progress")))
+              ? "/journal"
+              : "/journal?overview=1";
+            const href = item.path === "/journal" ? journalTo : item.path;
+            const isJournal = item.path === "/journal";
+            const isJournalActive = location.pathname === "/journal";
             return (
               <Link
                 key={item.path}
-                to={item.path === "/journal"
-                  ? (typeof localStorage !== "undefined" && (localStorage.getItem("journal_selected_entry_id") || localStorage.getItem("journal_work_in_progress"))
-                    ? "/journal"
-                    : "/journal?overview=1")
-                  : item.path}
+                to={href}
+                onClick={(e) => {
+                  if (isJournal && isJournalActive) {
+                    e.preventDefault();
+                    navigate("/journal?overview=1");
+                  }
+                }}
                 style={{
                   display: "flex",
                   alignItems: "center",

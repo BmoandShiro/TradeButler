@@ -591,9 +591,18 @@ export default function Journal() {
     loadStrategies();
     loadAvailableSymbols();
     loadAllJournalTrades();
-    
-    // Open to Overview by default; do not auto-restore last entry or work-in-progress when navigating to Journal.
   }, [dataMode, searchParams]);
+
+  // When navigating to Journal without ?overview=1, restore the last-open entry from localStorage so the tab doesn't reset to overview.
+  useEffect(() => {
+    if (searchParams.get("overview") === "1") return;
+    const savedId = localStorage.getItem("journal_selected_entry_id");
+    if (!savedId) return;
+    const id = parseInt(savedId, 10);
+    if (isNaN(id)) return;
+    setPendingRestoreEntryId(id);
+    loadEntry(id);
+  }, [dataMode]);
 
   // Clear pending restore once an entry is selected (so we don't stay in "loading" state)
   useEffect(() => {
