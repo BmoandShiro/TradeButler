@@ -3681,13 +3681,38 @@ pub fn get_strategy_checklist_item_metrics_by_outcome(strategy_id: i64) -> Resul
         [],
         |row| row.get::<_, i64>(0),
     ).unwrap_or(0) > 0;
-    let items: Vec<(i64, String, String)> = conn.prepare(
-        "SELECT id, item_text, checklist_type FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id"
-    ).map_err(|e| e.to_string())?
-        .query_map(params![strategy_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
+    let has_response_value = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='response_value'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let has_high_is_good = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='high_is_good'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let items: Vec<(i64, String, String, Option<bool>)> = if has_high_is_good {
+        conn.prepare(
+            "SELECT id, item_text, checklist_type, high_is_good FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id"
+        ).map_err(|e| e.to_string())?
+            .query_map(params![strategy_id], |row| Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get::<_, Option<i64>>(3).ok().flatten().map(|v| v != 0),
+            )))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect()
+    } else {
+        conn.prepare(
+            "SELECT id, item_text, checklist_type FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id"
+        ).map_err(|e| e.to_string())?
+            .query_map(params![strategy_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, None)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect()
+    };
     // Journal entry IDs for this strategy that are "losing" (avg trade performance <= 0).
     let losing_entry_ids: std::collections::HashSet<i64> = {
         let entry_ids: Vec<i64> = conn.prepare(
@@ -3726,62 +3751,118 @@ pub fn get_strategy_checklist_item_metrics_by_outcome(strategy_id: i64) -> Resul
         losing
     };
     let mut out = Vec::new();
-    for (item_id, item_text, checklist_type) in items {
-        let sql = if has_jt_ids {
-            "SELECT jcr.journal_entry_id, jcr.journal_trade_ids FROM journal_checklist_responses jcr
-             INNER JOIN journal_entries je ON je.id = jcr.journal_entry_id AND je.strategy_id = ?1
-             WHERE jcr.checklist_item_id = ?2 AND jcr.is_checked = 1"
-        } else {
-            "SELECT jcr.journal_entry_id, NULL FROM journal_checklist_responses jcr
-             INNER JOIN journal_entries je ON je.id = jcr.journal_entry_id AND je.strategy_id = ?1
-             WHERE jcr.checklist_item_id = ?2 AND jcr.is_checked = 1"
-        };
-        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
-        let rows: Vec<(i64, Option<String>)> = stmt.query_map(params![strategy_id, item_id], |row| {
-            Ok((row.get(0)?, row.get(1).ok()))
-        }).map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        let mut times_good = 0_i64;
-        let mut times_bad = 0_i64;
-        for (journal_entry_id, journal_trade_ids) in &rows {
-            let jt_ids: Vec<i64> = if let Some(ref s) = journal_trade_ids {
-                serde_json::from_str(s.as_str()).unwrap_or_default()
-            } else {
-                conn.prepare("SELECT id FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order")
+    for (item_id, item_text, checklist_type, high_is_good) in items {
+        let is_survey_value_based = checklist_type == "survey" && high_is_good.is_some() && has_response_value;
+        let (times_good, times_bad, times_not_checked_bad) = if is_survey_value_based {
+            let high_ok = high_is_good.unwrap_or(true);
+            let sql = "SELECT jcr.journal_entry_id, jcr.response_value FROM journal_checklist_responses jcr
+                 INNER JOIN journal_entries je ON je.id = jcr.journal_entry_id AND je.strategy_id = ?1
+                 WHERE jcr.checklist_item_id = ?2 AND jcr.response_value IS NOT NULL";
+            let rows: Vec<(i64, i64)> = conn.prepare(sql).map_err(|e| e.to_string())?
+                .query_map(params![strategy_id, item_id], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .collect();
+            let mut times_good = 0_i64;
+            let mut times_bad = 0_i64;
+            let mut losing_with_bad_value = 0_i64;
+            let entry_values: std::collections::HashMap<i64, i64> = rows.iter().map(|(eid, v)| (*eid, *v)).collect();
+            for (journal_entry_id, value) in &rows {
+                let jt_ids: Vec<i64> = conn.prepare("SELECT id FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order")
                     .map_err(|e| e.to_string())?
                     .query_map(params![journal_entry_id], |row| row.get(0))
                     .map_err(|e| e.to_string())?
                     .filter_map(|r| r.ok())
-                    .collect()
-            };
-            if jt_ids.is_empty() {
-                times_bad += 1;
-                continue;
-            }
-            let mut sum = 0.0_f64;
-            let mut n = 0;
-            for jt_id in &jt_ids {
-                if let Ok((v, _)) = get_journal_trade_performance_raw(&conn, *jt_id) {
-                    if let Some(val) = v {
-                        sum += val;
-                        n += 1;
+                    .collect();
+                if jt_ids.is_empty() {
+                    continue;
+                }
+                let mut sum = 0.0_f64;
+                let mut n = 0;
+                for jt_id in &jt_ids {
+                    if let Ok((v, _)) = get_journal_trade_performance_raw(&conn, *jt_id) {
+                        if let Some(val) = v {
+                            sum += val;
+                            n += 1;
+                        }
                     }
                 }
-            }
-            if n > 0 {
+                if n == 0 {
+                    continue;
+                }
                 let avg = sum / n as f64;
-                if avg > 0.0 {
+                let winning = avg > 0.0;
+                let good_value = if high_ok { *value >= 4 } else { *value <= 2 };
+                let bad_value = if high_ok { *value <= 2 } else { *value >= 4 };
+                if winning && good_value {
                     times_good += 1;
+                } else if winning && bad_value {
+                    times_bad += 1;
+                } else if !winning && bad_value {
+                    losing_with_bad_value += 1;
+                }
+            }
+            let losing_no_response = losing_entry_ids.iter().filter(|eid| !entry_values.contains_key(eid)).count() as i64;
+            let times_not_checked_bad = losing_no_response + losing_with_bad_value;
+            (times_good, times_bad, times_not_checked_bad)
+        } else {
+            let sql = if has_jt_ids {
+                "SELECT jcr.journal_entry_id, jcr.journal_trade_ids FROM journal_checklist_responses jcr
+                 INNER JOIN journal_entries je ON je.id = jcr.journal_entry_id AND je.strategy_id = ?1
+                 WHERE jcr.checklist_item_id = ?2 AND jcr.is_checked = 1"
+            } else {
+                "SELECT jcr.journal_entry_id, NULL FROM journal_checklist_responses jcr
+                 INNER JOIN journal_entries je ON je.id = jcr.journal_entry_id AND je.strategy_id = ?1
+                 WHERE jcr.checklist_item_id = ?2 AND jcr.is_checked = 1"
+            };
+            let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+            let rows: Vec<(i64, Option<String>)> = stmt.query_map(params![strategy_id, item_id], |row| {
+                Ok((row.get(0)?, row.get(1).ok()))
+            }).map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .collect();
+            let mut times_good = 0_i64;
+            let mut times_bad = 0_i64;
+            for (journal_entry_id, journal_trade_ids) in &rows {
+                let jt_ids: Vec<i64> = if let Some(ref s) = journal_trade_ids {
+                    serde_json::from_str(s.as_str()).unwrap_or_default()
+                } else {
+                    conn.prepare("SELECT id FROM journal_trades WHERE journal_entry_id = ?1 ORDER BY trade_order")
+                        .map_err(|e| e.to_string())?
+                        .query_map(params![journal_entry_id], |row| row.get(0))
+                        .map_err(|e| e.to_string())?
+                        .filter_map(|r| r.ok())
+                        .collect()
+                };
+                if jt_ids.is_empty() {
+                    times_bad += 1;
+                    continue;
+                }
+                let mut sum = 0.0_f64;
+                let mut n = 0;
+                for jt_id in &jt_ids {
+                    if let Ok((v, _)) = get_journal_trade_performance_raw(&conn, *jt_id) {
+                        if let Some(val) = v {
+                            sum += val;
+                            n += 1;
+                        }
+                    }
+                }
+                if n > 0 {
+                    let avg = sum / n as f64;
+                    if avg > 0.0 {
+                        times_good += 1;
+                    } else {
+                        times_bad += 1;
+                    }
                 } else {
                     times_bad += 1;
                 }
-            } else {
-                times_bad += 1;
             }
-        }
-        let checked_entry_ids: std::collections::HashSet<i64> = rows.iter().map(|(eid, _)| *eid).collect();
-        let times_not_checked_bad = losing_entry_ids.iter().filter(|eid| !checked_entry_ids.contains(eid)).count() as i64;
+            let checked_entry_ids: std::collections::HashSet<i64> = rows.iter().map(|(eid, _)| *eid).collect();
+            let times_not_checked_bad = losing_entry_ids.iter().filter(|eid| !checked_entry_ids.contains(eid)).count() as i64;
+            (times_good, times_bad, times_not_checked_bad)
+        };
         out.push(ChecklistItemMetricByOutcomeRow {
             checklist_item_id: item_id,
             item_text: item_text.clone(),
@@ -4515,6 +4596,11 @@ pub struct StrategyChecklistItem {
     pub item_order: i64,
     pub checklist_type: String,
     pub parent_id: Option<i64>,
+    /// For survey items: true = high (e.g. 5) is good, false = low (e.g. 1) is good. Mirrors emotional survey.
+    pub high_is_good: Option<bool>,
+    /// Optional description for this checklist item (kept for backward compatibility; currently we show
+    /// one description per checklist section instead).
+    pub description: Option<String>,
 }
 
 #[tauri::command]
@@ -4524,53 +4610,111 @@ pub fn get_strategy_checklist(strategy_id: i64, checklist_type: Option<String>) 
     
     let mut items = Vec::new();
     
+    let has_high_is_good_col = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='high_is_good'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let has_description_col = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='description'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    let map_row = |row: &rusqlite::Row| -> Result<StrategyChecklistItem, rusqlite::Error> {
+        let high_is_good = if has_high_is_good_col {
+            row.get::<_, Option<i64>>(7).ok().flatten().map(|v| v != 0)
+        } else {
+            None
+        };
+        let description = if has_description_col {
+            let idx = if has_high_is_good_col { 8 } else { 7 };
+            row.get::<_, Option<String>>(idx).ok().flatten()
+        } else {
+            None
+        };
+        Ok(StrategyChecklistItem {
+            id: Some(row.get(0)?),
+            strategy_id: row.get(1)?,
+            item_text: row.get(2)?,
+            is_checked: row.get::<_, i64>(3)? != 0,
+            item_order: row.get(4)?,
+            checklist_type: row.get(5).unwrap_or_else(|_| "entry".to_string()),
+            parent_id: row.get(6).ok(),
+            high_is_good,
+            description,
+        })
+    };
+
     if let Some(ct) = checklist_type {
-        let mut stmt = conn
-            .prepare("SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = ?2 ORDER BY item_order ASC, id ASC")
-            .map_err(|e| e.to_string())?;
-        
-        let items_iter = stmt
-            .query_map(params![strategy_id, ct], |row| {
-                Ok(StrategyChecklistItem {
-                    id: Some(row.get(0)?),
-                    strategy_id: row.get(1)?,
-                    item_text: row.get(2)?,
-                    is_checked: row.get::<_, i64>(3)? != 0,
-                    item_order: row.get(4)?,
-                    checklist_type: row.get(5).unwrap_or_else(|_| "entry".to_string()),
-                    parent_id: row.get(6).ok(),
-                })
-            })
-            .map_err(|e| e.to_string())?;
-        
+        let sql = match (has_high_is_good_col, has_description_col) {
+            (true, true) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, description FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = ?2 ORDER BY item_order ASC, id ASC",
+            (true, false) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = ?2 ORDER BY item_order ASC, id ASC",
+            (false, true) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, description FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = ?2 ORDER BY item_order ASC, id ASC",
+            (false, false) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = ?2 ORDER BY item_order ASC, id ASC",
+        };
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let items_iter = stmt.query_map(params![strategy_id, ct], map_row).map_err(|e| e.to_string())?;
         for item_result in items_iter {
             items.push(item_result.map_err(|e| e.to_string())?);
         }
     } else {
-        let mut stmt = conn
-            .prepare("SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY item_order ASC, id ASC")
-            .map_err(|e| e.to_string())?;
-        
-        let items_iter = stmt
-            .query_map(params![strategy_id], |row| {
-                Ok(StrategyChecklistItem {
-                    id: Some(row.get(0)?),
-                    strategy_id: row.get(1)?,
-                    item_text: row.get(2)?,
-                    is_checked: row.get::<_, i64>(3)? != 0,
-                    item_order: row.get(4)?,
-                    checklist_type: row.get(5).unwrap_or_else(|_| "entry".to_string()),
-                    parent_id: row.get(6).ok(),
-                })
-            })
-            .map_err(|e| e.to_string())?;
-        
+        let sql = match (has_high_is_good_col, has_description_col) {
+            (true, true) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, description FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY item_order ASC, id ASC",
+            (true, false) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY item_order ASC, id ASC",
+            (false, true) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, description FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY item_order ASC, id ASC",
+            (false, false) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY item_order ASC, id ASC",
+        };
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let items_iter = stmt.query_map(params![strategy_id], map_row).map_err(|e| e.to_string())?;
         for item_result in items_iter {
             items.push(item_result.map_err(|e| e.to_string())?);
         }
     }
     
     Ok(items)
+}
+
+#[derive(serde::Serialize)]
+pub struct ChecklistSectionDescription {
+    pub checklist_type: String,
+    pub description: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_strategy_checklist_section_descriptions(strategy_id: i64) -> Result<Vec<ChecklistSectionDescription>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT checklist_type, description FROM strategy_checklist_section_descriptions WHERE strategy_id = ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([strategy_id], |row| {
+            Ok(ChecklistSectionDescription {
+                checklist_type: row.get(0)?,
+                description: row.get(1).ok().flatten(),
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let out: Vec<ChecklistSectionDescription> = rows.filter_map(|r| r.ok()).collect();
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn save_strategy_checklist_section_description(
+    strategy_id: i64,
+    checklist_type: String,
+    description: Option<String>,
+) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO strategy_checklist_section_descriptions (strategy_id, checklist_type, description) VALUES (?1, ?2, ?3)
+         ON CONFLICT(strategy_id, checklist_type) DO UPDATE SET description = excluded.description",
+        rusqlite::params![strategy_id, checklist_type, description.as_deref()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -4908,26 +5052,85 @@ pub fn save_strategy_checklist_item(
     item_order: i64,
     checklist_type: String,
     parent_id: Option<i64>,
+    high_is_good: Option<bool>,
+    description: Option<String>,
 ) -> Result<i64, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     let checked_int = if is_checked { 1 } else { 0 };
+    let high_is_good_int: Option<i64> = high_is_good.map(|b| if b { 1 } else { 0 });
+
+    let has_high_is_good_col = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='high_is_good'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let has_description_col = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='description'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
     
     if let Some(item_id) = id {
-        // Update existing item
-        conn.execute(
-            "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, checklist_type = ?4, parent_id = ?5, updated_at = datetime('now') WHERE id = ?6",
-            params![item_text, checked_int, item_order, checklist_type, parent_id, item_id],
-        ).map_err(|e| e.to_string())?;
+        match (has_high_is_good_col, has_description_col) {
+            (true, true) => {
+                conn.execute(
+                    "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, checklist_type = ?4, parent_id = ?5, high_is_good = ?6, description = ?7, updated_at = datetime('now') WHERE id = ?8",
+                    params![item_text, checked_int, item_order, checklist_type, parent_id, high_is_good_int, description, item_id],
+                ).map_err(|e| e.to_string())?;
+            }
+            (true, false) => {
+                conn.execute(
+                    "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, checklist_type = ?4, parent_id = ?5, high_is_good = ?6, updated_at = datetime('now') WHERE id = ?7",
+                    params![item_text, checked_int, item_order, checklist_type, parent_id, high_is_good_int, item_id],
+                ).map_err(|e| e.to_string())?;
+            }
+            (false, true) => {
+                conn.execute(
+                    "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, checklist_type = ?4, parent_id = ?5, description = ?6, updated_at = datetime('now') WHERE id = ?7",
+                    params![item_text, checked_int, item_order, checklist_type, parent_id, description, item_id],
+                ).map_err(|e| e.to_string())?;
+            }
+            (false, false) => {
+                conn.execute(
+                    "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, checklist_type = ?4, parent_id = ?5, updated_at = datetime('now') WHERE id = ?6",
+                    params![item_text, checked_int, item_order, checklist_type, parent_id, item_id],
+                ).map_err(|e| e.to_string())?;
+            }
+        }
         Ok(item_id)
     } else {
-        // Insert new item
-        conn.execute(
-            "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, created_at, updated_at) 
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))",
-            params![strategy_id, item_text, checked_int, item_order, checklist_type, parent_id],
-        ).map_err(|e| e.to_string())?;
+        match (has_high_is_good_col, has_description_col) {
+            (true, true) => {
+                conn.execute(
+                    "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, description, created_at, updated_at) 
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now'))",
+                    params![strategy_id, item_text, checked_int, item_order, checklist_type, parent_id, high_is_good_int, description],
+                ).map_err(|e| e.to_string())?;
+            }
+            (true, false) => {
+                conn.execute(
+                    "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, created_at, updated_at) 
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'), datetime('now'))",
+                    params![strategy_id, item_text, checked_int, item_order, checklist_type, parent_id, high_is_good_int],
+                ).map_err(|e| e.to_string())?;
+            }
+            (false, true) => {
+                conn.execute(
+                    "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, description, created_at, updated_at) 
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'), datetime('now'))",
+                    params![strategy_id, item_text, checked_int, item_order, checklist_type, parent_id, description],
+                ).map_err(|e| e.to_string())?;
+            }
+            (false, false) => {
+                conn.execute(
+                    "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, created_at, updated_at) 
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))",
+                    params![strategy_id, item_text, checked_int, item_order, checklist_type, parent_id],
+                ).map_err(|e| e.to_string())?;
+            }
+        }
         Ok(conn.last_insert_rowid())
     }
 }
@@ -6682,25 +6885,109 @@ pub fn export_data() -> Result<String, String> {
     }
     
     // Export strategy checklists
-    let mut stmt = conn
-        .prepare("SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id FROM strategy_checklists ORDER BY strategy_id, checklist_type, item_order")
-        .map_err(|e| e.to_string())?;
-    let checklist_iter = stmt
-        .query_map([], |row| {
-            Ok(StrategyChecklistItem {
-                id: Some(row.get(0)?),
-                strategy_id: row.get(1)?,
-                item_text: row.get(2)?,
-                is_checked: row.get::<_, i64>(3)? != 0,
-                item_order: row.get(4)?,
-                checklist_type: row.get(5).unwrap_or_else(|_| "entry".to_string()),
-                parent_id: row.get(6).ok(),
-            })
-        })
-        .map_err(|e| e.to_string())?;
+    let has_high_is_good_export = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='high_is_good'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let has_description_export = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='description'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
     let mut strategy_checklists = Vec::new();
-    for item in checklist_iter {
-        strategy_checklists.push(item.map_err(|e| e.to_string())?);
+    if has_high_is_good_export {
+        // high_is_good column exists
+        if has_description_export {
+            // Both high_is_good and description
+            let mut stmt = conn
+                .prepare("SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, description FROM strategy_checklists ORDER BY strategy_id, checklist_type, item_order")
+                .map_err(|e| e.to_string())?;
+            let checklist_iter = stmt.query_map([], |row| {
+                let high_is_good = row.get::<_, Option<i64>>(7).ok().flatten().map(|v| v != 0);
+                let description = row.get::<_, Option<String>>(8).ok().flatten();
+                Ok(StrategyChecklistItem {
+                    id: Some(row.get(0)?),
+                    strategy_id: row.get(1)?,
+                    item_text: row.get(2)?,
+                    is_checked: row.get::<_, i64>(3)? != 0,
+                    item_order: row.get(4)?,
+                    checklist_type: row.get(5).unwrap_or_else(|_| "entry".to_string()),
+                    parent_id: row.get(6).ok(),
+                    high_is_good,
+                    description,
+                })
+            }).map_err(|e| e.to_string())?;
+            for item in checklist_iter {
+                strategy_checklists.push(item.map_err(|e| e.to_string())?);
+            }
+        } else {
+            // Only high_is_good
+            let mut stmt = conn
+                .prepare("SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good FROM strategy_checklists ORDER BY strategy_id, checklist_type, item_order")
+                .map_err(|e| e.to_string())?;
+            let checklist_iter = stmt.query_map([], |row| {
+                let high_is_good = row.get::<_, Option<i64>>(7).ok().flatten().map(|v| v != 0);
+                Ok(StrategyChecklistItem {
+                    id: Some(row.get(0)?),
+                    strategy_id: row.get(1)?,
+                    item_text: row.get(2)?,
+                    is_checked: row.get::<_, i64>(3)? != 0,
+                    item_order: row.get(4)?,
+                    checklist_type: row.get(5).unwrap_or_else(|_| "entry".to_string()),
+                    parent_id: row.get(6).ok(),
+                    high_is_good,
+                    description: None,
+                })
+            }).map_err(|e| e.to_string())?;
+            for item in checklist_iter {
+                strategy_checklists.push(item.map_err(|e| e.to_string())?);
+            }
+        }
+    } else {
+        // No high_is_good column
+        if has_description_export {
+            let mut stmt = conn
+                .prepare("SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, description FROM strategy_checklists ORDER BY strategy_id, checklist_type, item_order")
+                .map_err(|e| e.to_string())?;
+            let checklist_iter = stmt.query_map([], |row| {
+                let description = row.get::<_, Option<String>>(7).ok().flatten();
+                Ok(StrategyChecklistItem {
+                    id: Some(row.get(0)?),
+                    strategy_id: row.get(1)?,
+                    item_text: row.get(2)?,
+                    is_checked: row.get::<_, i64>(3)? != 0,
+                    item_order: row.get(4)?,
+                    checklist_type: row.get(5).unwrap_or_else(|_| "entry".to_string()),
+                    parent_id: row.get(6).ok(),
+                    high_is_good: None,
+                    description,
+                })
+            }).map_err(|e| e.to_string())?;
+            for item in checklist_iter {
+                strategy_checklists.push(item.map_err(|e| e.to_string())?);
+            }
+        } else {
+            let mut stmt = conn
+                .prepare("SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id FROM strategy_checklists ORDER BY strategy_id, checklist_type, item_order")
+                .map_err(|e| e.to_string())?;
+            let checklist_iter = stmt.query_map([], |row| {
+                Ok(StrategyChecklistItem {
+                    id: Some(row.get(0)?),
+                    strategy_id: row.get(1)?,
+                    item_text: row.get(2)?,
+                    is_checked: row.get::<_, i64>(3)? != 0,
+                    item_order: row.get(4)?,
+                    checklist_type: row.get(5).unwrap_or_else(|_| "entry".to_string()),
+                    parent_id: row.get(6).ok(),
+                    high_is_good: None,
+                    description: None,
+                })
+            }).map_err(|e| e.to_string())?;
+            for item in checklist_iter {
+                strategy_checklists.push(item.map_err(|e| e.to_string())?);
+            }
+        }
     }
     
     // Export journal checklist responses
