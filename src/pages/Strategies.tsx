@@ -6,8 +6,48 @@ import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp
 import { format } from "date-fns";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
 import { BRUSH_MIN_POINTS, CHART_BAR_FILL_OPACITY } from "../utils/chartDataSampling";
-/** Margin for overview bar charts so X-axis category labels have room when angled. */
-const OVERVIEW_CHART_MARGIN = { top: 5, right: 5, left: 5, bottom: 72 };
+/** Margin for overview bar charts; minimal bottom so chart area is maximized. */
+const OVERVIEW_CHART_MARGIN = { top: 5, right: 5, left: 5, bottom: 10 };
+/** Max characters per line for wrapped X-axis labels (word-aware). */
+const OVERVIEW_XAXIS_MAX_CHARS_PER_LINE = 12;
+function wrapLabelLines(value: string, maxChars: number): string[] {
+  if (!value || value.length <= maxChars) return [value].filter(Boolean);
+  const words = value.split(/\s+/);
+  const lines: string[] = [];
+  let line = "";
+  for (const w of words) {
+    if (w.length > maxChars) {
+      if (line) { lines.push(line); line = ""; }
+      for (let i = 0; i < w.length; i += maxChars) lines.push(w.slice(i, i + maxChars));
+      continue;
+    }
+    const next = line ? `${line} ${w}` : w;
+    if (next.length <= maxChars) line = next;
+    else {
+      if (line) lines.push(line);
+      line = w;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+/** Custom X-axis tick that wraps strategy names onto multiple lines. Uses fullName when present to avoid truncated labels. */
+function OverviewChartAxisTick(props: { x?: number; y?: number; payload?: { value?: string; name?: string; fullName?: string }; fontSize?: number }) {
+  const { x = 0, y = 0, payload } = props;
+  const fontSize = props.fontSize ?? 11;
+  const value = (payload?.fullName ?? payload?.value ?? payload?.name ?? "") as string;
+  const lines = wrapLabelLines(value, OVERVIEW_XAXIS_MAX_CHARS_PER_LINE);
+  const fill = "var(--text-secondary)";
+  return (
+    <g transform={`translate(${x},${y})`} style={{ overflow: "visible" }}>
+      <text textAnchor="middle" fill={fill} fontSize={fontSize}>
+        {lines.map((text, i) => (
+          <tspan key={i} x={0} dy={i === 0 ? 8 : fontSize + 1}>{text}</tspan>
+        ))}
+      </text>
+    </g>
+  );
+}
 import RichTextEditor from "../components/RichTextEditor";
 import { ColorPicker } from "../components/ColorPicker";
 import { TradeChart } from "../components/TradeChart";
@@ -2467,9 +2507,8 @@ export default function Strategies() {
       if (s.id == null) continue;
       const stats = strategyStats.get(s.id);
       if (!stats || stats.totalTrades <= 0) continue;
-      const shortName = s.name.length > 14 ? s.name.slice(0, 13) + "…" : s.name;
       data.push({
-        name: shortName,
+        name: s.name,
         fullName: s.name,
         pnl: Number(stats.totalPnL.toFixed(2)),
         win_rate: Number(stats.winRate.toFixed(1)),
@@ -2506,10 +2545,9 @@ export default function Strategies() {
       if (s.id == null) continue;
       const stats = strategyStats.get(s.id);
       if (!stats || stats.totalTrades <= 0) continue;
-      const shortName = s.name.length > 14 ? s.name.slice(0, 13) + "…" : s.name;
       const winning = Math.round(stats.totalTrades * (stats.winRate / 100));
       const losing = stats.totalTrades - winning;
-      data.push({ name: shortName, fullName: s.name, winning, losing });
+      data.push({ name: s.name, fullName: s.name, winning, losing });
     }
     return data.sort((a, b) => b.winning + b.losing - (a.winning + a.losing));
   }, [strategiesForOverview, strategyStats]);
@@ -7394,15 +7432,92 @@ export default function Strategies() {
                 </div>
               </div>
             </div>
-            {strategiesOverviewStats.bestWinRateName && (
-              <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "12px" }}>
-                Best win rate:{" "}
-                <span style={{ color: "var(--text-primary)", fontWeight: 600 }}>
-                  {strategiesOverviewStats.bestWinRateName} ({strategiesOverviewStats.bestWinRate.toFixed(1)}%)
+            <div
+              style={{
+                marginBottom: "12px",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "8px",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px" }}>
+                <span
+                  style={{
+                    fontSize: "12px",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  Strategy distributions
                 </span>
+                {strategiesOverviewStats.bestWinRateName && (
+                  <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                    Best win rate:{" "}
+                    <span style={{ color: "var(--text-primary)", fontWeight: 600 }}>
+                      {strategiesOverviewStats.bestWinRateName} ({strategiesOverviewStats.bestWinRate.toFixed(1)}%)
+                    </span>
+                  </span>
+                )}
               </div>
-            )}
-            <div style={{ height: 260 }}>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "4px",
+                  padding: "4px",
+                  borderRadius: "999px",
+                  background: "linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                }}
+              >
+                {[
+                  { id: "pnl" as const, label: "P&L" },
+                  { id: "win_rate" as const, label: "Win rate" },
+                  { id: "trades" as const, label: "Trades" },
+                  { id: "checklist_usage" as const, label: "Checklist usage" },
+                  { id: "profitable_trades" as const, label: "Profitable trades" },
+                ].map((tab) => {
+                  const isActive = strategyOverviewTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setStrategyOverviewTab(tab.id)}
+                      style={{
+                        padding: "6px 12px",
+                        fontSize: "12px",
+                        borderRadius: "999px",
+                        border: "none",
+                        backgroundColor: isActive ? "var(--accent)" : "transparent",
+                        color: isActive ? "#ffffff" : "var(--text-secondary)",
+                        cursor: "pointer",
+                        boxShadow: isActive ? "0 0 0 1px rgba(255,255,255,0.08)" : "none",
+                        transition: "background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease",
+                        whiteSpace: "nowrap",
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isActive) {
+                          e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.02)";
+                          e.currentTarget.style.color = "var(--text-primary)";
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isActive) {
+                          e.currentTarget.style.backgroundColor = "transparent";
+                          e.currentTarget.style.color = "var(--text-secondary)";
+                        }
+                      }}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div style={{ height: 260, minHeight: 260, overflow: "hidden", marginBottom: 0, paddingBottom: 0 }}>
               {(() => {
                 if (strategyOverviewTab === "checklist_usage") {
                   if (overviewChecklistUsageChartData.length === 0) {
@@ -7416,7 +7531,7 @@ export default function Strategies() {
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={overviewChecklistUsageChartData} margin={OVERVIEW_CHART_MARGIN}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} height={56} interval={0} />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<OverviewChartAxisTick fontSize={11} />} height={40} interval={0} />
                         <YAxis stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} allowDecimals={false} />
                         <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", fontSize: "11px", color: "var(--text-primary)" }} formatter={(value: any) => [value, "Times used"]} />
                         <Bar dataKey="count" fill="var(--accent)" fillOpacity={CHART_BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} radius={[4, 4, 0, 0]} />
@@ -7436,7 +7551,7 @@ export default function Strategies() {
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={overviewProfitableTradesChartData} margin={OVERVIEW_CHART_MARGIN}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} height={56} interval={0} />
+                        <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<OverviewChartAxisTick fontSize={11} />} height={40} interval={0} />
                         <YAxis stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} allowDecimals={false} />
                         <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", fontSize: "11px", color: "var(--text-primary)" }} formatter={(value: any) => [value, ""]} labelFormatter={(label: string) => `${label} (Winning / Losing)`} />
                         <Bar dataKey="winning" fill="var(--success, #22c55e)" fillOpacity={CHART_BAR_FILL_OPACITY} stroke="var(--success, #22c55e)" strokeWidth={1} stackId="trades" radius={[0, 0, 0, 0]} />
@@ -7459,7 +7574,7 @@ export default function Strategies() {
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={strategiesOverviewChartData} margin={OVERVIEW_CHART_MARGIN}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                      <XAxis dataKey="name" stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} height={56} interval={strategiesOverviewChartData.length > 20 ? Math.floor(strategiesOverviewChartData.length / 10) : 0} />
+                      <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<OverviewChartAxisTick fontSize={11} />} height={40} interval={strategiesOverviewChartData.length > 20 ? Math.floor(strategiesOverviewChartData.length / 10) : 0} />
                       <YAxis stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} tickFormatter={(v: number) => strategyOverviewTab === "win_rate" ? `${v.toFixed(0)}%` : strategyOverviewTab === "trades" ? v.toString() : `$${v.toFixed(0)}`} />
                       <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", fontSize: "11px", color: "var(--text-primary)" }} formatter={(value: any) => { if (strategyOverviewTab === "win_rate") return [`${value.toFixed(1)}%`, "Win rate"]; if (strategyOverviewTab === "trades") return [value, "Trades"]; return [`$${value.toFixed(2)}`, "P&L"]; }} />
                       <Bar dataKey={strategyOverviewTab === "pnl" ? "pnl" : strategyOverviewTab === "win_rate" ? "win_rate" : "trades"} fill="var(--accent)" fillOpacity={CHART_BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} radius={[4, 4, 0, 0]} />
@@ -7469,46 +7584,12 @@ export default function Strategies() {
                 );
               })()}
             </div>
-            <div
-              style={{
-                marginTop: "12px",
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "6px",
-              }}
-            >
-              {[
-                { id: "pnl" as const, label: "P&L" },
-                { id: "win_rate" as const, label: "Win rate" },
-                { id: "trades" as const, label: "Trades" },
-                { id: "checklist_usage" as const, label: "Checklist usage" },
-                { id: "profitable_trades" as const, label: "Profitable trades" },
-              ].map((tab) => {
-                const isActive = strategyOverviewTab === tab.id;
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => setStrategyOverviewTab(tab.id)}
-                    style={{
-                      padding: "6px 12px",
-                      fontSize: "12px",
-                      borderRadius: "999px",
-                      border: "none",
-                      backgroundColor: isActive ? "var(--accent)" : "transparent",
-                      color: isActive ? "#ffffff" : "var(--text-secondary)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {tab.label}
-                  </button>
-                );
-              })}
-            </div>
 
             {/* Specific Strategy Metrics: Survey metrics + Checklist item metrics + Checklists and Survey insights */}
             {(overviewCustomMetricsByStrategy.size > 0 || overviewChecklistItemMetricsByStrategy.size > 0 || overviewChecklistByOutcomePerStrategy.length > 0 || strategies.some((s) => s.id != null)) && (
-              <div style={{ marginTop: "20px" }}>
+              <>
+                <div style={{ borderTop: "1px solid var(--border-color)", marginTop: 0, marginBottom: "12px" }} />
+                <div>
                 <h2
                   style={{
                     fontSize: "16px",
@@ -8179,6 +8260,7 @@ export default function Strategies() {
                   </div>
                 )}
               </div>
+              </>
             )}
 
           </div>
