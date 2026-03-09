@@ -1746,6 +1746,8 @@ export default function Strategies() {
   const [colorPresetDropdownOpen, setColorPresetDropdownOpen] = useState(false);
   /** Checklist/survey item metrics: when checked, avg performance (R → % → price). */
   const [checklistItemMetrics, setChecklistItemMetrics] = useState<Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>([]);
+  /** Strategy IDs for which the overview Checklist & survey item metrics table is expanded. */
+  const [overviewItemMetricsExpandedStrategyIds, setOverviewItemMetricsExpandedStrategyIds] = useState<Set<number>>(new Set());
   const [surveyMetricForm, setSurveyMetricForm] = useState<{
     name: string;
     description: string;
@@ -2025,6 +2027,55 @@ export default function Strategies() {
     });
     localStorage.setItem(CHECKLIST_TITLES_KEY, JSON.stringify(obj));
   }, [checklistTitles]);
+
+  const getChecklistOrSurveyTitle = (
+    strategyId: number,
+    checklistType: string
+  ): { kind: "checklist" | "survey"; title: string } => {
+    const type = checklistType || "";
+    const strategyTitles = checklistTitles.get(strategyId);
+    const custom = strategyTitles?.get(type);
+    const isSurvey = type === "survey" || type.startsWith("survey_");
+
+    if (isSurvey) {
+      if (custom && custom.trim()) {
+        return { kind: "survey", title: custom.trim() };
+      }
+      if (type === "survey") {
+        return { kind: "survey", title: "Post-Trade Survey" };
+      }
+      const pretty =
+        type
+          .replace(/^survey_/, "")
+          .replace(/_/g, " ")
+          .replace(/\b\w/g, (c) => c.toUpperCase())
+          .trim() || "Survey";
+      return { kind: "survey", title: `${pretty}` };
+    }
+
+    if (custom && custom.trim()) {
+      return { kind: "checklist", title: custom.trim() };
+    }
+
+    const defaultTitleMap: Record<string, string> = {
+      daily_mantra: "Mantra",
+      daily_analysis: "Analysis",
+      entry: "Entry Checklist",
+      take_profit: "Take Profit Checklist",
+    };
+    const def = defaultTitleMap[type];
+    if (def) {
+      return { kind: "checklist", title: def };
+    }
+
+    const prettyBase = type
+      .split("_")
+      .map((word) => (word ? word.charAt(0).toUpperCase() + word.slice(1) : ""))
+      .join(" ")
+      .trim();
+    const title = prettyBase ? `${prettyBase} Checklist` : "Checklist";
+    return { kind: "checklist", title };
+  };
 
   // Restore state from localStorage
   const restoreState = () => {
@@ -6336,7 +6387,7 @@ export default function Strategies() {
                     </div>
 
                     {/* Checklist & survey item metrics: when each item was checked, avg performance (R → % → price) */}
-                    {checklistItemMetrics.length > 0 && (
+                    {checklistItemMetrics.length > 0 && selectedStrategy != null && (
                       <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: "1px solid var(--border-color)" }}>
                         <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-secondary)", margin: "0 0 8px 0", textTransform: "uppercase", letterSpacing: "0.02em" }}>
                           Checklist & survey item metrics
@@ -6345,28 +6396,102 @@ export default function Strategies() {
                           When each item was checked in Journal, performance uses R-multiple if set; otherwise % return or P&L from linked trades.
                         </p>
                         <div style={{ overflowX: "auto" }}>
-                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
-                            <thead>
-                              <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
-                                <th style={{ textAlign: "left", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Item</th>
-                                <th style={{ textAlign: "left", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Type</th>
-                                <th style={{ textAlign: "right", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Times checked</th>
-                                <th style={{ textAlign: "right", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Avg performance</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {checklistItemMetrics.filter((row) => row.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER).map((row) => (
-                                <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
-                                  <td style={{ padding: "8px", color: "var(--text-primary)" }}>{row.item_text}</td>
-                                  <td style={{ padding: "8px", color: "var(--text-secondary)" }}>{row.checklist_type === "survey" ? "Post-Trade Survey" : row.checklist_type === "entry" ? "Entry" : row.checklist_type === "exit" ? "Exit" : row.checklist_type.replace(/^survey_/, "").replace(/_/g, " ")}</td>
-                                  <td style={{ padding: "8px", textAlign: "right", color: "var(--text-primary)" }}>{row.times_checked}</td>
-                                  <td style={{ padding: "8px", textAlign: "right", color: row.avg_performance != null && row.avg_performance < 0 ? "var(--loss)" : "var(--text-primary)" }}>
-                                    {formatChecklistAvgPerformance(row.avg_performance, row.performance_kind)}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                          {(() => {
+                            const nonPlaceholder = checklistItemMetrics.filter(
+                              (row) => row.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER
+                            );
+                            if (nonPlaceholder.length === 0) return null;
+                            const checklistRows = nonPlaceholder.filter((row) => {
+                              const meta = getChecklistOrSurveyTitle(selectedStrategy, row.checklist_type);
+                              return meta.kind === "checklist";
+                            });
+                            const surveyRows = nonPlaceholder.filter((row) => {
+                              const meta = getChecklistOrSurveyTitle(selectedStrategy, row.checklist_type);
+                              return meta.kind === "survey";
+                            });
+                            return (
+                              <div style={{ display: "flex", flexDirection: "column", gap: "12px", minWidth: "100%" }}>
+                                {checklistRows.length > 0 && (
+                                  <div style={{ marginBottom: surveyRows.length > 0 ? "8px" : 0 }}>
+                                    <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Checklist items</div>
+                                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+                                      <thead>
+                                        <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                          <th style={{ textAlign: "left", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Checklist</th>
+                                          <th style={{ textAlign: "left", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Item</th>
+                                          <th style={{ textAlign: "right", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Times checked</th>
+                                          <th style={{ textAlign: "right", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Avg performance</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {checklistRows.map((row) => {
+                                          const meta = getChecklistOrSurveyTitle(selectedStrategy, row.checklist_type);
+                                          return (
+                                            <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                              <td style={{ padding: "8px", color: "var(--text-secondary)" }}>{meta.title}</td>
+                                              <td style={{ padding: "8px", color: "var(--text-primary)" }}>{row.item_text}</td>
+                                              <td style={{ padding: "8px", textAlign: "right", color: "var(--text-primary)" }}>{row.times_checked}</td>
+                                              <td
+                                                style={{
+                                                  padding: "8px",
+                                                  textAlign: "right",
+                                                  color:
+                                                    row.avg_performance != null && row.avg_performance < 0
+                                                      ? "var(--loss)"
+                                                      : "var(--text-primary)",
+                                                }}
+                                              >
+                                                {formatChecklistAvgPerformance(row.avg_performance, row.performance_kind)}
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                                {surveyRows.length > 0 && (
+                                  <div>
+                                    <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Survey items</div>
+                                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+                                      <thead>
+                                        <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                          <th style={{ textAlign: "left", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Survey</th>
+                                          <th style={{ textAlign: "left", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Item</th>
+                                          <th style={{ textAlign: "right", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Times checked</th>
+                                          <th style={{ textAlign: "right", padding: "8px", color: "var(--text-secondary)", fontWeight: "600" }}>Avg performance</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {surveyRows.map((row) => {
+                                          const meta = getChecklistOrSurveyTitle(selectedStrategy, row.checklist_type);
+                                          return (
+                                            <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                              <td style={{ padding: "8px", color: "var(--text-secondary)" }}>{meta.title}</td>
+                                              <td style={{ padding: "8px", color: "var(--text-primary)" }}>{row.item_text}</td>
+                                              <td style={{ padding: "8px", textAlign: "right", color: "var(--text-primary)" }}>{row.times_checked}</td>
+                                              <td
+                                                style={{
+                                                  padding: "8px",
+                                                  textAlign: "right",
+                                                  color:
+                                                    row.avg_performance != null && row.avg_performance < 0
+                                                      ? "var(--loss)"
+                                                      : "var(--text-primary)",
+                                                }}
+                                              >
+                                                {formatChecklistAvgPerformance(row.avg_performance, row.performance_kind)}
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                     )}
@@ -7440,6 +7565,29 @@ export default function Strategies() {
                         const displayLosingSurvey = [...losingSurvey].sort((a, b) => b.bad - a.bad).slice(0, TOP_INSIGHTS);
                         const hasInsights = winningPerType.length > 0 || notClickedLosingPerType.length > 0;
                         const showInsightsBlock = hasInsights || metrics.length > 0;
+                        const nonPlaceholder = itemMetrics.filter(
+                          (row) => row.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER
+                        );
+                        const hasItemMetrics = nonPlaceholder.length > 0;
+                        const checklistRows = nonPlaceholder.filter(
+                          (row) =>
+                            !(row.checklist_type === "survey" || row.checklist_type.startsWith("survey_"))
+                        );
+                        const surveyRows = nonPlaceholder.filter(
+                          (row) =>
+                            row.checklist_type === "survey" || row.checklist_type.startsWith("survey_")
+                        );
+                        const checklistCount = checklistRows.length;
+                        const surveyCount = surveyRows.length;
+                        const isExpanded = overviewItemMetricsExpandedStrategyIds.has(s.id!);
+                        const toggleExpanded = () => {
+                          setOverviewItemMetricsExpandedStrategyIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(s.id!)) next.delete(s.id!);
+                            else next.add(s.id!);
+                            return next;
+                          });
+                        };
                         return (
                           <div
                             key={s.id}
@@ -7452,42 +7600,280 @@ export default function Strategies() {
                           >
                             <div
                               style={{
-                                fontSize: "13px",
-                                fontWeight: "600",
-                                color: "var(--text-primary)",
-                                marginBottom: "8px",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                gap: "8px",
+                                marginBottom: hasItemMetrics && isExpanded ? "8px" : "4px",
                               }}
                             >
-                              {s.name}
+                              <div
+                                style={{
+                                  fontSize: "13px",
+                                  fontWeight: "600",
+                                  color: "var(--text-primary)",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                  paddingRight: "8px",
+                                }}
+                              >
+                                {s.name}
+                              </div>
+                              {hasItemMetrics && (
+                                <button
+                                  type="button"
+                                  onClick={toggleExpanded}
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "6px",
+                                    padding: "4px 10px",
+                                    borderRadius: "999px",
+                                    border: "1px solid var(--accent)",
+                                    background:
+                                      "linear-gradient(to right, rgba(59,130,246,0.18), rgba(34,197,94,0.16))",
+                                    color: "var(--text-primary)",
+                                    cursor: "pointer",
+                                    fontSize: "11px",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  <span style={{ fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                                    Items
+                                  </span>
+                                  <span>
+                                    {checklistCount} checklist · {surveyCount} survey
+                                  </span>
+                                  <span style={{ display: "flex", alignItems: "center" }}>
+                                    {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                  </span>
+                                </button>
+                              )}
                             </div>
-                            {itemMetrics.length > 0 && (
-                              <>
-                                <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.02em" }}>
-                                  Checklist & survey item metrics
+                            {hasItemMetrics && isExpanded && (
+                              <div
+                                style={{
+                                  overflowX: "auto",
+                                  marginBottom: hasInsights || metrics.length > 0 ? "12px" : 0,
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    gap: "8px",
+                                    minWidth: "100%",
+                                  }}
+                                >
+                                  {checklistRows.length > 0 && (
+                                    <div>
+                                      <div
+                                        style={{
+                                          fontSize: "11px",
+                                          color: "var(--text-secondary)",
+                                          marginBottom: "4px",
+                                        }}
+                                      >
+                                        Checklist items
+                                      </div>
+                                      <table
+                                        style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}
+                                      >
+                                        <thead>
+                                          <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                            <th
+                                              style={{
+                                                textAlign: "left",
+                                                padding: "6px",
+                                                color: "var(--text-secondary)",
+                                                fontWeight: "600",
+                                              }}
+                                            >
+                                              Checklist
+                                            </th>
+                                            <th
+                                              style={{
+                                                textAlign: "left",
+                                                padding: "6px",
+                                                color: "var(--text-secondary)",
+                                                fontWeight: "600",
+                                              }}
+                                            >
+                                              Item
+                                            </th>
+                                            <th
+                                              style={{
+                                                textAlign: "right",
+                                                padding: "6px",
+                                                color: "var(--text-secondary)",
+                                                fontWeight: "600",
+                                              }}
+                                            >
+                                              #
+                                            </th>
+                                            <th
+                                              style={{
+                                                textAlign: "right",
+                                                padding: "6px",
+                                                color: "var(--text-secondary)",
+                                                fontWeight: "600",
+                                              }}
+                                            >
+                                              Avg
+                                            </th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {checklistRows.map((row) => {
+                                            const meta = getChecklistOrSurveyTitle(s.id!, row.checklist_type);
+                                            return (
+                                              <tr
+                                                key={`overview-checklist-${s.id}-${row.checklist_item_id}`}
+                                                style={{ borderBottom: "1px solid var(--border-color)" }}
+                                              >
+                                                <td style={{ padding: "6px", color: "var(--text-secondary)" }}>
+                                                  {meta.title}
+                                                </td>
+                                                <td style={{ padding: "6px", color: "var(--text-primary)" }}>
+                                                  {row.item_text}
+                                                </td>
+                                                <td
+                                                  style={{
+                                                    padding: "6px",
+                                                    textAlign: "right",
+                                                    color: "var(--text-secondary)",
+                                                  }}
+                                                >
+                                                  {row.times_checked}
+                                                </td>
+                                                <td
+                                                  style={{
+                                                    padding: "6px",
+                                                    textAlign: "right",
+                                                    color:
+                                                      row.avg_performance != null && row.avg_performance < 0
+                                                        ? "var(--loss)"
+                                                        : "var(--text-primary)",
+                                                  }}
+                                                >
+                                                  {formatChecklistAvgPerformance(
+                                                    row.avg_performance,
+                                                    row.performance_kind
+                                                  )}
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                  {surveyRows.length > 0 && (
+                                    <div>
+                                      <div
+                                        style={{
+                                          fontSize: "11px",
+                                          color: "var(--text-secondary)",
+                                          marginBottom: "4px",
+                                        }}
+                                      >
+                                        Survey items
+                                      </div>
+                                      <table
+                                        style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}
+                                      >
+                                        <thead>
+                                          <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                            <th
+                                              style={{
+                                                textAlign: "left",
+                                                padding: "6px",
+                                                color: "var(--text-secondary)",
+                                                fontWeight: "600",
+                                              }}
+                                            >
+                                              Survey
+                                            </th>
+                                            <th
+                                              style={{
+                                                textAlign: "left",
+                                                padding: "6px",
+                                                color: "var(--text-secondary)",
+                                                fontWeight: "600",
+                                              }}
+                                            >
+                                              Item
+                                            </th>
+                                            <th
+                                              style={{
+                                                textAlign: "right",
+                                                padding: "6px",
+                                                color: "var(--text-secondary)",
+                                                fontWeight: "600",
+                                              }}
+                                            >
+                                              #
+                                            </th>
+                                            <th
+                                              style={{
+                                                textAlign: "right",
+                                                padding: "6px",
+                                                color: "var(--text-secondary)",
+                                                fontWeight: "600",
+                                              }}
+                                            >
+                                              Avg
+                                            </th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {surveyRows.map((row) => {
+                                            const meta = getChecklistOrSurveyTitle(s.id!, row.checklist_type);
+                                            return (
+                                              <tr
+                                                key={`overview-survey-${s.id}-${row.checklist_item_id}`}
+                                                style={{ borderBottom: "1px solid var(--border-color)" }}
+                                              >
+                                                <td style={{ padding: "6px", color: "var(--text-secondary)" }}>
+                                                  {meta.title}
+                                                </td>
+                                                <td style={{ padding: "6px", color: "var(--text-primary)" }}>
+                                                  {row.item_text}
+                                                </td>
+                                                <td
+                                                  style={{
+                                                    padding: "6px",
+                                                    textAlign: "right",
+                                                    color: "var(--text-secondary)",
+                                                  }}
+                                                >
+                                                  {row.times_checked}
+                                                </td>
+                                                <td
+                                                  style={{
+                                                    padding: "6px",
+                                                    textAlign: "right",
+                                                    color:
+                                                      row.avg_performance != null && row.avg_performance < 0
+                                                        ? "var(--loss)"
+                                                        : "var(--text-primary)",
+                                                  }}
+                                                >
+                                                  {formatChecklistAvgPerformance(
+                                                    row.avg_performance,
+                                                    row.performance_kind
+                                                  )}
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
                                 </div>
-                                <div style={{ overflowX: "auto", marginBottom: (hasInsights || metrics.length > 0) ? "12px" : 0 }}>
-                                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
-                                    <thead>
-                                      <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
-                                        <th style={{ textAlign: "left", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>Item</th>
-                                        <th style={{ textAlign: "right", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>#</th>
-                                        <th style={{ textAlign: "right", padding: "6px", color: "var(--text-secondary)", fontWeight: "600" }}>Avg</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {itemMetrics.filter((row) => row.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER).map((row) => (
-                                        <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
-                                          <td style={{ padding: "6px", color: "var(--text-primary)" }}>{row.item_text}</td>
-                                          <td style={{ padding: "6px", textAlign: "right", color: "var(--text-secondary)" }}>{row.times_checked}</td>
-                                          <td style={{ padding: "6px", textAlign: "right", color: row.avg_performance != null && row.avg_performance < 0 ? "var(--loss)" : "var(--text-primary)" }}>
-                                            {formatChecklistAvgPerformance(row.avg_performance, row.performance_kind)}
-                                          </td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              </>
+                              </div>
                             )}
                             {showInsightsBlock && (hasInsights || metrics.length > 0) && (
                               <div
@@ -7543,22 +7929,102 @@ export default function Strategies() {
                                         <div style={{ fontSize: "9px", color: "var(--text-secondary)" }}>in losing</div>
                                       </div>
                                     )}
-                                    {itemMetrics.length > 0 && (
-                                      <div
-                                        style={{
-                                          padding: "6px 10px",
-                                          borderRadius: "6px",
-                                          backgroundColor: "var(--bg-tertiary)",
-                                          border: "1px solid var(--border-color)",
-                                          minWidth: "60px",
-                                          textAlign: "center",
-                                        }}
-                                      >
-                                        <div style={{ fontSize: "9px", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: "2px" }}>Items</div>
-                                        <div style={{ fontSize: "16px", fontWeight: "700", color: "var(--text-primary)" }}>{itemMetrics.filter((r) => r.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER).length}</div>
-                                        <div style={{ fontSize: "9px", color: "var(--text-secondary)" }}>tracked</div>
-                                      </div>
-                                    )}
+                                    {itemMetrics.length > 0 &&
+                                      (() => {
+                                        const nonPlaceholder = itemMetrics.filter(
+                                          (r) => r.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER
+                                        );
+                                        const checklistItemCount = nonPlaceholder.filter(
+                                          (row) =>
+                                            !(row.checklist_type === "survey" || row.checklist_type.startsWith("survey_"))
+                                        ).length;
+                                        const surveyItemCount = nonPlaceholder.filter(
+                                          (row) =>
+                                            row.checklist_type === "survey" || row.checklist_type.startsWith("survey_")
+                                        ).length;
+                                        return (
+                                          <>
+                                            <div
+                                              style={{
+                                                padding: "6px 10px",
+                                                borderRadius: "6px",
+                                                backgroundColor: "var(--bg-tertiary)",
+                                                border: "1px solid var(--border-color)",
+                                                minWidth: "60px",
+                                                textAlign: "center",
+                                              }}
+                                            >
+                                              <div
+                                                style={{
+                                                  fontSize: "9px",
+                                                  color: "var(--text-secondary)",
+                                                  textTransform: "uppercase",
+                                                  letterSpacing: "0.03em",
+                                                  marginBottom: "2px",
+                                                }}
+                                              >
+                                                Checklist
+                                              </div>
+                                              <div
+                                                style={{
+                                                  fontSize: "16px",
+                                                  fontWeight: "700",
+                                                  color: "var(--text-primary)",
+                                                }}
+                                              >
+                                                {checklistItemCount}
+                                              </div>
+                                              <div
+                                                style={{
+                                                  fontSize: "9px",
+                                                  color: "var(--text-secondary)",
+                                                }}
+                                              >
+                                                items
+                                              </div>
+                                            </div>
+                                            <div
+                                              style={{
+                                                padding: "6px 10px",
+                                                borderRadius: "6px",
+                                                backgroundColor: "var(--bg-tertiary)",
+                                                border: "1px solid var(--border-color)",
+                                                minWidth: "60px",
+                                                textAlign: "center",
+                                              }}
+                                            >
+                                              <div
+                                                style={{
+                                                  fontSize: "9px",
+                                                  color: "var(--text-secondary)",
+                                                  textTransform: "uppercase",
+                                                  letterSpacing: "0.03em",
+                                                  marginBottom: "2px",
+                                                }}
+                                              >
+                                                Survey
+                                              </div>
+                                              <div
+                                                style={{
+                                                  fontSize: "16px",
+                                                  fontWeight: "700",
+                                                  color: "var(--text-primary)",
+                                                }}
+                                              >
+                                                {surveyItemCount}
+                                              </div>
+                                              <div
+                                                style={{
+                                                  fontSize: "9px",
+                                                  color: "var(--text-secondary)",
+                                                }}
+                                              >
+                                                items
+                                              </div>
+                                            </div>
+                                          </>
+                                        );
+                                      })()}
                                   </div>
                                   {(metrics.length > 0 || (showInsightsBlock && (displayWinningSurvey.length > 0 || displayLosingSurvey.length > 0))) && (
                                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px" }}>

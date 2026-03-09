@@ -529,7 +529,7 @@ export function getSandboxStrategySurveyMetricsWithValues(strategyId: number) {
 }
 
 export function getSandboxStrategyChecklistItemMetrics(strategyId: number) {
-  const items = SANDBOX_STRATEGY_CHECKLIST_ITEMS.filter((i) => i.strategy_id === strategyId && i.checklist_type !== "survey");
+  const items = SANDBOX_STRATEGY_CHECKLIST_ITEMS.filter((i) => i.strategy_id === strategyId);
   return items.map((i, idx) => {
     const base = 20 + (strategyId * 7) + (i.id % 11);
     const times_checked = base * (3 + (idx % 4));
