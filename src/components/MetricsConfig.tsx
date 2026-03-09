@@ -50,7 +50,7 @@ const defaultMetrics: MetricConfig[] = [
 ];
 
 const STORAGE_KEY = "tradebutler_metrics_config";
-const COLOR_RANGE_KEY = "tradebutler_color_range";
+export const COLOR_RANGE_KEY = "tradebutler_color_range";
 const DASHBOARD_SECTIONS_KEY = "tradebutler_dashboard_sections";
 export const DASHBOARD_MAX_METRIC_ROWS_KEY = "tradebutler_dashboard_max_metric_rows";
 export const DASHBOARD_MAX_COLUMNS_KEY = "tradebutler_dashboard_max_columns";
@@ -77,6 +77,9 @@ export const DEFAULT_LAYOUT = {
   sectionsGridMarginBottom: 16,
   dashboardPadding: 30,
 } as const;
+
+/** Default color range for dollar metrics (red threshold, green threshold). Applied on Reset layout / Reset to Defaults. */
+export const DEFAULT_COLOR_RANGE = { min: -2.5, max: 2.5 } as const;
 
 export function useMetricsConfig() {
   const [metrics, setMetrics] = useState<MetricConfig[]>(() => {
@@ -205,10 +208,10 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       try {
         return JSON.parse(saved);
       } catch {
-        return { min: -100, max: 100 };
+        return { ...DEFAULT_COLOR_RANGE };
       }
     }
-    return { min: -100, max: 100 };
+    return { ...DEFAULT_COLOR_RANGE };
   });
   
   // Dashboard sections state
@@ -463,7 +466,11 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
 
         <div style={{ marginBottom: "16px", display: "flex", gap: "10px" }}>
           <button
-            onClick={resetToDefaults}
+            onClick={() => {
+              resetToDefaults();
+              setColorRange({ ...DEFAULT_COLOR_RANGE });
+              onConfigChange?.();
+            }}
             style={{
               background: "var(--bg-tertiary)",
               border: "1px solid var(--border-color)",

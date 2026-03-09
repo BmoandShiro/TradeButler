@@ -43,7 +43,7 @@ import {
   ListOrdered,
   Save,
 } from "lucide-react";
-import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY, DASHBOARD_LOCKED_ROW_HEIGHT_KEY, DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY, DASHBOARD_METRICS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY, DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY, DASHBOARD_PADDING_KEY, DASHBOARD_SPLIT_GRID_KEY, DASHBOARD_SECTIONS_ON_TOP_KEY, DEFAULT_LAYOUT } from "../components/MetricsConfig";
+import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY, DASHBOARD_LOCKED_ROW_HEIGHT_KEY, DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY, DASHBOARD_METRICS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY, DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY, DASHBOARD_PADDING_KEY, DASHBOARD_SPLIT_GRID_KEY, DASHBOARD_SECTIONS_ON_TOP_KEY, DEFAULT_LAYOUT, DEFAULT_COLOR_RANGE, COLOR_RANGE_KEY } from "../components/MetricsConfig";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { format } from "date-fns";
 import {
@@ -616,9 +616,10 @@ function SectionCardResizeWrapper({
           left: 0,
           right: 0,
           bottom: 0,
-          height: "14px",
+          height: "20px",
           cursor: "ns-resize",
           background: "transparent",
+          borderTop: "1px solid var(--border-color)",
           pointerEvents: "auto",
           zIndex: 10,
         }}
@@ -774,7 +775,7 @@ function DroppableSlot({ id, children, style: slotStyle, fillCell }: { id: strin
       style={{
         minWidth: 0,
         maxWidth: "100%",
-        overflow: "hidden",
+        overflow: "visible",
         boxSizing: "border-box",
         ...(fillCell ? { minHeight: 0, height: "100%" } : { minHeight: isEmpty ? "100px" : "120px" }),
         borderRadius: "8px",
@@ -3263,6 +3264,7 @@ export default function Dashboard() {
       localStorage.removeItem(DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY);
       setLockedPlacements(null);
       localStorage.removeItem(DASHBOARD_LOCKED_PLACEMENTS_KEY);
+      localStorage.setItem(COLOR_RANGE_KEY, JSON.stringify(DEFAULT_COLOR_RANGE));
       setLockedGridColumns(DEFAULT_LAYOUT.maxColumns);
       localStorage.setItem(DASHBOARD_MAX_METRIC_ROWS_KEY, String(DEFAULT_LAYOUT.maxMetricRows));
       localStorage.setItem(DASHBOARD_MAX_COLUMNS_KEY, String(DEFAULT_LAYOUT.maxColumns));
@@ -4520,7 +4522,7 @@ export default function Dashboard() {
                   minWidth: 0,
                   maxWidth: "100%",
                   width: "100%",
-                  overflow: "hidden",
+                  overflow: layoutLocked ? "visible" : "hidden",
                   boxSizing: "border-box",
                   ...(topSymbolsSpan > 1 ? { gridColumn: `span ${topSymbolsSpan}` as const } : {}),
                   ...(sectionSizes.topSymbols?.height != null ? { minHeight: `${sectionSizes.topSymbols.height}px` } : {}),
@@ -4770,7 +4772,7 @@ export default function Dashboard() {
                   minWidth: 0,
                   maxWidth: "100%",
                   width: "100%",
-                  overflow: "hidden",
+                  overflow: layoutLocked ? "visible" : "hidden",
                   boxSizing: "border-box",
                   ...(stratSpan > 1 ? { gridColumn: `span ${stratSpan}` as const } : {}),
                   ...(sectionSizes.strategyPerformance?.height != null ? { minHeight: `${sectionSizes.strategyPerformance.height}px` } : {}),
@@ -5271,7 +5273,7 @@ export default function Dashboard() {
                   minWidth: 0,
                   maxWidth: "100%",
                   width: "100%",
-                  overflow: "hidden",
+                  overflow: layoutLocked ? "visible" : "hidden",
                   boxSizing: "border-box",
                   ...(recentSpan > 1 ? { gridColumn: `span ${recentSpan}` as const } : {}),
                   ...(sectionSizes.recentTrades?.height != null ? { minHeight: `${sectionSizes.recentTrades.height}px` } : {}),
@@ -5569,7 +5571,7 @@ export default function Dashboard() {
                   minWidth: 0,
                   maxWidth: "100%",
                   width: "100%",
-                  overflow: "hidden",
+                  overflow: layoutLocked ? "visible" : "hidden",
                   boxSizing: "border-box",
                   ...(openSpan > 1 ? { gridColumn: `span ${openSpan}` as const } : {}),
                   ...(sectionSizes.openPositions?.height != null ? { minHeight: `${sectionSizes.openPositions.height}px` } : {}),
@@ -6063,7 +6065,7 @@ export default function Dashboard() {
                   minWidth: 0,
                   maxWidth: "100%",
                   width: "100%",
-                  overflow: "hidden",
+                  overflow: layoutLocked ? "visible" : "hidden",
                   boxSizing: "border-box",
                   ...(tradesSpan > 1 ? { gridColumn: `span ${tradesSpan}` as const } : {}),
                   ...(sectionSizes.trades?.height != null ? { minHeight: `${sectionSizes.trades.height}px` } : {}),
