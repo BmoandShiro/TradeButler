@@ -83,6 +83,8 @@ interface ChecklistItem {
   parent_id: number | null;
   /** For survey items: true = high (5) is good, false = low (1) is good. Mirrors emotional survey. */
   high_is_good?: boolean | null;
+  /** Optional description for this checklist item (kept for backward compatibility; section-level descriptions are preferred). */
+  description?: string | null;
 }
 
 /** Checklist item metrics by outcome (winning/losing, checked/not checked) for overview insights. */
@@ -964,6 +966,9 @@ function ChecklistSection({
   moveItemsToGroup,
   useParentDndContext = false,
   onEditTitle,
+  sectionDescription = "",
+  onSectionDescriptionChange,
+  onSectionDescriptionBlur,
 }: { 
   type: string; 
   title: string; 
@@ -995,6 +1000,12 @@ function ChecklistSection({
   useParentDndContext?: boolean;
   /** When provided and isEditing, show an edit control to change the section title (readonly by default to avoid drag conflicts). */
   onEditTitle?: (type: string, newTitle: string) => void;
+  /** One description for this checklist section (e.g. Analysis). Shown under the section title. */
+  sectionDescription?: string;
+  /** Called when the user changes the section description (controlled input). */
+  onSectionDescriptionChange?: (description: string) => void;
+  /** Called when the textarea blurs, to persist the description. */
+  onSectionDescriptionBlur?: () => void;
 }) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState("");
@@ -1145,6 +1156,35 @@ function ChecklistSection({
           )}
         </div>
       </div>
+      {/* One description per checklist section (e.g. Analysis), shown under the title */}
+      {isEditing && onSectionDescriptionChange && (
+        <div style={{ marginBottom: "16px" }}>
+          <textarea
+            value={sectionDescription}
+            onChange={(e) => onSectionDescriptionChange?.(e.target.value)}
+            onBlur={onSectionDescriptionBlur}
+            placeholder="Description for this checklist (optional — shown on Journal page)"
+            rows={2}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              backgroundColor: "var(--bg-primary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              color: "var(--text-primary)",
+              fontSize: "13px",
+              outline: "none",
+              resize: "vertical",
+              minHeight: "52px",
+            }}
+          />
+        </div>
+      )}
+      {!isEditing && sectionDescription && sectionDescription.trim() && (
+        <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px", lineHeight: 1.4 }}>
+          {sectionDescription.trim()}
+        </div>
+      )}
       {isEditing ? (
         useParentDndContext ? (
           <SortableContext id={`checklist-items-${type}`} items={itemIds} strategy={verticalListSortingStrategy}>
@@ -1759,6 +1799,8 @@ export default function Strategies() {
   const [editingChecklists, setEditingChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [originalChecklists, setOriginalChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [checklistEditHistory, setChecklistEditHistory] = useState<Map<number, Array<Map<string, ChecklistItem[]>>>>(new Map());
+  /** One description per checklist section (e.g. Analysis, Mantra, Entry, Take Profit, Survey) per strategy. */
+  const [checklistSectionDescriptions, setChecklistSectionDescriptions] = useState<Map<number, Map<string, string>>>(new Map());
   
   // Checklist type display order per strategy (allows custom checklists above Analysis, Mantra, Entry, Take Profit). Persisted in localStorage.
   const CHECKLIST_TYPE_ORDER_KEY = "tradebutler_checklist_type_order";
@@ -2648,6 +2690,41 @@ export default function Strategies() {
         next.set(strategyId, customTypesSet);
         return next;
       });
+
+      // Load section-level descriptions (one per checklist type) when not in sandbox
+      if (dataMode !== "sandbox") {
+        try {
+          const sectionDescs = await invoke<Array<{ checklist_type: string; description: string | null }>>(
+            "get_strategy_checklist_section_descriptions",
+            { strategyId }
+          );
+          const descMap = new Map<string, string>();
+          for (const row of sectionDescs) {
+            if (row.description != null && row.description !== "") {
+              descMap.set(row.checklist_type, row.description);
+            }
+          }
+          setChecklistSectionDescriptions((prev) => {
+            const next = new Map(prev);
+            next.set(strategyId, descMap);
+            return next;
+          });
+        } catch (e) {
+          console.error("Error loading checklist section descriptions:", e);
+          setChecklistSectionDescriptions((prev) => {
+            const next = new Map(prev);
+            if (!next.has(strategyId)) next.set(strategyId, new Map());
+            return next;
+          });
+        }
+      } else {
+        // Sandbox: keep an empty map (no persistence)
+        setChecklistSectionDescriptions((prev) => {
+          const next = new Map(prev);
+          if (!next.has(strategyId)) next.set(strategyId, new Map());
+          return next;
+        });
+      }
     } catch (error) {
       console.error("Error loading checklists:", error);
       // Fallback to default structure
@@ -2666,6 +2743,11 @@ export default function Strategies() {
         next.set(strategyId, new Set());
         return next;
       });
+      setChecklistSectionDescriptions((prev) => {
+        const next = new Map(prev);
+        next.set(strategyId, new Map());
+        return next;
+      });
     }
   };
 
@@ -2681,6 +2763,36 @@ export default function Strategies() {
     const next = new Map(map);
     next.set(typeName, []);
     return next;
+  };
+
+  const saveChecklistSectionDescription = async (strategyId: number, checklistType: string, description: string) => {
+    // Update local state immediately so UI feels responsive
+    setChecklistSectionDescriptions((prev) => {
+      const next = new Map(prev);
+      const typeMap = new Map(next.get(strategyId) || []);
+      if (description.trim()) {
+        typeMap.set(checklistType, description);
+      } else {
+        typeMap.delete(checklistType);
+      }
+      next.set(strategyId, typeMap);
+      return next;
+    });
+
+    if (strategyId === -1 || dataMode === "sandbox") {
+      // In sandbox or while creating a strategy, keep it in-memory only
+      return;
+    }
+
+    try {
+      await invoke("save_strategy_checklist_section_description", {
+        strategyId,
+        checklistType,
+        description: description.trim() || null,
+      });
+    } catch (e) {
+      console.error("Error saving checklist section description:", e);
+    }
   };
 
   const addChecklistItem = async (strategyId: number, type: string, text: string, parentId: number | null = null, highIsGood?: boolean) => {
@@ -5822,6 +5934,8 @@ export default function Strategies() {
                         <div>
                           {allTypes.map((type) => {
                             const isCustom = !defaultTypes.includes(type);
+                            const sectionDescMap = checklistSectionDescriptions.get(virtualStrategyId) || new Map<string, string>();
+                            const sectionDesc = sectionDescMap.get(type) ?? "";
                             return (
                               <SortableChecklistSection key={type} type={type} isEditing={isEditing || isCreating}>
                                 <ChecklistSection
@@ -5853,6 +5967,20 @@ export default function Strategies() {
                                   moveItemsToGroup={moveItemsToGroup}
                                   useParentDndContext
                                   onEditTitle={onEditChecklistTitle}
+                                  sectionDescription={sectionDesc}
+                                  onSectionDescriptionChange={(desc) => {
+                                    setChecklistSectionDescriptions((prev) => {
+                                      const next = new Map(prev);
+                                      const mapForStrategy = new Map(next.get(virtualStrategyId) || []);
+                                      mapForStrategy.set(type, desc);
+                                      next.set(virtualStrategyId, mapForStrategy);
+                                      return next;
+                                    });
+                                  }}
+                                  onSectionDescriptionBlur={() => {
+                                    const current = (checklistSectionDescriptions.get(virtualStrategyId) || new Map<string, string>()).get(type) ?? "";
+                                    saveChecklistSectionDescription(virtualStrategyId, type, current);
+                                  }}
                                 />
                               </SortableChecklistSection>
                             );
@@ -6735,6 +6863,8 @@ export default function Strategies() {
                     {surveyTypesOrdered.map((surveyType) => {
                       const items = currentChecklist.get(surveyType) || [];
                       const isCustomSurvey = surveyType.startsWith("survey_");
+                      const sectionDescMap = checklistSectionDescriptions.get(virtualStrategyId) || new Map<string, string>();
+                      const sectionDesc = sectionDescMap.get(surveyType) ?? "";
                       return (
                         <div key={surveyType} style={{ marginBottom: "24px" }}>
                           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
@@ -6785,6 +6915,20 @@ export default function Strategies() {
                               isCustom={isCustomSurvey}
                               onDeleteChecklist={undefined}
                               moveItemsToGroup={moveItemsToGroup}
+                              sectionDescription={sectionDesc}
+                              onSectionDescriptionChange={(desc) => {
+                                setChecklistSectionDescriptions((prev) => {
+                                  const next = new Map(prev);
+                                  const mapForStrategy = new Map(next.get(virtualStrategyId) || []);
+                                  mapForStrategy.set(surveyType, desc);
+                                  next.set(virtualStrategyId, mapForStrategy);
+                                  return next;
+                                });
+                              }}
+                              onSectionDescriptionBlur={() => {
+                                const current = (checklistSectionDescriptions.get(virtualStrategyId) || new Map<string, string>()).get(surveyType) ?? "";
+                                saveChecklistSectionDescription(virtualStrategyId, surveyType, current);
+                              }}
                             />
                         </div>
                       );
