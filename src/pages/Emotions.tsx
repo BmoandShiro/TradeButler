@@ -669,6 +669,40 @@ function MetricsDisplay({
   const [surveyChartBrushEnd, setSurveyChartBrushEnd] = useState(0);
   const [metricModalBrushStart, setMetricModalBrushStart] = useState(0);
   const [metricModalBrushEnd, setMetricModalBrushEnd] = useState(0);
+  // Series config for good-high charts (higher = better): dataKey -> { label, color }
+  const GOOD_HIGH_SERIES: { key: string; label: string; color: string }[] = [
+    { key: "stability", label: "Emotional Stability", color: "var(--accent)" },
+    { key: "discipline", label: "Discipline", color: "var(--warning)" },
+    { key: "fomo", label: "FOMO Resistance", color: "var(--success)" },
+    { key: "revengeRisk", label: "Revenge-Trade Risk (resistance)", color: "#a855f7" },
+    { key: "overconfidence", label: "Overconfidence (resistance)", color: "#f43f5e" },
+    { key: "fear", label: "Fear After Losses (resistance)", color: "#06b6d4" },
+    { key: "preTradeClarity", label: "Pre-Trade Clarity", color: "#84cc16" },
+    { key: "urgency", label: "Urgency Resistance", color: "#eab308" },
+    { key: "interference", label: "Interference Resistance", color: "#3b82f6" },
+    { key: "excitementGreed", label: "Excitement/Greed Control", color: "#ec4899" },
+  ];
+  const GOOD_LOW_SERIES: { key: string; label: string; color: string }[] = [
+    { key: "fomoRisk", label: "FOMO Tendency", color: "#f97316" },
+    { key: "revengeTendency", label: "Revenge Tendency", color: "#a855f7" },
+    { key: "overconfidenceRaw", label: "Overconfidence", color: "#f43f5e" },
+    { key: "fearTendency", label: "Fear / Emotional Reaction", color: "#06b6d4" },
+    { key: "urgencyPressure", label: "Urgency Pressure", color: "#eab308" },
+    { key: "interferenceTemptation", label: "Interference Temptation", color: "#3b82f6" },
+    { key: "excitementGreedRaw", label: "Excitement/Greed", color: "#ec4899" },
+  ];
+  const [visibleMain, setVisibleMain] = useState<Record<string, boolean>>(() =>
+    GOOD_HIGH_SERIES.reduce((acc, { key }) => ({ ...acc, [key]: true }), {})
+  );
+  const [visibleGoodHigh, setVisibleGoodHigh] = useState<Record<string, boolean>>(() =>
+    GOOD_HIGH_SERIES.reduce((acc, { key }) => ({ ...acc, [key]: true }), {})
+  );
+  const [visibleGoodLow, setVisibleGoodLow] = useState<Record<string, boolean>>(() =>
+    GOOD_LOW_SERIES.reduce((acc, { key }) => ({ ...acc, [key]: true }), {})
+  );
+  const toggleMain = (key: string) => setVisibleMain((prev) => ({ ...prev, [key]: !prev[key] }));
+  const toggleGoodHigh = (key: string) => setVisibleGoodHigh((prev) => ({ ...prev, [key]: !prev[key] }));
+  const toggleGoodLow = (key: string) => setVisibleGoodLow((prev) => ({ ...prev, [key]: !prev[key] }));
   useEffect(() => {
     setSurveyChartBrushEnd(0);
   }, [chartTimeframe, chartCustomStart, chartCustomEnd]);
@@ -1383,6 +1417,14 @@ function MetricsDisplay({
           urgency: parseFloat(urgency.toFixed(2)),
           interference: parseFloat(interference.toFixed(2)),
           excitementGreed: parseFloat(excitementGreed.toFixed(2)),
+          // Raw "good low" metrics (lower = better)
+          fomoRisk: parseFloat(survey.before_fomo.toFixed(2)),
+          revengeTendency: parseFloat(revengeRaw.toFixed(2)),
+          overconfidenceRaw: parseFloat(survey.after_confidence_affected.toFixed(2)),
+          fearTendency: parseFloat(fearRaw.toFixed(2)),
+          urgencyPressure: parseFloat(survey.before_urgency_pressure.toFixed(2)),
+          interferenceTemptation: parseFloat(survey.during_tempted_interfere.toFixed(2)),
+          excitementGreedRaw: parseFloat(survey.during_excitement_greed.toFixed(2)),
         };
       });
   }, [filteredSurveysForChart]);
@@ -1452,7 +1494,7 @@ function MetricsDisplay({
     return withTrend;
   }, [stateMetricChartData]);
 
-  // Survey trends chart: stability, discipline, fomo on 0–10 scale (same as metric cards)
+  // Survey trends chart: all good-high metrics on 0–10 scale (same as metric cards)
   const surveyToDisplay10 = (raw: number) => Math.max(0, Math.min(10, (raw - 1) * 2.5));
   const surveyChartData = useMemo(
     () =>
@@ -1462,9 +1504,36 @@ function MetricsDisplay({
           stability: parseFloat(surveyToDisplay10(r.emotionalStability).toFixed(2)),
           discipline: parseFloat(surveyToDisplay10(r.discipline).toFixed(2)),
           fomo: parseFloat(surveyToDisplay10(r.fomo).toFixed(2)),
+          revengeRisk: parseFloat(surveyToDisplay10(r.revengeRisk).toFixed(2)),
+          overconfidence: parseFloat(surveyToDisplay10(r.overconfidence).toFixed(2)),
+          fear: parseFloat(surveyToDisplay10(r.fear).toFixed(2)),
+          preTradeClarity: parseFloat(surveyToDisplay10(r.preTradeClarity).toFixed(2)),
+          urgency: parseFloat(surveyToDisplay10(r.urgency).toFixed(2)),
+          interference: parseFloat(surveyToDisplay10(r.interference).toFixed(2)),
+          excitementGreed: parseFloat(surveyToDisplay10(r.excitementGreed).toFixed(2)),
         })),
         CHART_MAX_POINTS
       ),
+    [surveyChartDataFull]
+  );
+  // Good-low chart data: raw metrics (1–5) scaled to 0–10 for display; lower = better
+  const surveyGoodLowChartData = useMemo(
+    () =>
+      surveyChartDataFull.length === 0
+        ? []
+        : sampleTimeSeries(
+            surveyChartDataFull.map((r) => ({
+              date: r.date,
+              fomoRisk: parseFloat(surveyToDisplay10(r.fomoRisk).toFixed(2)),
+              revengeTendency: parseFloat(surveyToDisplay10(r.revengeTendency).toFixed(2)),
+              overconfidenceRaw: parseFloat(surveyToDisplay10(r.overconfidenceRaw).toFixed(2)),
+              fearTendency: parseFloat(surveyToDisplay10(r.fearTendency).toFixed(2)),
+              urgencyPressure: parseFloat(surveyToDisplay10(r.urgencyPressure).toFixed(2)),
+              interferenceTemptation: parseFloat(surveyToDisplay10(r.interferenceTemptation).toFixed(2)),
+              excitementGreedRaw: parseFloat(surveyToDisplay10(r.excitementGreedRaw).toFixed(2)),
+            })),
+            CHART_MAX_POINTS
+          ),
     [surveyChartDataFull]
   );
   const surveyUseBrush = surveyChartData.length > 24;
@@ -2317,7 +2386,7 @@ function MetricsDisplay({
         );
       })()}
 
-      {/* Survey Trends Chart */}
+      {/* Survey Trends Chart — all metrics, toggleable */}
       {surveys.length > 0 && (
         <div
           style={{
@@ -2343,6 +2412,20 @@ function MetricsDisplay({
               />
             )}
           </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", marginBottom: "12px", alignItems: "center" }}>
+            {GOOD_HIGH_SERIES.map(({ key, label, color }) => (
+              <label key={key} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "13px", color: "var(--text-secondary)" }}>
+                <input
+                  type="checkbox"
+                  checked={!!visibleMain[key]}
+                  onChange={() => toggleMain(key)}
+                  style={{ accentColor: color }}
+                />
+                <span style={{ width: "10px", height: "10px", borderRadius: "2px", backgroundColor: visibleMain[key] ? color : "var(--border-color)", flexShrink: 0 }} />
+                {label}
+              </label>
+            ))}
+          </div>
           <ResponsiveContainer width="100%" height={surveyUseBrush ? 340 : 300}>
             <LineChart data={surveyChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
@@ -2352,7 +2435,7 @@ function MetricsDisplay({
                 stroke="var(--text-secondary)"
                 style={{ fontSize: "12px" }}
               />
-              <YAxis 
+              <YAxis
                 domain={[0, 10]}
                 stroke="var(--text-secondary)"
                 style={{ fontSize: "12px" }}
@@ -2365,34 +2448,134 @@ function MetricsDisplay({
                   color: "var(--text-primary)",
                 }}
               />
-              <Legend />
-              <Line 
-                type="monotone" 
-                dataKey="stability" 
-                stroke="var(--accent)"
-                strokeWidth={2}
-                dot={surveyShowDots ? { fill: "var(--accent)", r: 4 } : false}
-                name="Emotional Stability"
-              />
-              <Line 
-                type="monotone" 
-                dataKey="discipline" 
-                stroke="var(--warning)"
-                strokeWidth={2}
-                dot={surveyShowDots ? { fill: "var(--warning)", r: 4 } : false}
-                name="Discipline"
-              />
-              <Line 
-                type="monotone" 
-                dataKey="fomo" 
-                stroke="var(--success)"
-                strokeWidth={2}
-                dot={surveyShowDots ? { fill: "var(--success)", r: 4 } : false}
-                name="FOMO Resistance"
-              />
+              {GOOD_HIGH_SERIES.filter((s) => visibleMain[s.key]).map(({ key, label, color }) => (
+                <Line
+                  key={key}
+                  type="monotone"
+                  dataKey={key}
+                  stroke={color}
+                  strokeWidth={2}
+                  dot={surveyShowDots ? { fill: color, r: 4 } : false}
+                  name={label}
+                />
+              ))}
               {surveyUseBrush && (
                 <Brush
                   data={surveyChartData}
+                  dataKey="date"
+                  height={36}
+                  stroke="var(--border-color)"
+                  fill="var(--bg-tertiary)"
+                  startIndex={surveyBrushStart}
+                  endIndex={surveyBrushEnd}
+                  onDragEnd={(range: { startIndex?: number; endIndex?: number }) => {
+                    if (range.startIndex != null && range.endIndex != null) {
+                      setSurveyChartBrushStart(range.startIndex);
+                      setSurveyChartBrushEnd(range.endIndex);
+                    }
+                  }}
+                />
+              )}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Good when high — metrics where higher is better */}
+      {surveys.length > 0 && (
+        <div
+          style={{
+            backgroundColor: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "8px",
+            padding: "24px",
+            marginBottom: "30px",
+          }}
+        >
+          <h2 style={{ fontSize: "20px", fontWeight: "600", margin: "0 0 12px 0" }}>Metrics where higher is better</h2>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", marginBottom: "12px", alignItems: "center" }}>
+            {GOOD_HIGH_SERIES.map(({ key, label, color }) => (
+              <label key={key} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "13px", color: "var(--text-secondary)" }}>
+                <input
+                  type="checkbox"
+                  checked={!!visibleGoodHigh[key]}
+                  onChange={() => toggleGoodHigh(key)}
+                  style={{ accentColor: color }}
+                />
+                <span style={{ width: "10px", height: "10px", borderRadius: "2px", backgroundColor: visibleGoodHigh[key] ? color : "var(--border-color)", flexShrink: 0 }} />
+                {label}
+              </label>
+            ))}
+          </div>
+          <ResponsiveContainer width="100%" height={surveyUseBrush ? 340 : 300}>
+            <LineChart data={surveyChartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+              <XAxis dataKey="date" interval={surveyXInterval} stroke="var(--text-secondary)" style={{ fontSize: "12px" }} />
+              <YAxis domain={[0, 10]} stroke="var(--text-secondary)" style={{ fontSize: "12px" }} />
+              <Tooltip contentStyle={{ backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)" }} />
+              {GOOD_HIGH_SERIES.filter((s) => visibleGoodHigh[s.key]).map(({ key, label, color }) => (
+                <Line key={key} type="monotone" dataKey={key} stroke={color} strokeWidth={2} dot={surveyShowDots ? { fill: color, r: 4 } : false} name={label} />
+              ))}
+              {surveyUseBrush && (
+                <Brush
+                  data={surveyChartData}
+                  dataKey="date"
+                  height={36}
+                  stroke="var(--border-color)"
+                  fill="var(--bg-tertiary)"
+                  startIndex={surveyBrushStart}
+                  endIndex={surveyBrushEnd}
+                  onDragEnd={(range: { startIndex?: number; endIndex?: number }) => {
+                    if (range.startIndex != null && range.endIndex != null) {
+                      setSurveyChartBrushStart(range.startIndex);
+                      setSurveyChartBrushEnd(range.endIndex);
+                    }
+                  }}
+                />
+              )}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Good when low — metrics where lower is better */}
+      {surveys.length > 0 && surveyGoodLowChartData.length > 0 && (
+        <div
+          style={{
+            backgroundColor: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "8px",
+            padding: "24px",
+            marginBottom: "30px",
+          }}
+        >
+          <h2 style={{ fontSize: "20px", fontWeight: "600", margin: "0 0 12px 0" }}>Metrics where lower is better</h2>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", marginBottom: "12px", alignItems: "center" }}>
+            {GOOD_LOW_SERIES.map(({ key, label, color }) => (
+              <label key={key} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "13px", color: "var(--text-secondary)" }}>
+                <input
+                  type="checkbox"
+                  checked={!!visibleGoodLow[key]}
+                  onChange={() => toggleGoodLow(key)}
+                  style={{ accentColor: color }}
+                />
+                <span style={{ width: "10px", height: "10px", borderRadius: "2px", backgroundColor: visibleGoodLow[key] ? color : "var(--border-color)", flexShrink: 0 }} />
+                {label}
+              </label>
+            ))}
+          </div>
+          <ResponsiveContainer width="100%" height={surveyGoodLowChartData.length > 24 ? 340 : 300}>
+            <LineChart data={surveyGoodLowChartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+              <XAxis dataKey="date" interval={surveyXInterval} stroke="var(--text-secondary)" style={{ fontSize: "12px" }} />
+              <YAxis domain={[0, 10]} stroke="var(--text-secondary)" style={{ fontSize: "12px" }} />
+              <Tooltip contentStyle={{ backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)" }} />
+              {GOOD_LOW_SERIES.filter((s) => visibleGoodLow[s.key]).map(({ key, label, color }) => (
+                <Line key={key} type="monotone" dataKey={key} stroke={color} strokeWidth={2} dot={surveyShowDots ? { fill: color, r: 4 } : false} name={label} />
+              ))}
+              {surveyGoodLowChartData.length > 24 && (
+                <Brush
+                  data={surveyGoodLowChartData}
                   dataKey="date"
                   height={36}
                   stroke="var(--border-color)"
@@ -2547,13 +2730,9 @@ export default function Emotions() {
     saveScrollPosition();
   }, [showForm]);
 
-  // Restore scroll position on mount
+  // Start at top of page when navigating to Emotions (do not restore previous scroll)
   useEffect(() => {
-    // Wait a bit for content to load
-    const timer = setTimeout(() => {
-      restoreScrollPosition();
-    }, 100);
-    return () => clearTimeout(timer);
+    if (mainScrollRef.current) mainScrollRef.current.scrollTop = 0;
   }, []);
 
   // Save scroll position on scroll

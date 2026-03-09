@@ -35,6 +35,7 @@ import {
   loadSandboxState,
 } from "../utils/sandboxStore";
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
+import { sanitizeHtml, normalizeRichTextHtml } from "../utils/sanitizeHtml";
 
 interface JournalEntry {
   id: number;
@@ -241,26 +242,8 @@ export default function Journal() {
     const savedId = localStorage.getItem('journal_selected_entry_id');
     return savedId ? null : null; // Will be loaded by ID in useEffect
   });
-  // If we have a saved entry id to restore, don't show overview until load completes (avoids flash). Skip when URL has ?overview=1 (e.g. from Analytics).
-  const [pendingRestoreEntryId, setPendingRestoreEntryId] = useState<number | null>(() => {
-    if (typeof window === "undefined") return null;
-    if (new URLSearchParams(window.location.search).get("overview") === "1") return null;
-    const savedId = localStorage.getItem("journal_selected_entry_id");
-    if (savedId) {
-      const id = parseInt(savedId, 10);
-      if (!Number.isNaN(id)) return id;
-    }
-    try {
-      const wip = localStorage.getItem("journal_work_in_progress");
-      if (wip) {
-        const parsed = JSON.parse(wip) as { selectedEntryId?: number | null; isCreating?: boolean };
-        if (parsed.selectedEntryId != null && !parsed.isCreating) return parsed.selectedEntryId;
-      }
-    } catch {
-      /* ignore */
-    }
-    return null;
-  });
+  // Journal opens to Overview by default; only restore entry when navigating from another page with state (e.g. "Open in Journal").
+  const [pendingRestoreEntryId, setPendingRestoreEntryId] = useState<number | null>(null);
   const [selectedTrades, setSelectedTrades] = useState<JournalTrade[]>([]);
   const [allJournalTrades, setAllJournalTrades] = useState<JournalTrade[]>([]);
   const [isCreating, setIsCreating] = useState(false);
@@ -477,7 +460,7 @@ export default function Journal() {
     }
   };
 
-  // Restore work-in-progress from localStorage
+  // Restore work-in-progress from localStorage (used by "Restore draft" on Overview)
   const restoreWorkInProgress = () => {
     try {
       const saved = localStorage.getItem('journal_work_in_progress');
@@ -609,28 +592,7 @@ export default function Journal() {
     loadAvailableSymbols();
     loadAllJournalTrades();
     
-    // When URL has ?overview=1 (e.g. from Analytics "Journal Overview" link), do not restore entry or work-in-progress
-    const forceOverview = searchParams.get("overview") === "1";
-    const openFromState = (location.state as { openEntryId?: number } | null)?.openEntryId != null;
-    
-    if (!openFromState && !forceOverview) {
-      const savedEntryId = localStorage.getItem('journal_selected_entry_id');
-      if (savedEntryId) {
-        const entryId = parseInt(savedEntryId, 10);
-        if (!isNaN(entryId)) {
-          setTimeout(() => loadEntry(entryId), 300);
-        }
-      }
-    }
-    
-    if (!forceOverview) {
-      const hasWorkInProgress = localStorage.getItem('journal_work_in_progress');
-      if (hasWorkInProgress) {
-        setTimeout(() => {
-          restoreWorkInProgress();
-        }, 200);
-      }
-    }
+    // Open to Overview by default; do not auto-restore last entry or work-in-progress when navigating to Journal.
   }, [dataMode, searchParams]);
 
   // Clear pending restore once an entry is selected (so we don't stay in "loading" state)
@@ -1516,10 +1478,10 @@ export default function Journal() {
             entry_type: tradeData.entry_type || null,
             exit_type: tradeData.exit_type || null,
             trade: tradeData.trade || null,
-            what_went_well: tradeData.what_went_well || null,
-            what_could_be_improved: tradeData.what_could_be_improved || null,
-            emotional_state: tradeData.emotional_state || null,
-            notes: tradeData.notes || null,
+            what_went_well: normalizeRichTextHtml(tradeData.what_went_well || "") || null,
+            what_could_be_improved: normalizeRichTextHtml(tradeData.what_could_be_improved || "") || null,
+            emotional_state: normalizeRichTextHtml(tradeData.emotional_state || "") || null,
+            notes: normalizeRichTextHtml(tradeData.notes || "") || null,
             outcome: tradeData.outcome || null,
             trade_order: i,
           };
@@ -1600,10 +1562,10 @@ export default function Journal() {
             entryType: tradeData.entry_type || null,
             exitType: tradeData.exit_type || null,
             trade: tradeData.trade || null,
-            whatWentWell: tradeData.what_went_well || null,
-            whatCouldBeImproved: tradeData.what_could_be_improved || null,
-            emotionalState: tradeData.emotional_state || null,
-            notes: tradeData.notes || null,
+            whatWentWell: normalizeRichTextHtml(tradeData.what_went_well || "") || null,
+            whatCouldBeImproved: normalizeRichTextHtml(tradeData.what_could_be_improved || "") || null,
+            emotionalState: normalizeRichTextHtml(tradeData.emotional_state || "") || null,
+            notes: normalizeRichTextHtml(tradeData.notes || "") || null,
             outcome: tradeData.outcome || null,
             rMultiple: (tradeData as { r_multiple?: string }).r_multiple?.trim() ? Number((tradeData as { r_multiple?: string }).r_multiple) : null,
             tradeOrder: i,
@@ -1617,10 +1579,10 @@ export default function Journal() {
             entryType: tradeData.entry_type || null,
             exitType: tradeData.exit_type || null,
             trade: tradeData.trade || null,
-            whatWentWell: tradeData.what_went_well || null,
-            whatCouldBeImproved: tradeData.what_could_be_improved || null,
-            emotionalState: tradeData.emotional_state || null,
-            notes: tradeData.notes || null,
+            whatWentWell: normalizeRichTextHtml(tradeData.what_went_well || "") || null,
+            whatCouldBeImproved: normalizeRichTextHtml(tradeData.what_could_be_improved || "") || null,
+            emotionalState: normalizeRichTextHtml(tradeData.emotional_state || "") || null,
+            notes: normalizeRichTextHtml(tradeData.notes || "") || null,
             outcome: tradeData.outcome || null,
             rMultiple: (tradeData as { r_multiple?: string }).r_multiple?.trim() ? Number((tradeData as { r_multiple?: string }).r_multiple) : null,
             tradeOrder: i,
@@ -1899,10 +1861,10 @@ export default function Journal() {
             entryType: tradeData.entry_type || null,
             exitType: tradeData.exit_type || null,
             trade: tradeData.trade || null,
-            whatWentWell: tradeData.what_went_well || null,
-            whatCouldBeImproved: tradeData.what_could_be_improved || null,
-            emotionalState: tradeData.emotional_state || null,
-            notes: tradeData.notes || null,
+            whatWentWell: normalizeRichTextHtml(tradeData.what_went_well || "") || null,
+            whatCouldBeImproved: normalizeRichTextHtml(tradeData.what_could_be_improved || "") || null,
+            emotionalState: normalizeRichTextHtml(tradeData.emotional_state || "") || null,
+            notes: normalizeRichTextHtml(tradeData.notes || "") || null,
             outcome: tradeData.outcome || null,
             rMultiple: (tradeData as { r_multiple?: string }).r_multiple?.trim() ? Number((tradeData as { r_multiple?: string }).r_multiple) : null,
             tradeOrder: i,
@@ -1916,10 +1878,10 @@ export default function Journal() {
             entryType: tradeData.entry_type || null,
             exitType: tradeData.exit_type || null,
             trade: tradeData.trade || null,
-            whatWentWell: tradeData.what_went_well || null,
-            whatCouldBeImproved: tradeData.what_could_be_improved || null,
-            emotionalState: tradeData.emotional_state || null,
-            notes: tradeData.notes || null,
+            whatWentWell: normalizeRichTextHtml(tradeData.what_went_well || "") || null,
+            whatCouldBeImproved: normalizeRichTextHtml(tradeData.what_could_be_improved || "") || null,
+            emotionalState: normalizeRichTextHtml(tradeData.emotional_state || "") || null,
+            notes: normalizeRichTextHtml(tradeData.notes || "") || null,
             outcome: tradeData.outcome || null,
             rMultiple: (tradeData as { r_multiple?: string }).r_multiple?.trim() ? Number((tradeData as { r_multiple?: string }).r_multiple) : null,
             tradeOrder: i,
@@ -2319,6 +2281,7 @@ export default function Journal() {
     } catch (error) {
       console.error("Error loading entry:", error);
       setPendingRestoreEntryId(null);
+      setSelectedEntry(null);
     }
   };
 
@@ -2795,11 +2758,29 @@ export default function Journal() {
   }, [overviewFilteredTradesForCharts]);
 
   const [showAllRecent, setShowAllRecent] = useState(false);
+  const [expandedImprovementCardIds, setExpandedImprovementCardIds] = useState<Set<number>>(new Set());
 
   const recentEntries = useMemo(
     () => (showAllRecent ? filteredEntries : filteredEntries.slice(0, 10)),
     [filteredEntries, showAllRecent]
   );
+
+  const recentWhatCouldBeImproved = useMemo(() => {
+    const maxCards = 8;
+    const out: { entry: JournalEntry; improvements: string[] }[] = [];
+    const considered = showAllRecent ? filteredEntries : filteredEntries.slice(0, 15);
+    for (const entry of considered) {
+      const trades = journalTradesByEntry.get(entry.id) || [];
+      const improvements = trades
+        .map((t) => (t.what_could_be_improved || "").trim())
+        .filter((s) => s.length > 0);
+      if (improvements.length > 0) {
+        out.push({ entry, improvements });
+        if (out.length >= maxCards) break;
+      }
+    }
+    return out;
+  }, [filteredEntries, showAllRecent, journalTradesByEntry]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", flex: 1 }}>
@@ -5311,6 +5292,41 @@ export default function Journal() {
               <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px" }}>
                 Review your past journal entries at a glance. Select any entry on the right to dive into full details.
               </p>
+              {typeof window !== "undefined" && localStorage.getItem("journal_work_in_progress") && (
+                <div
+                  style={{
+                    marginBottom: "16px",
+                    padding: "10px 14px",
+                    borderRadius: "6px",
+                    backgroundColor: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-color)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "12px",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                    You have an unsaved draft.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => restoreWorkInProgress()}
+                    style={{
+                      padding: "6px 12px",
+                      fontSize: "12px",
+                      fontWeight: "600",
+                      color: "var(--accent)",
+                      background: "none",
+                      border: "1px solid var(--accent)",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Restore draft
+                  </button>
+                </div>
+              )}
               <div
                 style={{
                   display: "flex",
@@ -5712,6 +5728,132 @@ export default function Journal() {
                 })()}
               </div>
             </div>
+
+            {recentWhatCouldBeImproved.length > 0 && (
+              <div
+                style={{
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "20px",
+                  marginBottom: "24px",
+                }}
+              >
+                <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "8px" }}>
+                  Reflect: What could be improved
+                </h3>
+                <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "14px" }}>
+                  Notes from your most recent journals. Reflect on these before you start the day.
+                </p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "12px" }}>
+                  {recentWhatCouldBeImproved.map(({ entry, improvements }) => {
+                    const isExpanded = expandedImprovementCardIds.has(entry.id);
+                    return (
+                      <div
+                        key={entry.id}
+                        onClick={() => {
+                          clearWorkInProgress();
+                          localStorage.setItem("journal_selected_entry_id", entry.id.toString());
+                          tabScrollPositions.current.clear();
+                          loadEntry(entry.id);
+                          setIsCreating(false);
+                          setIsEditing(false);
+                        }}
+                        style={{
+                          padding: "12px 14px",
+                          borderRadius: "8px",
+                          backgroundColor: "var(--bg-tertiary)",
+                          border: "1px solid var(--border-color)",
+                          cursor: "pointer",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "8px",
+                        }}
+                      >
+                        <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)" }}>
+                          {entry.date
+                            ? (() => {
+                                try {
+                                  const d = parse(entry.date, "yyyy-MM-dd", new Date());
+                                  return isNaN(d.getTime()) ? entry.date : format(d, "MMM d, yyyy");
+                                } catch {
+                                  return entry.date;
+                                }
+                              })()
+                            : ""}
+                          {entry.title ? ` · ${entry.title}` : ""}
+                        </div>
+                        <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                          <div
+                            style={{
+                              maxHeight: isExpanded ? "none" : "88px",
+                              overflow: "hidden",
+                            }}
+                          >
+                            <div
+                              className="reflect-improvement-content"
+                              style={{
+                                fontSize: "13px",
+                                color: "var(--text-primary)",
+                                lineHeight: 1.5,
+                              }}
+                            >
+                              {improvements.map((text, i) => (
+                                <div key={i} style={{ marginBottom: "6px" }}>
+                                  <div
+                                    dangerouslySetInnerHTML={{
+                                      __html: sanitizeHtml(text || ""),
+                                    }}
+                                    style={{
+                                      fontSize: "13px",
+                                      color: "var(--text-primary)",
+                                      lineHeight: 1.5,
+                                    }}
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedImprovementCardIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(entry.id)) next.delete(entry.id);
+                                else next.add(entry.id);
+                                return next;
+                              });
+                            }}
+                            style={{
+                              alignSelf: "flex-start",
+                              padding: "4px 8px",
+                              fontSize: "11px",
+                              fontWeight: "600",
+                              color: "var(--accent)",
+                              background: "none",
+                              border: "none",
+                              cursor: "pointer",
+                              borderRadius: "4px",
+                            }}
+                          >
+                            {isExpanded ? "Show less" : "Show more"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <style>{`
+                  .reflect-improvement-content p { margin: 0 0 6px 0; }
+                  .reflect-improvement-content p:last-child { margin-bottom: 0; }
+                  .reflect-improvement-content br { display: block; content: ""; margin-bottom: 4px; }
+                  .reflect-improvement-content ul, .reflect-improvement-content ol { margin: 0 0 6px 0; padding-left: 18px; }
+                  .reflect-improvement-content strong { font-weight: 600; }
+                  .reflect-improvement-content a { color: var(--accent); text-decoration: underline; }
+                `}</style>
+              </div>
+            )}
 
             <div
               style={{

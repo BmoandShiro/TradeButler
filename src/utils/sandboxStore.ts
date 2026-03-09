@@ -529,7 +529,7 @@ export function getSandboxStrategySurveyMetricsWithValues(strategyId: number) {
 }
 
 export function getSandboxStrategyChecklistItemMetrics(strategyId: number) {
-  const items = SANDBOX_STRATEGY_CHECKLIST_ITEMS.filter((i) => i.strategy_id === strategyId && i.checklist_type !== "survey");
+  const items = SANDBOX_STRATEGY_CHECKLIST_ITEMS.filter((i) => i.strategy_id === strategyId);
   return items.map((i, idx) => {
     const base = 20 + (strategyId * 7) + (i.id % 11);
     const times_checked = base * (3 + (idx % 4));
@@ -544,9 +544,9 @@ export function getSandboxStrategyChecklistItemMetrics(strategyId: number) {
   });
 }
 
-/** Checklist item metrics split by outcome: times used with winning vs losing trades (demo data). */
+/** Checklist item metrics split by outcome: times used with winning vs losing trades (demo data). Includes survey items so Survey Insights can display. */
 export function getSandboxStrategyChecklistItemMetricsByOutcome(strategyId: number) {
-  const items = SANDBOX_STRATEGY_CHECKLIST_ITEMS.filter((i) => i.strategy_id === strategyId && i.checklist_type !== "survey");
+  const items = SANDBOX_STRATEGY_CHECKLIST_ITEMS.filter((i) => i.strategy_id === strategyId);
   return items.map((i, idx) => {
     const total = 25 + (strategyId * 8) + (i.id % 13);
     const goodShare = 0.25 + (idx % 7) * 0.12;

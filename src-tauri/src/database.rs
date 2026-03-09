@@ -386,6 +386,40 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         conn.execute("ALTER TABLE journal_checklist_responses ADD COLUMN response_value INTEGER", [])?;
     }
 
+    // Migration: high_is_good for survey items (1 = high is good, 0 = low is good). Null = non-survey or legacy.
+    let has_high_is_good: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='high_is_good'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_high_is_good {
+        conn.execute("ALTER TABLE strategy_checklists ADD COLUMN high_is_good INTEGER", [])?;
+    }
+
+    // Migration: optional description for each checklist item (kept for backward compatibility, even though
+    // we currently store one description per checklist section instead of per item).
+    let has_description: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='description'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_description {
+        conn.execute("ALTER TABLE strategy_checklists ADD COLUMN description TEXT", [])?;
+    }
+
+    // One description per checklist section (e.g. Analysis, Mantra, Entry Checklist, Survey) per strategy.
+    // This table is used by the Strategies and Journal pages to show a short description under each section title.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS strategy_checklist_section_descriptions (
+            strategy_id INTEGER NOT NULL,
+            checklist_type TEXT NOT NULL,
+            description TEXT,
+            PRIMARY KEY (strategy_id, checklist_type),
+            FOREIGN KEY (strategy_id) REFERENCES strategies(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+
     // Custom survey metrics per strategy (name, description, formula, which survey items) — like Psychological Metrics but user-defined
     conn.execute(
         "CREATE TABLE IF NOT EXISTS strategy_survey_metrics (

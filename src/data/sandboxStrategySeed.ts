@@ -11,6 +11,8 @@ export interface SandboxChecklistItem {
   item_order: number;
   checklist_type: string;
   parent_id: number | null;
+  /** For survey items: true = high (5) is good, false = low (1) is good. */
+  high_is_good?: boolean | null;
 }
 
 export interface SandboxSurveyMetricWithValue {
@@ -26,7 +28,7 @@ export interface SandboxSurveyMetricWithValue {
 }
 
 let checklistId = 1;
-function ci(strategyId: number, text: string, order: number, type: string, checked: boolean, parentId: number | null = null): SandboxChecklistItem {
+function ci(strategyId: number, text: string, order: number, type: string, checked: boolean, parentId: number | null = null, highIsGood?: boolean): SandboxChecklistItem {
   return {
     id: checklistId++,
     strategy_id: strategyId,
@@ -35,6 +37,7 @@ function ci(strategyId: number, text: string, order: number, type: string, check
     item_order: order,
     checklist_type: type,
     parent_id: parentId,
+    ...(type === "survey" && highIsGood !== undefined && { high_is_good: highIsGood }),
   };
 }
 
@@ -56,37 +59,37 @@ function buildStrategyChecklistItems(): SandboxChecklistItem[] {
     if (strategyId === 1) {
       items.push(c("ADR > 3%?", 0, "entry"), c("Premarket volume > 1M?", 1, "entry"), c("First 30m range established?", 2, "entry"), c("Breakout with volume confirmation?", 3, "entry"));
       items.push(c("Target 2R or prior high", 0, "take_profit"), c("Stop below range low", 1, "take_profit"));
-      const s1 = [ci(strategyId, "How calm/clear before entry? (1-5)", 0, "survey", true), ci(strategyId, "How confident in setup? (1-5)", 1, "survey", true), ci(strategyId, "Urgency to enter? (1-5)", 2, "survey", true)];
+      const s1 = [ci(strategyId, "How calm/clear before entry? (1-5)", 0, "survey", true, null, true), ci(strategyId, "How confident in setup? (1-5)", 1, "survey", true, null, true), ci(strategyId, "Urgency to enter? (1-5)", 2, "survey", true, null, false), ci(strategyId, "Trust in process (1-5)", 3, "survey", true, null, true)];
       items.push(...s1);
       surveyIdsByStrategy[1] = s1.map((x) => x.id);
     } else if (strategyId === 2) {
       items.push(c("Daily trend identified?", 0, "entry"), c("38-50% pullback complete?", 1, "entry"), c("5m confirmation candle?", 2, "entry"), c("Risk defined (ATR/level)?", 3, "entry"));
       items.push(c("Target: prior structure", 0, "take_profit"), c("Stop: below pullback low", 1, "take_profit"));
-      const s2 = [ci(strategyId, "Patience level (1-5)", 0, "survey", true), ci(strategyId, "FOMO level (1-5)", 1, "survey", true), ci(strategyId, "Discipline to wait (1-5)", 2, "survey", true)];
+      const s2 = [ci(strategyId, "Patience level (1-5)", 0, "survey", true, null, true), ci(strategyId, "FOMO level (1-5)", 1, "survey", true, null, false), ci(strategyId, "Discipline to wait (1-5)", 2, "survey", true, null, true), ci(strategyId, "Pullback mindset (1-5)", 3, "survey", true, null, true)];
       items.push(...s2);
       surveyIdsByStrategy[2] = s2.map((x) => x.id);
     } else if (strategyId === 3) {
       items.push(c("Key level identified?", 0, "entry"), c("Max 1R risk per idea?", 1, "entry"), c("1-2 trades per week rule?", 2, "entry"));
       items.push(c("Profit target set (%)", 0, "take_profit"), c("Time stop (expiry)", 1, "take_profit"));
-      const s3 = [ci(strategyId, "Calm before trade (1-5)", 0, "survey", true), ci(strategyId, "Greed/fear balance (1-5)", 1, "survey", true), ci(strategyId, "Stick to plan (1-5)", 2, "survey", true), ci(strategyId, "Post-trade clarity (1-5)", 3, "survey", true)];
+      const s3 = [ci(strategyId, "Calm before trade (1-5)", 0, "survey", true, null, true), ci(strategyId, "Greed/fear balance (1-5)", 1, "survey", true, null, true), ci(strategyId, "Stick to plan (1-5)", 2, "survey", true, null, true), ci(strategyId, "Post-trade clarity (1-5)", 3, "survey", true, null, true)];
       items.push(...s3);
       surveyIdsByStrategy[3] = s3.map((x) => x.id);
     } else if (strategyId === 4) {
       items.push(c("Momentum confirmed (volume + price)", 0, "entry"), c("Within first 90 min?", 1, "entry"), c("Tight stop set (max 2R)", 2, "entry"));
       items.push(c("Target 1–2R or time stop", 0, "take_profit"), c("Stop on loss of momentum", 1, "take_profit"));
-      const s4 = [ci(strategyId, "Speed of decision (1-5)", 0, "survey", true), ci(strategyId, "Emotional control (1-5)", 1, "survey", true), ci(strategyId, "Follow-through (1-5)", 2, "survey", true)];
+      const s4 = [ci(strategyId, "Speed of decision (1-5)", 0, "survey", true, null, true), ci(strategyId, "Emotional control (1-5)", 1, "survey", true, null, true), ci(strategyId, "Follow-through (1-5)", 2, "survey", true, null, true), ci(strategyId, "Execution calm (1-5)", 3, "survey", true, null, true)];
       items.push(...s4);
       surveyIdsByStrategy[4] = s4.map((x) => x.id);
     } else if (strategyId === 5) {
       items.push(c("Breakout level and volume confirmed", 0, "entry"), c("Daily/4H structure aligned", 1, "entry"), c("Scale-out plan (1.5R, 3R)", 2, "entry"));
       items.push(c("Scale at 1.5R and 3R", 0, "take_profit"), c("Stop below breakout or swing low", 1, "take_profit"));
-      const s5 = [ci(strategyId, "Patience to hold (1-5)", 0, "survey", true), ci(strategyId, "Conviction in thesis (1-5)", 1, "survey", true), ci(strategyId, "Avoided early exit (1-5)", 2, "survey", true)];
+      const s5 = [ci(strategyId, "Patience to hold (1-5)", 0, "survey", true, null, true), ci(strategyId, "Conviction in thesis (1-5)", 1, "survey", true, null, true), ci(strategyId, "Avoided early exit (1-5)", 2, "survey", true, null, true), ci(strategyId, "Scale-out discipline (1-5)", 3, "survey", true, null, true)];
       items.push(...s5);
       surveyIdsByStrategy[5] = s5.map((x) => x.id);
     } else {
       items.push(c("Extended move identified (2+ ATR?)", 0, "entry"), c("VWAP/MA level clear", 1, "entry"), c("2:1 R:R defined", 2, "entry"));
       items.push(c("Target: mean (VWAP/MA)", 0, "take_profit"), c("Stop beyond extension", 1, "take_profit"));
-      const s6 = [ci(strategyId, "Fade discipline (1-5)", 0, "survey", true), ci(strategyId, "No revenge (1-5)", 1, "survey", true), ci(strategyId, "Execution calm (1-5)", 2, "survey", true)];
+      const s6 = [ci(strategyId, "Fade discipline (1-5)", 0, "survey", true, null, true), ci(strategyId, "No revenge (1-5)", 1, "survey", true, null, true), ci(strategyId, "Execution calm (1-5)", 2, "survey", true, null, true), ci(strategyId, "Mean reversion patience (1-5)", 3, "survey", true, null, true)];
       items.push(...s6);
       surveyIdsByStrategy[6] = s6.map((x) => x.id);
     }
