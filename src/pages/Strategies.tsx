@@ -6859,7 +6859,7 @@ export default function Strategies() {
                                 <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--success, #22c55e)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>These values were good for winning trades</div>
                                 <div style={{ display: "grid", gap: "6px" }}>
                                   {displayWinningSurvey.slice(0, 4).map(({ checklistTypeDisplay, topItemText, good, key }) => (
-                                    <div key={key} style={{ padding: "6px 8px", borderRadius: "4px", backgroundColor: "var(--bg-tertiary)", borderLeft: "3px solid var(--success, #22c55e)" }}>
+                                    <div key={key} style={{ padding: "6px 8px", borderRadius: "4px", backgroundColor: "var(--bg-tertiary)", borderLeft: "3px solid var(--success, #22c55e)", minHeight: "44px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
                                       <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
                                       <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
                                       <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({good} trades)</span>
@@ -6873,7 +6873,7 @@ export default function Strategies() {
                                 <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--danger, #ef4444)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>These values were bad for losing trades</div>
                                 <div style={{ display: "grid", gap: "6px" }}>
                                   {displayLosingSurvey.slice(0, 4).map(({ checklistTypeDisplay, topItemText, bad, key }) => (
-                                    <div key={key} style={{ padding: "6px 8px", borderRadius: "4px", backgroundColor: "var(--bg-tertiary)", borderLeft: "3px solid var(--danger, #ef4444)" }}>
+                                    <div key={key} style={{ padding: "6px 8px", borderRadius: "4px", backgroundColor: "var(--bg-tertiary)", borderLeft: "3px solid var(--danger, #ef4444)", minHeight: "44px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
                                       <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
                                       <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
                                       <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({bad} losing)</span>
@@ -7468,6 +7468,10 @@ export default function Strategies() {
                                                 borderRadius: "4px",
                                                 backgroundColor: "var(--bg-tertiary)",
                                                 borderLeft: "3px solid var(--success, #22c55e)",
+                                                minHeight: "44px",
+                                                display: "flex",
+                                                flexDirection: "column",
+                                                justifyContent: "center",
                                               }}
                                             >
                                               <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
@@ -7492,6 +7496,10 @@ export default function Strategies() {
                                                 borderRadius: "4px",
                                                 backgroundColor: "var(--bg-tertiary)",
                                                 borderLeft: "3px solid var(--danger, #ef4444)",
+                                                minHeight: "44px",
+                                                display: "flex",
+                                                flexDirection: "column",
+                                                justifyContent: "center",
                                               }}
                                             >
                                               <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
@@ -7510,19 +7518,14 @@ export default function Strategies() {
                                           These values were good for winning trades
                                         </div>
                                         <div style={{ display: "grid", gap: "6px" }}>
-                                          {displayWinningSurvey.slice(0, 4).map(({ checklistTypeDisplay, topItemText, good }, idx) => (
+                                          {displayWinningSurvey.slice(0, 4).map((row, idx) => (
                                             <div
-                                              key={`win-s-${s.id}-${idx}-${topItemText}`}
-                                              style={{
-                                                padding: "6px 8px",
-                                                borderRadius: "4px",
-                                                backgroundColor: "var(--bg-tertiary)",
-                                                borderLeft: "3px solid var(--success, #22c55e)",
-                                              }}
+                                              key={`win-s-${s.id}-${idx}-${row.topItemText}`}
+                                              style={{ padding: "6px 8px", borderRadius: "4px", backgroundColor: "var(--bg-tertiary)", borderLeft: "3px solid var(--success, #22c55e)", minHeight: "44px", display: "flex", flexDirection: "column", justifyContent: "center" }}
                                             >
-                                              <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
-                                              <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
-                                              <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({good} trades)</span>
+                                              <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{row.checklistTypeDisplay}</span>
+                                              <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{row.topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : row.topItemText}</span>
+                                              <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({row.good} trades)</span>
                                             </div>
                                           ))}
                                         </div>
@@ -7534,19 +7537,14 @@ export default function Strategies() {
                                           These values were bad for losing trades
                                         </div>
                                         <div style={{ display: "grid", gap: "6px" }}>
-                                          {displayLosingSurvey.slice(0, 4).map(({ checklistTypeDisplay, topItemText, bad }, idx) => (
+                                          {displayLosingSurvey.slice(0, 4).map((row, idx) => (
                                             <div
-                                              key={`lose-s-${s.id}-${idx}-${topItemText}`}
-                                              style={{
-                                                padding: "6px 8px",
-                                                borderRadius: "4px",
-                                                backgroundColor: "var(--bg-tertiary)",
-                                                borderLeft: "3px solid var(--danger, #ef4444)",
-                                              }}
+                                              key={`lose-s-${s.id}-${idx}-${row.topItemText}`}
+                                              style={{ padding: "6px 8px", borderRadius: "4px", backgroundColor: "var(--bg-tertiary)", borderLeft: "3px solid var(--danger, #ef4444)", minHeight: "44px", display: "flex", flexDirection: "column", justifyContent: "center" }}
                                             >
-                                              <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
-                                              <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
-                                              <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({bad} losing)</span>
+                                              <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{row.checklistTypeDisplay}</span>
+                                              <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{row.topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : row.topItemText}</span>
+                                              <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({row.bad} losing)</span>
                                             </div>
                                           ))}
                                         </div>
