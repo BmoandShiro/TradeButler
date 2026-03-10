@@ -110,7 +110,9 @@ interface JournalChecklistResponse {
   response_value?: number | null; // For survey items: 1-5 scale
 }
 
-const ENTRY_LEVEL_CHECKLIST_TYPES = ["daily_analysis", "daily_mantra"];
+// All checklist and survey items are scoped per journal trade.
+// Emotional states are the only thing that can be shared at the entry level.
+const ENTRY_LEVEL_CHECKLIST_TYPES: string[] = [];
 
 /** Hidden placeholder used in the DB for empty custom checklist types; never show to users. */
 const EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER = "__empty_custom_checklist_placeholder__";
@@ -3909,9 +3911,13 @@ export default function Journal() {
                               <button
                                 type="button"
                                 onClick={() => {
+                                  // Default new emotional state to the currently active trade,
+                                  // so each journal trade naturally gets its own state.
                                   setShowAddEmotionalStateForm(true);
-                                  setNewEmotionalStateLinkScope("entry");
-                                  setNewEmotionalStateTradeIndices([]);
+                                  setNewEmotionalStateLinkScope("trades");
+                                  setNewEmotionalStateTradeIndices([activeTradeIndex]);
+                                  setLinkExistingEmotionalStateScope("trades");
+                                  setLinkExistingEmotionalStateTradeIndex(activeTradeIndex);
                                 }}
                                 style={{
                                   display: "inline-flex",
@@ -5210,12 +5216,8 @@ export default function Journal() {
                               <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setTradeAssociationModalItemId(null)}>
                                 <div style={{ background: "var(--bg-primary)", borderRadius: "8px", padding: "20px", maxWidth: "400px", width: "90%", border: "1px solid var(--border-color)" }} onClick={e => e.stopPropagation()}>
                                   <h4 style={{ margin: "0 0 12px", fontSize: "14px" }}>Associate with trades</h4>
-                                  <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>By default this applies to the whole journal. Optionally link to specific <strong>journal trades</strong> in this entry ({entryTradesForAssociation.length}):</p>
+                                  <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Select which <strong>journal trades</strong> in this entry ({entryTradesForAssociation.length}) this checklist item should apply to.</p>
                                   <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
-                                    <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
-                                      <input type="checkbox" checked={!(checklistTradeAssociations.get(tradeAssociationModalItemId)?.length)} onChange={() => setChecklistTradeAssociation(tradeAssociationModalItemId, null)} />
-                                      <span>Whole entry (default)</span>
-                                    </label>
                                     <div style={{ maxHeight: "240px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", paddingRight: "4px" }}>
                                       {entryTradesForAssociation.map((t, i) => {
                                         const key: number = selectedEntry && (t as { id?: number }).id != null ? (t as { id: number }).id : i;
@@ -6641,12 +6643,8 @@ export default function Journal() {
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setTradeAssociationModalItemId(null)}>
           <div style={{ background: "var(--bg-primary)", borderRadius: "8px", padding: "20px", maxWidth: "400px", width: "90%", border: "1px solid var(--border-color)" }} onClick={e => e.stopPropagation()}>
             <h4 style={{ margin: "0 0 12px", fontSize: "14px" }}>Associate with trades</h4>
-            <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>By default this applies to the whole journal. Optionally link to specific <strong>journal trades</strong> in this entry ({entryTradesForAssociation.length}):</p>
+            <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Select which <strong>journal trades</strong> in this entry ({entryTradesForAssociation.length}) this checklist item should apply to.</p>
             <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
-                <input type="checkbox" checked={!(checklistTradeAssociations.get(tradeAssociationModalItemId)?.length)} onChange={() => setChecklistTradeAssociation(tradeAssociationModalItemId, null)} />
-                <span>Whole entry (default)</span>
-              </label>
               <div style={{ maxHeight: "240px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", paddingRight: "4px" }}>
                 {entryTradesForAssociation.map((t, i) => {
                   const key: number = selectedEntry && (t as { id?: number }).id != null ? (t as { id: number }).id : i;
