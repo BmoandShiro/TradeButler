@@ -270,20 +270,22 @@ const DEFAULT_JOURNAL_SECTION_ORDER: JournalSectionId[] = [
 
 const JOURNAL_SECTION_LABELS: Record<JournalSectionId, string> = {
   analysis_checklist: "Analysis",
-  emotional_state_before: "Emo. Before",
+  emotional_state_before: "Emotional State: Before Trade Survey",
   mantra_checklist: "Mantra",
   implementation: "Implementation",
   entry_checklist: "Entry",
-  emotional_state_during: "Emo. During",
+  emotional_state_during: "Emotional State: During Trade",
   take_profit_checklist: "Take Profit",
-  emotional_state_after: "Emo. After",
-  emotional_state_notes: "Emo. Notes",
+  emotional_state_after: "Emotional State: After Trade",
+  emotional_state_notes: "Emotional State Notes",
   what_went_well: "Went Well",
   what_could_be_improved: "Improve",
   notes: "Notes",
   links: "Links",
   custom_checklists_surveys: "Custom",
 };
+
+const EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED: JournalSectionId[] = ["emotional_state_during", "emotional_state_after", "emotional_state_notes"];
 
 const JOURNAL_SECTION_ORDER_KEY = "tradebutler_journal_section_order";
 
@@ -3689,12 +3691,14 @@ export default function Journal() {
 
               {/* Section nav: scroll-to links + reorder */}
               <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", padding: "8px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
-                {journalSectionOrder.map((sectionId) => (
+                {journalSectionOrder
+                  .filter((sectionId) => !EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId) || showAddEmotionalStateForm)
+                  .map((sectionId) => (
                   <button
                     key={sectionId}
                     type="button"
                     onClick={() => scrollToSection(sectionId)}
-                    style={{ padding: "4px 10px", fontSize: "11px", fontWeight: "500", color: "var(--text-primary)", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "6px", cursor: "pointer", whiteSpace: "nowrap" }}
+                    style={{ padding: "4px 10px", fontSize: "11px", fontWeight: "500", color: "var(--text-primary)", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "6px", cursor: "pointer" }}
                   >
                     {JOURNAL_SECTION_LABELS[sectionId]}
                   </button>
@@ -3715,13 +3719,45 @@ export default function Journal() {
                         {isTabContentMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                       </button>
                     )}
-                    {journalSectionOrder.map((sectionId) => (
+                    {journalSectionOrder.map((sectionId) => {
+                      const hideUntilEmoStarted = EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId) && !showAddEmotionalStateForm;
+                      if (hideUntilEmoStarted) return null;
+                      return (
                       <div key={sectionId} id={`section-${sectionId}`} ref={(el) => { sectionRefs.current.set(sectionId, el); }} style={{ marginBottom: "28px", scrollMarginTop: "12px" }}>
-                        <h3 style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "10px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                          {sectionId === "emotional_state_before"
-                            ? "Emotional State: Before Trade Survey"
-                            : JOURNAL_SECTION_LABELS[sectionId]}
-                        </h3>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+                          <h3 style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                            {JOURNAL_SECTION_LABELS[sectionId]}
+                          </h3>
+                          {sectionId === "emotional_state_before" && (isCreating || isEditing) && showAddEmotionalStateForm && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowAddEmotionalStateForm(false);
+                                setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
+                                setNewEmotionalStateSurveyResponses({});
+                                setTimeout(() => {
+                                  const idx = journalSectionOrder.indexOf("emotional_state_before");
+                                  const nextId = idx >= 0 && idx < journalSectionOrder.length - 1 ? journalSectionOrder[idx + 1] : null;
+                                  if (nextId) scrollToSection(nextId);
+                                }, 0);
+                              }}
+                              style={{
+                                padding: "6px 14px",
+                                background: "transparent",
+                                border: "1px solid var(--accent)",
+                                borderRadius: "999px",
+                                color: "var(--accent)",
+                                fontSize: "11px",
+                                cursor: "pointer",
+                                fontWeight: 600,
+                                letterSpacing: "0.06em",
+                                textTransform: "uppercase",
+                              }}
+                            >
+                              Skip
+                            </button>
+                          )}
+                        </div>
                         {sectionId === "implementation" && (
                           <RichTextEditor value={currentTrade.trade} onChange={(content: string) => updateTradeFormData(activeTradeIndex, "trade", content)} placeholder="Describe the related trades..." readOnly={false} />
                         )}
@@ -3908,34 +3944,35 @@ export default function Journal() {
                         {sectionId === "emotional_state_before" && (isCreating || isEditing) && (
                           <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                             {!showAddEmotionalStateForm && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  // Default new emotional state to the currently active trade,
-                                  // so each journal trade naturally gets its own state.
-                                  setShowAddEmotionalStateForm(true);
-                                  setNewEmotionalStateLinkScope("trades");
-                                  setNewEmotionalStateTradeIndices([activeTradeIndex]);
-                                  setLinkExistingEmotionalStateScope("trades");
-                                  setLinkExistingEmotionalStateTradeIndex(activeTradeIndex);
-                                }}
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  gap: "6px",
-                                  padding: "10px 16px",
-                                  background: "var(--accent)",
-                                  border: "none",
-                                  borderRadius: "6px",
-                                  color: "white",
-                                  fontSize: "13px",
-                                  cursor: "pointer",
-                                  fontWeight: 600,
-                                }}
-                              >
-                                + New emotional state
-                              </button>
+                              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowAddEmotionalStateForm(true);
+                                    setNewEmotionalStateLinkScope("trades");
+                                    setNewEmotionalStateTradeIndices([activeTradeIndex]);
+                                    setLinkExistingEmotionalStateScope("trades");
+                                    setLinkExistingEmotionalStateTradeIndex(activeTradeIndex);
+                                  }}
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    gap: "6px",
+                                    padding: "10px 16px",
+                                    background: "linear-gradient(135deg, #4a3680 0%, #352654 50%, #2a1e40 100%)",
+                                    border: "1px solid rgba(168, 85, 247, 0.55)",
+                                    borderRadius: "6px",
+                                    color: "rgba(240, 232, 255, 0.95)",
+                                    fontSize: "13px",
+                                    cursor: "pointer",
+                                    fontWeight: 600,
+                                    boxShadow: "0 0 0 1px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(88, 28, 135, 0.35)",
+                                  }}
+                                >
+                                  + Add emotional state
+                                </button>
+                              </div>
                             )}
                             {showAddEmotionalStateForm && (
                               <>
@@ -4143,7 +4180,7 @@ export default function Journal() {
                           </div>
                         )}
                       </div>
-                    ))}
+                    ); })}
                   </div>
                   {/* Duplicate trade fields and section tabs removed - content in consolidated bar and scrolling sections above */}
 
