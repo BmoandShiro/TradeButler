@@ -230,6 +230,26 @@ function groupEmotionalStatesByTimestamp(states: JournalEmotionalState[]): Journ
   );
 }
 
+/** Emotional state IDs that are linked to the given real trade (trade_id or trade_ids JSON). */
+function getEmotionalStateIdsForRealTrade(tradeId: number, states: JournalEmotionalState[]): number[] {
+  const ids: number[] = [];
+  for (const s of states) {
+    if (s.trade_id === tradeId) {
+      ids.push(s.id);
+      continue;
+    }
+    if (s.trade_ids) {
+      try {
+        const arr = JSON.parse(s.trade_ids) as number[];
+        if (Array.isArray(arr) && arr.includes(tradeId)) ids.push(s.id);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return ids;
+}
+
 interface PairedTrade {
   symbol: string;
   entry_trade_id: number;
@@ -249,7 +269,7 @@ interface PairedTrade {
 
 type TabType = "trade" | "what_went_well" | "what_could_be_improved" | "links" | "emotional_state" | "notes" | "checklists" | "survey";
 
-/** Section IDs for the scrolling journal entry flow (trader sequence). User can reorder. */
+/** Section IDs for the scrolling journal entry flow (trader sequence). User can reorder. Core sections only; custom checklists/surveys use "custom:<type>" ids. */
 export type JournalSectionId =
   | "analysis_checklist"
   | "emotional_state_before"
@@ -263,10 +283,10 @@ export type JournalSectionId =
   | "what_went_well"
   | "what_could_be_improved"
   | "notes"
-  | "links"
-  | "custom_checklists_surveys";
+  | "links";
 
-const DEFAULT_JOURNAL_SECTION_ORDER: JournalSectionId[] = [
+/** Core section order (no custom blocks); custom checklist/survey sections are added per-strategy. */
+const CORE_SECTION_ORDER: JournalSectionId[] = [
   "analysis_checklist",
   "emotional_state_before",
   "mantra_checklist",
@@ -280,7 +300,6 @@ const DEFAULT_JOURNAL_SECTION_ORDER: JournalSectionId[] = [
   "what_could_be_improved",
   "notes",
   "links",
-  "custom_checklists_surveys",
 ];
 
 const JOURNAL_SECTION_LABELS: Record<JournalSectionId, string> = {
@@ -294,10 +313,9 @@ const JOURNAL_SECTION_LABELS: Record<JournalSectionId, string> = {
   emotional_state_after: "Emo State: After",
   emotional_state_notes: "Emo State: Notes",
   what_went_well: "Went Well",
-  what_could_be_improved: "Improve",
+  what_could_be_improved: "Improvement",
   notes: "Notes",
   links: "Links",
-  custom_checklists_surveys: "Custom",
 };
 
 // Full labels for the scroll content only (nav bar keeps short labels to save space)
@@ -307,6 +325,8 @@ const JOURNAL_SECTION_LABELS_SCROLL: Record<JournalSectionId, string> = {
   emotional_state_during: "Emotional State: During Trade",
   emotional_state_after: "Emotional State: After Trade",
   emotional_state_notes: "Emotional State Notes",
+  what_went_well: "What went well",
+  what_could_be_improved: "What could be improved",
 };
 
 const EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED: JournalSectionId[] = ["emotional_state_during", "emotional_state_after", "emotional_state_notes"];
@@ -322,7 +342,7 @@ function SortableSectionRow({
   onMoveUp,
   onMoveDown,
 }: {
-  sectionId: JournalSectionId;
+  sectionId: string;
   label: string;
   index: number;
   totalLength: number;
@@ -399,27 +419,29 @@ export default function Journal() {
   const [activeTab, setActiveTab] = useState<TabType>("trade");
   // After a successful manual save, suppress background autosaves that could re-enter edit mode
   const [justSaved, setJustSaved] = useState(false);
-  const [journalSectionOrder, setJournalSectionOrder] = useState<JournalSectionId[]>(() => {
+  const [journalSectionOrder, setJournalSectionOrder] = useState<string[]>(() => {
     try {
       const raw = localStorage.getItem(JOURNAL_SECTION_ORDER_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw) as JournalSectionId[];
+        const parsed = JSON.parse(raw) as string[];
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const valid = parsed.filter((id): id is JournalSectionId => DEFAULT_JOURNAL_SECTION_ORDER.includes(id));
-          const missing = DEFAULT_JOURNAL_SECTION_ORDER.filter((id) => !valid.includes(id));
+          const valid = parsed.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:")));
+          const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
           return [...valid, ...missing];
         }
       }
     } catch {
       /* use default */
     }
-    return [...DEFAULT_JOURNAL_SECTION_ORDER];
+    return [...CORE_SECTION_ORDER];
   });
   const [showSectionOrderModal, setShowSectionOrderModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isMaximized, setIsMaximized] = useState(false);
   const [isTabContentMaximized, setIsTabContentMaximized] = useState(false);
   const [linkedPairs, setLinkedPairs] = useState<PairedTrade[]>([]);
+  /** Pending trade pairs when creating a new entry (not yet saved); persisted when journal is saved. */
+  const [pendingLinkedPairs, setPendingLinkedPairs] = useState<PairedTrade[]>([]);
   const [showLinkPairsModal, setShowLinkPairsModal] = useState(false);
   const [selectedPairForChart, setSelectedPairForChart] = useState<PairedTrade | null>(null);
   const [selectedPositionTrades, setSelectedPositionTrades] = useState<Array<{ id: number; symbol: string; side: string; quantity: number; price: number; timestamp: string; order_type: string; status: string; fees: number | null; notes: string | null; strategy_id: number | null }> | undefined>(undefined);
@@ -572,6 +594,8 @@ export default function Journal() {
   const [journalLinksTradeDropdownOpen, setJournalLinksTradeDropdownOpen] = useState(false);
   const [linkExistingEmotionalStateScope, setLinkExistingEmotionalStateScope] = useState<"entry" | "trades">("entry");
   const [linkExistingEmotionalStateTradeIndex, setLinkExistingEmotionalStateTradeIndex] = useState<number | null>(null);
+  /** Which link type is expanded in the Links section (scroll): emotional_state | trade_pair | real_trade */
+  const [linksSectionActiveOption, setLinksSectionActiveOption] = useState<"emotional_state" | "trade_pair" | "real_trade" | null>(null);
   const journalLinksStateDropdownRef = useRef<HTMLDivElement>(null);
   const journalLinksTradeDropdownRef = useRef<HTMLDivElement>(null);
   const journalLinksStateDropdownRefScroll = useRef<HTMLDivElement>(null);
@@ -643,7 +667,7 @@ export default function Journal() {
   const tabScrollPositions = useRef<Map<TabType, number>>(new Map());
   const tabContentRefs = useRef<Map<TabType, HTMLDivElement | null>>(new Map());
   const journalScrollContainerRef = useRef<HTMLDivElement | null>(null);
-  const sectionRefs = useRef<Map<JournalSectionId, HTMLDivElement | null>>(new Map());
+  const sectionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const leftPanelScrollRef = useRef<HTMLDivElement>(null);
 
   // Save work-in-progress to localStorage
@@ -744,7 +768,7 @@ export default function Journal() {
   };
 
   // Scroll journal entry section into view (for scrolling page mode)
-  const scrollToSection = (sectionId: JournalSectionId) => {
+  const scrollToSection = (sectionId: string) => {
     const el = sectionRefs.current.get(sectionId);
     if (el) {
       el.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -760,18 +784,10 @@ export default function Journal() {
     }
   }, [journalSectionOrder]);
 
-  // Drag-and-drop for Reorder sections modal
+  // Drag-and-drop for Reorder sections modal (handler is defined after effectiveSectionOrder)
   const sectionOrderSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
-  const handleSectionOrderDragEnd = useCallback((event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    const oldIndex = journalSectionOrder.indexOf(active.id as JournalSectionId);
-    const newIndex = journalSectionOrder.indexOf(over.id as JournalSectionId);
-    if (oldIndex === -1 || newIndex === -1) return;
-    setJournalSectionOrder((prev) => arrayMove(prev, oldIndex, newIndex));
-  }, [journalSectionOrder]);
 
   // Save scroll position when switching tabs
   const handleTabChange = (newTab: TabType) => {
@@ -1431,6 +1447,7 @@ export default function Journal() {
     setIsCreating(true);
     setIsEditing(false);
     setSelectedEntry(null);
+    setPendingLinkedPairs([]);
     localStorage.removeItem('journal_selected_entry_id');
     setSelectedTrades([]);
     setJournalTradeActualTradeIds(new Map());
@@ -1811,6 +1828,10 @@ export default function Journal() {
             linkSandboxEmotionalStatesToJournal([stateId], entryId, jtId ?? undefined);
           }
         }
+        if (pendingLinkedPairs.length > 0) {
+          setSandboxJournalEntryPairs(entryId, pendingLinkedPairs.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })));
+          setPendingLinkedPairs([]);
+        }
         await loadTrades(entryId);
         await loadLinkedPairs(entryId);
         return;
@@ -1837,6 +1858,10 @@ export default function Journal() {
         setIsEditing(true);
         const savedEntry = await invoke<JournalEntry>("get_journal_entry", { id: entryId });
         setSelectedEntry(savedEntry);
+        if (pendingLinkedPairs.length > 0) {
+          await invoke("set_journal_entry_pairs", { journalEntryId: entryId, pairs: pendingLinkedPairs.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })) });
+          setPendingLinkedPairs([]);
+        }
       } else if (selectedEntry) {
         entryId = selectedEntry.id;
         await invoke("update_journal_entry", {
@@ -2669,6 +2694,18 @@ export default function Journal() {
     return titleMap[type] || type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') + " Checklist";
   };
 
+  const getSectionLabel = (sectionId: string): string => {
+    if (JOURNAL_SECTION_LABELS[sectionId as JournalSectionId]) return JOURNAL_SECTION_LABELS[sectionId as JournalSectionId];
+    if (sectionId.startsWith("custom:")) return getChecklistTitle(sectionId.slice(7));
+    return sectionId;
+  };
+
+  const getSectionLabelScroll = (sectionId: string): string => {
+    if (JOURNAL_SECTION_LABELS_SCROLL[sectionId as JournalSectionId]) return JOURNAL_SECTION_LABELS_SCROLL[sectionId as JournalSectionId];
+    if (sectionId.startsWith("custom:")) return getChecklistTitle(sectionId.slice(7));
+    return sectionId;
+  };
+
   const calculateEntryProbability = (tradeIndex: number): number => {
     if (!entryFormData.strategy_id) return 0;
     const checklists = strategyChecklists.get(entryFormData.strategy_id);
@@ -2835,6 +2872,26 @@ export default function Journal() {
     const appended = [...allNeeded].filter(t => !ordered.includes(t));
     return [...ordered, ...appended];
   })();
+
+  const effectiveSectionOrder = useMemo(() => {
+    const base = journalSectionOrder.filter((id) => id !== "custom_checklists_surveys");
+    const surveyItems = (currentChecklists?.get("survey") || []).filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
+    const customSectionIds = [
+      ...customTypes.map((t) => `custom:${t}`),
+      ...(surveyItems.length > 0 ? ["custom:survey"] : []),
+    ];
+    const newCustom = customSectionIds.filter((id) => !base.includes(id));
+    return [...base, ...newCustom];
+  }, [journalSectionOrder, customTypes, currentChecklists]);
+
+  const handleSectionOrderDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = effectiveSectionOrder.indexOf(active.id as string);
+    const newIndex = effectiveSectionOrder.indexOf(over.id as string);
+    if (oldIndex === -1 || newIndex === -1) return;
+    setJournalSectionOrder(arrayMove(effectiveSectionOrder, oldIndex, newIndex));
+  }, [effectiveSectionOrder]);
 
   /** Render checklist UI for a single type (used in scrolling sections). */
   const renderChecklistForType = (type: string) => {
@@ -3902,8 +3959,8 @@ export default function Journal() {
 
               {/* Section nav: scroll-to links + reorder */}
               <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "5px", padding: "6px 12px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
-                {journalSectionOrder
-                  .filter((sectionId) => !EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId) || showAddEmotionalStateForm)
+                {effectiveSectionOrder
+                  .filter((sectionId) => !EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId as JournalSectionId) || showAddEmotionalStateForm)
                   .map((sectionId) => (
                   <button
                     key={sectionId}
@@ -3932,7 +3989,7 @@ export default function Journal() {
                       transition: "background 0.12s ease, color 0.12s ease, border-color 0.12s ease",
                     }}
                   >
-                    {JOURNAL_SECTION_LABELS[sectionId]}
+                    {getSectionLabel(sectionId)}
                   </button>
                 ))}
                 <button
@@ -3974,20 +4031,15 @@ export default function Journal() {
               {/* Main scrolling content: sections in trader order */}
               {currentTrade && (
                 <>
-                  <div ref={journalScrollContainerRef} style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column", padding: isTabContentMaximized ? "40px" : "16px 20px", position: "relative" }}>
-                    {!isTabContentMaximized && (
-                      <button onClick={() => setIsTabContentMaximized(!isTabContentMaximized)} style={{ position: "absolute", top: "16px", right: "20px", zIndex: 10, background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", padding: "8px", color: "var(--text-primary)", cursor: "pointer" }} title={isTabContentMaximized ? "Restore" : "Maximize"}>
-                        {isTabContentMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-                      </button>
-                    )}
-                    {journalSectionOrder.map((sectionId) => {
-                      const hideUntilEmoStarted = EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId) && !showAddEmotionalStateForm;
+                  <div ref={journalScrollContainerRef} style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column", padding: "16px 20px" }}>
+                    {effectiveSectionOrder.map((sectionId) => {
+                      const hideUntilEmoStarted = EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId as JournalSectionId) && !showAddEmotionalStateForm;
                       if (hideUntilEmoStarted) return null;
                       return (
                       <div key={sectionId} id={`section-${sectionId}`} ref={(el) => { sectionRefs.current.set(sectionId, el); }} style={{ marginBottom: "28px", scrollMarginTop: "12px" }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
                           <h3 style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                            {JOURNAL_SECTION_LABELS_SCROLL[sectionId]}
+                            {getSectionLabelScroll(sectionId)}
                           </h3>
                           {sectionId === "emotional_state_before" && (isCreating || isEditing) && showAddEmotionalStateForm && (
                             <button
@@ -3996,8 +4048,8 @@ export default function Journal() {
                                 setShowAddEmotionalStateForm(false);
                                 setNewEmotionalStateForm({ selectedEmotions: {}, notes: "", surveyResponses: {} });
                                 setTimeout(() => {
-                                  const idx = journalSectionOrder.indexOf("emotional_state_before");
-                                  const nextId = idx >= 0 && idx < journalSectionOrder.length - 1 ? journalSectionOrder[idx + 1] : null;
+                                  const idx = effectiveSectionOrder.indexOf("emotional_state_before");
+                                  const nextId = idx >= 0 && idx < effectiveSectionOrder.length - 1 ? effectiveSectionOrder[idx + 1] : null;
                                   if (nextId) scrollToSection(nextId);
                                 }, 0);
                               }}
@@ -4034,170 +4086,287 @@ export default function Journal() {
                         {sectionId === "mantra_checklist" && renderChecklistForType("daily_mantra")}
                         {sectionId === "entry_checklist" && renderChecklistForType("entry")}
                         {sectionId === "take_profit_checklist" && renderChecklistForType("take_profit")}
-                        {sectionId === "custom_checklists_surveys" && entryFormData.strategy_id && currentChecklists && (
-                          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-                            {customTypes.map((type) => (
-                              <div key={type}>
-                                <h4 style={{ fontSize: "13px", fontWeight: "600", marginBottom: "8px", color: "var(--text-primary)" }}>{getChecklistTitle(type)}</h4>
-                                {renderChecklistForType(type)}
-                              </div>
-                            ))}
-                            {(() => {
-                              const rawSurveyItems = currentChecklists.get("survey") || [];
-                              const surveyItems = rawSurveyItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
-                              if (surveyItems.length === 0) return null;
-                              const groups = surveyItems.filter(item => !item.parent_id && surveyItems.some(child => child.parent_id === item.id));
-                              const regularItems = surveyItems.filter(item => !item.parent_id && !surveyItems.some(child => child.parent_id === item.id));
-                              const groupedItems = surveyItems.filter(item => item.parent_id !== null && surveyItems.some(p => p.id === item.parent_id));
-                              const itemsByParent = new Map<number, ChecklistItem[]>();
-                              groupedItems.forEach(item => { if (item.parent_id) { const pid = item.parent_id; if (!itemsByParent.has(pid)) itemsByParent.set(pid, []); itemsByParent.get(pid)!.push(item); } });
-                              return (
-                                <div>
-                                  <h4 style={{ fontSize: "13px", fontWeight: "600", marginBottom: "8px", color: "var(--text-primary)" }}>Post-Trade Survey</h4>
-                                  {groups.map((group) => {
-                                    const children = itemsByParent.get(group.id) || [];
-                                    return (
-                                      <div key={group.id} style={{ marginBottom: "12px" }}>
-                                        <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px", fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>{group.item_text}</div>
-                                        {children.map((child) => {
-                                          const score = surveyScores.get(activeTradeIndex)?.get(child.id);
-                                          return (
-                                            <div key={child.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginLeft: "16px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
-                                              <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{child.item_text}</label>
-                                              <div style={{ display: "flex", gap: "4px" }}>
-                                                {[1, 2, 3, 4, 5].map((n) => (
-                                                  <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(child.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(child.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
-                                                ))}
-                                              </div>
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    );
-                                  })}
-                                  {regularItems.map((item) => {
-                                    const score = surveyScores.get(activeTradeIndex)?.get(item.id);
-                                    return (
-                                      <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
-                                        <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{item.item_text}</label>
-                                        <div style={{ display: "flex", gap: "4px" }}>
-                                          {[1, 2, 3, 4, 5].map((n) => (
-                                            <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(item.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(item.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              );
-                            })()}
-                          </div>
-                        )}
-                        {sectionId === "custom_checklists_surveys" && (!entryFormData.strategy_id || !currentChecklists) && (
+                        {sectionId.startsWith("custom:") && (!entryFormData.strategy_id || !currentChecklists) && (
                           <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load custom checklists and surveys.</p>
                         )}
-                        {sectionId === "links" && (isCreating || isEditing) && (
-                          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                            <div style={{ padding: "14px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                              <h4 style={{ margin: "0 0 8px", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>Emotional states</h4>
-                              <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal to emotional state entries. Saved when you save the entry.</p>
-                              <div style={{ marginBottom: "10px" }}>
-                                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
-                                    <input type="radio" name="linkScopeScroll" checked={linkExistingEmotionalStateScope === "entry"} onChange={() => { setLinkExistingEmotionalStateScope("entry"); setLinkExistingEmotionalStateTradeIndex(null); }} />
-                                    Entire journal entry
-                                  </label>
-                                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
-                                    <input type="radio" name="linkScopeScroll" checked={linkExistingEmotionalStateScope === "trades"} onChange={() => setLinkExistingEmotionalStateScope("trades")} />
-                                    Specific trade(s)
-                                  </label>
-                                  {linkExistingEmotionalStateScope === "trades" && (
-                                    <div style={{ marginLeft: "24px", display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "4px" }}>
-                                      {tradesFormData.map((t, i) => (
-                                        <label key={i} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
-                                          <input type="radio" name="linkTradeScroll" checked={linkExistingEmotionalStateTradeIndex === i} onChange={() => setLinkExistingEmotionalStateTradeIndex(i)} />
-                                          {t.symbol || `Trade ${i + 1}`}
-                                        </label>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                              {groupEmotionalStatesByTimestamp(emotionalStatesForCurrentTrade).length > 0 && (
-                                <ul style={{ listStyle: "none", padding: 0, margin: "0 0 10px" }}>
-                                  {groupEmotionalStatesByTimestamp(emotionalStatesForCurrentTrade).map((group) => {
-                                    const first = group[0];
-                                    const stateIds = group.map((s) => s.id);
-                                    return (
-                                      <li key={first.timestamp} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "6px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
-                                        <span style={{ fontSize: "12px", color: "var(--text-primary)" }}>{format(new Date(first.timestamp), "MMM d, HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}</span>
-                                        <button type="button" onClick={() => setEntryFormData((prev) => { const next = (prev.linked_emotional_state_ids ?? []).filter((id) => !stateIds.includes(id)); const scopes = { ...(prev.linked_emotional_state_link_scopes ?? {}) }; stateIds.forEach((id) => delete scopes[id]); return { ...prev, linked_emotional_state_ids: next, linked_emotional_state_link_scopes: scopes }; })} style={{ padding: "2px 6px", fontSize: "11px", color: "var(--text-secondary)", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}>Remove</button>
-                                      </li>
-                                    );
-                                  })}
-                                </ul>
-                              )}
-                              <div style={{ position: "relative" }} ref={journalLinksStateDropdownRefScroll}>
-                                <button type="button" onClick={() => setJournalLinksStateDropdownOpen((o) => !o)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", width: "100%", padding: "8px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)", fontSize: "13px", cursor: "pointer", textAlign: "left" }}>
-                                  <span>Add emotional state...</span>
-                                  <ChevronDown size={16} style={{ transform: journalLinksStateDropdownOpen ? "rotate(180deg)" : "none" }} />
-                                </button>
-                                {journalLinksStateDropdownOpen && (() => {
-                                  const linkedIds = new Set(entryFormData.linked_emotional_state_ids ?? []);
-                                  const allGroups = groupEmotionalStatesByTimestamp(allEmotionalStates);
-                                  const addableGroups = allGroups.filter((g) => !linkedIds.has(g[0].id));
-                                  const scope = { scope: linkExistingEmotionalStateScope, tradeIndex: linkExistingEmotionalStateScope === "trades" ? linkExistingEmotionalStateTradeIndex : null };
+                        {sectionId.startsWith("custom:") && entryFormData.strategy_id && currentChecklists && (() => {
+                          const type = sectionId.slice(7);
+                          if (type === "survey") {
+                            const rawSurveyItems = currentChecklists.get("survey") || [];
+                            const surveyItems = rawSurveyItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
+                            if (surveyItems.length === 0) return <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No survey items.</p>;
+                            const groups = surveyItems.filter(item => !item.parent_id && surveyItems.some(child => child.parent_id === item.id));
+                            const regularItems = surveyItems.filter(item => !item.parent_id && !surveyItems.some(child => child.parent_id === item.id));
+                            const groupedItems = surveyItems.filter(item => item.parent_id !== null && surveyItems.some(p => p.id === item.parent_id));
+                            const itemsByParent = new Map<number, ChecklistItem[]>();
+                            groupedItems.forEach(item => { if (item.parent_id) { const pid = item.parent_id; if (!itemsByParent.has(pid)) itemsByParent.set(pid, []); itemsByParent.get(pid)!.push(item); } });
+                            return (
+                              <div>
+                                {groups.map((group) => {
+                                  const children = itemsByParent.get(group.id) || [];
                                   return (
-                                    <div style={{ position: "absolute", zIndex: 50, marginTop: "4px", maxHeight: "200px", overflowY: "auto", minWidth: "280px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", padding: "6px" }}>
-                                      {addableGroups.length === 0 ? <div style={{ padding: "12px", fontSize: "12px", color: "var(--text-secondary)" }}>All selected or none exist.</div> : addableGroups.map((group) => {
-                                        const first = group[0];
+                                    <div key={group.id} style={{ marginBottom: "12px" }}>
+                                      <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px", fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>{group.item_text}</div>
+                                      {children.map((child) => {
+                                        const score = surveyScores.get(activeTradeIndex)?.get(child.id);
                                         return (
-                                          <button key={first.timestamp} type="button" onClick={() => { setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: [...(prev.linked_emotional_state_ids ?? []), first.id], linked_emotional_state_link_scopes: { ...(prev.linked_emotional_state_link_scopes ?? {}), [first.id]: scope } })); setJournalLinksStateDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "8px 12px", textAlign: "left", fontSize: "12px", color: "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer" }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
-                                            {format(new Date(first.timestamp), "MMM d, HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
-                                          </button>
+                                          <div key={child.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginLeft: "16px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
+                                            <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{child.item_text}</label>
+                                            <div style={{ display: "flex", gap: "4px" }}>
+                                              {[1, 2, 3, 4, 5].map((n) => (
+                                                <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(child.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(child.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
+                                              ))}
+                                            </div>
+                                          </div>
                                         );
                                       })}
                                     </div>
                                   );
-                                })()}
+                                })}
+                                {regularItems.map((item) => {
+                                  const score = surveyScores.get(activeTradeIndex)?.get(item.id);
+                                  return (
+                                    <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
+                                      <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{item.item_text}</label>
+                                      <div style={{ display: "flex", gap: "4px" }}>
+                                        {[1, 2, 3, 4, 5].map((n) => (
+                                          <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(item.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(item.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
                               </div>
+                            );
+                          }
+                          return renderChecklistForType(type);
+                        })()}
+                        {sectionId === "links" && (isCreating || isEditing) && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+                            <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>Link this journal to emotional states, trade pairs, or real trades. Saved when you save the entry.</p>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                              {(["emotional_state", "trade_pair", "real_trade"] as const).map((option) => {
+                                const isActive = linksSectionActiveOption === option;
+                                const label = option === "emotional_state" ? "Link to existing emotional state" : option === "trade_pair" ? "Link to trade pair" : "Link to real trade";
+                                return (
+                                  <button
+                                    key={option}
+                                    type="button"
+                                    onClick={() => setLinksSectionActiveOption((prev) => (prev === option ? null : option))}
+                                    onMouseEnter={(e) => {
+                                      if (!isActive) {
+                                        e.currentTarget.style.background = "var(--bg-hover)";
+                                        e.currentTarget.style.color = "var(--text-primary)";
+                                        e.currentTarget.style.borderColor = "var(--accent)";
+                                      }
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      if (!isActive) {
+                                        e.currentTarget.style.background = "var(--bg-primary)";
+                                        e.currentTarget.style.color = "var(--accent)";
+                                        e.currentTarget.style.borderColor = "var(--accent)";
+                                      }
+                                    }}
+                                    style={{
+                                      padding: "6px 12px",
+                                      fontSize: "12px",
+                                      fontWeight: "500",
+                                      color: isActive ? "white" : "var(--accent)",
+                                      background: isActive ? "var(--accent)" : "var(--bg-primary)",
+                                      border: "1px solid var(--accent)",
+                                      borderRadius: "999px",
+                                      cursor: "pointer",
+                                      transition: "background 0.12s ease, color 0.12s ease, border-color 0.12s ease",
+                                    }}
+                                  >
+                                    {label}
+                                  </button>
+                                );
+                              })}
                             </div>
-                            <div style={{ padding: "14px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                              <h4 style={{ margin: "0 0 8px", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>Real trades</h4>
-                              <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal to real trades. Saved when you save the entry.</p>
-                              {(entryFormData.linked_trade_ids?.length ?? 0) > 0 && (
-                                <ul style={{ listStyle: "none", padding: 0, margin: "0 0 10px" }}>
-                                  {(entryFormData.linked_trade_ids ?? []).map((tradeId) => {
-                                    const t = realTradesForLink.find((r) => r.id === tradeId);
-                                    return (
-                                      <li key={tradeId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "6px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
-                                        <span style={{ fontSize: "12px", color: "var(--text-primary)" }}>{t ? `${t.symbol} ${t.side}${t.quantity ? ` · ${t.quantity}` : ""}${t.pnl != null && t.pnl !== 0 ? ` · PnL ${t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(2)}` : ""} · ${format(new Date(t.timestamp), "MMM dd")}` : `#${tradeId}`}</span>
-                                        <button type="button" onClick={() => setEntryFormData((prev) => ({ ...prev, linked_trade_ids: (prev.linked_trade_ids ?? []).filter((id) => id !== tradeId) }))} style={{ padding: "2px 6px", fontSize: "11px", color: "var(--text-secondary)", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}>Remove</button>
-                                      </li>
-                                    );
-                                  })}
-                                </ul>
-                              )}
-                              <div style={{ position: "relative" }} ref={journalLinksTradeDropdownRefScroll}>
-                                <button type="button" onClick={() => setJournalLinksTradeDropdownOpen((o) => !o)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", width: "100%", padding: "8px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)", fontSize: "13px", cursor: "pointer", textAlign: "left" }}>
-                                  <span>Add real trade...</span>
-                                  <ChevronDown size={16} style={{ transform: journalLinksTradeDropdownOpen ? "rotate(180deg)" : "none" }} />
-                                </button>
-                                {journalLinksTradeDropdownOpen && (
-                                  <div style={{ position: "absolute", zIndex: 50, marginTop: "4px", maxHeight: "200px", overflowY: "auto", minWidth: "280px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", padding: "6px" }}>
-                                    {realTradesForLink.map((t) => {
-                                      const ids = entryFormData.linked_trade_ids ?? [];
-                                      const isLinked = ids.includes(t.id);
+                            {linksSectionActiveOption === "emotional_state" && (
+                              <div style={{ padding: "14px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
+                                <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "8px 12px", marginBottom: "12px" }}>
+                                  <span style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: 500 }}>Link to</span>
+                                  <div style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px", borderRadius: "999px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)" }}>
+                                    <button type="button" onClick={() => { setLinkExistingEmotionalStateScope("entry"); setLinkExistingEmotionalStateTradeIndex(null); }} style={{ padding: "4px 10px", fontSize: "11px", borderRadius: "999px", border: "none", cursor: "pointer", backgroundColor: linkExistingEmotionalStateScope === "entry" ? "var(--accent)" : "transparent", color: linkExistingEmotionalStateScope === "entry" ? "white" : "var(--text-secondary)", fontWeight: 500 }}>Entire journal entry</button>
+                                    <button type="button" onClick={() => setLinkExistingEmotionalStateScope("trades")} style={{ padding: "4px 10px", fontSize: "11px", borderRadius: "999px", border: "none", cursor: "pointer", backgroundColor: linkExistingEmotionalStateScope === "trades" ? "var(--accent)" : "transparent", color: linkExistingEmotionalStateScope === "trades" ? "white" : "var(--text-secondary)", fontWeight: 500 }}>Specific trade(s)</button>
+                                  </div>
+                                  {linkExistingEmotionalStateScope === "trades" && (
+                                    <div style={{ display: "inline-flex", flexWrap: "wrap", gap: "6px" }}>
+                                      {tradesFormData.map((t, i) => (
+                                        <button key={i} type="button" onClick={() => setLinkExistingEmotionalStateTradeIndex(i)} style={{ padding: "4px 8px", fontSize: "11px", borderRadius: "6px", border: "1px solid var(--border-color)", cursor: "pointer", backgroundColor: linkExistingEmotionalStateTradeIndex === i ? "var(--accent)" : "var(--bg-primary)", color: linkExistingEmotionalStateTradeIndex === i ? "white" : "var(--text-secondary)" }}>{t.symbol || `Trade ${i + 1}`}</button>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                                {groupEmotionalStatesByTimestamp(emotionalStatesForCurrentTrade).length > 0 && (
+                                  <ul style={{ listStyle: "none", padding: 0, margin: "0 0 10px" }}>
+                                    {groupEmotionalStatesByTimestamp(emotionalStatesForCurrentTrade).map((group) => {
+                                      const first = group[0];
+                                      const stateIds = group.map((s) => s.id);
                                       return (
-                                        <button key={t.id} type="button" disabled={isLinked} onClick={() => { if (!isLinked) setEntryFormData((prev) => ({ ...prev, linked_trade_ids: [...(prev.linked_trade_ids ?? []), t.id] })); setJournalLinksTradeDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "8px 12px", textAlign: "left", fontSize: "12px", color: isLinked ? "var(--text-secondary)" : "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: isLinked ? "default" : "pointer", opacity: isLinked ? 0.8 : 1 }} onMouseEnter={(e) => { if (!isLinked) e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
-                                          {t.symbol} {t.side}{t.quantity ? ` · ${t.quantity}` : ""}{t.pnl != null && t.pnl !== 0 ? ` · PnL ${t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(2)}` : ""} · {format(new Date(t.timestamp), "MMM dd")}{isLinked && " ✓"}
-                                        </button>
+                                        <li key={first.timestamp} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "6px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
+                                          <span style={{ fontSize: "12px", color: "var(--text-primary)" }}>{format(new Date(first.timestamp), "MMM d, HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}</span>
+                                          <button type="button" onClick={() => setEntryFormData((prev) => { const next = (prev.linked_emotional_state_ids ?? []).filter((id) => !stateIds.includes(id)); const scopes = { ...(prev.linked_emotional_state_link_scopes ?? {}) }; stateIds.forEach((id) => delete scopes[id]); return { ...prev, linked_emotional_state_ids: next, linked_emotional_state_link_scopes: scopes }; })} style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", cursor: "pointer" }}>Remove</button>
+                                        </li>
                                       );
                                     })}
-                                  </div>
+                                  </ul>
                                 )}
+                                <div style={{ position: "relative" }} ref={journalLinksStateDropdownRefScroll}>
+                                  <button type="button" onClick={() => setJournalLinksStateDropdownOpen((o) => !o)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", width: "100%", padding: "8px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)", fontSize: "13px", cursor: "pointer", textAlign: "left" }}>
+                                    <span>Add emotional state...</span>
+                                    <ChevronDown size={16} style={{ transform: journalLinksStateDropdownOpen ? "rotate(180deg)" : "none" }} />
+                                  </button>
+                                  {journalLinksStateDropdownOpen && (() => {
+                                    const linkedIds = new Set(entryFormData.linked_emotional_state_ids ?? []);
+                                    const allGroups = groupEmotionalStatesByTimestamp(allEmotionalStates);
+                                    const addableGroups = allGroups.filter((g) => !linkedIds.has(g[0].id));
+                                    const scope = { scope: linkExistingEmotionalStateScope, tradeIndex: linkExistingEmotionalStateScope === "trades" ? linkExistingEmotionalStateTradeIndex : null };
+                                    return (
+                                      <div style={{ position: "absolute", zIndex: 50, marginTop: "4px", maxHeight: "200px", overflowY: "auto", minWidth: "280px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", padding: "6px" }}>
+                                        {addableGroups.length === 0 ? <div style={{ padding: "12px", fontSize: "12px", color: "var(--text-secondary)" }}>All selected or none exist.</div> : addableGroups.map((group) => {
+                                          const first = group[0];
+                                          return (
+                                            <button key={first.timestamp} type="button" onClick={() => { setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: [...(prev.linked_emotional_state_ids ?? []), first.id], linked_emotional_state_link_scopes: { ...(prev.linked_emotional_state_link_scopes ?? {}), [first.id]: scope } })); setJournalLinksStateDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "8px 12px", textAlign: "left", fontSize: "12px", color: "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer" }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
+                                              {format(new Date(first.timestamp), "MMM d, HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
                               </div>
-                            </div>
+                            )}
+                            {linksSectionActiveOption === "trade_pair" && (
+                              <div style={{ padding: "14px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
+                                <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: "0 0 10px" }}>Link entry/exit trade pairs from your Trades tab. Pairs appear above the content and are clickable for charts. Links are saved when you save the journal entry.</p>
+                                {(() => {
+                                  const pairsList = selectedEntry?.id ? linkedPairs : pendingLinkedPairs;
+                                  return (
+                                    <>
+                                      {pairsList.length > 0 && (
+                                        <ul style={{ listStyle: "none", padding: 0, margin: "0 0 10px" }}>
+                                          {pairsList.map((pair) => (
+                                            <li key={`${pair.entry_trade_id}_${pair.exit_trade_id}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "6px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
+                                              <span style={{ fontSize: "12px", color: "var(--text-primary)" }}>{pair.symbol ?? "—"} · Entry #{pair.entry_trade_id} / Exit #{pair.exit_trade_id}</span>
+                                              <button
+                                                type="button"
+                                                onClick={async () => {
+                                                  const remaining = pairsList.filter((p) => !(p.entry_trade_id === pair.entry_trade_id && p.exit_trade_id === pair.exit_trade_id));
+                                                  if (selectedEntry?.id) {
+                                                    try {
+                                                      if (dataMode === "sandbox") {
+                                                        setSandboxJournalEntryPairs(selectedEntry.id, remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })));
+                                                        setLinkedPairs(remaining);
+                                                      } else {
+                                                        await invoke("set_journal_entry_pairs", { journalEntryId: selectedEntry.id, pairs: remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })) });
+                                                        setLinkedPairs(remaining);
+                                                      }
+                                                    } catch (err) {
+                                                      console.error(err);
+                                                      alert("Failed to unlink.");
+                                                    }
+                                                  } else {
+                                                    setPendingLinkedPairs(remaining);
+                                                  }
+                                                }}
+                                                style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", cursor: "pointer" }}
+                                              >
+                                                Remove
+                                              </button>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          setShowLinkPairsModal(true);
+                                          setLinkPairsSearchQuery("");
+                                          setLinkPairsSortBy("date");
+                                          setLinkPairsSortDirection("desc");
+                                          const method = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+                                          const all = await invoke<PairedTrade[]>("get_paired_trades", { pairingMethod: method || null });
+                                          setAllPairsForPicker(all);
+                                          const currentPairs = selectedEntry?.id ? linkedPairs : pendingLinkedPairs;
+                                          setLinkPickerSelected(new Set(currentPairs.map((p) => `${p.entry_trade_id}_${p.exit_trade_id}`)));
+                                        }}
+                                        style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "8px 14px", background: "var(--accent)", border: "1px solid var(--accent)", borderRadius: "6px", color: "white", fontSize: "13px", cursor: "pointer", fontWeight: 600 }}
+                                      >
+                                        <Link2 size={14} /> Add trade pairs
+                                      </button>
+                                    </>
+                                  );
+                                })()}
+                              </div>
+                            )}
+                            {linksSectionActiveOption === "real_trade" && (
+                              <div style={{ padding: "14px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
+                                <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: "0 0 10px" }}>Link this journal to executed trades from your Trades tab.</p>
+                                {(entryFormData.linked_trade_ids?.length ?? 0) > 0 && (
+                                  <ul style={{ listStyle: "none", padding: 0, margin: "0 0 10px" }}>
+                                    {(entryFormData.linked_trade_ids ?? []).map((tradeId) => {
+                                      const t = realTradesForLink.find((r) => r.id === tradeId);
+                                      return (
+                                        <li key={tradeId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "6px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
+                                          <span style={{ fontSize: "12px", color: "var(--text-primary)" }}>{t ? `${t.symbol} ${t.side}${t.quantity ? ` · ${t.quantity}` : ""}${t.pnl != null && t.pnl !== 0 ? ` · PnL ${t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(2)}` : ""} · ${format(new Date(t.timestamp), "MMM dd")}` : `#${tradeId}`}</span>
+                                          <button type="button" onClick={() => setEntryFormData((prev) => ({ ...prev, linked_trade_ids: (prev.linked_trade_ids ?? []).filter((id) => id !== tradeId) }))} style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", cursor: "pointer" }}>Remove</button>
+                                        </li>
+                                      );
+                                    })}
+                                  </ul>
+                                )}
+                                <div style={{ position: "relative" }} ref={journalLinksTradeDropdownRefScroll}>
+                                  <button type="button" onClick={() => setJournalLinksTradeDropdownOpen((o) => !o)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", width: "100%", padding: "8px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)", fontSize: "13px", cursor: "pointer", textAlign: "left" }}>
+                                    <span>Add real trade...</span>
+                                    <ChevronDown size={16} style={{ transform: journalLinksTradeDropdownOpen ? "rotate(180deg)" : "none" }} />
+                                  </button>
+                                  {journalLinksTradeDropdownOpen && (
+                                    <div style={{ position: "absolute", zIndex: 50, marginTop: "4px", maxHeight: "200px", overflowY: "auto", minWidth: "280px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", padding: "6px" }}>
+                                      {realTradesForLink.map((t) => {
+                                        const ids = entryFormData.linked_trade_ids ?? [];
+                                        const isLinked = ids.includes(t.id);
+                                        return (
+                                          <button
+                                            key={t.id}
+                                            type="button"
+                                            disabled={isLinked}
+                                            onClick={() => {
+                                              if (!isLinked) {
+                                                const stateIdsForTrade = getEmotionalStateIdsForRealTrade(t.id, allEmotionalStates);
+                                                const scope = { scope: "entry" as const, tradeIndex: null };
+                                                setEntryFormData((prev) => {
+                                                  const newLinkedIds = [...(prev.linked_trade_ids ?? []), t.id];
+                                                  const existingStateIds = new Set(prev.linked_emotional_state_ids ?? []);
+                                                  const newStateIds = [...existingStateIds];
+                                                  const newScopes = { ...(prev.linked_emotional_state_link_scopes ?? {}) };
+                                                  for (const sid of stateIdsForTrade) {
+                                                    if (!existingStateIds.has(sid)) {
+                                                      newStateIds.push(sid);
+                                                      newScopes[sid] = scope;
+                                                    }
+                                                  }
+                                                  return { ...prev, linked_trade_ids: newLinkedIds, linked_emotional_state_ids: newStateIds, linked_emotional_state_link_scopes: newScopes };
+                                                });
+                                              }
+                                              setJournalLinksTradeDropdownOpen(false);
+                                            }}
+                                            style={{ display: "block", width: "100%", padding: "8px 12px", textAlign: "left", fontSize: "12px", color: isLinked ? "var(--text-secondary)" : "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: isLinked ? "default" : "pointer", opacity: isLinked ? 0.8 : 1 }}
+                                            onMouseEnter={(e) => { if (!isLinked) e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }}
+                                            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+                                          >
+                                            {t.symbol} {t.side}{t.quantity ? ` · ${t.quantity}` : ""}{t.pnl != null && t.pnl !== 0 ? ` · PnL ${t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(2)}` : ""} · {format(new Date(t.timestamp), "MMM dd")}{isLinked && " ✓"}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
                         {sectionId === "emotional_state_before" && (isCreating || isEditing) && (
@@ -4734,7 +4903,34 @@ export default function Journal() {
                                       const ids = entryFormData.linked_trade_ids ?? [];
                                       const isLinked = ids.includes(t.id);
                                       return (
-                                        <button key={t.id} type="button" disabled={isLinked} onClick={() => { if (!isLinked) setEntryFormData((prev) => ({ ...prev, linked_trade_ids: [...(prev.linked_trade_ids ?? []), t.id] })); setJournalLinksTradeDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "8px 12px", textAlign: "left", fontSize: "13px", color: isLinked ? "var(--text-secondary)" : "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: isLinked ? "default" : "pointer", opacity: isLinked ? 0.8 : 1 }} onMouseEnter={(e) => { if (!isLinked) e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
+                                        <button
+                                          key={t.id}
+                                          type="button"
+                                          disabled={isLinked}
+                                          onClick={() => {
+                                            if (!isLinked) {
+                                              const stateIdsForTrade = getEmotionalStateIdsForRealTrade(t.id, allEmotionalStates);
+                                              const scope = { scope: "entry" as const, tradeIndex: null };
+                                              setEntryFormData((prev) => {
+                                                const newLinkedIds = [...(prev.linked_trade_ids ?? []), t.id];
+                                                const existingStateIds = new Set(prev.linked_emotional_state_ids ?? []);
+                                                const newStateIds = [...existingStateIds];
+                                                const newScopes = { ...(prev.linked_emotional_state_link_scopes ?? {}) };
+                                                for (const sid of stateIdsForTrade) {
+                                                  if (!existingStateIds.has(sid)) {
+                                                    newStateIds.push(sid);
+                                                    newScopes[sid] = scope;
+                                                  }
+                                                }
+                                                return { ...prev, linked_trade_ids: newLinkedIds, linked_emotional_state_ids: newStateIds, linked_emotional_state_link_scopes: newScopes };
+                                              });
+                                            }
+                                            setJournalLinksTradeDropdownOpen(false);
+                                          }}
+                                          style={{ display: "block", width: "100%", padding: "8px 12px", textAlign: "left", fontSize: "13px", color: isLinked ? "var(--text-secondary)" : "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: isLinked ? "default" : "pointer", opacity: isLinked ? 0.8 : 1 }}
+                                          onMouseEnter={(e) => { if (!isLinked) e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }}
+                                          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+                                        >
                                           {t.symbol} {t.side}{t.quantity ? ` · ${t.quantity}` : ""}{t.pnl != null && t.pnl !== 0 ? ` · PnL ${t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(2)}` : ""} · {format(new Date(t.timestamp), "MMM dd, yyyy")}{isLinked && <span style={{ marginLeft: "8px", fontSize: "11px", color: "var(--accent)" }}>Selected</span>}
                                         </button>
                                       );
@@ -4899,7 +5095,34 @@ export default function Journal() {
                                       const ids = entryFormData.linked_trade_ids ?? [];
                                       const isLinked = ids.includes(t.id);
                                       return (
-                                        <button key={t.id} type="button" disabled={isLinked} onClick={() => { if (!isLinked) setEntryFormData((prev) => ({ ...prev, linked_trade_ids: [...(prev.linked_trade_ids ?? []), t.id] })); setJournalLinksTradeDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "8px 12px", textAlign: "left", fontSize: "13px", color: isLinked ? "var(--text-secondary)" : "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: isLinked ? "default" : "pointer", opacity: isLinked ? 0.8 : 1 }} onMouseEnter={(e) => { if (!isLinked) e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
+                                        <button
+                                          key={t.id}
+                                          type="button"
+                                          disabled={isLinked}
+                                          onClick={() => {
+                                            if (!isLinked) {
+                                              const stateIdsForTrade = getEmotionalStateIdsForRealTrade(t.id, allEmotionalStates);
+                                              const scope = { scope: "entry" as const, tradeIndex: null };
+                                              setEntryFormData((prev) => {
+                                                const newLinkedIds = [...(prev.linked_trade_ids ?? []), t.id];
+                                                const existingStateIds = new Set(prev.linked_emotional_state_ids ?? []);
+                                                const newStateIds = [...existingStateIds];
+                                                const newScopes = { ...(prev.linked_emotional_state_link_scopes ?? {}) };
+                                                for (const sid of stateIdsForTrade) {
+                                                  if (!existingStateIds.has(sid)) {
+                                                    newStateIds.push(sid);
+                                                    newScopes[sid] = scope;
+                                                  }
+                                                }
+                                                return { ...prev, linked_trade_ids: newLinkedIds, linked_emotional_state_ids: newStateIds, linked_emotional_state_link_scopes: newScopes };
+                                              });
+                                            }
+                                            setJournalLinksTradeDropdownOpen(false);
+                                          }}
+                                          style={{ display: "block", width: "100%", padding: "8px 12px", textAlign: "left", fontSize: "13px", color: isLinked ? "var(--text-secondary)" : "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: isLinked ? "default" : "pointer", opacity: isLinked ? 0.8 : 1 }}
+                                          onMouseEnter={(e) => { if (!isLinked) e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }}
+                                          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+                                        >
                                           {t.symbol} {t.side}{t.quantity ? ` · ${t.quantity}` : ""}{t.pnl != null && t.pnl !== 0 ? ` · PnL ${t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(2)}` : ""} · {format(new Date(t.timestamp), "MMM dd, yyyy")}{isLinked && <span style={{ marginLeft: "8px", fontSize: "11px", color: "var(--accent)" }}>Linked</span>}
                                         </button>
                                       );
@@ -6948,24 +7171,16 @@ export default function Journal() {
                 collisionDetection={closestCenter}
                 onDragEnd={handleSectionOrderDragEnd}
               >
-                <SortableContext items={journalSectionOrder} strategy={verticalListSortingStrategy}>
-                  {journalSectionOrder.map((sectionId, index) => (
+                <SortableContext items={effectiveSectionOrder} strategy={verticalListSortingStrategy}>
+                  {effectiveSectionOrder.map((sectionId, index) => (
                     <SortableSectionRow
                       key={sectionId}
                       sectionId={sectionId}
-                      label={JOURNAL_SECTION_LABELS[sectionId]}
+                      label={getSectionLabel(sectionId)}
                       index={index}
-                      totalLength={journalSectionOrder.length}
-                      onMoveUp={() => setJournalSectionOrder((prev) => {
-                        const next = [...prev];
-                        [next[index - 1], next[index]] = [next[index], next[index - 1]];
-                        return next;
-                      })}
-                      onMoveDown={() => setJournalSectionOrder((prev) => {
-                        const next = [...prev];
-                        [next[index], next[index + 1]] = [next[index + 1], next[index]];
-                        return next;
-                      })}
+                      totalLength={effectiveSectionOrder.length}
+                      onMoveUp={() => setJournalSectionOrder(arrayMove(effectiveSectionOrder, index, index - 1))}
+                      onMoveDown={() => setJournalSectionOrder(arrayMove(effectiveSectionOrder, index, index + 1))}
                     />
                   ))}
                 </SortableContext>
@@ -7307,7 +7522,7 @@ export default function Journal() {
       )}
 
       {/* Link trade pairs modal */}
-      {showLinkPairsModal && selectedEntry?.id && (
+      {showLinkPairsModal && (
         <div
           style={{
             position: "fixed",
@@ -7517,21 +7732,83 @@ export default function Journal() {
                 type="button"
                 disabled={savingLinkPairs}
                 onClick={async () => {
-                  if (!selectedEntry?.id) return;
+                  const pairs = Array.from(linkPickerSelected).map((key) => {
+                    const [e, x] = key.split("_").map(Number);
+                    return { entry_trade_id: e, exit_trade_id: x };
+                  });
+                  if (!selectedEntry?.id) {
+                    const updated = allPairsForPicker.filter((p) => linkPickerSelected.has(`${p.entry_trade_id}_${p.exit_trade_id}`));
+                    setPendingLinkedPairs(updated);
+                    const tradeIdsFromPairs = new Set<number>();
+                    for (const p of updated) {
+                      tradeIdsFromPairs.add(p.entry_trade_id);
+                      tradeIdsFromPairs.add(p.exit_trade_id);
+                    }
+                    const scope = { scope: "entry" as const, tradeIndex: null };
+                    const newStateIds: number[] = [];
+                    for (const tid of tradeIdsFromPairs) {
+                      for (const sid of getEmotionalStateIdsForRealTrade(tid, allEmotionalStates)) {
+                        if (!newStateIds.includes(sid)) newStateIds.push(sid);
+                      }
+                    }
+                    if (newStateIds.length > 0) {
+                      setEntryFormData((prev) => {
+                        const existing = new Set(prev.linked_emotional_state_ids ?? []);
+                        const merged = [...existing];
+                        const mergedScopes = { ...(prev.linked_emotional_state_link_scopes ?? {}) };
+                        for (const sid of newStateIds) {
+                          if (!existing.has(sid)) {
+                            merged.push(sid);
+                            mergedScopes[sid] = scope;
+                          }
+                        }
+                        return { ...prev, linked_emotional_state_ids: merged, linked_emotional_state_link_scopes: mergedScopes };
+                      });
+                    }
+                    setShowLinkPairsModal(false);
+                    return;
+                  }
                   setSavingLinkPairs(true);
                   try {
-                    const pairs = Array.from(linkPickerSelected).map((key) => {
-                      const [e, x] = key.split("_").map(Number);
-                      return { entry_trade_id: e, exit_trade_id: x };
-                    });
+                    let updated: PairedTrade[];
                     if (dataMode === "sandbox") {
                       setSandboxJournalEntryPairs(selectedEntry.id, pairs);
-                      const updated = getSandboxJournalEntryPairsAsPairedTrades(selectedEntry.id) as unknown as PairedTrade[];
+                      updated = getSandboxJournalEntryPairsAsPairedTrades(selectedEntry.id) as unknown as PairedTrade[];
                       setLinkedPairs(updated);
                     } else {
                       await invoke("set_journal_entry_pairs", { journalEntryId: selectedEntry.id, pairs });
-                      const updated = await invoke<PairedTrade[]>("get_journal_entry_pairs", { journalEntryId: selectedEntry.id });
+                      updated = await invoke<PairedTrade[]>("get_journal_entry_pairs", { journalEntryId: selectedEntry.id });
                       setLinkedPairs(updated);
+                    }
+                    const tradeIdsFromPairs = new Set<number>();
+                    for (const p of updated) {
+                      tradeIdsFromPairs.add(p.entry_trade_id);
+                      tradeIdsFromPairs.add(p.exit_trade_id);
+                    }
+                    const scope = { scope: "entry" as const, tradeIndex: null };
+                    const newStateIds: number[] = [];
+                    const newScopes: Record<number, { scope: "entry" | "trades"; tradeIndex: number | null }> = {};
+                    for (const tid of tradeIdsFromPairs) {
+                      for (const sid of getEmotionalStateIdsForRealTrade(tid, allEmotionalStates)) {
+                        if (!newStateIds.includes(sid)) {
+                          newStateIds.push(sid);
+                          newScopes[sid] = scope;
+                        }
+                      }
+                    }
+                    if (newStateIds.length > 0) {
+                      setEntryFormData((prev) => {
+                        const existing = new Set(prev.linked_emotional_state_ids ?? []);
+                        const merged = [...existing];
+                        const mergedScopes = { ...(prev.linked_emotional_state_link_scopes ?? {}) };
+                        for (const sid of newStateIds) {
+                          if (!existing.has(sid)) {
+                            merged.push(sid);
+                            mergedScopes[sid] = scope;
+                          }
+                        }
+                        return { ...prev, linked_emotional_state_ids: merged, linked_emotional_state_link_scopes: mergedScopes };
+                      });
                     }
                     setShowLinkPairsModal(false);
                   } catch (e) {
