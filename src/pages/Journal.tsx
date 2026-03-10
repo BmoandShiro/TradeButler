@@ -285,6 +285,15 @@ const JOURNAL_SECTION_LABELS: Record<JournalSectionId, string> = {
   custom_checklists_surveys: "Custom",
 };
 
+// Full labels for the scroll content only (nav bar keeps short labels to save space)
+const JOURNAL_SECTION_LABELS_SCROLL: Record<JournalSectionId, string> = {
+  ...JOURNAL_SECTION_LABELS,
+  emotional_state_before: "Emotional State: Before Trade Survey",
+  emotional_state_during: "Emotional State: During Trade",
+  emotional_state_after: "Emotional State: After Trade",
+  emotional_state_notes: "Emotional State Notes",
+};
+
 const EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED: JournalSectionId[] = ["emotional_state_during", "emotional_state_after", "emotional_state_notes"];
 
 const JOURNAL_SECTION_ORDER_KEY = "tradebutler_journal_section_order";
@@ -3798,7 +3807,7 @@ export default function Journal() {
                       <div key={sectionId} id={`section-${sectionId}`} ref={(el) => { sectionRefs.current.set(sectionId, el); }} style={{ marginBottom: "28px", scrollMarginTop: "12px" }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
                           <h3 style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                            {JOURNAL_SECTION_LABELS[sectionId]}
+                            {JOURNAL_SECTION_LABELS_SCROLL[sectionId]}
                           </h3>
                           {sectionId === "emotional_state_before" && (isCreating || isEditing) && showAddEmotionalStateForm && (
                             <button
