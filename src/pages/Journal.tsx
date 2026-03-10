@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useMemo } from "react";
+import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, ChevronUp, Search, LayoutDashboard, GripVertical } from "lucide-react";
@@ -410,8 +410,47 @@ export default function Journal() {
   // Emotional states linked to this journal entry/implementation (same as Emotions page)
   const [journalEmotionalStates, setJournalEmotionalStates] = useState<JournalEmotionalState[]>([]);
   const [showAddEmotionalStateForm, setShowAddEmotionalStateForm] = useState(false);
-  const [newEmotionalStateForm, setNewEmotionalStateForm] = useState<{ selectedEmotions: Record<string, number>; notes: string }>({ selectedEmotions: {}, notes: "" });
-  const [newEmotionalStateSurveyResponses, setNewEmotionalStateSurveyResponses] = useState<Record<string, number>>({});
+  const DEFAULT_EMOTIONAL_STATE_FORM = useMemo(() => ({ selectedEmotions: {} as Record<string, number>, notes: "", surveyResponses: {} as Record<string, number> }), []);
+  const [emotionalStateFormByTrade, setEmotionalStateFormByTrade] = useState<Map<number, { selectedEmotions: Record<string, number>; notes: string; surveyResponses: Record<string, number> }>>(new Map());
+  const newEmotionalStateForm = useMemo(
+    () => emotionalStateFormByTrade.get(activeTradeIndex) ?? DEFAULT_EMOTIONAL_STATE_FORM,
+    [emotionalStateFormByTrade, activeTradeIndex, DEFAULT_EMOTIONAL_STATE_FORM]
+  );
+  const newEmotionalStateSurveyResponses = newEmotionalStateForm.surveyResponses;
+  const setNewEmotionalStateForm = useCallback(
+    (updater: React.SetStateAction<{ selectedEmotions: Record<string, number>; notes: string; surveyResponses: Record<string, number> }>) => {
+      setEmotionalStateFormByTrade((prev) => {
+        const next = new Map(prev);
+        const cur = next.get(activeTradeIndex) ?? DEFAULT_EMOTIONAL_STATE_FORM;
+        const nextForm = typeof updater === "function" ? updater({ ...cur, surveyResponses: cur.surveyResponses }) : updater;
+        next.set(activeTradeIndex, { selectedEmotions: nextForm.selectedEmotions ?? cur.selectedEmotions, notes: nextForm.notes ?? cur.notes, surveyResponses: nextForm.surveyResponses ?? cur.surveyResponses });
+        return next;
+      });
+    },
+    [activeTradeIndex, DEFAULT_EMOTIONAL_STATE_FORM]
+  );
+  const setNewEmotionalStateSurveyResponses = useCallback(
+    (updater: React.SetStateAction<Record<string, number>>) => {
+      setEmotionalStateFormByTrade((prev) => {
+        const next = new Map(prev);
+        const cur = next.get(activeTradeIndex) ?? DEFAULT_EMOTIONAL_STATE_FORM;
+        const nextSurvey = typeof updater === "function" ? updater(cur.surveyResponses) : updater;
+        next.set(activeTradeIndex, { ...cur, surveyResponses: nextSurvey });
+        return next;
+      });
+    },
+    [activeTradeIndex, DEFAULT_EMOTIONAL_STATE_FORM]
+  );
+  const setEmotionalStateFormForTradeIndex = useCallback(
+    (tradeIndex: number, form: { selectedEmotions: Record<string, number>; notes: string; surveyResponses: Record<string, number> }) => {
+      setEmotionalStateFormByTrade((prev) => {
+        const next = new Map(prev);
+        next.set(tradeIndex, form);
+        return next;
+      });
+    },
+    []
+  );
   const [newEmotionalStateLinkScope, setNewEmotionalStateLinkScope] = useState<"entry" | "trades">("entry");
   const [newEmotionalStateTradeIndices, setNewEmotionalStateTradeIndices] = useState<number[]>([]);
   // Pending emotional state entries (tradeIndex -1 = entire journal, >= 0 = that trade only; one state per scope)
@@ -1554,10 +1593,8 @@ export default function Journal() {
     newScores.set(tradesFormData.length, new Map());
     setSurveyScores(newScores);
     
-    // Reset emotional state "add" form so the new trade starts with a clean slate
+    // Reset emotional state "add" form so the new trade starts with a clean slate (new trade has no form data yet)
     setShowAddEmotionalStateForm(false);
-    setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
-    setNewEmotionalStateSurveyResponses({});
   };
 
   const handleRemoveTrade = (index: number) => {
@@ -2220,8 +2257,7 @@ export default function Journal() {
       }
       if (toPersist.length > 0) {
         setShowAddEmotionalStateForm(false);
-        setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
-        setNewEmotionalStateSurveyResponses({});
+        setNewEmotionalStateForm({ selectedEmotions: {}, notes: "", surveyResponses: {} });
         setNewEmotionalStateLinkScope("entry");
         setNewEmotionalStateTradeIndices([]);
         setPendingEmotionalStates([]);
@@ -3814,8 +3850,7 @@ export default function Journal() {
                               type="button"
                               onClick={() => {
                                 setShowAddEmotionalStateForm(false);
-                                setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
-                                setNewEmotionalStateSurveyResponses({});
+                                setNewEmotionalStateForm({ selectedEmotions: {}, notes: "", surveyResponses: {} });
                                 setTimeout(() => {
                                   const idx = journalSectionOrder.indexOf("emotional_state_before");
                                   const nextId = idx >= 0 && idx < journalSectionOrder.length - 1 ? journalSectionOrder[idx + 1] : null;
@@ -4248,8 +4283,7 @@ export default function Journal() {
                                     }
                                     const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
                                     setJournalEmotionalStates(states);
-                                    setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
-                                    setNewEmotionalStateSurveyResponses({});
+                                    setNewEmotionalStateForm({ selectedEmotions: {}, notes: "", surveyResponses: {} });
                                     setNewEmotionalStateLinkScope("entry");
                                     setNewEmotionalStateTradeIndices([]);
                                     setShowAddEmotionalStateForm(false);
@@ -4266,8 +4300,7 @@ export default function Journal() {
                                     }
                                     setPendingEmotionalStates(next);
                                   }
-                                  setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
-                                  setNewEmotionalStateSurveyResponses({});
+                                  setNewEmotionalStateForm({ selectedEmotions: {}, notes: "", surveyResponses: {} });
                                   setNewEmotionalStateLinkScope("entry");
                                   setNewEmotionalStateTradeIndices([]);
                                   setShowAddEmotionalStateForm(false);
@@ -4898,10 +4931,14 @@ export default function Journal() {
                                         type="button"
                                         onClick={() => {
                                           setPendingEmotionalStates((prev) => prev.filter((p) => p !== pending));
-                                          setNewEmotionalStateForm({ selectedEmotions: { ...pending.selectedEmotions }, notes: pending.notes });
-                                          setNewEmotionalStateSurveyResponses(pending.surveyResponses ? { ...pending.surveyResponses } : {});
+                                          setEmotionalStateFormForTradeIndex(pending.tradeIndex >= 0 ? pending.tradeIndex : activeTradeIndex, {
+                                            selectedEmotions: { ...pending.selectedEmotions },
+                                            notes: pending.notes,
+                                            surveyResponses: pending.surveyResponses ? { ...pending.surveyResponses } : {},
+                                          });
                                           setNewEmotionalStateLinkScope(pending.tradeIndex === -1 ? "entry" : "trades");
                                           setNewEmotionalStateTradeIndices(pending.tradeIndex === -1 ? [] : [pending.tradeIndex]);
+                                          if (pending.tradeIndex >= 0) setActiveTradeIndex(pending.tradeIndex);
                                           setShowAddEmotionalStateForm(true);
                                         }}
                                         style={{ padding: "2px 6px", background: "transparent", border: "none", borderRadius: "4px", color: "var(--accent)", cursor: "pointer", fontSize: "12px" }}
@@ -4937,7 +4974,7 @@ export default function Journal() {
                                   <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                                     <button
                                       type="button"
-                                      onClick={() => { setShowAddEmotionalStateForm(false); setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" }); setNewEmotionalStateSurveyResponses({}); setNewEmotionalStateLinkScope("entry"); setNewEmotionalStateTradeIndices([]); }}
+                                      onClick={() => { setShowAddEmotionalStateForm(false); setNewEmotionalStateForm({ selectedEmotions: {}, notes: "", surveyResponses: {} }); setNewEmotionalStateLinkScope("entry"); setNewEmotionalStateTradeIndices([]); }}
                                       style={{ padding: "8px 14px", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-secondary)", cursor: "pointer", fontSize: "13px" }}
                                     >
                                       Close
@@ -5039,8 +5076,7 @@ export default function Journal() {
                                           }
                                           const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
                                           setJournalEmotionalStates(states);
-                                          setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
-                                          setNewEmotionalStateSurveyResponses({});
+                                          setNewEmotionalStateForm({ selectedEmotions: {}, notes: "", surveyResponses: {} });
                                           setNewEmotionalStateLinkScope("entry");
                                           setNewEmotionalStateTradeIndices([]);
                                           setShowAddEmotionalStateForm(false);
@@ -5059,8 +5095,7 @@ export default function Journal() {
                                           }
                                           setPendingEmotionalStates(next);
                                         }
-                                        setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
-                                        setNewEmotionalStateSurveyResponses({});
+                                        setNewEmotionalStateForm({ selectedEmotions: {}, notes: "", surveyResponses: {} });
                                         setNewEmotionalStateLinkScope("entry");
                                         setNewEmotionalStateTradeIndices([]);
                                         setShowAddEmotionalStateForm(false);
