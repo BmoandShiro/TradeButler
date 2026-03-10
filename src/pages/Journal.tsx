@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, BarChart3, Search, LayoutDashboard } from "lucide-react";
+import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, ChevronUp, Search, LayoutDashboard, GripVertical } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
 import { format, parse } from "date-fns";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
@@ -232,6 +232,59 @@ interface PairedTrade {
 
 type TabType = "trade" | "what_went_well" | "what_could_be_improved" | "links" | "emotional_state" | "notes" | "checklists" | "survey";
 
+/** Section IDs for the scrolling journal entry flow (trader sequence). User can reorder. */
+export type JournalSectionId =
+  | "analysis_checklist"
+  | "emotional_state_before"
+  | "mantra_checklist"
+  | "implementation"
+  | "entry_checklist"
+  | "emotional_state_during"
+  | "take_profit_checklist"
+  | "emotional_state_after"
+  | "emotional_state_notes"
+  | "what_went_well"
+  | "what_could_be_improved"
+  | "notes"
+  | "links"
+  | "custom_checklists_surveys";
+
+const DEFAULT_JOURNAL_SECTION_ORDER: JournalSectionId[] = [
+  "analysis_checklist",
+  "emotional_state_before",
+  "mantra_checklist",
+  "implementation",
+  "entry_checklist",
+  "emotional_state_during",
+  "take_profit_checklist",
+  "emotional_state_after",
+  "emotional_state_notes",
+  "what_went_well",
+  "what_could_be_improved",
+  "notes",
+  "links",
+  "custom_checklists_surveys",
+];
+
+const JOURNAL_SECTION_LABELS: Record<JournalSectionId, string> = {
+  analysis_checklist: "Analysis",
+  emotional_state_before: "Emo. Before",
+  mantra_checklist: "Mantra",
+  implementation: "Implementation",
+  entry_checklist: "Entry",
+  emotional_state_during: "Emo. During",
+  take_profit_checklist: "Take Profit",
+  emotional_state_after: "Emo. After",
+  emotional_state_notes: "Emo. Notes",
+  what_went_well: "Went Well",
+  what_could_be_improved: "Improve",
+  notes: "Notes",
+  links: "Links",
+  custom_checklists_surveys: "Custom",
+};
+
+const JOURNAL_SECTION_ORDER_KEY = "tradebutler_journal_section_order";
+
 export default function Journal() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [journalEntriesPage, setJournalEntriesPage] = useState(1);
@@ -250,6 +303,25 @@ export default function Journal() {
   const [isEditing, setIsEditing] = useState(false);
   const [activeTradeIndex, setActiveTradeIndex] = useState(0);
   const [activeTab, setActiveTab] = useState<TabType>("trade");
+  // After a successful manual save, suppress background autosaves that could re-enter edit mode
+  const [justSaved, setJustSaved] = useState(false);
+  const [journalSectionOrder, setJournalSectionOrder] = useState<JournalSectionId[]>(() => {
+    try {
+      const raw = localStorage.getItem(JOURNAL_SECTION_ORDER_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as JournalSectionId[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const valid = parsed.filter((id): id is JournalSectionId => DEFAULT_JOURNAL_SECTION_ORDER.includes(id));
+          const missing = DEFAULT_JOURNAL_SECTION_ORDER.filter((id) => !valid.includes(id));
+          return [...valid, ...missing];
+        }
+      }
+    } catch {
+      /* use default */
+    }
+    return [...DEFAULT_JOURNAL_SECTION_ORDER];
+  });
+  const [showSectionOrderModal, setShowSectionOrderModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isMaximized, setIsMaximized] = useState(false);
   const [isTabContentMaximized, setIsTabContentMaximized] = useState(false);
@@ -369,6 +441,8 @@ export default function Journal() {
   const [linkExistingEmotionalStateTradeIndex, setLinkExistingEmotionalStateTradeIndex] = useState<number | null>(null);
   const journalLinksStateDropdownRef = useRef<HTMLDivElement>(null);
   const journalLinksTradeDropdownRef = useRef<HTMLDivElement>(null);
+  const journalLinksStateDropdownRefScroll = useRef<HTMLDivElement>(null);
+  const journalLinksTradeDropdownRefScroll = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
   const navigate = useNavigate();
@@ -435,6 +509,8 @@ export default function Journal() {
   // Store scroll positions for each tab
   const tabScrollPositions = useRef<Map<TabType, number>>(new Map());
   const tabContentRefs = useRef<Map<TabType, HTMLDivElement | null>>(new Map());
+  const journalScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const sectionRefs = useRef<Map<JournalSectionId, HTMLDivElement | null>>(new Map());
   const leftPanelScrollRef = useRef<HTMLDivElement>(null);
 
   // Save work-in-progress to localStorage
@@ -522,6 +598,23 @@ export default function Journal() {
     }
     return "journal"; // Fallback to global if no entry selected
   };
+
+  // Scroll journal entry section into view (for scrolling page mode)
+  const scrollToSection = (sectionId: JournalSectionId) => {
+    const el = sectionRefs.current.get(sectionId);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
+  // Persist section order when it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem(JOURNAL_SECTION_ORDER_KEY, JSON.stringify(journalSectionOrder));
+    } catch {
+      /* ignore */
+    }
+  }, [journalSectionOrder]);
 
   // Save scroll position when switching tabs
   const handleTabChange = (newTab: TabType) => {
@@ -803,9 +896,9 @@ export default function Journal() {
     return () => { cancelled = true; };
   }, [viewEntryEmotionalStates, dataMode]);
 
-  // Load all emotional states and real trades for "Link to" dropdowns when on Emotional State tab
+  // Load all emotional states and real trades for "Link to" dropdowns (Links section + Emotional State tab)
   useEffect(() => {
-    if (activeTab !== "emotional_state" && activeTab !== "links") return;
+    if (!(isCreating || isEditing)) return;
     (async () => {
       try {
         if (dataMode === "sandbox") {
@@ -854,12 +947,15 @@ export default function Journal() {
         setRealTradesForLink([]);
       }
     })();
-  }, [activeTab, selectedEntry?.id, dataMode]);
+  }, [isCreating, isEditing, dataMode]);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
-      if (journalLinksStateDropdownRef.current && !journalLinksStateDropdownRef.current.contains(e.target as Node)) setJournalLinksStateDropdownOpen(false);
-      if (journalLinksTradeDropdownRef.current && !journalLinksTradeDropdownRef.current.contains(e.target as Node)) setJournalLinksTradeDropdownOpen(false);
+      const target = e.target as Node;
+      const stateContained = (journalLinksStateDropdownRef.current?.contains(target)) || (journalLinksStateDropdownRefScroll.current?.contains(target));
+      const tradeContained = (journalLinksTradeDropdownRef.current?.contains(target)) || (journalLinksTradeDropdownRefScroll.current?.contains(target));
+      if (!stateContained) setJournalLinksStateDropdownOpen(false);
+      if (!tradeContained) setJournalLinksTradeDropdownOpen(false);
     };
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
@@ -1187,6 +1283,7 @@ export default function Journal() {
     if (selectedEntry) {
       setIsEditing(true);
       setIsCreating(false);
+      setJustSaved(false);
       setPendingEmotionalStates([]);
       let linkedTradeIds: number[] = [];
       if (selectedEntry.linked_trade_ids) {
@@ -1438,8 +1535,8 @@ export default function Journal() {
 
   // Auto-save function (silent, doesn't require title)
   const autoSave = async () => {
-    // Only auto-save if we have a title and are creating or editing
-    if (!entryFormData.title.trim() || (!isCreating && !isEditing)) {
+    // Only auto-save if we have a title, are creating/editing, and haven't just manually saved
+    if (!entryFormData.title.trim() || (!isCreating && !isEditing) || justSaved) {
       return;
     }
 
@@ -1791,20 +1888,32 @@ export default function Journal() {
 
     try {
       if (dataMode === "sandbox") {
+        // Keep sandbox save path lightweight but align UX with real-mode save:
+        // - autosave to sandbox store
+        // - refresh trades/pairs and entry list
+        // - exit edit/create mode into view mode with the entry selected.
         if (!isCreating && selectedEntry) {
           const keptTradeIds = new Set(tradesFormData.filter((t) => t.id !== null).map((t) => t.id!));
           for (const trade of selectedTrades) {
             if (trade.id && !keptTradeIds.has(trade.id)) deleteSandboxJournalTrade(trade.id);
           }
         }
+
         await autoSave();
+
         if (selectedEntry) {
           await loadTrades(selectedEntry.id);
           await loadLinkedPairs(selectedEntry.id);
         }
+
+        await loadEntries();
+
+        setIsCreating(false);
         setIsEditing(false);
         setShowAddEmotionalStateForm(false);
         setPendingEmotionalStates([]);
+        setJustSaved(true);
+        clearWorkInProgress();
         return;
       }
 
@@ -2052,6 +2161,7 @@ export default function Journal() {
       setIsEditing(false);
       setEditHistory([]);
       setOriginalEntryData(null);
+      setJustSaved(true);
       clearWorkInProgress();
     } catch (error) {
       console.error("Error saving entry:", error);
@@ -2062,6 +2172,7 @@ export default function Journal() {
   const handleCancel = () => {
     setIsCreating(false);
     setIsEditing(false);
+    setJustSaved(false);
     setEditHistory([]);
     setOriginalEntryData(null);
     setJournalTradeActualTradeIds(new Map());
@@ -2509,6 +2620,59 @@ export default function Journal() {
     const appended = [...allNeeded].filter(t => !ordered.includes(t));
     return [...ordered, ...appended];
   })();
+
+  /** Render checklist UI for a single type (used in scrolling sections). */
+  const renderChecklistForType = (type: string) => {
+    if (!entryFormData.strategy_id || !currentChecklists) return <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load checklists.</p>;
+    const rawItems = currentChecklists.get(type) || [];
+    const items = rawItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
+    if (items.length === 0) return <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No items for this checklist.</p>;
+    const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(type);
+    const responses = isEntryLevel ? entryLevelChecklistResponses : (checklistResponses.get(activeTradeIndex) || new Map());
+    const getChecked = (id: number) => responses.get(id) || false;
+    const onToggle = isEntryLevel ? (id: number) => toggleEntryLevelChecklistItem(id) : (id: number) => toggleChecklistItem(activeTradeIndex, id);
+    const groups = items.filter(item => !item.parent_id && items.some(child => child.parent_id === item.id));
+    const regularItems = items.filter(item => !item.parent_id && !items.some(child => child.parent_id === item.id));
+    const groupedItems = items.filter(item => item.parent_id !== null && items.some(p => p.id === item.parent_id));
+    const itemsByParent = new Map<number, ChecklistItem[]>();
+    groupedItems.forEach(item => { if (item.parent_id) { const parentId = item.parent_id; if (!itemsByParent.has(parentId)) itemsByParent.set(parentId, []); itemsByParent.get(parentId)!.push(item); } });
+    return (
+      <div style={{ marginBottom: "4px" }}>
+        {groups.map((group) => {
+          const children = itemsByParent.get(group.id) || [];
+          return (
+            <div key={group.id} style={{ marginBottom: "12px" }}>
+              <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px", fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>{group.item_text}</div>
+              {children.map((child) => (
+                <div key={child.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 12px", marginLeft: "16px", marginBottom: "2px" }}>
+                  <input type="checkbox" checked={getChecked(child.id)} onChange={() => onToggle(child.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
+                  <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }} onClick={() => onToggle(child.id)}>{child.item_text}</label>
+                  {isEntryLevel && entryTradesForAssociation.length > 1 && (
+                    <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                      <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{!(checklistTradeAssociations.get(child.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(child.id)!.length} trade(s)`}</span>
+                      <button type="button" onClick={() => setTradeAssociationModalItemId(child.id)} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", padding: "2px", display: "flex" }} title="Associate with specific trades"><Link2 size={12} /></button>
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          );
+        })}
+        {regularItems.map((item) => (
+          <div key={item.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 12px", marginBottom: "2px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
+            <input type="checkbox" checked={getChecked(item.id)} onChange={() => onToggle(item.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
+            <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }} onClick={() => onToggle(item.id)}>{item.item_text}</label>
+            {isEntryLevel && entryTradesForAssociation.length > 1 && (
+              <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{!(checklistTradeAssociations.get(item.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(item.id)!.length} trade(s)`}</span>
+                <button type="button" onClick={() => setTradeAssociationModalItemId(item.id)} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", padding: "2px", display: "flex" }} title="Associate with specific trades"><Link2 size={12} /></button>
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   const journalTradesByEntry = useMemo(() => {
     const map = new Map<number, JournalTrade[]>();
@@ -3341,606 +3505,644 @@ export default function Journal() {
             </div>
             <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
               {!isTabContentMaximized && (
-                <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)" }}>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", alignItems: "flex-end" }}>
-                    <div style={{ flex: "0 0 120px", minWidth: "100px" }}>
-                      <label style={{ display: "block", marginBottom: "4px", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)" }}>
-                        Date
-                      </label>
-                      <input
-                        type="date"
-                        value={entryFormData.date}
-                        onChange={(e) => setEntryFormData({ ...entryFormData, date: e.target.value })}
-                        style={{
-                          width: "100%",
-                          padding: "6px 8px",
-                          backgroundColor: "var(--bg-primary)",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "4px",
-                          color: "var(--text-primary)",
-                          fontSize: "14px",
-                        }}
-                      />
-                    </div>
-                    <div style={{ flex: "1 1 200px", minWidth: "140px" }}>
-                      <label style={{ display: "block", marginBottom: "4px", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)" }}>
-                        Title
-                      </label>
-                      <input
-                        ref={titleInputRef}
-                        type="text"
-                        value={entryFormData.title}
-                        onChange={(e) => {
-                          const newData = { ...entryFormData, title: e.target.value };
-                          setEntryFormData(newData);
-                          if (isEditing) {
-                            const currentState = {
-                              entry: newData,
-                              trades: tradesFormData.map(t => ({ ...t })),
-                              checklistResponses: new Map(checklistResponses),
-                            };
-                            setEditHistory(prev => [...prev, currentState].slice(-10));
-                          }
-                        }}
-                        placeholder="Entry title..."
-                        style={{
-                          width: "100%",
-                          padding: "6px 8px",
-                          backgroundColor: "var(--bg-primary)",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "4px",
-                          color: "var(--text-primary)",
-                          fontSize: "14px",
-                        }}
-                      />
-                    </div>
-                    <div style={{ flex: "0 0 180px", minWidth: "140px" }}>
-                      <label style={{ display: "block", marginBottom: "4px", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)" }}>
-                        Strategy
-                      </label>
-                      <select
-                        value={entryFormData.strategy_id || ""}
-                        onChange={(e) => setEntryFormData({ ...entryFormData, strategy_id: e.target.value ? parseInt(e.target.value) : null })}
-                        style={{
-                          width: "100%",
-                          padding: "6px 8px",
-                          backgroundColor: "var(--bg-primary)",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "4px",
-                          color: "var(--text-primary)",
-                          fontSize: "14px",
-                        }}
-                      >
-                        <option value="">Select a strategy...</option>
-                        {strategies.map((strategy) => (
-                          <option key={strategy.id} value={strategy.id}>
-                            {strategy.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                <>
+                {/* Consolidated top bar: Date, Title, Strategy, Trade selector */}
+                <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)", display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "flex-end" }}>
+                  <div style={{ flex: "0 0 110px", minWidth: "90px" }}>
+                    <label style={{ display: "block", marginBottom: "2px", fontSize: "11px", fontWeight: "500", color: "var(--text-secondary)" }}>Date</label>
+                    <input
+                      type="date"
+                      value={entryFormData.date}
+                      onChange={(e) => setEntryFormData({ ...entryFormData, date: e.target.value })}
+                      style={{ width: "100%", padding: "5px 6px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "13px" }}
+                    />
+                  </div>
+                  <div style={{ flex: "1 1 160px", minWidth: "120px" }}>
+                    <label style={{ display: "block", marginBottom: "2px", fontSize: "11px", fontWeight: "500", color: "var(--text-secondary)" }}>Title</label>
+                    <input
+                      ref={titleInputRef}
+                      type="text"
+                      value={entryFormData.title}
+                      onChange={(e) => {
+                        const newData = { ...entryFormData, title: e.target.value };
+                        setEntryFormData(newData);
+                        if (isEditing) {
+                          const currentState = { entry: newData, trades: tradesFormData.map(t => ({ ...t })), checklistResponses: new Map(checklistResponses) };
+                          setEditHistory(prev => [...prev, currentState].slice(-10));
+                        }
+                      }}
+                      placeholder="Entry title..."
+                      style={{ width: "100%", padding: "5px 6px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "13px" }}
+                    />
+                  </div>
+                  <div style={{ flex: "0 0 140px", minWidth: "100px" }}>
+                    <label style={{ display: "block", marginBottom: "2px", fontSize: "11px", fontWeight: "500", color: "var(--text-secondary)" }}>Strategy</label>
+                    <select
+                      value={entryFormData.strategy_id || ""}
+                      onChange={(e) => setEntryFormData({ ...entryFormData, strategy_id: e.target.value ? parseInt(e.target.value) : null })}
+                      style={{ width: "100%", padding: "5px 6px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "13px" }}
+                    >
+                      <option value="">Strategy...</option>
+                      {strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "2px", flexWrap: "wrap" }}>
+                    {tradesFormData.map((trade, index) => {
+                      const isActive = activeTradeIndex === index;
+                      const tabLabel = trade.symbol || `T${index + 1}`;
+                      return (
+                        <div key={index} style={{ display: "flex", alignItems: "center" }}>
+                          <button
+                            type="button"
+                            onClick={() => setActiveTradeIndex(index)}
+                            style={{
+                              padding: "6px 12px",
+                              background: isActive ? "var(--bg-primary)" : "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderBottom: isActive ? "2px solid var(--accent)" : "2px solid transparent",
+                              color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
+                              cursor: "pointer",
+                              fontSize: "12px",
+                              fontWeight: isActive ? "600" : "400",
+                              borderRadius: "4px 4px 0 0",
+                              marginBottom: "-1px",
+                            }}
+                          >
+                            {tabLabel}
+                          </button>
+                          {tradesFormData.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); handleRemoveTrade(index); }}
+                              style={{ padding: "4px", marginLeft: "2px", background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer" }}
+                              title="Remove trade"
+                            >
+                              <X size={12} />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => handleAddTrade()}
+                      style={{ padding: "6px 10px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--accent)", cursor: "pointer", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px" }}
+                      title="Add trade"
+                    >
+                      <Plus size={14} />
+                      Add
+                    </button>
                   </div>
                 </div>
-              )}
 
-              {/* Trade Tabs */}
-              {!isTabContentMaximized && (
-                <div
-                  style={{
-                    display: "flex",
-                    borderBottom: "1px solid var(--border-color)",
-                    backgroundColor: "var(--bg-secondary)",
-                    overflowX: "auto",
-                  }}
-                >
-                {tradesFormData.map((trade, index) => {
-                  const isActive = activeTradeIndex === index;
-                  const tabLabel = trade.symbol || `Trade ${index + 1}`;
-                  return (
-                    <div key={index} style={{ display: "flex", alignItems: "center" }}>
-                      <button
-                        onClick={() => setActiveTradeIndex(index)}
-                        style={{
-                          padding: "12px 20px",
-                          background: isActive ? "var(--bg-primary)" : "transparent",
-                          border: "none",
-                          borderBottom: isActive ? "2px solid var(--accent)" : "2px solid transparent",
-                          color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
-                          cursor: "pointer",
-                          fontSize: "14px",
-                          fontWeight: isActive ? "600" : "400",
-                          transition: "all 0.2s",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {tabLabel}
-                      </button>
-                      {tradesFormData.length > 1 && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleRemoveTrade(index);
-                          }}
-                          style={{
-                            padding: "4px 8px",
-                            background: "transparent",
-                            border: "none",
-                            color: "var(--danger)",
-                            cursor: "pointer",
-                            display: "flex",
-                            alignItems: "center",
-                          }}
-                          title="Remove Trade"
-                        >
-                          <X size={14} />
+              {/* Trade-specific fields - compact row */}
+              {currentTrade && (
+                <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)", display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "flex-end" }}>
+                  <div style={{ minWidth: "80px", flex: "1 1 80px" }}>
+                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Symbol</label>
+                    <input type="text" list={`symbol-list-${activeTradeIndex}`} value={currentTrade.symbol} onChange={(e) => updateTradeFormData(activeTradeIndex, "symbol", e.target.value)} placeholder="Symbol" style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }} />
+                    <datalist id={`symbol-list-${activeTradeIndex}`}>{availableSymbols.map((sym) => <option key={sym} value={sym} />)}</datalist>
+                  </div>
+                  <div style={{ minWidth: "70px", flex: "0 0 70px" }}>
+                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Position</label>
+                    <select value={currentTrade.position} onChange={(e) => updateTradeFormData(activeTradeIndex, "position", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
+                      <option value="">Pos.</option>
+                      <option value="Long">Long</option>
+                      <option value="Short">Short</option>
+                      <option value="Call">Call</option>
+                      <option value="Put">Put</option>
+                    </select>
+                  </div>
+                  <div style={{ minWidth: "75px", flex: "0 0 75px" }}>
+                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>TF</label>
+                    <select value={currentTrade.timeframe} onChange={(e) => updateTradeFormData(activeTradeIndex, "timeframe", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
+                      <option value="">TF</option>
+                      <option value="1m">1m</option>
+                      <option value="5m">5m</option>
+                      <option value="15m">15m</option>
+                      <option value="1h">1h</option>
+                      <option value="1d">1d</option>
+                    </select>
+                  </div>
+                  <div style={{ minWidth: "60px", flex: "0 0 60px" }}>
+                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Entry</label>
+                    <select value={currentTrade.entry_type} onChange={(e) => updateTradeFormData(activeTradeIndex, "entry_type", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
+                      <option value="">—</option>
+                      <option value="Market">Market</option>
+                      <option value="Limit">Limit</option>
+                    </select>
+                  </div>
+                  <div style={{ minWidth: "60px", flex: "0 0 60px" }}>
+                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Exit</label>
+                    <select value={currentTrade.exit_type} onChange={(e) => updateTradeFormData(activeTradeIndex, "exit_type", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
+                      <option value="">—</option>
+                      <option value="Market">Market</option>
+                      <option value="Limit">Limit</option>
+                    </select>
+                  </div>
+                  <div style={{ minWidth: "70px", flex: "0 0 70px" }}>
+                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Outcome</label>
+                    <select value={currentTrade.outcome} onChange={(e) => updateTradeFormData(activeTradeIndex, "outcome", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
+                      <option value="None">None</option>
+                      <option value="Positive">+</option>
+                      <option value="Negative">−</option>
+                      <option value="Breakeven">BE</option>
+                    </select>
+                  </div>
+                  <div style={{ minWidth: "55px", flex: "0 0 55px" }}>
+                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>R</label>
+                    <input type="text" inputMode="decimal" value={(currentTrade as { r_multiple?: string }).r_multiple ?? ""} onChange={(e) => updateTradeFormData(activeTradeIndex, "r_multiple", e.target.value)} placeholder="R" style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }} />
+                  </div>
+                  {((isEditing && currentTrade.id != null) || selectedEntry?.id) && (
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      {isEditing && currentTrade.id != null && (
+                        <button type="button" onClick={() => { setLinkActualTradesSelection(journalTradeActualTradeIds.get(currentTrade.id!) ?? []); setLinkActualTradesModalJournalTradeId(currentTrade.id!); }} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 8px", background: "var(--accent)", border: "none", borderRadius: "4px", color: "white", cursor: "pointer", fontSize: "11px" }}>
+                          <Link2 size={12} /> {journalTradeActualTradeIds.get(currentTrade.id!)?.length ? "Edit" : "Link"}
+                        </button>
+                      )}
+                      {selectedEntry?.id && (
+                        <button type="button" onClick={async () => { setShowLinkPairsModal(true); setLinkPairsSearchQuery(""); setLinkPairsSortBy("date"); setLinkPairsSortDirection("desc"); const method = localStorage.getItem("tradebutler_pairing_method") || "FIFO"; const all = await invoke<PairedTrade[]>("get_paired_trades", { pairingMethod: method || null }); setAllPairsForPicker(all); setLinkPickerSelected(new Set(linkedPairs.map(p => `${p.entry_trade_id}_${p.exit_trade_id}`))); }} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 8px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "11px", cursor: "pointer" }}>
+                          <Link2 size={12} /> Pairs {linkedPairs.length > 0 && `(${linkedPairs.length})`}
                         </button>
                       )}
                     </div>
-                  );
-                })}
-                <button
-                  type="button"
-                  onClick={handleAddTrade}
-                  style={{
-                    padding: "12px 20px",
-                    background: "transparent",
-                    border: "none",
-                    color: "var(--accent)",
-                    cursor: "pointer",
-                    fontSize: "14px",
-                    fontWeight: "400",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "4px",
-                  }}
-                  title="Add trade"
-                >
-                  <Plus size={16} />
-                  Add Trade
-                </button>
-              </div>
+                  )}
+                </div>
               )}
 
-              {/* Content Tabs for Current Trade */}
+              {/* Linked pairs list - compact when entry has pairs */}
+              {selectedEntry?.id && !isTabContentMaximized && linkedPairs.length > 0 && (
+                <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)", display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
+                  <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginRight: "8px" }}>{linkedPairs.length} pair{linkedPairs.length !== 1 ? "s" : ""}</span>
+                  {linkedPairs.map((pair) => (
+                    <div key={`${pair.entry_trade_id}-${pair.exit_trade_id}`} style={{ display: "flex", alignItems: "center", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", overflow: "hidden" }}>
+                      <button type="button" onClick={() => { setSelectedPairForChart(pair); setSelectedPositionTrades(undefined); fetchPositionTradesForPair(pair).then(setSelectedPositionTrades); }} style={{ padding: "4px 8px", background: "none", border: "none", color: "var(--text-primary)", fontSize: "12px", cursor: "pointer" }}>
+                        {pair.symbol} {format(new Date(pair.entry_timestamp), "MMM d")}→{format(new Date(pair.exit_timestamp), "MMM d")} <span style={{ color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)", fontWeight: "600" }}>{pair.net_profit_loss >= 0 ? "+" : ""}{pair.net_profit_loss.toFixed(2)}</span>
+                      </button>
+                      <button type="button" onClick={async () => { if (!selectedEntry?.id) return; const remaining = linkedPairs.filter((p) => !(p.entry_trade_id === pair.entry_trade_id && p.exit_trade_id === pair.exit_trade_id)); try { if (dataMode === "sandbox") { setSandboxJournalEntryPairs(selectedEntry.id, remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id }))); setLinkedPairs(remaining); } else { await invoke("set_journal_entry_pairs", { journalEntryId: selectedEntry.id, pairs: remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })) }); setLinkedPairs(remaining); } } catch (err) { console.error(err); alert("Failed to unlink."); } }} style={{ padding: "4px 6px", borderLeft: "1px solid var(--border-color)", background: "none", color: "var(--text-secondary)", cursor: "pointer" }} title="Unlink"><X size={12} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Section nav: scroll-to links + reorder */}
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", padding: "8px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
+                {journalSectionOrder.map((sectionId) => (
+                  <button
+                    key={sectionId}
+                    type="button"
+                    onClick={() => scrollToSection(sectionId)}
+                    style={{ padding: "4px 10px", fontSize: "11px", fontWeight: "500", color: "var(--text-primary)", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "6px", cursor: "pointer", whiteSpace: "nowrap" }}
+                  >
+                    {JOURNAL_SECTION_LABELS[sectionId]}
+                  </button>
+                ))}
+                <button type="button" onClick={() => setShowSectionOrderModal(true)} style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "transparent", border: "1px dashed var(--border-color)", borderRadius: "6px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "4px" }} title="Reorder sections">
+                  <GripVertical size={12} /> Order
+                </button>
+              </div>
+                </>
+              )}
+
+              {/* Main scrolling content: sections in trader order */}
               {currentTrade && (
                 <>
-                  {/* Trade-specific fields - Symbol, Position, Entry Type, Exit Type, and Outcome */}
-                  {!isTabContentMaximized && (
-                    <div style={{ padding: "20px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)" }}>
-                    <div style={{ display: "flex", gap: "12px" }}>
-                      <div style={{ flex: 1 }}>
-                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
-                          Symbol
-                        </label>
-                        <div style={{ position: "relative" }}>
-                          <input
-                            type="text"
-                            list={`symbol-list-${activeTradeIndex}`}
-                            value={currentTrade.symbol}
-                            onChange={(e) => updateTradeFormData(activeTradeIndex, "symbol", e.target.value)}
-                            placeholder="Symbol..."
-                            style={{
-                              width: "100%",
-                              padding: "8px",
-                              backgroundColor: "var(--bg-primary)",
-                              border: "1px solid var(--border-color)",
-                              borderRadius: "4px",
-                              color: "var(--text-primary)",
-                              fontSize: "14px",
-                            }}
-                          />
-                          <datalist id={`symbol-list-${activeTradeIndex}`}>
-                            {availableSymbols.map((symbol) => (
-                              <option key={symbol} value={symbol} />
-                            ))}
-                          </datalist>
-                        </div>
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
-                          Position
-                        </label>
-                        <select
-                          value={currentTrade.position}
-                          onChange={(e) => updateTradeFormData(activeTradeIndex, "position", e.target.value)}
-                          style={{
-                            width: "100%",
-                            padding: "8px",
-                            backgroundColor: "var(--bg-primary)",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: "4px",
-                            color: "var(--text-primary)",
-                            fontSize: "14px",
-                          }}
-                        >
-                          <option value="">Select position...</option>
-                          <option value="Long">Long</option>
-                          <option value="Short">Short</option>
-                          <option value="Call">Call</option>
-                          <option value="Put">Put</option>
-                          <option value="Call Spread">Call Spread</option>
-                          <option value="Put Spread">Put Spread</option>
-                          <option value="Iron Condor">Iron Condor</option>
-                          <option value="Butterfly">Butterfly</option>
-                          <option value="Straddle">Straddle</option>
-                          <option value="Strangle">Strangle</option>
-                          <option value="Covered Call">Covered Call</option>
-                          <option value="Protective Put">Protective Put</option>
-                        </select>
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
-                          Trade Timeframe
-                        </label>
-                        <select
-                          value={currentTrade.timeframe}
-                          onChange={(e) => updateTradeFormData(activeTradeIndex, "timeframe", e.target.value)}
-                          style={{
-                            width: "100%",
-                            padding: "8px",
-                            backgroundColor: "var(--bg-primary)",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: "4px",
-                            color: "var(--text-primary)",
-                            fontSize: "14px",
-                          }}
-                        >
-                          <option value="">Select timeframe...</option>
-                          <option value="1s">1 Second</option>
-                          <option value="5s">5 Seconds</option>
-                          <option value="10s">10 Seconds</option>
-                          <option value="15s">15 Seconds</option>
-                          <option value="30s">30 Seconds</option>
-                          <option value="1m">1 Minute</option>
-                          <option value="2m">2 Minutes</option>
-                          <option value="3m">3 Minutes</option>
-                          <option value="5m">5 Minutes</option>
-                          <option value="7m">7 Minutes</option>
-                          <option value="10m">10 Minutes</option>
-                          <option value="15m">15 Minutes</option>
-                          <option value="20m">20 Minutes</option>
-                          <option value="30m">30 Minutes</option>
-                          <option value="1h">1 Hour</option>
-                          <option value="2h">2 Hours</option>
-                          <option value="3h">3 Hours</option>
-                          <option value="4h">4 Hours</option>
-                          <option value="6h">6 Hours</option>
-                          <option value="8h">8 Hours</option>
-                          <option value="12h">12 Hours</option>
-                          <option value="1d">1 Day</option>
-                          <option value="2d">2 Days</option>
-                          <option value="3d">3 Days</option>
-                          <option value="1w">1 Week</option>
-                          <option value="1M">1 Month</option>
-                        </select>
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
-                          Entry Type
-                        </label>
-                        <select
-                          value={currentTrade.entry_type}
-                          onChange={(e) => updateTradeFormData(activeTradeIndex, "entry_type", e.target.value)}
-                          style={{
-                            width: "100%",
-                            padding: "8px",
-                            backgroundColor: "var(--bg-primary)",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: "4px",
-                            color: "var(--text-primary)",
-                            fontSize: "14px",
-                          }}
-                        >
-                          <option value="">Select entry type...</option>
-                          <option value="Market">Market</option>
-                          <option value="Limit">Limit</option>
-                        </select>
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
-                          Exit Type
-                        </label>
-                        <select
-                          value={currentTrade.exit_type}
-                          onChange={(e) => updateTradeFormData(activeTradeIndex, "exit_type", e.target.value)}
-                          style={{
-                            width: "100%",
-                            padding: "8px",
-                            backgroundColor: "var(--bg-primary)",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: "4px",
-                            color: "var(--text-primary)",
-                            fontSize: "14px",
-                          }}
-                        >
-                          <option value="">Select exit type...</option>
-                          <option value="Market">Market</option>
-                          <option value="Limit">Limit</option>
-                        </select>
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
-                          Outcome
-                        </label>
-                        <select
-                          value={currentTrade.outcome}
-                          onChange={(e) => updateTradeFormData(activeTradeIndex, "outcome", e.target.value)}
-                          style={{
-                            width: "100%",
-                            padding: "8px",
-                            backgroundColor: "var(--bg-primary)",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: "4px",
-                            color: "var(--text-primary)",
-                            fontSize: "14px",
-                          }}
-                        >
-                          <option value="None">None</option>
-                          <option value="Positive">Positive</option>
-                          <option value="Negative">Negative</option>
-                          <option value="Breakeven">Breakeven</option>
-                        </select>
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
-                          R-multiple
-                        </label>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={(currentTrade as { r_multiple?: string }).r_multiple ?? ""}
-                          onChange={(e) => updateTradeFormData(activeTradeIndex, "r_multiple", e.target.value)}
-                          placeholder="e.g. 1.5 or -0.5"
-                          style={{
-                            width: "100%",
-                            padding: "8px",
-                            backgroundColor: "var(--bg-primary)",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: "4px",
-                            color: "var(--text-primary)",
-                            fontSize: "14px",
-                          }}
-                        />
-                        <p style={{ margin: "2px 0 0", fontSize: "10px", color: "var(--text-secondary)" }}>Used for metrics; if blank, % or P&L from linked trades is used.</p>
-                      </div>
-                    </div>
-                    {/* Link this journal trade to actual trades (from Trades table) - only when editing and journal trade has id */}
-                    {(isEditing && currentTrade.id != null) || (selectedEntry?.id && !isTabContentMaximized) ? (
-                      <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid var(--border-color)" }}>
-                        {isEditing && currentTrade.id != null && (
-                          <>
-                            <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500", color: "var(--text-secondary)" }}>
-                              Link to actual trades
-                            </label>
-                            <p style={{ margin: "4px 0 0", fontSize: "11px", color: "var(--text-secondary)" }}>
-                              Associate this journal trade with real trades from your Trades list.
-                            </p>
-                          </>
+                  <div ref={journalScrollContainerRef} style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column", padding: isTabContentMaximized ? "40px" : "16px 20px", position: "relative" }}>
+                    {!isTabContentMaximized && (
+                      <button onClick={() => setIsTabContentMaximized(!isTabContentMaximized)} style={{ position: "absolute", top: "16px", right: "20px", zIndex: 10, background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", padding: "8px", color: "var(--text-primary)", cursor: "pointer" }} title={isTabContentMaximized ? "Restore" : "Maximize"}>
+                        {isTabContentMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                      </button>
+                    )}
+                    {journalSectionOrder.map((sectionId) => (
+                      <div key={sectionId} id={`section-${sectionId}`} ref={(el) => { sectionRefs.current.set(sectionId, el); }} style={{ marginBottom: "28px", scrollMarginTop: "12px" }}>
+                        <h3 style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "10px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                          {sectionId === "emotional_state_before"
+                            ? "Emotional State: Before Trade Survey"
+                            : JOURNAL_SECTION_LABELS[sectionId]}
+                        </h3>
+                        {sectionId === "implementation" && (
+                          <RichTextEditor value={currentTrade.trade} onChange={(content: string) => updateTradeFormData(activeTradeIndex, "trade", content)} placeholder="Describe the related trades..." readOnly={false} />
                         )}
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", marginTop: "8px" }}>
-                          {isEditing && currentTrade.id != null && (
-                            <>
-                              <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>
-                                {(journalTradeActualTradeIds.get(currentTrade.id!)?.length ?? 0) > 0
-                                  ? `${journalTradeActualTradeIds.get(currentTrade.id!)?.length ?? 0} actual trade(s) linked`
-                                  : "No actual trades linked"}
-                              </span>
+                        {sectionId === "what_went_well" && (
+                          <RichTextEditor value={currentTrade.what_went_well} onChange={(content: string) => updateTradeFormData(activeTradeIndex, "what_went_well", content)} placeholder="What went well..." readOnly={false} />
+                        )}
+                        {sectionId === "what_could_be_improved" && (
+                          <RichTextEditor value={currentTrade.what_could_be_improved} onChange={(content: string) => updateTradeFormData(activeTradeIndex, "what_could_be_improved", content)} placeholder="What could be improved..." readOnly={false} />
+                        )}
+                        {sectionId === "notes" && (
+                          <RichTextEditor value={currentTrade.notes} onChange={(content: string) => updateTradeFormData(activeTradeIndex, "notes", content)} placeholder="Notes..." readOnly={false} />
+                        )}
+                        {sectionId === "analysis_checklist" && renderChecklistForType("daily_analysis")}
+                        {sectionId === "mantra_checklist" && renderChecklistForType("daily_mantra")}
+                        {sectionId === "entry_checklist" && renderChecklistForType("entry")}
+                        {sectionId === "take_profit_checklist" && renderChecklistForType("take_profit")}
+                        {sectionId === "custom_checklists_surveys" && entryFormData.strategy_id && currentChecklists && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+                            {customTypes.map((type) => (
+                              <div key={type}>
+                                <h4 style={{ fontSize: "13px", fontWeight: "600", marginBottom: "8px", color: "var(--text-primary)" }}>{getChecklistTitle(type)}</h4>
+                                {renderChecklistForType(type)}
+                              </div>
+                            ))}
+                            {(() => {
+                              const rawSurveyItems = currentChecklists.get("survey") || [];
+                              const surveyItems = rawSurveyItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
+                              if (surveyItems.length === 0) return null;
+                              const groups = surveyItems.filter(item => !item.parent_id && surveyItems.some(child => child.parent_id === item.id));
+                              const regularItems = surveyItems.filter(item => !item.parent_id && !surveyItems.some(child => child.parent_id === item.id));
+                              const groupedItems = surveyItems.filter(item => item.parent_id !== null && surveyItems.some(p => p.id === item.parent_id));
+                              const itemsByParent = new Map<number, ChecklistItem[]>();
+                              groupedItems.forEach(item => { if (item.parent_id) { const pid = item.parent_id; if (!itemsByParent.has(pid)) itemsByParent.set(pid, []); itemsByParent.get(pid)!.push(item); } });
+                              return (
+                                <div>
+                                  <h4 style={{ fontSize: "13px", fontWeight: "600", marginBottom: "8px", color: "var(--text-primary)" }}>Post-Trade Survey</h4>
+                                  {groups.map((group) => {
+                                    const children = itemsByParent.get(group.id) || [];
+                                    return (
+                                      <div key={group.id} style={{ marginBottom: "12px" }}>
+                                        <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px", fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>{group.item_text}</div>
+                                        {children.map((child) => {
+                                          const score = surveyScores.get(child.id);
+                                          return (
+                                            <div key={child.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginLeft: "16px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
+                                              <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{child.item_text}</label>
+                                              <div style={{ display: "flex", gap: "4px" }}>
+                                                {[1, 2, 3, 4, 5].map((n) => (
+                                                  <button key={n} type="button" onClick={() => { setSurveyScores(prev => new Map(prev).set(child.id, n)); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(child.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    );
+                                  })}
+                                  {regularItems.map((item) => {
+                                    const score = surveyScores.get(item.id);
+                                    return (
+                                      <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
+                                        <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{item.item_text}</label>
+                                        <div style={{ display: "flex", gap: "4px" }}>
+                                          {[1, 2, 3, 4, 5].map((n) => (
+                                            <button key={n} type="button" onClick={() => { setSurveyScores(prev => new Map(prev).set(item.id, n)); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(item.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        )}
+                        {sectionId === "custom_checklists_surveys" && (!entryFormData.strategy_id || !currentChecklists) && (
+                          <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load custom checklists and surveys.</p>
+                        )}
+                        {sectionId === "links" && (isCreating || isEditing) && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                            <div style={{ padding: "14px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
+                              <h4 style={{ margin: "0 0 8px", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>Emotional states</h4>
+                              <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal to emotional state entries. Saved when you save the entry.</p>
+                              <div style={{ marginBottom: "10px" }}>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                    <input type="radio" name="linkScopeScroll" checked={linkExistingEmotionalStateScope === "entry"} onChange={() => { setLinkExistingEmotionalStateScope("entry"); setLinkExistingEmotionalStateTradeIndex(null); }} />
+                                    Entire journal entry
+                                  </label>
+                                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                    <input type="radio" name="linkScopeScroll" checked={linkExistingEmotionalStateScope === "trades"} onChange={() => setLinkExistingEmotionalStateScope("trades")} />
+                                    Specific trade(s)
+                                  </label>
+                                  {linkExistingEmotionalStateScope === "trades" && (
+                                    <div style={{ marginLeft: "24px", display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "4px" }}>
+                                      {tradesFormData.map((t, i) => (
+                                        <label key={i} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
+                                          <input type="radio" name="linkTradeScroll" checked={linkExistingEmotionalStateTradeIndex === i} onChange={() => setLinkExistingEmotionalStateTradeIndex(i)} />
+                                          {t.symbol || `Trade ${i + 1}`}
+                                        </label>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              {(entryFormData.linked_emotional_state_ids?.length ?? 0) > 0 && (
+                                <ul style={{ listStyle: "none", padding: 0, margin: "0 0 10px" }}>
+                                  {(entryFormData.linked_emotional_state_ids ?? []).map((stateId) => {
+                                    const allGroups = groupEmotionalStatesByTimestamp(allEmotionalStates);
+                                    const group = allGroups.find((g) => g.some((s) => s.id === stateId));
+                                    const first = group?.[0];
+                                    return first ? (
+                                      <li key={first.timestamp} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "6px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
+                                        <span style={{ fontSize: "12px", color: "var(--text-primary)" }}>{format(new Date(first.timestamp), "MMM d, HH:mm")} · {group!.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}</span>
+                                        <button type="button" onClick={() => setEntryFormData((prev) => { const next = (prev.linked_emotional_state_ids ?? []).filter((id) => id !== stateId); const scopes = { ...(prev.linked_emotional_state_link_scopes ?? {}) }; delete scopes[stateId]; return { ...prev, linked_emotional_state_ids: next, linked_emotional_state_link_scopes: scopes }; })} style={{ padding: "2px 6px", fontSize: "11px", color: "var(--text-secondary)", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}>Remove</button>
+                                      </li>
+                                    ) : null;
+                                  })}
+                                </ul>
+                              )}
+                              <div style={{ position: "relative" }} ref={journalLinksStateDropdownRefScroll}>
+                                <button type="button" onClick={() => setJournalLinksStateDropdownOpen((o) => !o)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", width: "100%", padding: "8px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)", fontSize: "13px", cursor: "pointer", textAlign: "left" }}>
+                                  <span>Add emotional state...</span>
+                                  <ChevronDown size={16} style={{ transform: journalLinksStateDropdownOpen ? "rotate(180deg)" : "none" }} />
+                                </button>
+                                {journalLinksStateDropdownOpen && (() => {
+                                  const linkedIds = new Set(entryFormData.linked_emotional_state_ids ?? []);
+                                  const allGroups = groupEmotionalStatesByTimestamp(allEmotionalStates);
+                                  const addableGroups = allGroups.filter((g) => !linkedIds.has(g[0].id));
+                                  const scope = { scope: linkExistingEmotionalStateScope, tradeIndex: linkExistingEmotionalStateScope === "trades" ? linkExistingEmotionalStateTradeIndex : null };
+                                  return (
+                                    <div style={{ position: "absolute", zIndex: 50, marginTop: "4px", maxHeight: "200px", overflowY: "auto", minWidth: "280px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", padding: "6px" }}>
+                                      {addableGroups.length === 0 ? <div style={{ padding: "12px", fontSize: "12px", color: "var(--text-secondary)" }}>All selected or none exist.</div> : addableGroups.map((group) => {
+                                        const first = group[0];
+                                        return (
+                                          <button key={first.timestamp} type="button" onClick={() => { setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: [...(prev.linked_emotional_state_ids ?? []), first.id], linked_emotional_state_link_scopes: { ...(prev.linked_emotional_state_link_scopes ?? {}), [first.id]: scope } })); setJournalLinksStateDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "8px 12px", textAlign: "left", fontSize: "12px", color: "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer" }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
+                                            {format(new Date(first.timestamp), "MMM d, HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+                            </div>
+                            <div style={{ padding: "14px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
+                              <h4 style={{ margin: "0 0 8px", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>Real trades</h4>
+                              <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal to real trades. Saved when you save the entry.</p>
+                              {(entryFormData.linked_trade_ids?.length ?? 0) > 0 && (
+                                <ul style={{ listStyle: "none", padding: 0, margin: "0 0 10px" }}>
+                                  {(entryFormData.linked_trade_ids ?? []).map((tradeId) => {
+                                    const t = realTradesForLink.find((r) => r.id === tradeId);
+                                    return (
+                                      <li key={tradeId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "6px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
+                                        <span style={{ fontSize: "12px", color: "var(--text-primary)" }}>{t ? `${t.symbol} ${t.side}${t.quantity ? ` · ${t.quantity}` : ""}${t.pnl != null && t.pnl !== 0 ? ` · PnL ${t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(2)}` : ""} · ${format(new Date(t.timestamp), "MMM dd")}` : `#${tradeId}`}</span>
+                                        <button type="button" onClick={() => setEntryFormData((prev) => ({ ...prev, linked_trade_ids: (prev.linked_trade_ids ?? []).filter((id) => id !== tradeId) }))} style={{ padding: "2px 6px", fontSize: "11px", color: "var(--text-secondary)", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer" }}>Remove</button>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              )}
+                              <div style={{ position: "relative" }} ref={journalLinksTradeDropdownRefScroll}>
+                                <button type="button" onClick={() => setJournalLinksTradeDropdownOpen((o) => !o)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", width: "100%", padding: "8px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)", fontSize: "13px", cursor: "pointer", textAlign: "left" }}>
+                                  <span>Add real trade...</span>
+                                  <ChevronDown size={16} style={{ transform: journalLinksTradeDropdownOpen ? "rotate(180deg)" : "none" }} />
+                                </button>
+                                {journalLinksTradeDropdownOpen && (
+                                  <div style={{ position: "absolute", zIndex: 50, marginTop: "4px", maxHeight: "200px", overflowY: "auto", minWidth: "280px", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "8px", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", padding: "6px" }}>
+                                    {realTradesForLink.map((t) => {
+                                      const ids = entryFormData.linked_trade_ids ?? [];
+                                      const isLinked = ids.includes(t.id);
+                                      return (
+                                        <button key={t.id} type="button" disabled={isLinked} onClick={() => { if (!isLinked) setEntryFormData((prev) => ({ ...prev, linked_trade_ids: [...(prev.linked_trade_ids ?? []), t.id] })); setJournalLinksTradeDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "8px 12px", textAlign: "left", fontSize: "12px", color: isLinked ? "var(--text-secondary)" : "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: isLinked ? "default" : "pointer", opacity: isLinked ? 0.8 : 1 }} onMouseEnter={(e) => { if (!isLinked) e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
+                                          {t.symbol} {t.side}{t.quantity ? ` · ${t.quantity}` : ""}{t.pnl != null && t.pnl !== 0 ? ` · PnL ${t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(2)}` : ""} · {format(new Date(t.timestamp), "MMM dd")}{isLinked && " ✓"}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        {sectionId === "emotional_state_before" && (isCreating || isEditing) && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                            {!showAddEmotionalStateForm && (
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setLinkActualTradesSelection(journalTradeActualTradeIds.get(currentTrade.id!) ?? []);
-                                  setLinkActualTradesModalJournalTradeId(currentTrade.id!);
+                                  setShowAddEmotionalStateForm(true);
+                                  setNewEmotionalStateLinkScope("entry");
+                                  setNewEmotionalStateTradeIndices([]);
                                 }}
                                 style={{
                                   display: "inline-flex",
                                   alignItems: "center",
-                                  gap: "4px",
-                                  padding: "6px 12px",
+                                  justifyContent: "center",
+                                  gap: "6px",
+                                  padding: "10px 16px",
                                   background: "var(--accent)",
                                   border: "none",
                                   borderRadius: "6px",
                                   color: "white",
-                                  cursor: "pointer",
-                                  fontSize: "13px",
-                                }}
-                              >
-                                <Link2 size={14} />
-                                {journalTradeActualTradeIds.get(currentTrade.id!)?.length ? "Edit links" : "Link to actual trades"}
-                              </button>
-                            </>
-                          )}
-                          {selectedEntry?.id && (
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                setShowLinkPairsModal(true);
-                                setLinkPairsSearchQuery("");
-                                setLinkPairsSortBy("date");
-                                setLinkPairsSortDirection("desc");
-                                const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-                                const all = await invoke<PairedTrade[]>("get_paired_trades", { pairingMethod: pairingMethod || null });
-                                setAllPairsForPicker(all);
-                                const current = linkedPairs.map(p => `${p.entry_trade_id}_${p.exit_trade_id}`);
-                                setLinkPickerSelected(new Set(current));
-                              }}
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "6px",
-                                padding: "6px 12px",
-                                backgroundColor: "var(--bg-tertiary)",
-                                border: "1px solid var(--border-color)",
-                                borderRadius: "6px",
-                                color: "var(--text-primary)",
-                                fontSize: "13px",
-                                cursor: "pointer",
-                              }}
-                            >
-                              <Link2 size={14} />
-                              Link trade pairs
-                              {linkedPairs.length > 0 && (
-                                <span style={{ marginLeft: "2px", fontSize: "12px", color: "var(--text-secondary)" }}>
-                                  ({linkedPairs.length})
-                                </span>
-                              )}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                  )}
-
-                  {/* Link trade pairs list (button is next to "Link to actual trades" above) */}
-                  {selectedEntry?.id && !isTabContentMaximized && linkedPairs.length > 0 && (
-                    <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "10px" }}>
-                        <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                          {linkedPairs.length} pair{linkedPairs.length !== 1 ? "s" : ""} linked
-                        </span>
-                      </div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                          {linkedPairs.map((pair) => (
-                            <div
-                              key={`${pair.entry_trade_id}-${pair.exit_trade_id}`}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "0",
-                                backgroundColor: "var(--bg-primary)",
-                                border: "1px solid var(--border-color)",
-                                borderRadius: "6px",
-                                overflow: "hidden",
-                              }}
-                            >
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedPairForChart(pair);
-                                  setSelectedPositionTrades(undefined);
-                                  fetchPositionTradesForPair(pair).then(setSelectedPositionTrades);
-                                }}
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: "6px",
-                                  padding: "6px 12px",
-                                  background: "none",
-                                  border: "none",
-                                  color: "var(--text-primary)",
                                   fontSize: "13px",
                                   cursor: "pointer",
-                                }}
-                                onMouseEnter={(e) => {
-                                  e.currentTarget.style.backgroundColor = "var(--bg-tertiary)";
-                                }}
-                                onMouseLeave={(e) => {
-                                  e.currentTarget.style.backgroundColor = "transparent";
+                                  fontWeight: 600,
                                 }}
                               >
-                                <BarChart3 size={14} />
-                                {pair.symbol} {format(new Date(pair.entry_timestamp), "MMM d")} → {format(new Date(pair.exit_timestamp), "MMM d")}
-                                <span style={{ color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)", fontWeight: "600" }}>
-                                  {pair.net_profit_loss >= 0 ? "+" : ""}{pair.net_profit_loss.toFixed(2)}
-                                </span>
+                                + New emotional state
                               </button>
-                              <button
-                                type="button"
-                                onClick={async (e) => {
-                                  e.stopPropagation();
-                                  if (!selectedEntry?.id) return;
-                                  const remaining = linkedPairs.filter(
-                                    (p) => !(p.entry_trade_id === pair.entry_trade_id && p.exit_trade_id === pair.exit_trade_id)
-                                  );
+                            )}
+                            {showAddEmotionalStateForm && (
+                              <>
+                                <div style={{ padding: "12px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                                  <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this emotional state to the entire entry or specific journal trade(s).</p>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                    <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                      <input
+                                        type="radio"
+                                        name="emotionalStateScopeScroll"
+                                        checked={newEmotionalStateLinkScope === "entry"}
+                                        onChange={() => {
+                                          setNewEmotionalStateLinkScope("entry");
+                                          setNewEmotionalStateTradeIndices([]);
+                                          setLinkExistingEmotionalStateScope("entry");
+                                          setLinkExistingEmotionalStateTradeIndex(null);
+                                        }}
+                                      />
+                                      Entire journal entry
+                                    </label>
+                                    <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
+                                      <input
+                                        type="radio"
+                                        name="emotionalStateScopeScroll"
+                                        checked={newEmotionalStateLinkScope === "trades"}
+                                        onChange={() => {
+                                          setNewEmotionalStateLinkScope("trades");
+                                          setLinkExistingEmotionalStateScope("trades");
+                                        }}
+                                      />
+                                      Specific trade(s)
+                                    </label>
+                                    {newEmotionalStateLinkScope === "trades" && (
+                                      <div style={{ marginLeft: "24px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                                        {tradesFormData.map((t, i) => {
+                                          const checked = newEmotionalStateTradeIndices.includes(i);
+                                          return (
+                                            <label key={i} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
+                                              <input
+                                                type="checkbox"
+                                                checked={checked}
+                                                onChange={() => {
+                                                  const next = checked ? newEmotionalStateTradeIndices.filter((j) => j !== i) : [...newEmotionalStateTradeIndices, i];
+                                                  setNewEmotionalStateTradeIndices(next);
+                                                  setLinkExistingEmotionalStateTradeIndex(next[0] ?? null);
+                                                }}
+                                              />
+                                              {t.symbol || `Trade ${i + 1}`}
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                                <div style={{ padding: "12px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                                <p style={{ margin: "0 0 8px", fontSize: "11px", color: "var(--text-secondary)" }}>{INTENSITY_SCALE_LABEL}</p>
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "12px" }}>
+                                  {JOURNAL_EMOTIONS.map((emotion) => {
+                                    const intensity = newEmotionalStateForm.selectedEmotions[emotion];
+                                    const isSelected = intensity !== undefined;
+                                    return (
+                                      <button key={emotion} type="button" onClick={() => { if (isSelected) { const next = { ...newEmotionalStateForm.selectedEmotions }; delete next[emotion]; setNewEmotionalStateForm((f) => ({ ...f, selectedEmotions: next })); } else { setNewEmotionalStateForm((f) => ({ ...f, selectedEmotions: { ...f.selectedEmotions, [emotion]: DEFAULT_EMOTION_INTENSITY } })); } }} style={{ padding: "6px 12px", borderRadius: "999px", border: `1px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: isSelected ? "var(--bg-hover)" : "var(--bg-tertiary)", color: "var(--text-primary)", fontSize: "12px", fontWeight: isSelected ? "600" : "500", cursor: "pointer" }}>{emotion}{isSelected && ` ${intensity}/10`}</button>
+                                    );
+                                  })}
+                                </div>
+                                {Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 && (
+                                  <div style={{ marginBottom: "12px" }}>
+                                    {Object.entries(newEmotionalStateForm.selectedEmotions).map(([emotion, intensity]) => (
+                                      <div key={emotion} style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
+                                        <span style={{ minWidth: "80px", fontSize: "12px" }}>{emotion}</span>
+                                        <input type="range" min={0} max={10} value={intensity} onChange={(e) => setNewEmotionalStateForm((f) => ({ ...f, selectedEmotions: { ...f.selectedEmotions, [emotion]: parseInt(e.target.value, 10) } }))} style={{ flex: 1, maxWidth: "160px", accentColor: "var(--accent)" }} />
+                                        <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--accent)", minWidth: "24px" }}>{intensity}/10</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                <h4 style={{ margin: "12px 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>Before trade</h4>
+                                {JOURNAL_SURVEY_QUESTIONS.before.map((q) => (
+                                  <div key={q.key} style={{ marginBottom: "12px" }}>
+                                    <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>{q.question}</label>
+                                    <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>{q.scale}</p>
+                                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                                      <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>1</span>
+                                      <input type="range" min={1} max={5} value={newEmotionalStateSurveyResponses[q.key] ?? 3} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
+                                      <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>5</span>
+                                      <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 3}</span>
+                                    </div>
+                                  </div>
+                                ))}
+                                <p style={{ margin: "12px 0 0", fontSize: "11px", color: "var(--text-secondary)" }}>Fill during/after/notes below, then add in Emo. Notes section.</p>
+                              </div>
+                              </>
+                            )}
+                          </div>
+                        )}
+                        {sectionId === "emotional_state_during" && (isCreating || isEditing) && showAddEmotionalStateForm && (
+                          <div style={{ padding: "12px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                            <h4 style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>During trade</h4>
+                            {JOURNAL_SURVEY_QUESTIONS.during.map((q) => (
+                              <div key={q.key} style={{ marginBottom: "12px" }}>
+                                <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>{q.question}</label>
+                                <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>{q.scale}</p>
+                                <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>1</span>
+                                  <input type="range" min={1} max={5} value={newEmotionalStateSurveyResponses[q.key] ?? 3} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
+                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>5</span>
+                                  <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 3}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {sectionId === "emotional_state_after" && (isCreating || isEditing) && showAddEmotionalStateForm && (
+                          <div style={{ padding: "12px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                            <h4 style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>After trade</h4>
+                            {JOURNAL_SURVEY_QUESTIONS.after.map((q) => (
+                              <div key={q.key} style={{ marginBottom: "12px" }}>
+                                <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>{q.question}</label>
+                                <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>{q.scale}</p>
+                                <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>1</span>
+                                  <input type="range" min={1} max={5} value={newEmotionalStateSurveyResponses[q.key] ?? 3} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
+                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>5</span>
+                                  <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 3}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {sectionId === "emotional_state_notes" && (isCreating || isEditing) && (
+                          <div style={{ padding: "12px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                            <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>Notes for this emotional state.</p>
+                            <RichTextEditor value={newEmotionalStateForm.notes} onChange={(content: string) => setNewEmotionalStateForm((f) => ({ ...f, notes: content }))} placeholder="Notes..." readOnly={false} />
+                            {showAddEmotionalStateForm && (
+                              <button type="button" disabled={Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 || (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0)} onClick={async () => {
+                                const hasAny = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0;
+                                if (!hasAny || (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0)) return;
+                                const entryId = selectedEntry?.id;
+                                const savedEntry = entryId != null;
+                                if (savedEntry) {
                                   try {
-                                    if (dataMode === "sandbox") {
-                                      setSandboxJournalEntryPairs(selectedEntry.id, remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })));
-                                      setLinkedPairs(remaining);
+                                    const now = new Date().toISOString();
+                                    const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+                                    const allStates = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
+                                    const deleteGroup = async (group: JournalEmotionalState[]) => { for (const s of group) await invoke("delete_emotional_state", { id: s.id }); };
+                                    let firstStateId: number | null = null;
+                                    if (newEmotionalStateLinkScope === "entry") {
+                                      const entryLevel = allStates.filter((s) => s.journal_trade_id == null);
+                                      const groups = groupEmotionalStatesByTimestamp(entryLevel);
+                                      for (const g of groups) await deleteGroup(g);
+                                      for (const emotion of Object.keys(newEmotionalStateForm.selectedEmotions)) {
+                                        const stateId = await invoke<number>("add_emotional_state", { timestamp: now, emotion, intensity: newEmotionalStateForm.selectedEmotions[emotion], notes: newEmotionalStateForm.notes || null, tradeId: null, journalEntryId: entryId, journalTradeId: null, isPaper: dataMode === "paper" });
+                                        if (firstStateId === null) firstStateId = stateId;
+                                      }
                                     } else {
-                                      await invoke("set_journal_entry_pairs", {
-                                        journalEntryId: selectedEntry.id,
-                                        pairs: remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })),
-                                      });
-                                      setLinkedPairs(remaining);
+                                      for (const tradeIdx of newEmotionalStateTradeIndices) {
+                                        const trade = tradesFormData[tradeIdx];
+                                        const jtId = trade?.id ?? null;
+                                        if (jtId == null) continue;
+                                        const forTrade = allStates.filter((s) => s.journal_trade_id === jtId);
+                                        const groups = groupEmotionalStatesByTimestamp(forTrade);
+                                        for (const g of groups) await deleteGroup(g);
+                                        for (const emotion of Object.keys(newEmotionalStateForm.selectedEmotions)) {
+                                          const stateId = await invoke<number>("add_emotional_state", { timestamp: now, emotion, intensity: newEmotionalStateForm.selectedEmotions[emotion], notes: newEmotionalStateForm.notes || null, tradeId: null, journalEntryId: entryId, journalTradeId: jtId, isPaper: dataMode === "paper" });
+                                          if (firstStateId === null) firstStateId = stateId;
+                                        }
+                                      }
                                     }
-                                  } catch (err) {
-                                    console.error("Failed to unlink pair:", err);
-                                    alert("Failed to unlink pair.");
+                                    const sr = newEmotionalStateSurveyResponses;
+                                    const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 3) !== 3);
+                                    if (shouldSaveSurvey && firstStateId != null) {
+                                      try {
+                                        await invoke("add_emotion_survey", { emotional_state_id: firstStateId, timestamp: now, before_calm_clear: sr.before_calm_clear ?? 3, before_urgency_pressure: sr.before_urgency_pressure ?? 3, before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 3, before_fomo: sr.before_fomo ?? 3, before_recovering_loss: sr.before_recovering_loss ?? 3, before_patient_detached: sr.before_patient_detached ?? 3, before_trust_process: sr.before_trust_process ?? 3, before_emotional_state: sr.before_emotional_state ?? 3, during_stable: sr.during_stable ?? 3, during_tension_stress: sr.during_tension_stress ?? 3, during_tempted_interfere: sr.during_tempted_interfere ?? 3, during_need_control: sr.during_need_control ?? 3, during_fear_loss: sr.during_fear_loss ?? 3, during_excitement_greed: sr.during_excitement_greed ?? 3, during_mentally_present: sr.during_mentally_present ?? 3, after_accept_outcome: sr.after_accept_outcome ?? 3, after_emotional_reaction: sr.after_emotional_reaction ?? 3, after_confidence_affected: sr.after_confidence_affected ?? 3, after_tempted_another_trade: sr.after_tempted_another_trade ?? 3, after_proud_discipline: sr.after_proud_discipline ?? 3 });
+                                      } catch (err) { console.error("Failed to save emotion survey:", err); }
+                                    }
+                                    const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
+                                    setJournalEmotionalStates(states);
+                                    setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
+                                    setNewEmotionalStateSurveyResponses({});
+                                    setNewEmotionalStateLinkScope("entry");
+                                    setNewEmotionalStateTradeIndices([]);
+                                    setShowAddEmotionalStateForm(false);
+                                  } catch (e) { console.error(e); }
+                                } else {
+                                  const surveyPayload = { ...newEmotionalStateSurveyResponses };
+                                  if (newEmotionalStateLinkScope === "entry") {
+                                    setPendingEmotionalStates((prev) => prev.filter((p) => p.tradeIndex !== -1).concat([{ tradeIndex: -1, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes, surveyResponses: surveyPayload }]));
+                                  } else {
+                                    let next = pendingEmotionalStates.filter((p) => p.tradeIndex === -1 || !newEmotionalStateTradeIndices.includes(p.tradeIndex));
+                                    for (const i of newEmotionalStateTradeIndices) {
+                                      next = next.filter((p) => p.tradeIndex !== i);
+                                      next.push({ tradeIndex: i, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes, surveyResponses: surveyPayload });
+                                    }
+                                    setPendingEmotionalStates(next);
                                   }
-                                }}
-                                title="Unlink from journal entry"
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  padding: "6px 8px",
-                                  background: "none",
-                                  border: "none",
-                                  borderLeft: "1px solid var(--border-color)",
-                                  color: "var(--text-secondary)",
-                                  cursor: "pointer",
-                                }}
-                                onMouseEnter={(e) => {
-                                  e.currentTarget.style.backgroundColor = "var(--loss)";
-                                  e.currentTarget.style.color = "white";
-                                }}
-                                onMouseLeave={(e) => {
-                                  e.currentTarget.style.backgroundColor = "transparent";
-                                  e.currentTarget.style.color = "var(--text-secondary)";
-                                }}
-                              >
-                                <X size={14} />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                    </div>
-                  )}
-
-                  {!isTabContentMaximized && (
-                    <div
-                      style={{
-                        display: "flex",
-                        borderBottom: "1px solid var(--border-color)",
-                        backgroundColor: "var(--bg-secondary)",
-                      }}
-                    >
-                  {[
-                      { id: "trade" as TabType, label: "Implementation" },
-                      { id: "what_went_well" as TabType, label: "What Went Well" },
-                      { id: "what_could_be_improved" as TabType, label: "What Could Be Improved" },
-                      { id: "emotional_state" as TabType, label: "Emotional State" },
-                      { id: "notes" as TabType, label: "Notes" },
-                      { id: "checklists" as TabType, label: "Checklists" },
-                      { id: "survey" as TabType, label: "Survey" },
-                      { id: "links" as TabType, label: "Links" },
-                    ].map((tab) => {
-                      const isActive = activeTab === tab.id;
-                      return (
-                        <button
-                          key={tab.id}
-                          onClick={() => handleTabChange(tab.id)}
-                          style={{
-                            padding: "12px 20px",
-                            background: isActive ? "var(--bg-primary)" : "transparent",
-                            border: "none",
-                            borderBottom: isActive ? "2px solid var(--accent)" : "2px solid transparent",
-                            color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
-                            cursor: "pointer",
-                            fontSize: "14px",
-                            fontWeight: isActive ? "600" : "400",
-                            transition: "all 0.2s",
-                          }}
-                        >
-                          {tab.label}
-                        </button>
-                      );
-                    })}
+                                  setNewEmotionalStateForm({ selectedEmotions: {}, notes: "" });
+                                  setNewEmotionalStateSurveyResponses({});
+                                  setNewEmotionalStateLinkScope("entry");
+                                  setNewEmotionalStateTradeIndices([]);
+                                  setShowAddEmotionalStateForm(false);
+                                }
+                              }} style={{ marginTop: "12px", padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ? "not-allowed" : "pointer", fontSize: "13px", fontWeight: "600", opacity: Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ? 0.6 : 1 }}>Add emotional state to entry</button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                  )}
+                  {/* Duplicate trade fields and section tabs removed - content in consolidated bar and scrolling sections above */}
 
-                  {/* Tab Content */}
-                  <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", padding: isTabContentMaximized ? "40px" : "20px", position: "relative" }}>
+                  {/* Tab Content - hidden; section content is in scrolling sections above. Shown only when maximized for legacy tab switcher. */}
+                  <div style={{ flex: 1, overflow: "hidden", display: isTabContentMaximized ? "flex" : "none", flexDirection: "column", padding: isTabContentMaximized ? "40px" : "20px", position: "relative" }}>
                     {/* Maximize button for tab content */}
                     <button
                       onClick={() => setIsTabContentMaximized(!isTabContentMaximized)}
@@ -6407,6 +6609,68 @@ export default function Journal() {
                 Done
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Section order modal: reorder journal entry sections */}
+      {showSectionOrderModal && (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setShowSectionOrderModal(false)}>
+          <div style={{ backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "12px", padding: "20px", width: "90%", maxWidth: "420px", boxShadow: "0 8px 32px rgba(0,0,0,0.3)" }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>Reorder sections</h3>
+            <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "16px" }}>Drag order is saved automatically. Use arrows to move sections.</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "60vh", overflowY: "auto" }}>
+              {journalSectionOrder.map((sectionId, index) => (
+                <div key={sectionId} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                  <GripVertical size={16} style={{ color: "var(--text-secondary)", flexShrink: 0 }} />
+                  <span style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{JOURNAL_SECTION_LABELS[sectionId]}</span>
+                  <button type="button" disabled={index === 0} onClick={() => setJournalSectionOrder((prev) => { const next = [...prev]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return next; })} style={{ padding: "4px 8px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: index === 0 ? "var(--text-secondary)" : "var(--text-primary)", cursor: index === 0 ? "not-allowed" : "pointer", display: "flex" }} title="Move up"><ChevronUp size={16} /></button>
+                  <button type="button" disabled={index === journalSectionOrder.length - 1} onClick={() => setJournalSectionOrder((prev) => { const next = [...prev]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; return next; })} style={{ padding: "4px 8px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: index === journalSectionOrder.length - 1 ? "var(--text-secondary)" : "var(--text-primary)", cursor: index === journalSectionOrder.length - 1 ? "not-allowed" : "pointer", display: "flex" }} title="Move down"><ChevronDown size={16} /></button>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: "16px", display: "flex", justifyContent: "flex-end" }}>
+              <button type="button" onClick={() => setShowSectionOrderModal(false)} style={{ padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "13px" }}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Trade association modal (for checklist items in scrolling sections) */}
+      {tradeAssociationModalItemId !== null && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setTradeAssociationModalItemId(null)}>
+          <div style={{ background: "var(--bg-primary)", borderRadius: "8px", padding: "20px", maxWidth: "400px", width: "90%", border: "1px solid var(--border-color)" }} onClick={e => e.stopPropagation()}>
+            <h4 style={{ margin: "0 0 12px", fontSize: "14px" }}>Associate with trades</h4>
+            <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>By default this applies to the whole journal. Optionally link to specific <strong>journal trades</strong> in this entry ({entryTradesForAssociation.length}):</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                <input type="checkbox" checked={!(checklistTradeAssociations.get(tradeAssociationModalItemId)?.length)} onChange={() => setChecklistTradeAssociation(tradeAssociationModalItemId, null)} />
+                <span>Whole entry (default)</span>
+              </label>
+              <div style={{ maxHeight: "240px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", paddingRight: "4px" }}>
+                {entryTradesForAssociation.map((t, i) => {
+                  const key: number = selectedEntry && (t as { id?: number }).id != null ? (t as { id: number }).id : i;
+                  const label = (t as { symbol?: string }).symbol || `Trade ${i + 1}`;
+                  const currentAssoc = checklistTradeAssociations.get(tradeAssociationModalItemId);
+                  const isSelected = !!currentAssoc && currentAssoc.length > 0 && currentAssoc.includes(key);
+                  const toggleTrade = () => {
+                    const prev = checklistTradeAssociations.get(tradeAssociationModalItemId) || [];
+                    const ids = prev.length > 0 ? [...prev] : [];
+                    const idx = ids.indexOf(key);
+                    if (idx >= 0) ids.splice(idx, 1);
+                    else ids.push(key);
+                    setChecklistTradeAssociation(tradeAssociationModalItemId, ids.length > 0 ? ids : null);
+                  };
+                  return (
+                    <label key={i} style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", flexShrink: 0 }}>
+                      <input type="checkbox" checked={isSelected} onChange={toggleTrade} />
+                      <span>{label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+            <button type="button" onClick={() => setTradeAssociationModalItemId(null)} style={{ padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer" }}>Done</button>
           </div>
         </div>
       )}
