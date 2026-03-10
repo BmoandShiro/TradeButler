@@ -2,6 +2,21 @@ import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, ChevronUp, Search, LayoutDashboard, GripVertical } from "lucide-react";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
 import { format, parse } from "date-fns";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
@@ -297,6 +312,72 @@ const JOURNAL_SECTION_LABELS_SCROLL: Record<JournalSectionId, string> = {
 const EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED: JournalSectionId[] = ["emotional_state_during", "emotional_state_after", "emotional_state_notes"];
 
 const JOURNAL_SECTION_ORDER_KEY = "tradebutler_journal_section_order";
+
+/** Sortable row for the Reorder sections modal (uses @dnd-kit). */
+function SortableSectionRow({
+  sectionId,
+  label,
+  index,
+  totalLength,
+  onMoveUp,
+  onMoveDown,
+}: {
+  sectionId: JournalSectionId;
+  label: string;
+  index: number;
+  totalLength: number;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: sectionId });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        ...style,
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        padding: "8px 10px",
+        backgroundColor: "var(--bg-tertiary)",
+        borderRadius: "8px",
+        border: "1px solid var(--border-color)",
+      }}
+    >
+      <div
+        {...attributes}
+        {...listeners}
+        style={{
+          cursor: "grab",
+          color: "var(--text-secondary)",
+          display: "flex",
+          alignItems: "center",
+          flexShrink: 0,
+        }}
+        title="Drag to reorder"
+      >
+        <GripVertical size={16} />
+      </div>
+      <span style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{label}</span>
+      <button type="button" disabled={index === 0} onClick={onMoveUp} style={{ padding: "4px 8px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: index === 0 ? "var(--text-secondary)" : "var(--text-primary)", cursor: index === 0 ? "not-allowed" : "pointer", display: "flex" }} title="Move up"><ChevronUp size={16} /></button>
+      <button type="button" disabled={index === totalLength - 1} onClick={onMoveDown} style={{ padding: "4px 8px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: index === totalLength - 1 ? "var(--text-secondary)" : "var(--text-primary)", cursor: index === totalLength - 1 ? "not-allowed" : "pointer", display: "flex" }} title="Move down"><ChevronDown size={16} /></button>
+    </div>
+  );
+}
 
 export default function Journal() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
@@ -677,6 +758,19 @@ export default function Journal() {
     } catch {
       /* ignore */
     }
+  }, [journalSectionOrder]);
+
+  // Drag-and-drop for Reorder sections modal
+  const sectionOrderSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  );
+  const handleSectionOrderDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = journalSectionOrder.indexOf(active.id as JournalSectionId);
+    const newIndex = journalSectionOrder.indexOf(over.id as JournalSectionId);
+    if (oldIndex === -1 || newIndex === -1) return;
+    setJournalSectionOrder((prev) => arrayMove(prev, oldIndex, newIndex));
   }, [journalSectionOrder]);
 
   // Save scroll position when switching tabs
@@ -3807,7 +3901,7 @@ export default function Journal() {
               )}
 
               {/* Section nav: scroll-to links + reorder */}
-              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", padding: "8px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "5px", padding: "6px 12px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
                 {journalSectionOrder
                   .filter((sectionId) => !EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId) || showAddEmotionalStateForm)
                   .map((sectionId) => (
@@ -3815,13 +3909,63 @@ export default function Journal() {
                     key={sectionId}
                     type="button"
                     onClick={() => scrollToSection(sectionId)}
-                    style={{ padding: "4px 10px", fontSize: "11px", fontWeight: "500", color: "var(--text-primary)", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "6px", cursor: "pointer" }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "var(--accent)";
+                      e.currentTarget.style.color = "white";
+                      e.currentTarget.style.borderColor = "var(--accent)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "var(--bg-primary)";
+                      e.currentTarget.style.color = "var(--accent)";
+                      e.currentTarget.style.borderColor = "var(--accent)";
+                    }}
+                    style={{
+                      padding: "4px 10px",
+                      fontSize: "11px",
+                      fontWeight: "500",
+                      letterSpacing: "0.02em",
+                      color: "var(--accent)",
+                      background: "var(--bg-primary)",
+                      border: "1px solid var(--accent)",
+                      borderRadius: "999px",
+                      cursor: "pointer",
+                      transition: "background 0.12s ease, color 0.12s ease, border-color 0.12s ease",
+                    }}
                   >
                     {JOURNAL_SECTION_LABELS[sectionId]}
                   </button>
                 ))}
-                <button type="button" onClick={() => setShowSectionOrderModal(true)} style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "transparent", border: "1px dashed var(--border-color)", borderRadius: "6px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "4px" }} title="Reorder sections">
-                  <GripVertical size={12} /> Order
+                <button
+                  type="button"
+                  onClick={() => setShowSectionOrderModal(true)}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "var(--bg-hover)";
+                    e.currentTarget.style.borderColor = "var(--text-secondary)";
+                    e.currentTarget.style.color = "var(--text-primary)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.borderColor = "var(--border-color)";
+                    e.currentTarget.style.color = "var(--text-secondary)";
+                  }}
+                  style={{
+                    padding: "4px 8px",
+                    fontSize: "11px",
+                    fontWeight: "500",
+                    letterSpacing: "0.02em",
+                    color: "var(--text-secondary)",
+                    background: "transparent",
+                    border: "1px dashed var(--border-color)",
+                    borderRadius: "999px",
+                    cursor: "pointer",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "4px",
+                    transition: "background 0.12s ease, border-color 0.12s ease, color 0.12s ease",
+                  }}
+                  title="Reorder sections"
+                >
+                  <GripVertical size={11} /> Order
                 </button>
               </div>
                 </>
@@ -4069,20 +4213,28 @@ export default function Journal() {
                                     setLinkExistingEmotionalStateScope("trades");
                                     setLinkExistingEmotionalStateTradeIndex(activeTradeIndex);
                                   }}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.background = "var(--accent-hover)";
+                                    e.currentTarget.style.borderColor = "var(--accent-hover)";
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.background = "var(--accent)";
+                                    e.currentTarget.style.borderColor = "var(--accent)";
+                                  }}
                                   style={{
                                     display: "inline-flex",
                                     alignItems: "center",
                                     justifyContent: "center",
                                     gap: "6px",
-                                    padding: "10px 16px",
-                                    background: "linear-gradient(135deg, #4a3680 0%, #352654 50%, #2a1e40 100%)",
-                                    border: "1px solid rgba(168, 85, 247, 0.55)",
+                                    padding: "8px 14px",
+                                    background: "var(--accent)",
+                                    border: "1px solid var(--accent)",
                                     borderRadius: "6px",
-                                    color: "rgba(240, 232, 255, 0.95)",
+                                    color: "white",
                                     fontSize: "13px",
                                     cursor: "pointer",
                                     fontWeight: 600,
-                                    boxShadow: "0 0 0 1px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(88, 28, 135, 0.35)",
+                                    transition: "background 0.15s ease, border-color 0.15s ease",
                                   }}
                                 >
                                   + Add emotional state
@@ -6791,14 +6943,33 @@ export default function Journal() {
             <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>Reorder sections</h3>
             <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "16px" }}>Drag order is saved automatically. Use arrows to move sections.</p>
             <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "60vh", overflowY: "auto" }}>
-              {journalSectionOrder.map((sectionId, index) => (
-                <div key={sectionId} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
-                  <GripVertical size={16} style={{ color: "var(--text-secondary)", flexShrink: 0 }} />
-                  <span style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{JOURNAL_SECTION_LABELS[sectionId]}</span>
-                  <button type="button" disabled={index === 0} onClick={() => setJournalSectionOrder((prev) => { const next = [...prev]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return next; })} style={{ padding: "4px 8px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: index === 0 ? "var(--text-secondary)" : "var(--text-primary)", cursor: index === 0 ? "not-allowed" : "pointer", display: "flex" }} title="Move up"><ChevronUp size={16} /></button>
-                  <button type="button" disabled={index === journalSectionOrder.length - 1} onClick={() => setJournalSectionOrder((prev) => { const next = [...prev]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; return next; })} style={{ padding: "4px 8px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: index === journalSectionOrder.length - 1 ? "var(--text-secondary)" : "var(--text-primary)", cursor: index === journalSectionOrder.length - 1 ? "not-allowed" : "pointer", display: "flex" }} title="Move down"><ChevronDown size={16} /></button>
-                </div>
-              ))}
+              <DndContext
+                sensors={sectionOrderSensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleSectionOrderDragEnd}
+              >
+                <SortableContext items={journalSectionOrder} strategy={verticalListSortingStrategy}>
+                  {journalSectionOrder.map((sectionId, index) => (
+                    <SortableSectionRow
+                      key={sectionId}
+                      sectionId={sectionId}
+                      label={JOURNAL_SECTION_LABELS[sectionId]}
+                      index={index}
+                      totalLength={journalSectionOrder.length}
+                      onMoveUp={() => setJournalSectionOrder((prev) => {
+                        const next = [...prev];
+                        [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                        return next;
+                      })}
+                      onMoveDown={() => setJournalSectionOrder((prev) => {
+                        const next = [...prev];
+                        [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                        return next;
+                      })}
+                    />
+                  ))}
+                </SortableContext>
+              </DndContext>
             </div>
             <div style={{ marginTop: "16px", display: "flex", justifyContent: "flex-end" }}>
               <button type="button" onClick={() => setShowSectionOrderModal(false)} style={{ padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "13px" }}>Done</button>
