@@ -691,16 +691,27 @@ function MetricsDisplay({
     { key: "interferenceTemptation", label: "Interference Temptation", color: "#3b82f6" },
     { key: "excitementGreedRaw", label: "Excitement/Greed", color: "#ec4899" },
   ];
-  const [visibleMain, setVisibleMain] = useState<Record<string, boolean>>(() =>
-    GOOD_HIGH_SERIES.reduce((acc, { key }) => ({ ...acc, [key]: true }), {})
-  );
   const [visibleGoodHigh, setVisibleGoodHigh] = useState<Record<string, boolean>>(() =>
     GOOD_HIGH_SERIES.reduce((acc, { key }) => ({ ...acc, [key]: true }), {})
   );
   const [visibleGoodLow, setVisibleGoodLow] = useState<Record<string, boolean>>(() =>
     GOOD_LOW_SERIES.reduce((acc, { key }) => ({ ...acc, [key]: true }), {})
   );
-  const toggleMain = (key: string) => setVisibleMain((prev) => ({ ...prev, [key]: !prev[key] }));
+  type MetricChartTab = "readiness" | "impulse" | "aftermath" | "risks";
+  const [metricChartTab, setMetricChartTab] = useState<MetricChartTab>("readiness");
+  const GOOD_HIGH_GROUPS: Record<MetricChartTab, string[]> = {
+    readiness: ["stability", "discipline", "preTradeClarity"],
+    impulse: ["fomo", "urgency", "interference", "excitementGreed"],
+    aftermath: ["revengeRisk", "fear", "overconfidence"],
+    risks: [],
+  };
+  /** Themed line colors per chart tab — convey the emotion of each group */
+  const CHART_TAB_PALETTES: Record<MetricChartTab, string[]> = {
+    readiness: ["#3b82f6", "#0ea5e9", "#14b8a6"], // Calm blues & teals — clarity, stability, discipline
+    impulse: ["#f59e0b", "#f97316", "#eab308", "#fb923c"], // Warm ambers & oranges — urgency, FOMO, pressure
+    aftermath: ["#a855f7", "#06b6d4", "#ec4899"], // Violet, cyan, rose — emotional closure, wins & losses
+    risks: ["#64748b", "#94a3b8", "#f87171", "#fb923c", "#a78bfa", "#38bdf8", "#f472b6"], // Muted slate + accent — caution, risk
+  };
   const toggleGoodHigh = (key: string) => setVisibleGoodHigh((prev) => ({ ...prev, [key]: !prev[key] }));
   const toggleGoodLow = (key: string) => setVisibleGoodLow((prev) => ({ ...prev, [key]: !prev[key] }));
   useEffect(() => {
@@ -709,7 +720,6 @@ function MetricsDisplay({
   useEffect(() => {
     setMetricModalBrushEnd(0);
   }, [metricGraphOpen]);
-  if (surveys.length === 0 && states.length === 0) return null;
 
   const filteredSurveysForChart = useMemo(() => {
     const { start, end } = getTimeframeDates(chartTimeframe, chartCustomStart, chartCustomEnd);
@@ -1387,26 +1397,51 @@ function MetricsDisplay({
   }, [states]);
   void chartData; // reserved for chart use
 
+  // Safe 1–5 value for survey fields (avoids NaN when sandbox/localStorage has missing keys)
+  const surveyVal = (s: EmotionSurvey, key: keyof EmotionSurvey): number => {
+    const v = Number((s as Record<string, unknown>)[key]);
+    return Number.isFinite(v) ? Math.max(1, Math.min(5, v)) : 3;
+  };
+
   // Full survey time-series: one row per survey with all metric values (for metric graph modal)
   const surveyChartDataFull = useMemo(() => {
     if (filteredSurveysForChart.length === 0) return [];
     return filteredSurveysForChart
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+      .sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime())
       .map((survey) => {
-        const emotionalStability = (6 - survey.during_stable + 6 - survey.during_mentally_present + 6 - survey.after_accept_outcome) / 3;
-        const discipline = (6 - survey.before_patient_detached + 6 - survey.during_need_control + survey.after_proud_discipline) / 3;
-        const fomo = 6 - survey.before_fomo;
-        const revengeRaw = (survey.before_recovering_loss + survey.after_tempted_another_trade) / 2;
+        const during_stable = surveyVal(survey, "during_stable");
+        const during_mentally_present = surveyVal(survey, "during_mentally_present");
+        const after_accept_outcome = surveyVal(survey, "after_accept_outcome");
+        const before_patient_detached = surveyVal(survey, "before_patient_detached");
+        const during_need_control = surveyVal(survey, "during_need_control");
+        const after_proud_discipline = surveyVal(survey, "after_proud_discipline");
+        const before_fomo = surveyVal(survey, "before_fomo");
+        const before_recovering_loss = surveyVal(survey, "before_recovering_loss");
+        const after_tempted_another_trade = surveyVal(survey, "after_tempted_another_trade");
+        const after_confidence_affected = surveyVal(survey, "after_confidence_affected");
+        const during_fear_loss = surveyVal(survey, "during_fear_loss");
+        const after_emotional_reaction = surveyVal(survey, "after_emotional_reaction");
+        const before_calm_clear = surveyVal(survey, "before_calm_clear");
+        const before_urgency_pressure = surveyVal(survey, "before_urgency_pressure");
+        const during_tempted_interfere = surveyVal(survey, "during_tempted_interfere");
+        const during_excitement_greed = surveyVal(survey, "during_excitement_greed");
+
+        const emotionalStability = (6 - during_stable + 6 - during_mentally_present + 6 - after_accept_outcome) / 3;
+        const discipline = (6 - before_patient_detached + 6 - during_need_control + after_proud_discipline) / 3;
+        const fomo = 6 - before_fomo;
+        const revengeRaw = (before_recovering_loss + after_tempted_another_trade) / 2;
         const revengeRisk = 6 - revengeRaw;
-        const overconfidence = 6 - survey.after_confidence_affected;
-        const fearRaw = (survey.during_fear_loss + survey.after_emotional_reaction) / 2;
+        const overconfidence = 6 - after_confidence_affected;
+        const fearRaw = (during_fear_loss + after_emotional_reaction) / 2;
         const fear = 6 - fearRaw;
-        const preTradeClarity = survey.before_calm_clear;
-        const urgency = 6 - survey.before_urgency_pressure;
-        const interference = 6 - survey.during_tempted_interfere;
-        const excitementGreed = 6 - survey.during_excitement_greed;
+        const preTradeClarity = before_calm_clear;
+        const urgency = 6 - before_urgency_pressure;
+        const interference = 6 - during_tempted_interfere;
+        const excitementGreed = 6 - during_excitement_greed;
+
+        const ts = survey.timestamp && !Number.isNaN(new Date(survey.timestamp).getTime()) ? survey.timestamp : new Date().toISOString();
         return {
-          date: format(new Date(survey.timestamp), "MMM dd"),
+          date: format(new Date(ts), "MMM dd"),
           emotionalStability: parseFloat(emotionalStability.toFixed(2)),
           discipline: parseFloat(discipline.toFixed(2)),
           fomo: parseFloat(fomo.toFixed(2)),
@@ -1417,14 +1452,13 @@ function MetricsDisplay({
           urgency: parseFloat(urgency.toFixed(2)),
           interference: parseFloat(interference.toFixed(2)),
           excitementGreed: parseFloat(excitementGreed.toFixed(2)),
-          // Raw "good low" metrics (lower = better)
-          fomoRisk: parseFloat(survey.before_fomo.toFixed(2)),
+          fomoRisk: parseFloat(before_fomo.toFixed(2)),
           revengeTendency: parseFloat(revengeRaw.toFixed(2)),
-          overconfidenceRaw: parseFloat(survey.after_confidence_affected.toFixed(2)),
+          overconfidenceRaw: parseFloat(after_confidence_affected.toFixed(2)),
           fearTendency: parseFloat(fearRaw.toFixed(2)),
-          urgencyPressure: parseFloat(survey.before_urgency_pressure.toFixed(2)),
-          interferenceTemptation: parseFloat(survey.during_tempted_interfere.toFixed(2)),
-          excitementGreedRaw: parseFloat(survey.during_excitement_greed.toFixed(2)),
+          urgencyPressure: parseFloat(before_urgency_pressure.toFixed(2)),
+          interferenceTemptation: parseFloat(during_tempted_interfere.toFixed(2)),
+          excitementGreedRaw: parseFloat(during_excitement_greed.toFixed(2)),
         };
       });
   }, [filteredSurveysForChart]);
@@ -1495,7 +1529,11 @@ function MetricsDisplay({
   }, [stateMetricChartData]);
 
   // Survey trends chart: all good-high metrics on 0–10 scale (same as metric cards)
-  const surveyToDisplay10 = (raw: number) => Math.max(0, Math.min(10, (raw - 1) * 2.5));
+  const surveyToDisplay10 = (raw: number) => {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return 5;
+    return Math.max(0, Math.min(10, (n - 1) * 2.5));
+  };
   const surveyChartData = useMemo(
     () =>
       sampleTimeSeries(
@@ -1547,6 +1585,8 @@ function MetricsDisplay({
       : Math.max(0, surveyChartData.length - 1);
   const surveyXInterval = xAxisInterval(Math.max(1, surveyBrushEnd - surveyBrushStart + 1));
   const surveyShowDots = surveyBrushEnd - surveyBrushStart + 1 <= 50;
+
+  if (surveys.length === 0 && states.length === 0) return null;
 
   return (
     <div style={{ marginBottom: "30px" }}>
@@ -2386,214 +2426,222 @@ function MetricsDisplay({
         );
       })()}
 
-      {/* Survey Trends Chart — all metrics, toggleable */}
-      {surveys.length > 0 && (
-        <div
-          style={{
-            backgroundColor: "var(--bg-secondary)",
-            border: "1px solid var(--border-color)",
-            borderRadius: "8px",
-            padding: "24px",
-            marginBottom: "30px",
-          }}
-        >
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "16px", marginBottom: "16px" }}>
-            <h2 style={{ fontSize: "20px", fontWeight: "600", margin: 0 }}>Emotional Metrics Trends</h2>
-            {onChartTimeframeChange && (
-              <TimeframeSelector
-                value={chartTimeframe}
-                onChange={(tf) => {
-                  onChartTimeframeChange(tf);
-                  setSurveyChartBrushEnd(0);
+      {/* Survey Trends Charts — grouped into tabs */}
+      {surveys.length > 0 && (() => {
+        const tabs: { id: MetricChartTab; label: string; subtitle: string; description: string }[] = [
+          {
+            id: "readiness",
+            label: "Readiness",
+            subtitle: "Stability, clarity, discipline",
+            description: "How calm, clear, and disciplined you were before and during trades. Higher scores mean you were more mentally prepared and less reactive—ideal for sticking to your plan.",
+          },
+          {
+            id: "impulse",
+            label: "Impulse & FOMO",
+            subtitle: "FOMO, urgency, interference",
+            description: "Resistance to pressure and impulse: FOMO, urgency to act, temptation to interfere with trades, and excitement or greed. Higher is better—strong resistance supports patient, rule-based trading.",
+          },
+          {
+            id: "aftermath",
+            label: "After wins & losses",
+            subtitle: "Revenge, fear, overconfidence",
+            description: "How you respond after trades: revenge-trade risk, fear after losses, and overconfidence after wins. Higher scores indicate healthier emotional closure and less carry-over into the next trade.",
+          },
+          {
+            id: "risks",
+            label: "Raw risks (lower is better)",
+            subtitle: "FOMO, revenge, fear, excitement",
+            description: "Raw tendency levels where lower is better: FOMO, revenge urge, overconfidence, fear or emotional reaction, urgency pressure, interference temptation, and excitement/greed. Use this chart to spot when these risks are rising.",
+          },
+        ];
+        const isRisks = metricChartTab === "risks";
+        const chartData = isRisks ? surveyGoodLowChartData : surveyChartData;
+        const useBrush = isRisks ? surveyGoodLowChartData.length > 24 : surveyUseBrush;
+        const chartHeight = useBrush ? 340 : 300;
+        const highKeys = GOOD_HIGH_GROUPS[metricChartTab] ?? [];
+        const highSeries = GOOD_HIGH_SERIES.filter((s) => highKeys.includes(s.key));
+        const lowSeries = GOOD_LOW_SERIES;
+        const visibleSeries = isRisks ? visibleGoodLow : visibleGoodHigh;
+        const toggleSeries = isRisks ? toggleGoodLow : toggleGoodHigh;
+        const seriesForTab = isRisks ? lowSeries : highSeries;
+        const palette = CHART_TAB_PALETTES[metricChartTab] ?? CHART_TAB_PALETTES.readiness;
+        const seriesWithTheme = seriesForTab.map((s, i) => ({ ...s, color: (palette && palette[i % palette.length]) ?? s.color }));
+        const activeTabInfo = tabs.find((t) => t.id === metricChartTab);
+        const chartThemes: Record<MetricChartTab, { backgroundImage: string; boxShadow?: string }> = {
+          readiness:
+            { backgroundImage: "linear-gradient(145deg, rgba(59, 130, 246, 0.08) 0%, transparent 42%, transparent 58%, rgba(34, 197, 94, 0.06) 100%)", boxShadow: "0 4px 16px rgba(0,0,0,0.1)" },
+          impulse:
+            { backgroundImage: "linear-gradient(145deg, rgba(245, 158, 11, 0.08) 0%, transparent 42%, transparent 58%, rgba(234, 179, 8, 0.05) 100%)", boxShadow: "0 4px 16px rgba(0,0,0,0.1)" },
+          aftermath:
+            { backgroundImage: "linear-gradient(145deg, rgba(168, 85, 247, 0.07) 0%, transparent 42%, transparent 58%, rgba(244, 63, 94, 0.05) 100%)", boxShadow: "0 4px 16px rgba(0,0,0,0.1)" },
+          risks:
+            { backgroundImage: "linear-gradient(145deg, rgba(100, 116, 139, 0.06) 0%, transparent 42%, transparent 58%, rgba(239, 68, 68, 0.06) 100%)", boxShadow: "0 4px 16px rgba(0,0,0,0.1)" },
+        };
+        const theme = chartThemes[metricChartTab];
+        return (
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              padding: "24px",
+              marginBottom: "30px",
+            }}
+          >
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "16px", marginBottom: "16px" }}>
+              <h2 style={{ fontSize: "20px", fontWeight: "600", margin: 0 }}>Emotional Metrics Trends</h2>
+              {onChartTimeframeChange && (
+                <TimeframeSelector
+                  value={chartTimeframe}
+                  onChange={(tf) => {
+                    onChartTimeframeChange(tf);
+                    setSurveyChartBrushEnd(0);
+                  }}
+                  customStartDate={chartCustomStart || undefined}
+                  customEndDate={chartCustomEnd || undefined}
+                  onCustomDatesChange={onChartCustomDatesChange}
+                />
+              )}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "12px" }}>
+              {tabs.map((tab) => {
+                const active = metricChartTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setMetricChartTab(tab.id)}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-start",
+                      justifyContent: "center",
+                      padding: "8px 12px",
+                      borderRadius: "999px",
+                      border: active ? "1px solid var(--accent)" : "1px solid var(--border-color)",
+                      background: active ? "color-mix(in srgb, var(--accent) 20%, transparent)" : "transparent",
+                      color: "var(--text-primary)",
+                      fontSize: "12px",
+                      cursor: "pointer",
+                      minWidth: "140px",
+                    }}
+                  >
+                    <span style={{ fontWeight: 600 }}>{tab.label}</span>
+                    <span style={{ opacity: 0.7 }}>{tab.subtitle}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {activeTabInfo?.description && (
+              <p
+                style={{
+                  margin: "0 0 12px 0",
+                  fontSize: "13px",
+                  lineHeight: 1.5,
+                  color: "var(--text-secondary)",
+                  maxWidth: "720px",
                 }}
-                customStartDate={chartCustomStart || undefined}
-                customEndDate={chartCustomEnd || undefined}
-                onCustomDatesChange={onChartCustomDatesChange}
-              />
+              >
+                {activeTabInfo.description}
+              </p>
             )}
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", marginBottom: "12px", alignItems: "center" }}>
-            {GOOD_HIGH_SERIES.map(({ key, label, color }) => (
-              <label key={key} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "13px", color: "var(--text-secondary)" }}>
-                <input
-                  type="checkbox"
-                  checked={!!visibleMain[key]}
-                  onChange={() => toggleMain(key)}
-                  style={{ accentColor: color }}
-                />
-                <span style={{ width: "10px", height: "10px", borderRadius: "2px", backgroundColor: visibleMain[key] ? color : "var(--border-color)", flexShrink: 0 }} />
-                {label}
-              </label>
-            ))}
-          </div>
-          <ResponsiveContainer width="100%" height={surveyUseBrush ? 340 : 300}>
-            <LineChart data={surveyChartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-              <XAxis
-                dataKey="date"
-                interval={surveyXInterval}
-                stroke="var(--text-secondary)"
-                style={{ fontSize: "12px" }}
-              />
-              <YAxis
-                domain={[0, 10]}
-                stroke="var(--text-secondary)"
-                style={{ fontSize: "12px" }}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "var(--bg-primary)",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "6px",
-                  color: "var(--text-primary)",
-                }}
-              />
-              {GOOD_HIGH_SERIES.filter((s) => visibleMain[s.key]).map(({ key, label, color }) => (
-                <Line
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", marginBottom: "12px", alignItems: "center" }}>
+              {seriesWithTheme.map(({ key, label, color }) => (
+                <label
                   key={key}
-                  type="monotone"
-                  dataKey={key}
-                  stroke={color}
-                  strokeWidth={2}
-                  dot={surveyShowDots ? { fill: color, r: 4 } : false}
-                  name={label}
-                />
-              ))}
-              {surveyUseBrush && (
-                <Brush
-                  data={surveyChartData}
-                  dataKey="date"
-                  height={36}
-                  stroke="var(--border-color)"
-                  fill="var(--bg-tertiary)"
-                  startIndex={surveyBrushStart}
-                  endIndex={surveyBrushEnd}
-                  onDragEnd={(range: { startIndex?: number; endIndex?: number }) => {
-                    if (range.startIndex != null && range.endIndex != null) {
-                      setSurveyChartBrushStart(range.startIndex);
-                      setSurveyChartBrushEnd(range.endIndex);
-                    }
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    cursor: "pointer",
+                    fontSize: "13px",
+                    color: "var(--text-secondary)",
                   }}
-                />
-              )}
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* Good when high — metrics where higher is better */}
-      {surveys.length > 0 && (
-        <div
-          style={{
-            backgroundColor: "var(--bg-secondary)",
-            border: "1px solid var(--border-color)",
-            borderRadius: "8px",
-            padding: "24px",
-            marginBottom: "30px",
-          }}
-        >
-          <h2 style={{ fontSize: "20px", fontWeight: "600", margin: "0 0 12px 0" }}>Metrics where higher is better</h2>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", marginBottom: "12px", alignItems: "center" }}>
-            {GOOD_HIGH_SERIES.map(({ key, label, color }) => (
-              <label key={key} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "13px", color: "var(--text-secondary)" }}>
-                <input
-                  type="checkbox"
-                  checked={!!visibleGoodHigh[key]}
-                  onChange={() => toggleGoodHigh(key)}
-                  style={{ accentColor: color }}
-                />
-                <span style={{ width: "10px", height: "10px", borderRadius: "2px", backgroundColor: visibleGoodHigh[key] ? color : "var(--border-color)", flexShrink: 0 }} />
-                {label}
-              </label>
-            ))}
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!visibleSeries[key]}
+                    onChange={() => toggleSeries(key)}
+                    style={{ accentColor: color }}
+                  />
+                  <span
+                    style={{
+                      width: "10px",
+                      height: "10px",
+                      borderRadius: "2px",
+                      backgroundColor: visibleSeries[key] ? color : "var(--border-color)",
+                      flexShrink: 0,
+                    }}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <div
+              style={{
+                backgroundColor: "var(--bg-tertiary)",
+                backgroundImage: theme.backgroundImage,
+                border: "1px solid var(--border-color)",
+                borderRadius: "14px",
+                boxShadow: theme.boxShadow ?? "0 4px 16px rgba(0,0,0,0.12)",
+                padding: "20px 20px 16px",
+              }}
+            >
+              <ResponsiveContainer width="100%" height={chartHeight}>
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" opacity={0.7} />
+                  <XAxis
+                    dataKey="date"
+                    interval={surveyXInterval}
+                    stroke="var(--text-secondary)"
+                    style={{ fontSize: "12px" }}
+                  />
+                  <YAxis domain={[0, 10]} stroke="var(--text-secondary)" style={{ fontSize: "12px" }} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "var(--bg-primary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "6px",
+                      color: "var(--text-primary)",
+                    }}
+                  />
+                  {seriesWithTheme
+                    .filter((s) => visibleSeries[s.key])
+                    .map(({ key, label, color }) => (
+                      <Line
+                        key={key}
+                        type="monotone"
+                        dataKey={key}
+                        stroke={color}
+                        strokeWidth={2}
+                        dot={surveyShowDots ? { fill: color, r: 4 } : false}
+                        activeDot={{ r: 6, stroke: color, strokeWidth: 1.5 }}
+                        name={label}
+                      />
+                    ))}
+                {useBrush && (
+                  <Brush
+                    data={chartData}
+                    dataKey="date"
+                    height={36}
+                    stroke="var(--border-color)"
+                    fill="var(--bg-tertiary)"
+                    startIndex={surveyBrushStart}
+                    endIndex={surveyBrushEnd}
+                    onDragEnd={(range: { startIndex?: number; endIndex?: number }) => {
+                      if (range.startIndex != null && range.endIndex != null) {
+                        setSurveyChartBrushStart(range.startIndex);
+                        setSurveyChartBrushEnd(range.endIndex);
+                      }
+                    }}
+                  />
+                )}
+              </LineChart>
+            </ResponsiveContainer>
+            </div>
           </div>
-          <ResponsiveContainer width="100%" height={surveyUseBrush ? 340 : 300}>
-            <LineChart data={surveyChartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-              <XAxis dataKey="date" interval={surveyXInterval} stroke="var(--text-secondary)" style={{ fontSize: "12px" }} />
-              <YAxis domain={[0, 10]} stroke="var(--text-secondary)" style={{ fontSize: "12px" }} />
-              <Tooltip contentStyle={{ backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)" }} />
-              {GOOD_HIGH_SERIES.filter((s) => visibleGoodHigh[s.key]).map(({ key, label, color }) => (
-                <Line key={key} type="monotone" dataKey={key} stroke={color} strokeWidth={2} dot={surveyShowDots ? { fill: color, r: 4 } : false} name={label} />
-              ))}
-              {surveyUseBrush && (
-                <Brush
-                  data={surveyChartData}
-                  dataKey="date"
-                  height={36}
-                  stroke="var(--border-color)"
-                  fill="var(--bg-tertiary)"
-                  startIndex={surveyBrushStart}
-                  endIndex={surveyBrushEnd}
-                  onDragEnd={(range: { startIndex?: number; endIndex?: number }) => {
-                    if (range.startIndex != null && range.endIndex != null) {
-                      setSurveyChartBrushStart(range.startIndex);
-                      setSurveyChartBrushEnd(range.endIndex);
-                    }
-                  }}
-                />
-              )}
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* Good when low — metrics where lower is better */}
-      {surveys.length > 0 && surveyGoodLowChartData.length > 0 && (
-        <div
-          style={{
-            backgroundColor: "var(--bg-secondary)",
-            border: "1px solid var(--border-color)",
-            borderRadius: "8px",
-            padding: "24px",
-            marginBottom: "30px",
-          }}
-        >
-          <h2 style={{ fontSize: "20px", fontWeight: "600", margin: "0 0 12px 0" }}>Metrics where lower is better</h2>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", marginBottom: "12px", alignItems: "center" }}>
-            {GOOD_LOW_SERIES.map(({ key, label, color }) => (
-              <label key={key} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "13px", color: "var(--text-secondary)" }}>
-                <input
-                  type="checkbox"
-                  checked={!!visibleGoodLow[key]}
-                  onChange={() => toggleGoodLow(key)}
-                  style={{ accentColor: color }}
-                />
-                <span style={{ width: "10px", height: "10px", borderRadius: "2px", backgroundColor: visibleGoodLow[key] ? color : "var(--border-color)", flexShrink: 0 }} />
-                {label}
-              </label>
-            ))}
-          </div>
-          <ResponsiveContainer width="100%" height={surveyGoodLowChartData.length > 24 ? 340 : 300}>
-            <LineChart data={surveyGoodLowChartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-              <XAxis dataKey="date" interval={surveyXInterval} stroke="var(--text-secondary)" style={{ fontSize: "12px" }} />
-              <YAxis domain={[0, 10]} stroke="var(--text-secondary)" style={{ fontSize: "12px" }} />
-              <Tooltip contentStyle={{ backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)" }} />
-              {GOOD_LOW_SERIES.filter((s) => visibleGoodLow[s.key]).map(({ key, label, color }) => (
-                <Line key={key} type="monotone" dataKey={key} stroke={color} strokeWidth={2} dot={surveyShowDots ? { fill: color, r: 4 } : false} name={label} />
-              ))}
-              {surveyGoodLowChartData.length > 24 && (
-                <Brush
-                  data={surveyGoodLowChartData}
-                  dataKey="date"
-                  height={36}
-                  stroke="var(--border-color)"
-                  fill="var(--bg-tertiary)"
-                  startIndex={surveyBrushStart}
-                  endIndex={surveyBrushEnd}
-                  onDragEnd={(range: { startIndex?: number; endIndex?: number }) => {
-                    if (range.startIndex != null && range.endIndex != null) {
-                      setSurveyChartBrushStart(range.startIndex);
-                      setSurveyChartBrushEnd(range.endIndex);
-                    }
-                  }}
-                />
-              )}
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
+        );
+      })()}
 
     </div>
   );
@@ -2931,7 +2979,7 @@ export default function Emotions() {
     try {
       if (dataMode === "sandbox") {
         const data = getSandboxEmotionalStates() as unknown as EmotionalState[];
-        setStates(data);
+        setStates(Array.isArray(data) ? data : []);
         setLoading(false);
         return;
       }
@@ -2939,6 +2987,7 @@ export default function Emotions() {
       setStates(data);
     } catch (error) {
       console.error("Error loading emotional states:", error);
+      if (dataMode === "sandbox") setStates([]);
     } finally {
       setLoading(false);
     }
@@ -2947,13 +2996,15 @@ export default function Emotions() {
   const loadSurveys = async () => {
     try {
       if (dataMode === "sandbox") {
-        setSurveys(getSandboxEmotionSurveys() as EmotionSurvey[]);
+        const data = getSandboxEmotionSurveys();
+        setSurveys(Array.isArray(data) ? (data as EmotionSurvey[]) : []);
         return;
       }
       const data = await invoke<EmotionSurvey[]>("get_all_emotion_surveys");
       setSurveys(data);
     } catch (error) {
       console.error("Error loading surveys:", error);
+      if (dataMode === "sandbox") setSurveys([]);
     }
   };
 
