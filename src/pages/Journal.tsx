@@ -468,6 +468,20 @@ export default function Journal() {
     }
     return [];
   });
+  const [defaultStrategyIdForJournal, setDefaultStrategyIdForJournal] = useState<number | null>(() => {
+    try {
+      const saved = localStorage.getItem(JOURNAL_DEFAULT_STRATEGY_ID_KEY);
+      if (saved) {
+        const n = parseInt(saved, 10);
+        if (Number.isFinite(n)) return n;
+      }
+    } catch {
+      /* ignore */
+    }
+    return null;
+  });
+  const [strategyDropdownOpen, setStrategyDropdownOpen] = useState(false);
+  const strategyDropdownRef = useRef<HTMLDivElement>(null);
   const [showSectionOrderModal, setShowSectionOrderModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -824,6 +838,15 @@ export default function Journal() {
       /* ignore */
     }
   }, [hiddenSectionIds]);
+
+  useEffect(() => {
+    if (!strategyDropdownOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (strategyDropdownRef.current && !strategyDropdownRef.current.contains(e.target as Node)) setStrategyDropdownOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [strategyDropdownOpen]);
 
   // Drag-and-drop for Reorder sections modal (handler is defined after effectiveSectionOrder)
   const sectionOrderSensors = useSensors(
@@ -3863,32 +3886,134 @@ export default function Journal() {
                       style={{ width: "100%", padding: "5px 6px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "13px" }}
                     />
                   </div>
-                  <div style={{ flex: "0 0 140px", minWidth: "100px" }}>
+                  <div style={{ flex: "0 0 140px", minWidth: "100px" }} ref={strategyDropdownRef}>
                     <label style={{ display: "block", marginBottom: "2px", fontSize: "11px", fontWeight: "500", color: "var(--text-secondary)" }}>Strategy</label>
-                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                      <select
-                        value={entryFormData.strategy_id || ""}
-                        onChange={(e) => setEntryFormData({ ...entryFormData, strategy_id: e.target.value ? parseInt(e.target.value) : null })}
-                        style={{ flex: 1, minWidth: 0, padding: "5px 6px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "13px" }}
+                    <div style={{ position: "relative" }}>
+                      <button
+                        type="button"
+                        onClick={() => setStrategyDropdownOpen((o) => !o)}
+                        style={{
+                          width: "100%",
+                          padding: "5px 8px",
+                          textAlign: "left",
+                          backgroundColor: "var(--bg-primary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "4px",
+                          color: "var(--text-primary)",
+                          fontSize: "13px",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: "6px",
+                        }}
                       >
-                        <option value="">Strategy...</option>
-                        {strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                      </select>
-                      {entryFormData.strategy_id != null && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            try {
-                              localStorage.setItem(JOURNAL_DEFAULT_STRATEGY_ID_KEY, String(entryFormData.strategy_id));
-                            } catch {
-                              /* ignore */
-                            }
+                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {entryFormData.strategy_id != null ? (strategies.find((s) => s.id === entryFormData.strategy_id)?.name ?? "None") : "None"}
+                        </span>
+                        <ChevronDown size={14} style={{ flexShrink: 0, opacity: 0.7 }} />
+                      </button>
+                      {strategyDropdownOpen && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: "100%",
+                            left: 0,
+                            right: 0,
+                            marginTop: "2px",
+                            backgroundColor: "var(--bg-secondary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "6px",
+                            boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                            zIndex: 100,
+                            maxHeight: "220px",
+                            overflowY: "auto",
                           }}
-                          title="Use this strategy as default for new journal entries"
-                          style={{ flexShrink: 0, padding: "4px 6px", fontSize: "10px", color: "var(--text-secondary)", background: "transparent", border: "1px dashed var(--border-color)", borderRadius: "4px", cursor: "pointer", whiteSpace: "nowrap" }}
                         >
-                          Set default
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => { setEntryFormData({ ...entryFormData, strategy_id: null }); setStrategyDropdownOpen(false); }}
+                            style={{
+                              width: "100%",
+                              padding: "8px 10px",
+                              textAlign: "left",
+                              background: "none",
+                              border: "none",
+                              borderBottom: "1px solid var(--border-color)",
+                              color: "var(--accent)",
+                              fontSize: "13px",
+                              cursor: "pointer",
+                              fontWeight: 500,
+                            }}
+                          >
+                            None
+                          </button>
+                          {strategies.map((s) => {
+                            const isDefault = defaultStrategyIdForJournal === s.id;
+                            return (
+                              <div
+                                key={s.id}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "12px",
+                                  padding: "4px 8px 4px 12px",
+                                  background: entryFormData.strategy_id === s.id ? "var(--bg-hover)" : "transparent",
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => { setEntryFormData({ ...entryFormData, strategy_id: s.id }); setStrategyDropdownOpen(false); }}
+                                  style={{
+                                    flex: 1,
+                                    minWidth: 0,
+                                    padding: "6px 0",
+                                    textAlign: "left",
+                                    background: "none",
+                                    border: "none",
+                                    color: "var(--text-primary)",
+                                    fontSize: "13px",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  {s.name}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    try {
+                                      if (isDefault) {
+                                        localStorage.removeItem(JOURNAL_DEFAULT_STRATEGY_ID_KEY);
+                                        setDefaultStrategyIdForJournal(null);
+                                      } else {
+                                        localStorage.setItem(JOURNAL_DEFAULT_STRATEGY_ID_KEY, String(s.id));
+                                        setDefaultStrategyIdForJournal(s.id);
+                                      }
+                                    } catch {
+                                      /* ignore */
+                                    }
+                                  }}
+                                  title={isDefault ? "Clear default for new journal entries" : "Use this strategy as default for new journal entries"}
+                                  style={{
+                                    flexShrink: 0,
+                                    padding: "4px 8px",
+                                    fontSize: "11px",
+                                    fontWeight: isDefault ? 600 : 400,
+                                    color: isDefault ? "white" : "var(--text-secondary)",
+                                    background: isDefault ? "var(--accent)" : "transparent",
+                                    border: isDefault ? "1px solid var(--accent)" : "1px dashed var(--border-color)",
+                                    borderRadius: "4px",
+                                    cursor: "pointer",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {isDefault ? "Default" : "Set default"}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
                   </div>
