@@ -22,6 +22,7 @@ export interface ExampleStrategy {
   notes: string | null;
   created_at: string | null;
   color: string | null;
+  author?: string | null;
 }
 
 export interface ExampleJournalEntry {

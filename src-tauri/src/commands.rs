@@ -2396,6 +2396,37 @@ pub fn update_emotional_state(
 }
 
 #[tauri::command]
+pub fn update_emotional_state_links(
+    id: i64,
+    journal_entry_ids: Option<String>,
+    trade_ids: Option<String>,
+) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+
+    let has_multi_ids = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_ids'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if !has_multi_ids {
+        return Ok(());
+    }
+
+    conn.execute(
+        "UPDATE emotional_states SET journal_entry_ids = ?1, trade_ids = ?2 WHERE id = ?3",
+        params![journal_entry_ids, trade_ids, id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 pub fn delete_emotional_state(id: i64) -> Result<(), String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
@@ -2580,13 +2611,13 @@ pub fn get_all_emotion_surveys() -> Result<Vec<EmotionSurvey>, String> {
 
 // Strategy Management Commands
 #[tauri::command]
-pub fn create_strategy(name: String, description: Option<String>, notes: Option<String>, color: Option<String>) -> Result<i64, String> {
+pub fn create_strategy(name: String, description: Option<String>, notes: Option<String>, color: Option<String>, author: Option<String>) -> Result<i64, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     conn.execute(
-        "INSERT INTO strategies (name, description, notes, color) VALUES (?1, ?2, ?3, ?4)",
-        params![name, description, notes, color],
+        "INSERT INTO strategies (name, description, notes, color, author) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![name, description, notes, color, author],
     ).map_err(|e| e.to_string())?;
     
     Ok(conn.last_insert_rowid())
@@ -2598,7 +2629,7 @@ pub fn get_strategies() -> Result<Vec<Strategy>, String> {
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     let mut stmt = conn
-        .prepare("SELECT id, name, description, notes, created_at, color, COALESCE(display_order, id) FROM strategies ORDER BY COALESCE(display_order, id)")
+        .prepare("SELECT id, name, description, notes, created_at, color, COALESCE(display_order, id), author FROM strategies ORDER BY COALESCE(display_order, id)")
         .map_err(|e| e.to_string())?;
     
     let strategy_iter = stmt
@@ -2611,6 +2642,7 @@ pub fn get_strategies() -> Result<Vec<Strategy>, String> {
                 created_at: row.get(4)?,
                 color: row.get(5)?,
                 display_order: row.get(6)?,
+                author: row.get(7)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -2624,13 +2656,13 @@ pub fn get_strategies() -> Result<Vec<Strategy>, String> {
 }
 
 #[tauri::command]
-pub fn update_strategy(id: i64, name: String, description: Option<String>, notes: Option<String>, color: Option<String>) -> Result<(), String> {
+pub fn update_strategy(id: i64, name: String, description: Option<String>, notes: Option<String>, color: Option<String>, author: Option<String>) -> Result<(), String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     conn.execute(
-        "UPDATE strategies SET name = ?1, description = ?2, notes = ?3, color = ?4 WHERE id = ?5",
-        params![name, description, notes, color, id],
+        "UPDATE strategies SET name = ?1, description = ?2, notes = ?3, color = ?4, author = ?5 WHERE id = ?6",
+        params![name, description, notes, color, author, id],
     ).map_err(|e| e.to_string())?;
     
     Ok(())
@@ -6762,7 +6794,7 @@ pub fn export_data() -> Result<String, String> {
     
     // Export strategies
     let mut stmt = conn
-        .prepare("SELECT id, name, description, notes, created_at, color, COALESCE(display_order, id) FROM strategies ORDER BY COALESCE(display_order, id)")
+        .prepare("SELECT id, name, description, notes, created_at, color, COALESCE(display_order, id), author FROM strategies ORDER BY COALESCE(display_order, id)")
         .map_err(|e| e.to_string())?;
     let strategy_iter = stmt
         .query_map([], |row| {
@@ -6774,6 +6806,7 @@ pub fn export_data() -> Result<String, String> {
                 created_at: row.get(4)?,
                 color: row.get(5)?,
                 display_order: row.get(6)?,
+                author: row.get(7)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -7126,8 +7159,8 @@ pub fn import_data(json_data: String) -> Result<ImportResult, String> {
         } else {
             // Insert new strategy
             conn.execute(
-                "INSERT INTO strategies (name, description, notes, color) VALUES (?1, ?2, ?3, ?4)",
-                params![strategy.name, strategy.description, strategy.notes, strategy.color],
+                "INSERT INTO strategies (name, description, notes, color, author) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![strategy.name, strategy.description, strategy.notes, strategy.color, strategy.author],
             ).map_err(|e| e.to_string())?;
             
             let new_id = conn.last_insert_rowid();

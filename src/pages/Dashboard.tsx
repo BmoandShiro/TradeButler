@@ -631,8 +631,8 @@ function SectionCardResizeWrapper({
 // Metric descriptions mapping
 const metricDescriptions: Record<string, { description: string; calculation: string }> = {
   total_trades: {
-    description: "The total number of closed trade pairs (positions) during the selected timeframe.",
-    calculation: "Count of all paired trades (entry + exit) that have been closed."
+    description: "The total number of closed positions during the selected timeframe.",
+    calculation: "Count of all positions (entry + exit) that have been closed."
   },
   total_volume: {
     description: "The total dollar volume of all trades executed during the selected timeframe.",
@@ -640,7 +640,7 @@ const metricDescriptions: Record<string, { description: string; calculation: str
   },
   total_profit_loss: {
     description: "The total net profit or loss from all closed positions, including fees.",
-    calculation: "Sum of net_profit_loss for all paired trades (gross P&L minus entry and exit fees)."
+    calculation: "Sum of net_profit_loss for all positions (gross P&L minus entry and exit fees)."
   },
   win_rate: {
     description: "The percentage of closed trades that resulted in a profit.",
@@ -648,11 +648,11 @@ const metricDescriptions: Record<string, { description: string; calculation: str
   },
   winning_trades: {
     description: "The number of closed trades that resulted in a profit.",
-    calculation: "Count of paired trades where net_profit_loss > 0"
+    calculation: "Count of positions where net_profit_loss > 0"
   },
   losing_trades: {
     description: "The number of closed trades that resulted in a loss.",
-    calculation: "Count of paired trades where net_profit_loss < 0"
+    calculation: "Count of positions where net_profit_loss < 0"
   },
   average_profit: {
     description: "The average profit per winning trade.",
@@ -712,7 +712,7 @@ const metricDescriptions: Record<string, { description: string; calculation: str
   },
   total_fees: {
     description: "The total amount paid in trading fees (entry fees + exit fees) for all closed positions.",
-    calculation: "Sum of (entry_fees + exit_fees) for all paired trades"
+    calculation: "Sum of (entry_fees + exit_fees) for all positions"
   },
   net_profit: {
     description: "Total profit or loss after accounting for all fees (same as Total P&L).",
@@ -732,7 +732,7 @@ const metricDescriptions: Record<string, { description: string; calculation: str
   },
   average_holding_time_seconds: {
     description: "The average amount of time positions are held open before being closed.",
-    calculation: "Sum of (exit_timestamp - entry_timestamp) for all paired trades ÷ Number of trades"
+    calculation: "Sum of (exit_timestamp - entry_timestamp) for all positions ÷ Number of trades"
   },
   position_size_chart: {
     description: "Step chart of position size over time for a selected open position.",
@@ -4966,7 +4966,7 @@ export default function Dashboard() {
                           <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                           <div style={{ padding: "8px", display: "flex", flexDirection: "column", gap: "8px" }}>
                             <label style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
-                              Pairs Per Page:
+                              Positions per page:
                             </label>
                             <input
                               type="number"
@@ -5122,9 +5122,9 @@ export default function Dashboard() {
                         }}
                       >
                         {isLoading ? (
-                          <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>Loading trade pairs...</p>
+                          <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>Loading positions...</p>
                         ) : pairs.length === 0 ? (
-                          <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>No trade pairs found for this strategy.</p>
+                          <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>No positions found for this strategy.</p>
                         ) : (() => {
                           // Calculate pagination
                           const currentPage = strategyCurrentPages.get(strategyKey) || 1;
@@ -5876,12 +5876,12 @@ export default function Dashboard() {
                                 role="button"
                                 tabIndex={0}
                                 onClick={() => {
-                                  navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Pair" } });
+                                  navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Position" } });
                                 }}
                                 onKeyDown={(e) => {
                                   if (e.key === "Enter" || e.key === " ") {
                                     e.preventDefault();
-                                    navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Pair" } });
+                                    navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Position" } });
                                   }
                                 }}
                                 style={{
@@ -5960,12 +5960,12 @@ export default function Dashboard() {
                               role="button"
                               tabIndex={0}
                               onClick={() => {
-                                navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Pair" } });
+                                navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Position" } });
                               }}
                               onKeyDown={(e) => {
                                 if (e.key === "Enter" || e.key === " ") {
                                   e.preventDefault();
-                                  navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Pair" } });
+                                  navigate("/trades", { state: { expandPositionEntryId: group.entry_trade.id, viewMode: "Position" } });
                                 }
                               }}
                               style={{

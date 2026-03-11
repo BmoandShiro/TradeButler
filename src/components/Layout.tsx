@@ -913,7 +913,7 @@ export default function Layout({ children }: LayoutProps) {
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
-            const journalTo = (typeof localStorage !== "undefined" && (localStorage.getItem("journal_selected_entry_id") || localStorage.getItem("journal_work_in_progress")))
+            const journalTo = (typeof localStorage !== "undefined" && (localStorage.getItem(`journal_selected_entry_id_${getCurrentDataMode()}`) || localStorage.getItem("journal_work_in_progress")))
               ? "/journal"
               : "/journal?overview=1";
             const href = item.path === "/journal" ? journalTo : item.path;

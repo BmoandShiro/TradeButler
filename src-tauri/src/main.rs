@@ -37,6 +37,7 @@ fn main() {
             commands::get_emotional_states_for_journal,
             commands::update_emotional_state,
             commands::delete_emotional_state,
+            commands::update_emotional_state_links,
             commands::add_emotion_survey,
             commands::get_emotion_survey,
             commands::get_all_emotion_surveys,

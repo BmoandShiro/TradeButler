@@ -658,6 +658,14 @@ export default function Journal() {
     return () => unsub();
   }, []);
 
+  // When switching data mode (sandbox/real/paper), reset the view so the list and detail reflect the new mode's data
+  useEffect(() => {
+    setSelectedEntry(null);
+    setPendingRestoreEntryId(null);
+    setIsCreating(false);
+    setIsEditing(false);
+  }, [dataMode]);
+
   // When navigating from Analytics (e.g. "Journal Overview" link) with ?overview=1, show the overview (no entry selected, no create form)
   useEffect(() => {
     if (searchParams.get("overview") === "1") {
@@ -923,10 +931,17 @@ export default function Journal() {
     loadAllJournalTrades();
   }, [dataMode, searchParams]);
 
-  // When navigating to Journal without ?overview=1, restore the last-open entry from localStorage so the tab doesn't reset to overview.
+  // When navigating to Journal without ?overview=1, restore the last-open entry from localStorage (per mode) so the tab doesn't reset to overview.
   useEffect(() => {
     if (searchParams.get("overview") === "1") return;
-    const savedId = localStorage.getItem("journal_selected_entry_id");
+    let savedId = localStorage.getItem(`journal_selected_entry_id_${dataMode}`);
+    if (!savedId) {
+      const legacyId = localStorage.getItem("journal_selected_entry_id");
+      if (legacyId) {
+        localStorage.setItem(`journal_selected_entry_id_${dataMode}`, legacyId);
+        savedId = legacyId;
+      }
+    }
     if (!savedId) return;
     const id = parseInt(savedId, 10);
     if (isNaN(id)) return;
@@ -1512,7 +1527,7 @@ export default function Journal() {
     setIsEditing(false);
     setSelectedEntry(null);
     setPendingLinkedPairs([]);
-    localStorage.removeItem('journal_selected_entry_id');
+    localStorage.removeItem(`journal_selected_entry_id_${dataMode}`);
     setSelectedTrades([]);
     setJournalTradeActualTradeIds(new Map());
     setLinkActualTradesModalJournalTradeId(null);
@@ -1686,7 +1701,7 @@ export default function Journal() {
         deleteSandboxJournalEntry(selectedEntry.id);
         await loadEntries();
         setSelectedEntry(null);
-        localStorage.removeItem('journal_selected_entry_id');
+        localStorage.removeItem(`journal_selected_entry_id_${dataMode}`);
         setSelectedTrades([]);
         setShowDeleteConfirmModal(false);
         return;
@@ -1694,7 +1709,7 @@ export default function Journal() {
       await invoke("delete_journal_entry", { id: selectedEntry.id });
       await loadEntries();
       setSelectedEntry(null);
-    localStorage.removeItem('journal_selected_entry_id');
+      localStorage.removeItem(`journal_selected_entry_id_${dataMode}`);
       setSelectedTrades([]);
       setShowDeleteConfirmModal(false);
     } catch (error) {
@@ -2564,7 +2579,7 @@ export default function Journal() {
           } catch { /* ignore */ }
         }
         setEntryFormData((prev) => ({ ...prev, date: entry.date, title: entry.title, strategy_id: entry.strategy_id, linked_trade_ids: linkedTradeIds }));
-        localStorage.setItem('journal_selected_entry_id', id.toString());
+        localStorage.setItem(`journal_selected_entry_id_${dataMode}`, id.toString());
         const loadedTrades = await loadTrades(id);
         if (options?.openTradeId != null && loadedTrades.length > 0) {
           const idx = loadedTrades.findIndex((t) => t.id === options.openTradeId);
@@ -2609,8 +2624,8 @@ export default function Journal() {
         strategy_id: entry.strategy_id,
         linked_trade_ids: linkedTradeIds,
       }));
-      // Save selected entry ID to localStorage
-      localStorage.setItem('journal_selected_entry_id', id.toString());
+      // Save selected entry ID to localStorage (per mode)
+      localStorage.setItem(`journal_selected_entry_id_${dataMode}`, id.toString());
       const loadedTrades = await loadTrades(id);
       if (options?.openTradeId != null && loadedTrades.length > 0) {
         const idx = loadedTrades.findIndex((t) => t.id === options.openTradeId);
@@ -3722,11 +3737,11 @@ export default function Journal() {
                     </div>
                   )}
                 </div>
-                {/* Linked trade pairs with charts */}
+                {/* Linked positions with charts */}
                 {linkedPairs.length > 0 && (
                   <div style={{ marginTop: "24px" }}>
                     <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
-                      Linked trade pairs ({linkedPairs.length})
+                      Linked positions ({linkedPairs.length})
                     </h3>
                     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
                       {linkedPairs.map((pair) => (
@@ -4133,7 +4148,7 @@ export default function Journal() {
                       )}
                       {selectedEntry?.id && (
                         <button type="button" onClick={async () => { setShowLinkPairsModal(true); setLinkPairsSearchQuery(""); setLinkPairsSortBy("date"); setLinkPairsSortDirection("desc"); const method = localStorage.getItem("tradebutler_pairing_method") || "FIFO"; const all = await invoke<PairedTrade[]>("get_paired_trades", { pairingMethod: method || null }); setAllPairsForPicker(all); setLinkPickerSelected(new Set(linkedPairs.map(p => `${p.entry_trade_id}_${p.exit_trade_id}`))); }} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 8px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "11px", cursor: "pointer" }}>
-                          <Link2 size={12} /> Pairs {linkedPairs.length > 0 && `(${linkedPairs.length})`}
+                          <Link2 size={12} /> Positions {linkedPairs.length > 0 && `(${linkedPairs.length})`}
                         </button>
                       )}
                     </div>
@@ -4144,7 +4159,7 @@ export default function Journal() {
               {/* Linked pairs list - compact when entry has pairs */}
               {selectedEntry?.id && !isTabContentMaximized && linkedPairs.length > 0 && (
                 <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)", display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
-                  <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginRight: "8px" }}>{linkedPairs.length} pair{linkedPairs.length !== 1 ? "s" : ""}</span>
+                  <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginRight: "8px" }}>{linkedPairs.length} position{linkedPairs.length !== 1 ? "s" : ""}</span>
                   {linkedPairs.map((pair) => (
                     <div key={`${pair.entry_trade_id}-${pair.exit_trade_id}`} style={{ display: "flex", alignItems: "center", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", overflow: "hidden" }}>
                       <button type="button" onClick={() => { setSelectedPairForChart(pair); setSelectedPositionTrades(undefined); fetchPositionTradesForPair(pair).then(setSelectedPositionTrades); }} style={{ padding: "4px 8px", background: "none", border: "none", color: "var(--text-primary)", fontSize: "12px", cursor: "pointer" }}>
@@ -4342,11 +4357,11 @@ export default function Journal() {
                         })()}
                         {sectionId === "links" && (isCreating || isEditing) && (
                           <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-                            <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>Link this journal to emotional states, trade pairs, or real trades. Saved when you save the entry.</p>
+                            <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>Link this journal to emotional states, positions, or real trades. Saved when you save the entry.</p>
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
                               {(["emotional_state", "trade_pair", "real_trade"] as const).map((option) => {
                                 const isActive = linksSectionActiveOption === option;
-                                const label = option === "emotional_state" ? "Link to existing emotional state" : option === "trade_pair" ? "Link to trade pair" : "Link to real trade";
+                                const label = option === "emotional_state" ? "Link to existing emotional state" : option === "trade_pair" ? "Link to position" : "Link to real trade";
                                 return (
                                   <button
                                     key={option}
@@ -4441,7 +4456,7 @@ export default function Journal() {
                             )}
                             {linksSectionActiveOption === "trade_pair" && (
                               <div style={{ padding: "14px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                                <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: "0 0 10px" }}>Link entry/exit trade pairs from your Trades tab. Pairs appear above the content and are clickable for charts. Links are saved when you save the journal entry.</p>
+                                <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: "0 0 10px" }}>Link entry/exit positions from your Trades tab. Positions appear above the content and are clickable for charts. Links are saved when you save the journal entry.</p>
                                 {(() => {
                                   const pairsList = selectedEntry?.id ? linkedPairs : pendingLinkedPairs;
                                   return (
@@ -4495,7 +4510,7 @@ export default function Journal() {
                                         }}
                                         style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "8px 14px", background: "var(--accent)", border: "1px solid var(--accent)", borderRadius: "6px", color: "white", fontSize: "13px", cursor: "pointer", fontWeight: 600 }}
                                       >
-                                        <Link2 size={14} /> Add trade pairs
+                                        <Link2 size={14} /> Add positions
                                       </button>
                                     </>
                                   );
@@ -6709,7 +6724,7 @@ export default function Journal() {
                         key={entry.id}
                         onClick={() => {
                           clearWorkInProgress();
-                          localStorage.setItem("journal_selected_entry_id", entry.id.toString());
+                          localStorage.setItem(`journal_selected_entry_id_${dataMode}`, entry.id.toString());
                           tabScrollPositions.current.clear();
                           loadEntry(entry.id);
                           setIsCreating(false);
@@ -6852,7 +6867,7 @@ export default function Journal() {
                       key={entry.id}
                       onClick={() => {
                         clearWorkInProgress();
-                        localStorage.setItem("journal_selected_entry_id", entry.id.toString());
+                        localStorage.setItem(`journal_selected_entry_id_${dataMode}`, entry.id.toString());
                         tabScrollPositions.current.clear();
                         loadEntry(entry.id);
                         setIsCreating(false);
@@ -7016,7 +7031,7 @@ export default function Journal() {
                           prevStorageKey
                         );
                         clearWorkInProgress();
-                        localStorage.removeItem('journal_selected_entry_id');
+                        localStorage.removeItem(`journal_selected_entry_id_${dataMode}`);
                         setSelectedEntry(null);
                         setSelectedTrades([]);
                         tabScrollPositions.current.clear();
@@ -7034,8 +7049,8 @@ export default function Journal() {
                         );
                       }
                       clearWorkInProgress(); // Clear work in progress when selecting an existing entry
-                      // Save selected entry ID immediately
-                      localStorage.setItem('journal_selected_entry_id', entry.id.toString());
+                      // Save selected entry ID immediately (per mode)
+                      localStorage.setItem(`journal_selected_entry_id_${dataMode}`, entry.id.toString());
                       // Clear tab scroll positions to load fresh for new entry
                       tabScrollPositions.current.clear();
                       loadEntry(entry.id);
@@ -7760,7 +7775,7 @@ export default function Journal() {
         </div>
       )}
 
-      {/* Link trade pairs modal */}
+      {/* Link positions modal */}
       {showLinkPairsModal && (
         <div
           style={{
@@ -7794,10 +7809,10 @@ export default function Journal() {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "8px", color: "var(--text-primary)" }}>
-              Link trade pairs to this journal entry
+              Link positions to this journal entry
             </h3>
             <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px" }}>
-              Select the pairs from your Trades tab to link. Linked pairs appear above the text area and are clickable to view the chart.
+              Select the positions from your Trades tab to link. Linked positions appear above the text area and are clickable to view the chart.
             </p>
             <div style={{ position: "relative", marginBottom: "12px", flexShrink: 0 }}>
               <Search
@@ -7867,7 +7882,7 @@ export default function Journal() {
             </div>
             <div style={{ flex: 1, overflowY: "auto", marginBottom: "16px", border: "1px solid var(--border-color)", borderRadius: "8px", backgroundColor: "var(--bg-primary)" }}>
               {allPairsForPicker.length === 0 ? (
-                <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No trade pairs found. Add trades on the Trades tab first.</div>
+                <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No positions found. Add trades on the Trades tab first.</div>
               ) : (() => {
                 const searchLower = linkPairsSearchQuery.toLowerCase().trim();
                 let filtered = searchLower
@@ -7884,7 +7899,7 @@ export default function Journal() {
                     })
                   : [...allPairsForPicker];
                 if (filtered.length === 0) {
-                  return <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No pairs match your search.</div>;
+                  return <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No positions match your search.</div>;
                 }
                 const sorted = [...filtered].sort((a, b) => {
                   let comparison = 0;

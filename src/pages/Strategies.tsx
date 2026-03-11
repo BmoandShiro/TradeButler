@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
 import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard, BarChart2 } from "lucide-react";
 import { format } from "date-fns";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
+import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
 import { BRUSH_MIN_POINTS, CHART_BAR_FILL_OPACITY } from "../utils/chartDataSampling";
 /** Margin for overview bar charts; minimal bottom so chart area is maximized. */
 const OVERVIEW_CHART_MARGIN = { top: 5, right: 5, left: 5, bottom: 10 };
@@ -93,6 +93,7 @@ interface Strategy {
   created_at: string | null;
   color: string | null;
   display_order: number | null;
+  author?: string | null;
 }
 
 interface PairedTrade {
@@ -1675,6 +1676,7 @@ export default function Strategies() {
     name: "",
     description: "",
     color: "#3b82f6",
+    author: "",
   });
   const [newStrategyNotes, setNewStrategyNotes] = useState("");
   const [selectedStrategy, setSelectedStrategy] = useState<number | null>(() => {
@@ -1696,6 +1698,12 @@ export default function Strategies() {
   const [loadingPairs, setLoadingPairs] = useState<Set<number>>(new Set());
   const [strategyStats, setStrategyStats] = useState<Map<number, { totalTrades: number; totalPnL: number; winRate: number }>>(new Map());
   const [strategyOverviewTab, setStrategyOverviewTab] = useState<"pnl" | "win_rate" | "trades" | "checklist_usage" | "profitable_trades">("pnl");
+  const [overviewDistributionUseStrategyColors, setOverviewDistributionUseStrategyColors] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem("strategies_overview_distribution_use_strategy_colors");
+      return saved === "1";
+    } catch { return false; }
+  });
   const [strategyOverviewBrushStart, setStrategyOverviewBrushStart] = useState(0);
   const [strategyOverviewBrushEnd, setStrategyOverviewBrushEnd] = useState(0);
   const [strategyFilterText, setStrategyFilterText] = useState("");
@@ -1839,7 +1847,7 @@ export default function Strategies() {
       setMarkImportedTradesAsPaper(dataMode === "paper");
     }
   }, [showCSVFormatModal, dataMode]);
-  const [editHistory, setEditHistory] = useState<Array<{ name: string; description: string; color: string; notes: string }>>([]);
+  const [editHistory, setEditHistory] = useState<Array<{ name: string; description: string; color: string; notes: string; author: string }>>([]);
   const [editingChecklists, setEditingChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [originalChecklists, setOriginalChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [checklistEditHistory, setChecklistEditHistory] = useState<Map<number, Array<Map<string, ChecklistItem[]>>>>(new Map());
@@ -1919,7 +1927,13 @@ export default function Strategies() {
       const saved = localStorage.getItem('strategies_work_in_progress');
       if (saved) {
         const workInProgress = JSON.parse(saved);
-        setEditingFormData(workInProgress.editingFormData);
+        const restored = workInProgress.editingFormData || {};
+        setEditingFormData({
+          name: restored.name ?? "",
+          description: restored.description ?? "",
+          color: restored.color ?? "#3b82f6",
+          author: restored.author ?? "",
+        });
         setNewStrategyNotes(workInProgress.newStrategyNotes || "");
         
         // Restore notes content
@@ -2516,7 +2530,7 @@ export default function Strategies() {
   }, [strategiesForOverview, strategyStats]);
 
   const strategiesOverviewChartData = React.useMemo(() => {
-    const data: { name: string; fullName: string; pnl: number; win_rate: number; trades: number }[] = [];
+    const data: { name: string; fullName: string; pnl: number; win_rate: number; trades: number; color: string }[] = [];
     for (const s of strategiesForOverview) {
       if (s.id == null) continue;
       const stats = strategyStats.get(s.id);
@@ -2527,6 +2541,7 @@ export default function Strategies() {
         pnl: Number(stats.totalPnL.toFixed(2)),
         win_rate: Number(stats.winRate.toFixed(1)),
         trades: stats.totalTrades,
+        color: s.color || "var(--accent)",
       });
     }
     return data.sort((a, b) => {
@@ -3630,7 +3645,7 @@ export default function Strategies() {
     setIsCreating(true);
     setIsEditing(false);
     setSelectedStrategy(null);
-    setEditingFormData({ name: "", description: "", color: "#3b82f6" });
+    setEditingFormData({ name: "", description: "", color: "#3b82f6", author: "" });
     setNewStrategyNotes("");
     setTempChecklists(new Map()); // Explicitly clear temp checklists when creating new strategy
     setActiveTab("notes");
@@ -3994,6 +4009,7 @@ export default function Strategies() {
           description: editingFormData.description ?? null,
           notes: newStrategyNotes || null,
           color: editingFormData.color ?? null,
+          author: editingFormData.author?.trim() || null,
         });
         newStrategyId = newStrategy.id;
         if (pendingTradeIds.length > 0) {
@@ -4007,7 +4023,7 @@ export default function Strategies() {
         setIsCreating(false);
         setPendingTradeIds([]);
         setTempChecklists(new Map());
-        setEditingFormData({ name: "", description: "", color: "#3b82f6" });
+        setEditingFormData({ name: "", description: "", color: "#3b82f6", author: "" });
         setNewStrategyNotes("");
         return;
       }
@@ -4017,6 +4033,7 @@ export default function Strategies() {
         description: editingFormData.description || null,
         notes: newStrategyNotes || null,
         color: editingFormData.color || null,
+        author: editingFormData.author?.trim() || null,
       });
 
       // Assign pending trades to the strategy
@@ -4126,7 +4143,7 @@ export default function Strategies() {
       setIsCreating(false);
       setIsEditing(false); // Ensure we're in view mode, not edit mode
       setNewStrategyNotes("");
-      setEditingFormData({ name: "", description: "", color: "#3b82f6" });
+      setEditingFormData({ name: "", description: "", color: "#3b82f6", author: "" });
       setPendingTradeIds([]);
       setTempChecklists(new Map());
       setTempCalculationPresets([]);
@@ -4213,7 +4230,7 @@ export default function Strategies() {
     isSavingOrCancelingRef.current = true; // Prevent state restoration during cancel
     clearWorkInProgress(); // Clear work in progress when canceling
     setIsCreating(false);
-    setEditingFormData({ name: "", description: "", color: "#3b82f6" });
+    setEditingFormData({ name: "", description: "", color: "#3b82f6", author: "" });
     setNewStrategyNotes("");
     setSelectedStrategy(null);
     setPendingTradeIds([]);
@@ -4230,11 +4247,13 @@ export default function Strategies() {
         description: selectedStrategyData.description || "",
         color: selectedStrategyData.color || "#3b82f6",
         notes: selectedStrategyData.notes || "",
+        author: selectedStrategyData.author ?? "",
       };
       setEditingFormData({
         name: initialData.name,
         description: initialData.description,
         color: initialData.color,
+        author: initialData.author,
       });
       // Store initial state for undo
       setEditHistory([initialData]);
@@ -4410,6 +4429,7 @@ export default function Strategies() {
           description: editingFormData.description ?? null,
           notes: currentNotes || null,
           color: editingFormData.color ?? null,
+          author: editingFormData.author?.trim() || null,
         });
         setIsEditing(false);
         setEditHistory([]);
@@ -4445,6 +4465,7 @@ export default function Strategies() {
         description: editingFormData.description || null,
         notes: currentNotes || null,
         color: editingFormData.color || null,
+        author: editingFormData.author?.trim() || null,
       });
       
       // Save checklist changes if any
@@ -4533,6 +4554,7 @@ export default function Strategies() {
         name: selectedStrategyData.name,
         description: selectedStrategyData.description || "",
         color: selectedStrategyData.color || "#3b82f6",
+        author: selectedStrategyData.author ?? "",
       });
       // Reset notes to original value from database
       setNotesContent(new Map(notesContent.set(selectedStrategyData.id, selectedStrategyData.notes || "")));
@@ -4580,6 +4602,7 @@ export default function Strategies() {
       name: previousState.name,
       description: previousState.description,
       color: previousState.color,
+      author: previousState.author ?? "",
     });
     
     if (selectedStrategy) {
@@ -4724,6 +4747,7 @@ export default function Strategies() {
           description: strategy.description ?? null,
           notes: strategy.notes ?? null,
           color: strategy.color ?? null,
+          author: strategy.author ?? null,
         });
         await loadStrategies();
         setSelectedStrategy(newStrategy.id);
@@ -4737,6 +4761,7 @@ export default function Strategies() {
         description: strategy.description || null,
         notes: strategy.notes || null,
         color: strategy.color || null,
+        author: strategy.author ?? null,
       });
 
       // Load all checklist items from the original strategy
@@ -4811,13 +4836,15 @@ export default function Strategies() {
         description: editingFormData.description,
         color: editingFormData.color,
         notes: content,
+        author: editingFormData.author ?? "",
       };
       // Only add to history if it's different from the last state
       const lastState = editHistory[editHistory.length - 1];
-      if (lastState.notes !== content || 
+      if (lastState.notes !== content ||
           lastState.name !== editingFormData.name ||
           lastState.description !== editingFormData.description ||
-          lastState.color !== editingFormData.color) {
+          lastState.color !== editingFormData.color ||
+          (lastState.author ?? "") !== (editingFormData.author ?? "")) {
         setEditHistory(prev => {
           const newHistory = [...prev, currentState];
           return newHistory.slice(-10); // Keep last 10 states
@@ -5008,6 +5035,7 @@ export default function Strategies() {
                           description: editingFormData.description,
                           color: editingFormData.color,
                           notes: notesContent.get(selectedStrategy) || "",
+                          author: editingFormData.author ?? "",
                         };
                         setEditHistory(prev => [...prev, currentState].slice(-10));
                       }
@@ -5091,7 +5119,7 @@ export default function Strategies() {
                       onClick={() => {
                         setSelectedStrategy(null);
                         setIsCreating(false);
-                        setEditingFormData({ name: "", description: "", color: "#3b82f6" });
+                        setEditingFormData({ name: "", description: "", color: "#3b82f6", author: "" });
                         setEditHistory([]);
                       }}
                       style={{
@@ -5239,43 +5267,78 @@ export default function Strategies() {
               </div>
             </div>
 
-            {/* Name and Description - Editable when in edit/create mode */}
+            {/* Name, Description + Author - Editable when in edit/create mode */}
             <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border-color)" }}>
               {(isEditing || isCreating) ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-            <div>
-                    <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
-                Description
-              </label>
-              <input
-                type="text"
-                      value={editingFormData.description}
-                      onChange={(e) => {
-                        const newDescription = e.target.value;
-                        setEditingFormData({ ...editingFormData, description: newDescription });
-                        // Track history
-                        if (selectedStrategy && editHistory.length > 0) {
-                          const currentState = {
-                            name: editingFormData.name,
-                            description: newDescription,
-                            color: editingFormData.color,
-                            notes: notesContent.get(selectedStrategy) || "",
-                          };
-                          setEditHistory(prev => [...prev, currentState].slice(-10));
-                        }
-                      }}
-                      placeholder="Strategy description..."
-                style={{
-                  width: "100%",
-                        padding: "8px",
-                        backgroundColor: "var(--bg-secondary)",
-                  border: "1px solid var(--border-color)",
-                        borderRadius: "4px",
-                  color: "var(--text-primary)",
-                  fontSize: "14px",
-                }}
-              />
-            </div>
+            <div style={{ display: "flex", gap: "12px", alignItems: "flex-end" }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                        Description
+                      </label>
+                      <input
+                        type="text"
+                        value={editingFormData.description}
+                        onChange={(e) => {
+                          const newDescription = e.target.value;
+                          setEditingFormData({ ...editingFormData, description: newDescription });
+                          if (selectedStrategy && editHistory.length > 0) {
+                            const currentState = {
+                              name: editingFormData.name,
+                              description: newDescription,
+                              color: editingFormData.color,
+                              notes: notesContent.get(selectedStrategy) || "",
+                              author: editingFormData.author ?? "",
+                            };
+                            setEditHistory(prev => [...prev, currentState].slice(-10));
+                          }
+                        }}
+                        placeholder="Strategy description..."
+                        style={{
+                          width: "100%",
+                          padding: "8px",
+                          backgroundColor: "var(--bg-secondary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "4px",
+                          color: "var(--text-primary)",
+                          fontSize: "14px",
+                        }}
+                      />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
+                        Author
+                      </label>
+                      <input
+                        type="text"
+                        value={editingFormData.author}
+                        onChange={(e) => {
+                          const newAuthor = e.target.value;
+                          setEditingFormData({ ...editingFormData, author: newAuthor });
+                          if (selectedStrategy && editHistory.length > 0) {
+                            const currentState = {
+                              name: editingFormData.name,
+                              description: editingFormData.description,
+                              color: editingFormData.color,
+                              notes: notesContent.get(selectedStrategy) || "",
+                              author: newAuthor,
+                            };
+                            setEditHistory(prev => [...prev, currentState].slice(-10));
+                          }
+                        }}
+                        placeholder="Author (optional)"
+                        style={{
+                          width: "100%",
+                          padding: "8px",
+                          backgroundColor: "var(--bg-secondary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "4px",
+                          color: "var(--text-primary)",
+                          fontSize: "14px",
+                        }}
+                      />
+                    </div>
+                  </div>
             <div>
                     <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "500" }}>
                       Color
@@ -5291,6 +5354,7 @@ export default function Strategies() {
                             description: editingFormData.description,
                             color: newColor,
                             notes: notesContent.get(selectedStrategy) || "",
+                            author: editingFormData.author ?? "",
                           };
                           setEditHistory(prev => [...prev, currentState].slice(-10));
                         }
@@ -5299,13 +5363,18 @@ export default function Strategies() {
                   </div>
                 </div>
               ) : (
-                <>
+                <div style={{ display: "flex", gap: "12px", alignItems: "baseline" }}>
                   {selectedStrategyData?.description && (
-                    <p style={{ color: "var(--text-secondary)", fontSize: "14px" }}>
+                    <p style={{ flex: 1, color: "var(--text-secondary)", fontSize: "14px", margin: 0 }}>
                       {selectedStrategyData.description}
                     </p>
                   )}
-                </>
+                  {selectedStrategyData?.author && (
+                    <p style={{ flex: 1, color: "var(--text-secondary)", fontSize: "13px", margin: 0, textAlign: "right" }}>
+                      Author: {selectedStrategyData.author}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
 
@@ -7467,6 +7536,31 @@ export default function Strategies() {
                 >
                   Strategy distributions
                 </span>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    fontSize: "12px",
+                    color: "var(--text-secondary)",
+                    cursor: "pointer",
+                    marginLeft: "8px",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={overviewDistributionUseStrategyColors}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      setOverviewDistributionUseStrategyColors(v);
+                      try {
+                        localStorage.setItem("strategies_overview_distribution_use_strategy_colors", v ? "1" : "0");
+                      } catch { /* ignore */ }
+                    }}
+                    style={{ accentColor: "var(--accent)", cursor: "pointer" }}
+                  />
+                  Use strategy colors
+                </label>
                 {strategiesOverviewStats.bestWinRateName && (
                   <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
                     Best win rate:{" "}
@@ -7591,7 +7685,11 @@ export default function Strategies() {
                       <XAxis dataKey="name" stroke="var(--text-secondary)" tick={<OverviewChartAxisTick fontSize={11} />} height={40} interval={strategiesOverviewChartData.length > 20 ? Math.floor(strategiesOverviewChartData.length / 10) : 0} />
                       <YAxis stroke="var(--text-secondary)" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} tickFormatter={(v: number) => strategyOverviewTab === "win_rate" ? `${v.toFixed(0)}%` : strategyOverviewTab === "trades" ? v.toString() : `$${v.toFixed(0)}`} />
                       <Tooltip cursor={{ fill: "rgba(255,255,255,0.02)" }} contentStyle={{ backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", fontSize: "11px", color: "var(--text-primary)" }} formatter={(value: any) => { if (strategyOverviewTab === "win_rate") return [`${value.toFixed(1)}%`, "Win rate"]; if (strategyOverviewTab === "trades") return [value, "Trades"]; return [`$${value.toFixed(2)}`, "P&L"]; }} />
-                      <Bar dataKey={strategyOverviewTab === "pnl" ? "pnl" : strategyOverviewTab === "win_rate" ? "win_rate" : "trades"} fill="var(--accent)" fillOpacity={CHART_BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} radius={[4, 4, 0, 0]} />
+                      <Bar dataKey={strategyOverviewTab === "pnl" ? "pnl" : strategyOverviewTab === "win_rate" ? "win_rate" : "trades"} fill="var(--accent)" fillOpacity={CHART_BAR_FILL_OPACITY} stroke="var(--accent)" strokeWidth={1.6} activeBar={{ fill: "var(--accent)", fillOpacity: 0.8, stroke: "var(--accent)", strokeWidth: 2 }} radius={[4, 4, 0, 0]}>
+                        {overviewDistributionUseStrategyColors && strategiesOverviewChartData.map((entry, index) => (
+                          <Cell key={index} fill={entry.color} stroke={entry.color} />
+                        ))}
+                      </Bar>
                       {useBrush && <Brush dataKey="name" height={36} stroke="var(--border-color)" fill="var(--bg-tertiary)" startIndex={start} endIndex={end} onDragEnd={(r: { startIndex?: number; endIndex?: number }) => { if (r.startIndex != null && r.endIndex != null) { setStrategyOverviewBrushStart(r.startIndex); setStrategyOverviewBrushEnd(r.endIndex); } }} />}
                     </BarChart>
                   </ResponsiveContainer>
