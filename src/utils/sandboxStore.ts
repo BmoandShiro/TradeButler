@@ -23,6 +23,25 @@ const SANDBOX_STORE_VERSION = 5; // Bump to re-seed with fuller Strategy finding
 const LEGACY_KEY = "tradebutler_sandbox_store_v1";
 const EXAMPLE_STORE_KEY = "tradebutler_example_store_v1";
 
+/** End date of the static demo year data (Mar 5 2025 – Mar 4 2026). We shift so this becomes "today". */
+const DEMO_REFERENCE_END = new Date("2026-03-04T12:00:00Z").getTime();
+
+/** Shift demo dates so they end "today", making timeframe filters (e.g. last 7 days) work. */
+function getDemoDateOffsetMs(): number {
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  return today.getTime() - DEMO_REFERENCE_END;
+}
+
+function shiftTimestamp(iso: string, offsetMs: number): string {
+  return new Date(new Date(iso).getTime() + offsetMs).toISOString();
+}
+
+function shiftDateOnly(ymd: string, offsetMs: number): string {
+  const d = new Date(ymd + "T12:00:00Z");
+  return new Date(d.getTime() + offsetMs).toISOString().slice(0, 10);
+}
+
 export interface SandboxEmotionalState extends ExampleEmotionalState {
   journal_entry_id?: number | null;
   journal_trade_id?: number | null;
@@ -48,21 +67,41 @@ function nextId(items: { id: number }[]): number {
 }
 
 function getSeedState(): SandboxStoreState {
+  const offsetMs = getDemoDateOffsetMs();
+
+  const trades = EXAMPLE_TRADES.map((t) => ({
+    ...t,
+    timestamp: shiftTimestamp(t.timestamp, offsetMs),
+  }));
+
+  const journalEntries = EXAMPLE_JOURNAL_ENTRIES.map((e) => ({
+    ...e,
+    date: shiftDateOnly(e.date, offsetMs),
+  }));
+
+  const journalTrades = EXAMPLE_JOURNAL_TRADES.map((t) => ({
+    ...t,
+    r_multiple: (t as ExampleJournalTrade).r_multiple ?? null,
+    created_at: t.created_at ? shiftTimestamp(t.created_at, offsetMs) : null,
+  }));
+
   const emotionalStates = EXAMPLE_EMOTIONAL_STATES.map((s) => {
     const extended = s as SandboxEmotionalState & { journal_entry_id?: number | null };
     return {
       ...s,
+      timestamp: shiftTimestamp(s.timestamp, offsetMs),
       journal_entry_id: extended.journal_entry_id ?? null,
       journal_trade_id: null,
       journal_entry_ids: null,
       trade_ids: null,
     } as SandboxEmotionalState;
   });
+
   return {
-    trades: EXAMPLE_TRADES.map((t) => ({ ...t })),
+    trades,
     strategies: EXAMPLE_STRATEGIES.map((s) => ({ ...s })),
-    journalEntries: EXAMPLE_JOURNAL_ENTRIES.map((e) => ({ ...e })),
-    journalTrades: EXAMPLE_JOURNAL_TRADES.map((t) => ({ ...t, r_multiple: (t as ExampleJournalTrade).r_multiple ?? null })),
+    journalEntries,
+    journalTrades,
     emotionalStates,
     emotionSurveys: getDemoEmotionSurveys(emotionalStates),
     journalEntryPairs: { ...EXAMPLE_JOURNAL_ENTRY_PAIRS },
