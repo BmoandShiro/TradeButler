@@ -3722,11 +3722,11 @@ export default function Journal() {
                     </div>
                   )}
                 </div>
-                {/* Linked trade pairs with charts */}
+                {/* Linked positions with charts */}
                 {linkedPairs.length > 0 && (
                   <div style={{ marginTop: "24px" }}>
                     <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
-                      Linked trade pairs ({linkedPairs.length})
+                      Linked positions ({linkedPairs.length})
                     </h3>
                     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
                       {linkedPairs.map((pair) => (
@@ -4133,7 +4133,7 @@ export default function Journal() {
                       )}
                       {selectedEntry?.id && (
                         <button type="button" onClick={async () => { setShowLinkPairsModal(true); setLinkPairsSearchQuery(""); setLinkPairsSortBy("date"); setLinkPairsSortDirection("desc"); const method = localStorage.getItem("tradebutler_pairing_method") || "FIFO"; const all = await invoke<PairedTrade[]>("get_paired_trades", { pairingMethod: method || null }); setAllPairsForPicker(all); setLinkPickerSelected(new Set(linkedPairs.map(p => `${p.entry_trade_id}_${p.exit_trade_id}`))); }} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 8px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "11px", cursor: "pointer" }}>
-                          <Link2 size={12} /> Pairs {linkedPairs.length > 0 && `(${linkedPairs.length})`}
+                          <Link2 size={12} /> Positions {linkedPairs.length > 0 && `(${linkedPairs.length})`}
                         </button>
                       )}
                     </div>
@@ -4144,7 +4144,7 @@ export default function Journal() {
               {/* Linked pairs list - compact when entry has pairs */}
               {selectedEntry?.id && !isTabContentMaximized && linkedPairs.length > 0 && (
                 <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)", display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
-                  <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginRight: "8px" }}>{linkedPairs.length} pair{linkedPairs.length !== 1 ? "s" : ""}</span>
+                  <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginRight: "8px" }}>{linkedPairs.length} position{linkedPairs.length !== 1 ? "s" : ""}</span>
                   {linkedPairs.map((pair) => (
                     <div key={`${pair.entry_trade_id}-${pair.exit_trade_id}`} style={{ display: "flex", alignItems: "center", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", overflow: "hidden" }}>
                       <button type="button" onClick={() => { setSelectedPairForChart(pair); setSelectedPositionTrades(undefined); fetchPositionTradesForPair(pair).then(setSelectedPositionTrades); }} style={{ padding: "4px 8px", background: "none", border: "none", color: "var(--text-primary)", fontSize: "12px", cursor: "pointer" }}>
@@ -4342,11 +4342,11 @@ export default function Journal() {
                         })()}
                         {sectionId === "links" && (isCreating || isEditing) && (
                           <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-                            <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>Link this journal to emotional states, trade pairs, or real trades. Saved when you save the entry.</p>
+                            <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: 0 }}>Link this journal to emotional states, positions, or real trades. Saved when you save the entry.</p>
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
                               {(["emotional_state", "trade_pair", "real_trade"] as const).map((option) => {
                                 const isActive = linksSectionActiveOption === option;
-                                const label = option === "emotional_state" ? "Link to existing emotional state" : option === "trade_pair" ? "Link to trade pair" : "Link to real trade";
+                                const label = option === "emotional_state" ? "Link to existing emotional state" : option === "trade_pair" ? "Link to position" : "Link to real trade";
                                 return (
                                   <button
                                     key={option}
@@ -4441,7 +4441,7 @@ export default function Journal() {
                             )}
                             {linksSectionActiveOption === "trade_pair" && (
                               <div style={{ padding: "14px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                                <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: "0 0 10px" }}>Link entry/exit trade pairs from your Trades tab. Pairs appear above the content and are clickable for charts. Links are saved when you save the journal entry.</p>
+                                <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: "0 0 10px" }}>Link entry/exit positions from your Trades tab. Positions appear above the content and are clickable for charts. Links are saved when you save the journal entry.</p>
                                 {(() => {
                                   const pairsList = selectedEntry?.id ? linkedPairs : pendingLinkedPairs;
                                   return (
@@ -4495,7 +4495,7 @@ export default function Journal() {
                                         }}
                                         style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "8px 14px", background: "var(--accent)", border: "1px solid var(--accent)", borderRadius: "6px", color: "white", fontSize: "13px", cursor: "pointer", fontWeight: 600 }}
                                       >
-                                        <Link2 size={14} /> Add trade pairs
+                                        <Link2 size={14} /> Add positions
                                       </button>
                                     </>
                                   );
@@ -7760,7 +7760,7 @@ export default function Journal() {
         </div>
       )}
 
-      {/* Link trade pairs modal */}
+      {/* Link positions modal */}
       {showLinkPairsModal && (
         <div
           style={{
@@ -7794,10 +7794,10 @@ export default function Journal() {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "8px", color: "var(--text-primary)" }}>
-              Link trade pairs to this journal entry
+              Link positions to this journal entry
             </h3>
             <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px" }}>
-              Select the pairs from your Trades tab to link. Linked pairs appear above the text area and are clickable to view the chart.
+              Select the positions from your Trades tab to link. Linked positions appear above the text area and are clickable to view the chart.
             </p>
             <div style={{ position: "relative", marginBottom: "12px", flexShrink: 0 }}>
               <Search
@@ -7867,7 +7867,7 @@ export default function Journal() {
             </div>
             <div style={{ flex: 1, overflowY: "auto", marginBottom: "16px", border: "1px solid var(--border-color)", borderRadius: "8px", backgroundColor: "var(--bg-primary)" }}>
               {allPairsForPicker.length === 0 ? (
-                <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No trade pairs found. Add trades on the Trades tab first.</div>
+                <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No positions found. Add trades on the Trades tab first.</div>
               ) : (() => {
                 const searchLower = linkPairsSearchQuery.toLowerCase().trim();
                 let filtered = searchLower
@@ -7884,7 +7884,7 @@ export default function Journal() {
                     })
                   : [...allPairsForPicker];
                 if (filtered.length === 0) {
-                  return <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No pairs match your search.</div>;
+                  return <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No positions match your search.</div>;
                 }
                 const sorted = [...filtered].sort((a, b) => {
                   let comparison = 0;

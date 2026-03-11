@@ -149,9 +149,10 @@ export default function Trades() {
     const saved = localStorage.getItem(PAIRING_STORAGE_KEY);
     return (saved === "LIFO" ? "LIFO" : "FIFO") as "FIFO" | "LIFO";
   });
-  const [viewMode, setViewMode] = useState<"Individual" | "Pair">(() => {
+  const [viewMode, setViewMode] = useState<"Individual" | "Position" | "OpenPositions">(() => {
     const saved = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
-    return (saved === "Pair" ? "Pair" : "Individual") as "Individual" | "Pair";
+    if (saved === "OpenPositions" || saved === "Position" || saved === "Pair") return saved === "OpenPositions" ? "OpenPositions" : "Position";
+    return "Individual";
   });
   const [expandedTrades, setExpandedTrades] = useState<Set<number>>(new Set());
   const [chartCollapsedForPosition, setChartCollapsedForPosition] = useState<Set<number>>(new Set());
@@ -287,7 +288,7 @@ export default function Trades() {
     loadData();
   }, [pairingMethod, viewMode, timeframe, customStartDate, customEndDate, dataMode]);
 
-  // When navigated from Dashboard "Open Positions" with expandPositionEntryId, switch to Pair view and expand that position
+  // When navigated from Dashboard "Open Positions" with expandPositionEntryId, switch to Position view and expand that position
   const expandPositionEntryIdRef = useRef<number | null>(null);
   useEffect(() => {
     const state = location.state as { expandPositionEntryId?: number } | null;
@@ -301,8 +302,8 @@ export default function Trades() {
     if (entryId == null || positionGroups.length === 0) return;
     const hasGroup = positionGroups.some((g) => g.entry_trade.id === entryId);
     if (hasGroup) {
-      setViewMode("Pair");
-      localStorage.setItem(VIEW_MODE_STORAGE_KEY, "Pair");
+      setViewMode("Position");
+      localStorage.setItem(VIEW_MODE_STORAGE_KEY, "Position");
       setExpandedTrades((prev) => new Set([...prev, entryId]));
       expandPositionEntryIdRef.current = null;
       navigate(location.pathname, { replace: true, state: {} });
@@ -520,9 +521,9 @@ export default function Trades() {
     loadLinks();
   }, [tradesWithPairing, dataMode]);
 
-  // Load journal/emotional links for pairs (Pair view)
+  // Load journal/emotional links for positions (Position / Open Positions view)
   useEffect(() => {
-    if (viewMode !== "Pair" || positionGroups.length === 0) {
+    if ((viewMode !== "Position" && viewMode !== "OpenPositions") || positionGroups.length === 0) {
       return;
     }
     const pairKeys: string[] = [];
@@ -1259,7 +1260,7 @@ export default function Trades() {
     }
   };
 
-  const handleViewModeChange = (mode: "Individual" | "Pair") => {
+  const handleViewModeChange = (mode: "Individual" | "Position" | "OpenPositions") => {
     setViewMode(mode);
     localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
   };
@@ -1423,9 +1424,9 @@ export default function Trades() {
     }
   };
 
-  const SortableHeader = ({ column, label, viewMode }: { column: "date" | "symbol" | "pnl" | "price" | "quantity" | "trades" | "type" | "status" | "percent" | "position_size", label: string, viewMode: "Individual" | "Pair" }) => {
+  const SortableHeader = ({ column, label, viewMode }: { column: "date" | "symbol" | "pnl" | "price" | "quantity" | "trades" | "type" | "status" | "percent" | "position_size", label: string, viewMode: "Individual" | "Position" | "OpenPositions" }) => {
     const isActive = sortBy === column;
-    const showInView = viewMode === "Pair" || column !== "trades";
+    const showInView = viewMode === "Position" || viewMode === "OpenPositions" || column !== "trades";
     
     if (!showInView) return null;
     
@@ -1777,7 +1778,7 @@ export default function Trades() {
     return direction === "asc" ? comparison : -comparison;
   };
 
-  // Filter and sort position groups for Pair view
+  // Filter and sort position groups for Position view
   const filteredAndSortedPositionGroups = useMemo(() => {
     let filtered = positionGroups.filter((group) => {
       const t = group.entry_trade;
@@ -1800,21 +1801,48 @@ export default function Trades() {
     return filtered;
   }, [positionGroups, searchQuery, sortBy, sortDirection, sortBySecondary, filterSymbol, filterSide, filterType, filterStatus, filterStrategy, filterPctMin, filterPctMax, filterPnlMin, filterPnlMax, filterPositionSizeMin, filterPositionSizeMax, strategies]);
 
+  // Open positions only (final_quantity !== 0), then same filter/sort as position groups
+  const filteredAndSortedOpenPositionGroups = useMemo(() => {
+    const openGroups = positionGroups.filter((g) => Math.abs(g.final_quantity) > 0.0001);
+    let filtered = openGroups.filter((group) => {
+      const t = group.entry_trade;
+      if (!searchMatchesTrade(t)) return false;
+      const { pct, pnl } = getPercentAndPnlForGroup(group);
+      const positionSize = t.quantity * t.price;
+      if (!applyFiltersToTrade(t, { pct, pnl, positionSize })) return false;
+      return true;
+    });
+
+    const dir = sortDirection;
+    filtered.sort((a, b) => {
+      let comparison = compareGroupsForSort(a, b, sortBy, dir);
+      if (comparison === 0 && sortBySecondary !== "none") {
+        comparison = compareGroupsForSort(a, b, sortBySecondary, dir);
+      }
+      return comparison;
+    });
+
+    return filtered;
+  }, [positionGroups, searchQuery, sortBy, sortDirection, sortBySecondary, filterSymbol, filterSide, filterType, filterStatus, filterStrategy, filterPctMin, filterPctMax, filterPnlMin, filterPnlMax, filterPositionSizeMin, filterPositionSizeMax, strategies]);
+
+  const displayedPositionGroups = viewMode === "OpenPositions" ? filteredAndSortedOpenPositionGroups : filteredAndSortedPositionGroups;
+
   const tableSummary = useMemo(() => {
-    const count = viewMode === "Pair" ? filteredAndSortedPositionGroups.length : filteredAndSortedTrades.length;
-    const totalPnl = viewMode === "Pair"
-      ? filteredAndSortedPositionGroups.reduce((sum, g) => sum + g.total_pnl, 0)
-      : null;
-    const symbols = viewMode === "Pair"
-      ? new Set(filteredAndSortedPositionGroups.map((g) => g.entry_trade.symbol))
+    const isPositionView = viewMode === "Position" || viewMode === "OpenPositions";
+    const groups = viewMode === "OpenPositions" ? filteredAndSortedOpenPositionGroups : filteredAndSortedPositionGroups;
+    const count = isPositionView ? groups.length : filteredAndSortedTrades.length;
+    const totalPnl = isPositionView ? groups.reduce((sum, g) => sum + g.total_pnl, 0) : null;
+    const symbols = isPositionView
+      ? new Set(groups.map((g) => g.entry_trade.symbol))
       : new Set(filteredAndSortedTrades.map((t) => t.trade.symbol));
     return { count, totalPnl, symbolCount: symbols.size };
-  }, [viewMode, filteredAndSortedTrades, filteredAndSortedPositionGroups]);
+  }, [viewMode, filteredAndSortedTrades, filteredAndSortedPositionGroups, filteredAndSortedOpenPositionGroups]);
 
   const allVisibleIdsForPaperSelection = useMemo(() => {
     const ids = new Set<number>();
-    if (viewMode === "Pair") {
-      filteredAndSortedPositionGroups.forEach((group) => {
+    if (viewMode === "Position" || viewMode === "OpenPositions") {
+      const groups = viewMode === "OpenPositions" ? filteredAndSortedOpenPositionGroups : filteredAndSortedPositionGroups;
+      groups.forEach((group) => {
         ids.add(group.entry_trade.id);
         const exitTrade = group.position_trades.length >= 1 ? group.position_trades[group.position_trades.length - 1] : null;
         if (exitTrade) ids.add((exitTrade as Trade).id);
@@ -1823,7 +1851,7 @@ export default function Trades() {
       filteredAndSortedTrades.forEach((item) => ids.add(item.trade.id));
     }
     return ids;
-  }, [viewMode, filteredAndSortedPositionGroups, filteredAndSortedTrades]);
+  }, [viewMode, filteredAndSortedPositionGroups, filteredAndSortedOpenPositionGroups, filteredAndSortedTrades]);
 
   const selectAllForPaper = () => setSelectedTradeIdsForPaper(new Set(allVisibleIdsForPaperSelection));
   const clearPaperSelection = () => setSelectedTradeIdsForPaper(new Set());
@@ -1900,7 +1928,7 @@ export default function Trades() {
                 Individual
               </button>
               <button
-                onClick={() => handleViewModeChange("Pair")}
+                onClick={() => handleViewModeChange("Position")}
                 style={{
                   padding: "6px 12px",
                   borderRadius: "4px",
@@ -1908,17 +1936,33 @@ export default function Trades() {
                   fontWeight: "500",
                   cursor: "pointer",
                   border: "none",
-                  backgroundColor: viewMode === "Pair" ? "var(--accent)" : "transparent",
-                  color: viewMode === "Pair" ? "white" : "var(--text-primary)",
+                  backgroundColor: viewMode === "Position" ? "var(--accent)" : "transparent",
+                  color: viewMode === "Position" ? "white" : "var(--text-primary)",
                   transition: "all 0.2s",
                 }}
               >
-                Pair
+                Position
+              </button>
+              <button
+                onClick={() => handleViewModeChange("OpenPositions")}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: "4px",
+                  fontSize: "13px",
+                  fontWeight: "500",
+                  cursor: "pointer",
+                  border: "none",
+                  backgroundColor: viewMode === "OpenPositions" ? "var(--accent)" : "transparent",
+                  color: viewMode === "OpenPositions" ? "white" : "var(--text-primary)",
+                  transition: "all 0.2s",
+                }}
+              >
+                Open positions
               </button>
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ fontSize: "14px", color: "var(--text-secondary)" }}>Pairing Method:</span>
+            <span style={{ fontSize: "14px", color: "var(--text-secondary)" }}>Position method:</span>
             <div
               style={{
                 display: "flex",
@@ -2095,7 +2139,7 @@ export default function Trades() {
               {!hidePnlDollars && <option value="pnl">P&L</option>}
               <option value="price">Price</option>
               <option value="quantity">Qty</option>
-              {viewMode === "Pair" && <option value="trades">Trades</option>}
+              {(viewMode === "Position" || viewMode === "OpenPositions") && <option value="trades">Trades</option>}
               <option value="type">Type</option>
               <option value="status">Status</option>
               {!hidePnlPercent && <option value="percent">%</option>}
@@ -2139,7 +2183,7 @@ export default function Trades() {
               {!hidePnlDollars && <option value="pnl">Then: P&L</option>}
               <option value="price">Then: price</option>
               <option value="quantity">Then: qty</option>
-              {viewMode === "Pair" && <option value="trades">Then: trades</option>}
+              {(viewMode === "Position" || viewMode === "OpenPositions") && <option value="trades">Then: trades</option>}
               <option value="type">Then: type</option>
               <option value="status">Then: status</option>
               {!hidePnlPercent && <option value="percent">Then: %</option>}
@@ -2156,7 +2200,7 @@ export default function Trades() {
           />
           <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
             <span
-              title={viewMode === "Pair" ? "Position groups" : "Trades"}
+              title={viewMode === "Position" || viewMode === "OpenPositions" ? "Position groups" : "Trades"}
               style={{
                 padding: "6px 10px",
                 backgroundColor: "var(--bg-tertiary)",
@@ -2167,7 +2211,7 @@ export default function Trades() {
                 whiteSpace: "nowrap",
               }}
             >
-              <strong style={{ color: "var(--text-primary)", fontWeight: "600" }}>{tableSummary.count}</strong> {viewMode === "Pair" ? "pairs" : "trades"}
+              <strong style={{ color: "var(--text-primary)", fontWeight: "600" }}>{tableSummary.count}</strong> {viewMode === "OpenPositions" ? "open positions" : viewMode === "Position" ? "positions" : "trades"}
             </span>
             <span
               title="Unique symbols"
@@ -2183,7 +2227,7 @@ export default function Trades() {
             >
               <strong style={{ color: "var(--text-primary)", fontWeight: "600" }}>{tableSummary.symbolCount}</strong> symbols
             </span>
-            {!hidePnlDollars && viewMode === "Pair" && tableSummary.totalPnl !== null && (
+            {!hidePnlDollars && (viewMode === "Position" || viewMode === "OpenPositions") && tableSummary.totalPnl !== null && (
               <span
                 title="Total P&L"
                 style={{
@@ -2694,9 +2738,9 @@ export default function Trades() {
       </div>
       </div>
 
-      {viewMode === "Pair" ? (
-        // Pair View Mode - Show only entry trades with position details
-        filteredAndSortedPositionGroups.length === 0 ? (
+      {(viewMode === "Position" || viewMode === "OpenPositions") ? (
+        // Position / Open Positions View - Show entry trades with position details
+        displayedPositionGroups.length === 0 ? (
           <div
             style={{
               backgroundColor: "var(--bg-secondary)",
@@ -2707,7 +2751,7 @@ export default function Trades() {
             }}
           >
             <p style={{ color: "var(--text-secondary)", marginBottom: "16px" }}>
-              No positions found. Import trades to see position groups.
+              {viewMode === "OpenPositions" ? "No open positions." : "No positions found. Import trades to see position groups."}
             </p>
           </div>
         ) : (
@@ -2758,7 +2802,7 @@ export default function Trades() {
                       <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                         <span>Strategy</span>
                         <span
-                          title="All trades in a pair share the same strategy, journal, and emotional state links. Changing any of these for one trade updates the whole pair."
+                          title="All trades in a position share the same strategy, journal, and emotional state links. Changing any of these for one trade updates the whole position."
                           style={{ display: "inline-flex", cursor: "help", color: "var(--text-secondary)" }}
                         >
                           <Info size={14} />
@@ -2830,7 +2874,7 @@ export default function Trades() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredAndSortedPositionGroups.map((group) => {
+                  {displayedPositionGroups.map((group) => {
                     const isExpanded = expandedTrades.has(group.entry_trade.id);
                     return (
                       <>
@@ -3083,7 +3127,7 @@ export default function Trades() {
                             </>
                           )}
                           <td style={{ padding: "12px 8px", textAlign: "center", fontSize: "12px", width: "52px" }} onClick={(e) => e.stopPropagation()}>
-                            <label title="Select this pair for Mark as paper" style={{ display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", margin: 0 }}>
+                            <label title="Select this position for Mark as paper" style={{ display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", margin: 0 }}>
                               <input
                                 type="checkbox"
                                 checked={selectedTradeIdsForPaper.has(group.entry_trade.id)}
@@ -3671,7 +3715,7 @@ export default function Trades() {
                     <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                       <span>Strategy</span>
                       <span
-                        title="All trades in a pair share the same strategy, journal, and emotional state links. Changing any of these for one trade updates the whole pair."
+                        title="All trades in a position share the same strategy, journal, and emotional state links. Changing any of these for one trade updates the whole position."
                         style={{ display: "inline-flex", cursor: "help", color: "var(--text-secondary)" }}
                       >
                         <Info size={14} />
@@ -3804,7 +3848,7 @@ export default function Trades() {
                           ${formatWithCommas(trade.quantity * trade.price, { decimals: 2 })}
                         </td>
                         {!hidePnlDollars && (
-                          <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }} title={hasPairs ? undefined : "Realized P&L when this trade is paired (matched with an opposite leg)"}>
+                          <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }} title={hasPairs ? undefined : "Realized P&L when this trade is in a position (matched with an opposite leg)"}>
                             {hasPairs ? (
                               <span
                                 style={{
@@ -4091,7 +4135,7 @@ export default function Trades() {
                           <td colSpan={12} style={{ padding: "0", backgroundColor: "var(--bg-tertiary)" }}>
                             <div style={{ padding: "20px" }}>
                               <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px" }}>
-                                {trade.side === "BUY" ? "Exit Pairs" : "Entry Pairs"} ({relevantPairs.length})
+                                {trade.side === "BUY" ? "Exit positions" : "Entry positions"} ({relevantPairs.length})
                               </h3>
                               <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                                 {relevantPairs.map((pair, idx) => (
@@ -4269,7 +4313,7 @@ export default function Trades() {
                                           }}
                                           onClick={(e) => e.stopPropagation()}
                                           onMouseDown={(e) => e.stopPropagation()}
-                                          placeholder="Add notes for this trade pair..."
+                                          placeholder="Add notes for this position..."
                                           style={{
                                             width: "100%",
                                             minHeight: "60px",
