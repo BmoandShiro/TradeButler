@@ -1711,6 +1711,8 @@ export default function Strategies() {
   }>>>(new Map());
   /** Per-strategy checklist by outcome for overview: top winning items + often not clicked in losing trades. */
   const [overviewChecklistByOutcomePerStrategy, setOverviewChecklistByOutcomePerStrategy] = useState<Array<{ strategyId: number; strategyName: string; items: ChecklistItemMetricByOutcomeRow[] }>>([]);
+  /** Bumped when dataMode changes so strategy/checklist data is reloaded after caches are cleared (avoids stale Real/Paper data when switching to Demo). */
+  const [modeSwitchReloadKey, setModeSwitchReloadKey] = useState(0);
 
   // Sensors for strategy drag-and-drop
   const strategySensors = useSensors(
@@ -2194,6 +2196,18 @@ export default function Strategies() {
   }, []);
 
   useEffect(() => {
+    // When data mode changes (Demo / Real / Paper), clear
+    // per-strategy cached data so subsequent loads reflect the new mode.
+    setStrategies([]);
+    setStrategyPairs(new Map());
+    setStrategyStats(new Map());
+    setChecklists(new Map());
+    setCustomChecklistTypes(new Map());
+    setChecklistSectionDescriptions(new Map());
+    setNotesContent(new Map());
+
+    setLoading(true);
+    setModeSwitchReloadKey((k) => k + 1); // Force loadStrategyData effect to run again after this render so it sees empty caches
     loadStrategies();
   }, [dataMode]);
 
@@ -2262,7 +2276,7 @@ export default function Strategies() {
     if (selectedStrategy) {
       loadStrategyData(selectedStrategy);
     }
-  }, [selectedStrategy, activeTab]);
+  }, [selectedStrategy, activeTab, dataMode, modeSwitchReloadKey]);
 
   useEffect(() => {
     if ((activeTab === "survey" || activeTab === "surveys") && selectedStrategy != null && !isCreating) {
