@@ -172,7 +172,7 @@ export function getSandboxStrategies(): ExampleStrategy[] {
   return loadSandboxState().strategies;
 }
 
-export function addSandboxStrategy(input: { name: string; description?: string | null; notes?: string | null; color?: string | null }): ExampleStrategy {
+export function addSandboxStrategy(input: { name: string; description?: string | null; notes?: string | null; color?: string | null; author?: string | null }): ExampleStrategy {
   const state = loadSandboxState();
   const id = nextId(state.strategies);
   const strategy: ExampleStrategy = {
@@ -182,12 +182,13 @@ export function addSandboxStrategy(input: { name: string; description?: string |
     notes: input.notes ?? null,
     created_at: new Date().toISOString(),
     color: input.color ?? null,
+    author: input.author ?? null,
   };
   saveSandboxState({ ...state, strategies: [...state.strategies, strategy] });
   return strategy;
 }
 
-export function updateSandboxStrategy(id: number, input: { name?: string; description?: string | null; notes?: string | null; color?: string | null }) {
+export function updateSandboxStrategy(id: number, input: { name?: string; description?: string | null; notes?: string | null; color?: string | null; author?: string | null }) {
   const state = loadSandboxState();
   saveSandboxState({
     ...state,
@@ -199,6 +200,7 @@ export function updateSandboxStrategy(id: number, input: { name?: string; descri
             description: input.description !== undefined ? input.description : s.description,
             notes: input.notes !== undefined ? input.notes : s.notes,
             color: input.color !== undefined ? input.color : s.color,
+            author: input.author !== undefined ? input.author : s.author,
           }
         : s
     ),

@@ -72,6 +72,7 @@ pub struct Strategy {
     pub created_at: Option<String>,
     pub color: Option<String>,
     pub display_order: Option<i64>,
+    pub author: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -166,6 +167,11 @@ pub fn init_database(db_path: &Path) -> Result<()> {
     // Add display_order to strategies if it doesn't exist
     let _ = conn.execute(
         "ALTER TABLE strategies ADD COLUMN display_order INTEGER DEFAULT 0",
+        [],
+    );
+    // Add author to strategies if it doesn't exist
+    let _ = conn.execute(
+        "ALTER TABLE strategies ADD COLUMN author TEXT",
         [],
     );
     

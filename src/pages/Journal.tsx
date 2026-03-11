@@ -658,6 +658,14 @@ export default function Journal() {
     return () => unsub();
   }, []);
 
+  // When switching data mode (sandbox/real/paper), reset the view so the list and detail reflect the new mode's data
+  useEffect(() => {
+    setSelectedEntry(null);
+    setPendingRestoreEntryId(null);
+    setIsCreating(false);
+    setIsEditing(false);
+  }, [dataMode]);
+
   // When navigating from Analytics (e.g. "Journal Overview" link) with ?overview=1, show the overview (no entry selected, no create form)
   useEffect(() => {
     if (searchParams.get("overview") === "1") {
@@ -923,10 +931,17 @@ export default function Journal() {
     loadAllJournalTrades();
   }, [dataMode, searchParams]);
 
-  // When navigating to Journal without ?overview=1, restore the last-open entry from localStorage so the tab doesn't reset to overview.
+  // When navigating to Journal without ?overview=1, restore the last-open entry from localStorage (per mode) so the tab doesn't reset to overview.
   useEffect(() => {
     if (searchParams.get("overview") === "1") return;
-    const savedId = localStorage.getItem("journal_selected_entry_id");
+    let savedId = localStorage.getItem(`journal_selected_entry_id_${dataMode}`);
+    if (!savedId) {
+      const legacyId = localStorage.getItem("journal_selected_entry_id");
+      if (legacyId) {
+        localStorage.setItem(`journal_selected_entry_id_${dataMode}`, legacyId);
+        savedId = legacyId;
+      }
+    }
     if (!savedId) return;
     const id = parseInt(savedId, 10);
     if (isNaN(id)) return;
@@ -1512,7 +1527,7 @@ export default function Journal() {
     setIsEditing(false);
     setSelectedEntry(null);
     setPendingLinkedPairs([]);
-    localStorage.removeItem('journal_selected_entry_id');
+    localStorage.removeItem(`journal_selected_entry_id_${dataMode}`);
     setSelectedTrades([]);
     setJournalTradeActualTradeIds(new Map());
     setLinkActualTradesModalJournalTradeId(null);
@@ -1686,7 +1701,7 @@ export default function Journal() {
         deleteSandboxJournalEntry(selectedEntry.id);
         await loadEntries();
         setSelectedEntry(null);
-        localStorage.removeItem('journal_selected_entry_id');
+        localStorage.removeItem(`journal_selected_entry_id_${dataMode}`);
         setSelectedTrades([]);
         setShowDeleteConfirmModal(false);
         return;
@@ -1694,7 +1709,7 @@ export default function Journal() {
       await invoke("delete_journal_entry", { id: selectedEntry.id });
       await loadEntries();
       setSelectedEntry(null);
-    localStorage.removeItem('journal_selected_entry_id');
+      localStorage.removeItem(`journal_selected_entry_id_${dataMode}`);
       setSelectedTrades([]);
       setShowDeleteConfirmModal(false);
     } catch (error) {
@@ -2564,7 +2579,7 @@ export default function Journal() {
           } catch { /* ignore */ }
         }
         setEntryFormData((prev) => ({ ...prev, date: entry.date, title: entry.title, strategy_id: entry.strategy_id, linked_trade_ids: linkedTradeIds }));
-        localStorage.setItem('journal_selected_entry_id', id.toString());
+        localStorage.setItem(`journal_selected_entry_id_${dataMode}`, id.toString());
         const loadedTrades = await loadTrades(id);
         if (options?.openTradeId != null && loadedTrades.length > 0) {
           const idx = loadedTrades.findIndex((t) => t.id === options.openTradeId);
@@ -2609,8 +2624,8 @@ export default function Journal() {
         strategy_id: entry.strategy_id,
         linked_trade_ids: linkedTradeIds,
       }));
-      // Save selected entry ID to localStorage
-      localStorage.setItem('journal_selected_entry_id', id.toString());
+      // Save selected entry ID to localStorage (per mode)
+      localStorage.setItem(`journal_selected_entry_id_${dataMode}`, id.toString());
       const loadedTrades = await loadTrades(id);
       if (options?.openTradeId != null && loadedTrades.length > 0) {
         const idx = loadedTrades.findIndex((t) => t.id === options.openTradeId);
@@ -6709,7 +6724,7 @@ export default function Journal() {
                         key={entry.id}
                         onClick={() => {
                           clearWorkInProgress();
-                          localStorage.setItem("journal_selected_entry_id", entry.id.toString());
+                          localStorage.setItem(`journal_selected_entry_id_${dataMode}`, entry.id.toString());
                           tabScrollPositions.current.clear();
                           loadEntry(entry.id);
                           setIsCreating(false);
@@ -6852,7 +6867,7 @@ export default function Journal() {
                       key={entry.id}
                       onClick={() => {
                         clearWorkInProgress();
-                        localStorage.setItem("journal_selected_entry_id", entry.id.toString());
+                        localStorage.setItem(`journal_selected_entry_id_${dataMode}`, entry.id.toString());
                         tabScrollPositions.current.clear();
                         loadEntry(entry.id);
                         setIsCreating(false);
@@ -7016,7 +7031,7 @@ export default function Journal() {
                           prevStorageKey
                         );
                         clearWorkInProgress();
-                        localStorage.removeItem('journal_selected_entry_id');
+                        localStorage.removeItem(`journal_selected_entry_id_${dataMode}`);
                         setSelectedEntry(null);
                         setSelectedTrades([]);
                         tabScrollPositions.current.clear();
@@ -7034,8 +7049,8 @@ export default function Journal() {
                         );
                       }
                       clearWorkInProgress(); // Clear work in progress when selecting an existing entry
-                      // Save selected entry ID immediately
-                      localStorage.setItem('journal_selected_entry_id', entry.id.toString());
+                      // Save selected entry ID immediately (per mode)
+                      localStorage.setItem(`journal_selected_entry_id_${dataMode}`, entry.id.toString());
                       // Clear tab scroll positions to load fresh for new entry
                       tabScrollPositions.current.clear();
                       loadEntry(entry.id);
