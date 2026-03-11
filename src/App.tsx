@@ -25,7 +25,7 @@ function App() {
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/journal" element={<Journal />} />
           <Route path="/resources" element={<Documentation />} />
-          <Route path="/emotions" element={<Emotions />} />
+          <Route path="/emotions" element={<PageErrorBoundary pageName="Emotions"><Emotions /></PageErrorBoundary>} />
           <Route path="/analytics" element={<AnalyticsErrorBoundary><Analytics /></AnalyticsErrorBoundary>} />
           <Route path="/evaluation" element={<Evaluation />} />
           <Route path="/tools" element={<Tools />} />
