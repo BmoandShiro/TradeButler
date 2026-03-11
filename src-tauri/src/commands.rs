@@ -2396,6 +2396,37 @@ pub fn update_emotional_state(
 }
 
 #[tauri::command]
+pub fn update_emotional_state_links(
+    id: i64,
+    journal_entry_ids: Option<String>,
+    trade_ids: Option<String>,
+) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+
+    let has_multi_ids = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('emotional_states') WHERE name='journal_entry_ids'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if !has_multi_ids {
+        return Ok(());
+    }
+
+    conn.execute(
+        "UPDATE emotional_states SET journal_entry_ids = ?1, trade_ids = ?2 WHERE id = ?3",
+        params![journal_entry_ids, trade_ids, id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 pub fn delete_emotional_state(id: i64) -> Result<(), String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;

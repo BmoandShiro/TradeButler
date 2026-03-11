@@ -8,7 +8,17 @@ import { TradeChart } from "../components/TradeChart";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { formatWithCommas } from "../utils/formatCompactNumber";
-import { loadSandboxState, deleteSandboxTrade, updateSandboxTradeStrategy, updateSandboxTradeNotes } from "../utils/sandboxStore";
+import {
+  loadSandboxState,
+  deleteSandboxTrade,
+  updateSandboxTradeStrategy,
+  updateSandboxTradeNotes,
+  getSandboxJournalEntries,
+  getSandboxEmotionalStates,
+  getSandboxEmotionalStatesForJournal,
+  updateSandboxEmotionalState,
+  updateSandboxJournalEntry,
+} from "../utils/sandboxStore";
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 
 interface JournalEntrySummary {
@@ -60,6 +70,46 @@ interface Strategy {
   color: string | null;
 }
 
+interface JournalEntryForLink {
+  id: number;
+  date: string;
+  title: string;
+  strategy_id: number | null;
+  linked_trade_ids?: string | null;
+}
+
+interface TradeEmotionalState {
+  id: number;
+  timestamp: string;
+  emotion: string;
+  intensity: number;
+  notes: string | null;
+  trade_id: number | null;
+  journal_entry_id?: number | null;
+  journal_trade_id?: number | null;
+  journal_entry_ids?: string | null;
+  trade_ids?: string | null;
+}
+
+function getEmotionalStateIdsForRealTrade(tradeId: number, states: TradeEmotionalState[]): number[] {
+  const ids: number[] = [];
+  for (const s of states) {
+    if (s.trade_id === tradeId) {
+      ids.push(s.id);
+      continue;
+    }
+    if (s.trade_ids) {
+      try {
+        const arr = JSON.parse(s.trade_ids) as number[];
+        if (Array.isArray(arr) && arr.includes(tradeId)) ids.push(s.id);
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return ids;
+}
+
 const PAIRING_STORAGE_KEY = "tradebutler_pairing_method";
 const VIEW_MODE_STORAGE_KEY = "tradebutler_view_mode";
 const HIDE_PNL_DOLLARS_STORAGE_KEY = "tradebutler_hide_pnl_dollars";
@@ -78,6 +128,8 @@ const FILTER_PNL_MAX_KEY = "tradebutler_filter_pnl_max";
 const FILTER_POSITION_SIZE_MIN_KEY = "tradebutler_filter_position_size_min";
 const FILTER_POSITION_SIZE_MAX_KEY = "tradebutler_filter_position_size_max";
 const SORT_SECONDARY_KEY = "tradebutler_sort_secondary";
+const JOURNAL_MAP_STORAGE_KEY_BASE = "tradebutler_trade_journal_map_";
+const EMO_STATE_MAP_STORAGE_KEY_BASE = "tradebutler_trade_emotional_state_map_";
 
 interface PositionGroup {
   entry_trade: Trade;
@@ -178,6 +230,15 @@ export default function Trades() {
   const stickyBarRef = useRef<HTMLDivElement>(null);
   const paperSelectAllCheckboxRef = useRef<HTMLInputElement>(null);
 
+  const [journalEntriesForLink, setJournalEntriesForLink] = useState<JournalEntryForLink[]>([]);
+  const [journalEntryIdsByTradeId, setJournalEntryIdsByTradeId] = useState<Record<number, number[]>>({});
+  const [emotionalStatesForLink, setEmotionalStatesForLink] = useState<TradeEmotionalState[]>([]);
+  const [emotionalStateIdsByTradeId, setEmotionalStateIdsByTradeId] = useState<Record<number, number[]>>({});
+  const [journalPopoverTradeId, setJournalPopoverTradeId] = useState<number | null>(null);
+  const [emotionPopoverTradeId, setEmotionPopoverTradeId] = useState<number | null>(null);
+  const journalPopoverRef = useRef<HTMLDivElement>(null);
+  const emotionPopoverRef = useRef<HTMLDivElement>(null);
+
   const JOURNAL_ENTRIES_PER_PAGE = 10;
 
   async function loadJournalEntriesForPair(entryTradeId: number, exitTradeId: number) {
@@ -272,6 +333,199 @@ export default function Trades() {
       localStorage.removeItem("tradebutler_trades_custom_end");
     }
   }, [customStartDate, customEndDate]);
+
+  useEffect(() => {
+    const tradeIds = tradesWithPairing.map((t) => t.trade.id);
+    if (tradeIds.length === 0) {
+      setJournalEntriesForLink([]);
+      setJournalEntryIdsByTradeId({});
+      setEmotionalStatesForLink([]);
+      setEmotionalStateIdsByTradeId({});
+      return;
+    }
+
+    const loadLinks = async () => {
+      try {
+        if (dataMode === "sandbox") {
+          const entries = getSandboxJournalEntries() as unknown as JournalEntryForLink[];
+          setJournalEntriesForLink(entries);
+          const journalMap: Record<number, number[]> = {};
+          for (const tid of tradeIds) journalMap[tid] = [];
+          for (const entry of entries) {
+            if (!entry.linked_trade_ids) continue;
+            try {
+              const ids = JSON.parse(entry.linked_trade_ids) as number[];
+              if (!Array.isArray(ids)) continue;
+              for (const tid of ids) {
+                if (tradeIds.includes(tid) && !journalMap[tid].includes(entry.id)) {
+                  journalMap[tid].push(entry.id);
+                }
+              }
+            } catch {
+              // ignore
+            }
+          }
+          let storedJournal: Record<number, number[]> = {};
+          try {
+            const raw = localStorage.getItem(`${JOURNAL_MAP_STORAGE_KEY_BASE}${dataMode}`);
+            if (raw) {
+              const parsed = JSON.parse(raw) as Record<string, number[]>;
+              storedJournal = Object.fromEntries(
+                Object.entries(parsed).map(([k, v]) => [Number(k), Array.isArray(v) ? v : []])
+              );
+            }
+          } catch {
+            storedJournal = {};
+          }
+          for (const tid of tradeIds) {
+            if (storedJournal[tid]?.length) {
+              const combined = [...new Set([...journalMap[tid], ...storedJournal[tid]])];
+              journalMap[tid] = combined.filter((id) => entries.some((e) => e.id === id));
+            }
+          }
+          saveJournalMapForMode(journalMap, dataMode);
+          setJournalEntryIdsByTradeId(journalMap);
+
+          const emoStates = getSandboxEmotionalStates() as unknown as TradeEmotionalState[];
+          setEmotionalStatesForLink(emoStates);
+          let storedEmo: Record<number, number[]> = {};
+          try {
+            const raw = localStorage.getItem(`${EMO_STATE_MAP_STORAGE_KEY_BASE}${dataMode}`);
+            if (raw) {
+              const parsed = JSON.parse(raw) as Record<string, number[]>;
+              storedEmo = Object.fromEntries(
+                Object.entries(parsed).map(([k, v]) => [Number(k), Array.isArray(v) ? v : []])
+              );
+            }
+          } catch {
+            storedEmo = {};
+          }
+          const emoMap: Record<number, number[]> = {};
+          for (const tid of tradeIds) {
+            emoMap[tid] = getEmotionalStateIdsForRealTrade(tid, emoStates);
+            for (const jeId of journalMap[tid]) {
+              const forEntry = (getSandboxEmotionalStatesForJournal(jeId) as unknown as TradeEmotionalState[]).map((s) => s.id);
+              for (const id of forEntry) {
+                if (!emoMap[tid].includes(id)) emoMap[tid].push(id);
+              }
+            }
+            if (storedEmo[tid]?.length) {
+              emoMap[tid] = [...new Set([...emoMap[tid], ...storedEmo[tid]])].filter((id) => emoStates.some((s) => s.id === id));
+            }
+          }
+          saveEmotionalStateMapForMode(emoMap, dataMode);
+          setEmotionalStateIdsByTradeId(emoMap);
+          return;
+        }
+
+        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+        const [entries, emoStates] = await Promise.all([
+          invoke<JournalEntryForLink[]>("get_journal_entries", paperArgs),
+          invoke<TradeEmotionalState[]>("get_emotional_states", paperArgs),
+        ]);
+        setJournalEntriesForLink(entries);
+        setEmotionalStatesForLink(emoStates);
+
+        let storedJournalMap: Record<number, number[]> = {};
+        try {
+          const raw = localStorage.getItem(`${JOURNAL_MAP_STORAGE_KEY_BASE}${dataMode}`);
+          if (raw) {
+            const parsed = JSON.parse(raw) as Record<string, number[]>;
+            storedJournalMap = Object.fromEntries(
+              Object.entries(parsed).map(([k, v]) => [Number(k), Array.isArray(v) ? v : []])
+            );
+          }
+        } catch {
+          storedJournalMap = {};
+        }
+
+        const journalMap: Record<number, number[]> = {};
+        for (const tid of tradeIds) journalMap[tid] = [];
+        for (const entry of entries) {
+          if (!entry.linked_trade_ids) continue;
+          try {
+            const ids = JSON.parse(entry.linked_trade_ids) as number[];
+            if (!Array.isArray(ids)) continue;
+            for (const tid of ids) {
+              if (tradeIds.includes(tid) && !journalMap[tid].includes(entry.id)) {
+                journalMap[tid].push(entry.id);
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+        for (const tid of tradeIds) {
+          if (storedJournalMap[tid]?.length) {
+            journalMap[tid] = [...new Set([...journalMap[tid], ...storedJournalMap[tid]])].filter((id) => entries.some((e) => e.id === id));
+          }
+        }
+        saveJournalMapForMode(journalMap, dataMode);
+        setJournalEntryIdsByTradeId(journalMap);
+
+        let storedEmoMap: Record<number, number[]> = {};
+        try {
+          const raw = localStorage.getItem(`${EMO_STATE_MAP_STORAGE_KEY_BASE}${dataMode}`);
+          if (raw) {
+            const parsed = JSON.parse(raw) as Record<string, number[]>;
+            storedEmoMap = Object.fromEntries(
+              Object.entries(parsed).map(([k, v]) => [Number(k), Array.isArray(v) ? v : []])
+            );
+          }
+        } catch {
+          storedEmoMap = {};
+        }
+
+        const emoMap: Record<number, number[]> = {};
+        for (const tid of tradeIds) {
+          emoMap[tid] = getEmotionalStateIdsForRealTrade(tid, emoStates);
+          for (const jeId of journalMap[tid]) {
+            const byEntry = emoStates.filter((s) => {
+              if (s.journal_entry_id === jeId) return true;
+              if (!s.journal_entry_ids) return false;
+              try {
+                const arr = JSON.parse(s.journal_entry_ids) as number[];
+                return Array.isArray(arr) && arr.includes(jeId);
+              } catch {
+                return false;
+              }
+            });
+            for (const s of byEntry) {
+              if (!emoMap[tid].includes(s.id)) emoMap[tid].push(s.id);
+            }
+          }
+          if (storedEmoMap[tid]?.length) {
+            emoMap[tid] = [...new Set([...emoMap[tid], ...storedEmoMap[tid]])].filter((id) => emoStates.some((s) => s.id === id));
+          }
+        }
+        saveEmotionalStateMapForMode(emoMap, dataMode);
+        setEmotionalStateIdsByTradeId(emoMap);
+      } catch (e) {
+        console.error("Failed to load journal / emotional links for trades:", e);
+        setJournalEntriesForLink([]);
+        setJournalEntryIdsByTradeId({});
+        setEmotionalStatesForLink([]);
+        setEmotionalStateIdsByTradeId({});
+      }
+    };
+
+    loadLinks();
+  }, [tradesWithPairing, dataMode]);
+
+  // Close journal/emotion popovers on outside click
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (journalPopoverTradeId != null && journalPopoverRef.current && !journalPopoverRef.current.contains(t)) {
+        setJournalPopoverTradeId(null);
+      }
+      if (emotionPopoverTradeId != null && emotionPopoverRef.current && !emotionPopoverRef.current.contains(t)) {
+        setEmotionPopoverTradeId(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [journalPopoverTradeId, emotionPopoverTradeId]);
 
   const loadData = async () => {
     try {
@@ -405,6 +659,222 @@ export default function Trades() {
       console.error("Error loading data:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const saveEmotionalStateMapForMode = (map: Record<number, number[]>, mode: DataMode) => {
+    try {
+      const key = `${EMO_STATE_MAP_STORAGE_KEY_BASE}${mode}`;
+      localStorage.setItem(key, JSON.stringify(map));
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const saveJournalMapForMode = (map: Record<number, number[]>, mode: DataMode) => {
+    try {
+      const key = `${JOURNAL_MAP_STORAGE_KEY_BASE}${mode}`;
+      localStorage.setItem(key, JSON.stringify(map));
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const updateEntryLinkedTradeIds = (entry: JournalEntryForLink, tradeId: number, add: boolean): { ids: number[] } => {
+    let ids: number[] = [];
+    if (entry.linked_trade_ids) {
+      try {
+        const parsed = JSON.parse(entry.linked_trade_ids) as number[];
+        if (Array.isArray(parsed)) ids = parsed;
+      } catch {
+        ids = [];
+      }
+    }
+    if (add) {
+      if (!ids.includes(tradeId)) ids.push(tradeId);
+    } else {
+      ids = ids.filter((id) => id !== tradeId);
+    }
+    return { ids };
+  };
+
+  const handleToggleJournalLink = async (tradeId: number, entryId: number, checked: boolean) => {
+    const entry = journalEntriesForLink.find((e) => e.id === entryId);
+    if (!entry) return;
+    const { ids } = updateEntryLinkedTradeIds(entry, tradeId, checked);
+    try {
+      if (dataMode === "sandbox") {
+        updateSandboxJournalEntry(entryId, { linked_trade_ids: ids.length > 0 ? JSON.stringify(ids) : null });
+      } else {
+        await invoke("update_journal_entry", {
+          id: entry.id,
+          date: entry.date,
+          title: entry.title,
+          strategyId: entry.strategy_id,
+          linked_trade_ids: ids.length > 0 ? JSON.stringify(ids) : null,
+        });
+      }
+      setJournalEntriesForLink((prev) =>
+        prev.map((e) =>
+          e.id === entryId ? { ...e, linked_trade_ids: ids.length > 0 ? JSON.stringify(ids) : null } : e
+        )
+      );
+      setJournalEntryIdsByTradeId((prev) => {
+        const current = prev[tradeId] ?? [];
+        const next = checked ? (current.includes(entryId) ? current : [...current, entryId]) : current.filter((id) => id !== entryId);
+        const nextMap = { ...prev, [tradeId]: next };
+        saveJournalMapForMode(nextMap, dataMode);
+        return nextMap;
+      });
+
+      // When linking a journal, auto-link all emotional states linked to that journal to this trade
+      if (checked) {
+        try {
+          let statesForEntry: TradeEmotionalState[] = [];
+          if (dataMode === "sandbox") {
+            statesForEntry = getSandboxEmotionalStatesForJournal(entryId) as unknown as TradeEmotionalState[];
+          } else {
+            const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+            statesForEntry = await invoke<TradeEmotionalState[]>("get_emotional_states_for_journal", {
+              journalEntryId: entryId,
+              ...paperArgs,
+            });
+          }
+          const currentEmoIds = emotionalStateIdsByTradeId[tradeId] ?? [];
+          const toAdd = statesForEntry.filter((s) => !currentEmoIds.includes(s.id));
+          for (const s of toAdd) {
+            let stateTradeIds: number[] = [];
+            if (s.trade_ids) {
+              try {
+                const parsed = JSON.parse(s.trade_ids) as number[];
+                if (Array.isArray(parsed)) stateTradeIds = parsed;
+              } catch {
+                if (s.trade_id != null) stateTradeIds = [s.trade_id];
+              }
+            } else if (s.trade_id != null) {
+              stateTradeIds = [s.trade_id];
+            }
+            if (!stateTradeIds.includes(tradeId)) {
+              stateTradeIds.push(tradeId);
+              const tradeIdsJson = JSON.stringify(stateTradeIds);
+              if (dataMode === "sandbox") {
+                updateSandboxEmotionalState(s.id, { trade_ids: tradeIdsJson });
+              } else {
+                await invoke("update_emotional_state_links", {
+                  id: s.id,
+                  journal_entry_ids: s.journal_entry_ids ?? null,
+                  trade_ids: tradeIdsJson,
+                });
+              }
+              setEmotionalStatesForLink((prev) =>
+                prev.map((st) => (st.id === s.id ? { ...st, trade_ids: tradeIdsJson } : st))
+              );
+            }
+          }
+          if (toAdd.length > 0) {
+            setEmotionalStateIdsByTradeId((prev) => {
+              const next = [...(prev[tradeId] ?? []), ...toAdd.map((s) => s.id)];
+              const nextMap = { ...prev, [tradeId]: [...new Set(next)] };
+              saveEmotionalStateMapForMode(nextMap, dataMode);
+              return nextMap;
+            });
+          }
+        } catch (e) {
+          console.error("Failed to auto-link emotional states for journal:", e);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to toggle journal link:", e);
+    }
+  };
+
+  const handleToggleEmotionalStateLink = async (tradeId: number, stateId: number, checked: boolean) => {
+    const state = emotionalStatesForLink.find((s) => s.id === stateId);
+    if (!state) return;
+    let ids: number[] = [];
+    if (state.trade_ids) {
+      try {
+        const parsed = JSON.parse(state.trade_ids) as number[];
+        if (Array.isArray(parsed)) ids = parsed;
+      } catch {
+        ids = [];
+      }
+    } else if (state.trade_id != null) {
+      ids = [state.trade_id];
+    }
+    if (checked) {
+      if (!ids.includes(tradeId)) ids.push(tradeId);
+    } else {
+      ids = ids.filter((id) => id !== tradeId);
+    }
+    const tradeIdsJson = ids.length > 0 ? JSON.stringify(ids) : null;
+    try {
+      if (dataMode === "sandbox") {
+        updateSandboxEmotionalState(stateId, { trade_ids: tradeIdsJson });
+      } else {
+        await invoke("update_emotional_state_links", {
+          id: stateId,
+          journal_entry_ids: state.journal_entry_ids ?? null,
+          trade_ids: tradeIdsJson,
+        });
+      }
+      setEmotionalStatesForLink((prev) =>
+        prev.map((s) => (s.id === stateId ? { ...s, trade_ids: tradeIdsJson } : s))
+      );
+      setEmotionalStateIdsByTradeId((prev) => {
+        const current = prev[tradeId] ?? [];
+        const next = checked ? (current.includes(stateId) ? current : [...current, stateId]) : current.filter((id) => id !== stateId);
+        const nextMap = { ...prev, [tradeId]: next };
+        saveEmotionalStateMapForMode(nextMap, dataMode);
+        return nextMap;
+      });
+
+      // When linking an emotional state, auto-link any journals that state is linked to
+      if (checked) {
+        const journalEntryIdsFromState: number[] = [];
+        if (state.journal_entry_id != null) journalEntryIdsFromState.push(state.journal_entry_id);
+        if (state.journal_entry_ids) {
+          try {
+            const arr = JSON.parse(state.journal_entry_ids) as number[];
+            if (Array.isArray(arr)) arr.forEach((id) => { if (!journalEntryIdsFromState.includes(id)) journalEntryIdsFromState.push(id); });
+          } catch {
+            // ignore
+          }
+        }
+        const currentJournalIds = journalEntryIdsByTradeId[tradeId] ?? [];
+        const entryIdsToAdd = journalEntryIdsFromState.filter((id) => !currentJournalIds.includes(id));
+        for (const entryId of entryIdsToAdd) {
+          const entry = journalEntriesForLink.find((e) => e.id === entryId);
+          if (!entry) continue;
+          const { ids: entryTradeIds } = updateEntryLinkedTradeIds(entry, tradeId, true);
+          if (dataMode === "sandbox") {
+            updateSandboxJournalEntry(entryId, { linked_trade_ids: entryTradeIds.length > 0 ? JSON.stringify(entryTradeIds) : null });
+          } else {
+            await invoke("update_journal_entry", {
+              id: entry.id,
+              date: entry.date,
+              title: entry.title,
+              strategyId: entry.strategy_id,
+              linked_trade_ids: entryTradeIds.length > 0 ? JSON.stringify(entryTradeIds) : null,
+            });
+          }
+          setJournalEntriesForLink((prev) =>
+            prev.map((e) =>
+              e.id === entryId ? { ...e, linked_trade_ids: entryTradeIds.length > 0 ? JSON.stringify(entryTradeIds) : null } : e
+            )
+          );
+        }
+        if (entryIdsToAdd.length > 0) {
+          setJournalEntryIdsByTradeId((prev) => {
+            const next = [...(prev[tradeId] ?? []), ...entryIdsToAdd];
+            const nextMap = { ...prev, [tradeId]: [...new Set(next)] };
+            saveJournalMapForMode(nextMap, dataMode);
+            return nextMap;
+          });
+        }
+      }
+    } catch (e) {
+      console.error("Failed to toggle emotional state link:", e);
     }
   };
 
@@ -2690,6 +3160,12 @@ export default function Trades() {
                       </button>
                     </div>
                   </th>
+                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", minWidth: "120px", whiteSpace: "nowrap" }}>
+                    Journal
+                  </th>
+                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", minWidth: "140px", whiteSpace: "nowrap" }}>
+                    Emotional state
+                  </th>
                   <th style={{ padding: "12px 8px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--text-primary)", textTransform: "uppercase", minWidth: "90px", whiteSpace: "nowrap", backgroundColor: "var(--bg-secondary)" }} title={dataMode === "paper" ? "Select to mark as real" : "Select to mark as paper"} onClick={(e) => e.stopPropagation()}>
                     <label style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px", cursor: "pointer", margin: 0 }}>
                       <input
@@ -2857,6 +3333,189 @@ export default function Trades() {
                               </option>
                             ))}
                           </select>
+                        </td>
+                        <td style={{ padding: "12px 16px", fontSize: "14px", verticalAlign: "middle" }} onClick={(e) => e.stopPropagation()}>
+                          <div ref={journalPopoverTradeId === trade.id ? journalPopoverRef : undefined} style={{ position: "relative", display: "inline-block" }}>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setJournalPopoverTradeId((prev) => (prev === trade.id ? null : trade.id));
+                                setEmotionPopoverTradeId(null);
+                              }}
+                              style={{
+                                padding: "6px 12px",
+                                backgroundColor: "var(--bg-tertiary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "4px",
+                                color: "var(--text-primary)",
+                                fontSize: "13px",
+                                cursor: "pointer",
+                                minWidth: "120px",
+                                outline: "none",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "6px",
+                              }}
+                            >
+                              <ChevronDown size={14} style={{ opacity: 0.8, flexShrink: 0 }} />
+                              {(journalEntryIdsByTradeId[trade.id]?.length ?? 0) === 0
+                                ? "0 linked"
+                                : `${journalEntryIdsByTradeId[trade.id].length} linked`}
+                            </button>
+                            {journalPopoverTradeId === trade.id && (
+                              <div
+                                style={{
+                                  position: "absolute",
+                                  left: 0,
+                                  top: "100%",
+                                  marginTop: "4px",
+                                  zIndex: 50,
+                                  minWidth: "240px",
+                                  maxHeight: "280px",
+                                  overflowY: "auto",
+                                  backgroundColor: "var(--bg-secondary)",
+                                  border: "1px solid var(--border-color)",
+                                  borderRadius: "8px",
+                                  boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+                                  padding: "8px",
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "8px", textTransform: "uppercase" }}>
+                                  Link to journals
+                                </div>
+                                {journalEntriesForLink.length === 0 ? (
+                                  <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "8px 0" }}>No journal entries</div>
+                                ) : (
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                                    {journalEntriesForLink.map((entry) => {
+                                      const linked = (journalEntryIdsByTradeId[trade.id] ?? []).includes(entry.id);
+                                      return (
+                                        <label
+                                          key={entry.id}
+                                          style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "8px",
+                                            padding: "6px 8px",
+                                            borderRadius: "4px",
+                                            cursor: "pointer",
+                                            fontSize: "13px",
+                                            color: "var(--text-primary)",
+                                          }}
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={linked}
+                                            onChange={() => handleToggleJournalLink(trade.id, entry.id, !linked)}
+                                            onClick={(e) => e.stopPropagation()}
+                                            style={{ cursor: "pointer", flexShrink: 0 }}
+                                          />
+                                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                            {entry.title || "Untitled"} · {format(new Date(entry.date), "MMM dd")}
+                                          </span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td style={{ padding: "12px 16px", fontSize: "14px", verticalAlign: "middle" }} onClick={(e) => e.stopPropagation()}>
+                          <div ref={emotionPopoverTradeId === trade.id ? emotionPopoverRef : undefined} style={{ position: "relative", display: "inline-block" }}>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEmotionPopoverTradeId((prev) => (prev === trade.id ? null : trade.id));
+                                setJournalPopoverTradeId(null);
+                              }}
+                              style={{
+                                padding: "6px 12px",
+                                backgroundColor: "var(--bg-tertiary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "4px",
+                                color: "var(--text-primary)",
+                                fontSize: "13px",
+                                cursor: "pointer",
+                                minWidth: "120px",
+                                outline: "none",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "6px",
+                              }}
+                            >
+                              <ChevronDown size={14} style={{ opacity: 0.8, flexShrink: 0 }} />
+                              {(emotionalStateIdsByTradeId[trade.id]?.length ?? 0) === 0
+                                ? "0 linked"
+                                : `${emotionalStateIdsByTradeId[trade.id].length} linked`}
+                            </button>
+                            {emotionPopoverTradeId === trade.id && (
+                              <div
+                                style={{
+                                  position: "absolute",
+                                  left: 0,
+                                  top: "100%",
+                                  marginTop: "4px",
+                                  zIndex: 50,
+                                  minWidth: "260px",
+                                  maxHeight: "280px",
+                                  overflowY: "auto",
+                                  backgroundColor: "var(--bg-secondary)",
+                                  border: "1px solid var(--border-color)",
+                                  borderRadius: "8px",
+                                  boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+                                  padding: "8px",
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "8px", textTransform: "uppercase" }}>
+                                  Link to emotional states
+                                </div>
+                                {emotionalStatesForLink.length === 0 ? (
+                                  <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "8px 0" }}>No emotional states</div>
+                                ) : (
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                                    {emotionalStatesForLink
+                                      .slice()
+                                      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                                      .map((s) => {
+                                        const linked = (emotionalStateIdsByTradeId[trade.id] ?? []).includes(s.id);
+                                        return (
+                                          <label
+                                            key={s.id}
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "center",
+                                              gap: "8px",
+                                              padding: "6px 8px",
+                                              borderRadius: "4px",
+                                              cursor: "pointer",
+                                              fontSize: "13px",
+                                              color: "var(--text-primary)",
+                                            }}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              checked={linked}
+                                              onChange={() => handleToggleEmotionalStateLink(trade.id, s.id, !linked)}
+                                              onClick={(e) => e.stopPropagation()}
+                                              style={{ cursor: "pointer", flexShrink: 0 }}
+                                            />
+                                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                              {format(new Date(s.timestamp), "MMM dd HH:mm")} · {s.emotion}
+                                            </span>
+                                          </label>
+                                        );
+                                      })}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </td>
                         <td style={{ padding: "12px 8px", textAlign: "center", width: "52px" }} onClick={(e) => e.stopPropagation()}>
                           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
