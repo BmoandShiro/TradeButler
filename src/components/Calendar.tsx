@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useNavigate } from "react-router-dom";
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isToday } from "date-fns";
-import { ChevronLeft, ChevronRight, Heart, BookOpen } from "lucide-react";
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isToday, addDays } from "date-fns";
+import { ChevronLeft, ChevronRight, Heart, BookOpen, CalendarPlus, Bell, CalendarDays } from "lucide-react";
 import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import type { DataMode } from "../utils/dataMode";
 import { loadSandboxState, getSandboxEmotionalStates } from "../utils/sandboxStore";
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
+
+const CALENDAR_EVENTS_STORAGE_KEY = "tradebutler_calendar_events";
 
 interface DailyPnL {
   date: string;
@@ -27,6 +29,14 @@ interface CalendarEmotionalState {
   intensity: number;
 }
 
+export interface CalendarEventItem {
+  id: number;
+  date: string;
+  title: string;
+  kind: "event" | "reminder";
+  created_at?: string;
+}
+
 export default function Calendar() {
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -34,8 +44,15 @@ export default function Calendar() {
   const [loading, setLoading] = useState(true);
   const [journalEntriesByDate, setJournalEntriesByDate] = useState<Record<string, CalendarJournalEntry[]>>({});
   const [emotionalStatesByDate, setEmotionalStatesByDate] = useState<Record<string, CalendarEmotionalState[]>>({});
+  const [eventsByDate, setEventsByDate] = useState<Record<string, CalendarEventItem[]>>({});
+  const [upcomingEvents, setUpcomingEvents] = useState<CalendarEventItem[]>([]);
   const [openJournalDate, setOpenJournalDate] = useState<string | null>(null);
   const [openJournalPage, setOpenJournalPage] = useState<number>(0);
+  const [eventModalOpen, setEventModalOpen] = useState(false);
+  const [eventModalDate, setEventModalDate] = useState<string>(() => format(new Date(), "yyyy-MM-dd"));
+  const [editingEvent, setEditingEvent] = useState<CalendarEventItem | null>(null);
+  const [eventFormTitle, setEventFormTitle] = useState("");
+  const [eventFormKind, setEventFormKind] = useState<"event" | "reminder">("event");
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -100,12 +117,31 @@ export default function Calendar() {
           }
         });
         setEmotionalStatesByDate(emotionMap);
+
+        // Sandbox: load calendar events from localStorage
+        const stored = localStorage.getItem(`${CALENDAR_EVENTS_STORAGE_KEY}_sandbox`);
+        const allSandboxEvents: CalendarEventItem[] = stored ? JSON.parse(stored) : [];
+        const monthEvents: Record<string, CalendarEventItem[]> = {};
+        const todayStr = format(new Date(), "yyyy-MM-dd");
+        allSandboxEvents.forEach((ev) => {
+          if (ev.date >= rangeStart && ev.date <= rangeEnd) {
+            if (!monthEvents[ev.date]) monthEvents[ev.date] = [];
+            monthEvents[ev.date].push(ev);
+          }
+        });
+        setEventsByDate(monthEvents);
+        const upcoming = allSandboxEvents.filter((e) => e.date >= todayStr).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 30);
+        setUpcomingEvents(upcoming);
       } else {
         const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
-        const [pnlData, journalData, emotionalStates] = await Promise.all([
+        const todayStr = format(new Date(), "yyyy-MM-dd");
+        const futureEnd = format(addDays(new Date(), 60), "yyyy-MM-dd");
+        const [pnlData, journalData, emotionalStates, monthEventsData, upcomingData] = await Promise.all([
           invoke<DailyPnL[]>("get_daily_pnl", paperArgs),
           invoke<CalendarJournalEntry[]>("get_journal_entries", paperArgs),
           invoke<Array<{ id: number | null; timestamp: string; emotion: string; intensity: number }>>("get_emotional_states", paperArgs),
+          invoke<CalendarEventItem[]>("get_calendar_events", { start_date: rangeStart, end_date: rangeEnd }),
+          invoke<CalendarEventItem[]>("get_calendar_events", { start_date: todayStr, end_date: futureEnd }),
         ]);
 
         const pnlMap: Record<string, DailyPnL> = {};
@@ -132,6 +168,14 @@ export default function Calendar() {
           }
         });
         setEmotionalStatesByDate(emotionMap);
+        const evMap: Record<string, CalendarEventItem[]> = {};
+        (monthEventsData || []).forEach((ev) => {
+          const k = ev.date;
+          if (!evMap[k]) evMap[k] = [];
+          evMap[k].push({ ...ev, kind: (ev.kind === "reminder" ? "reminder" : "event") as "event" | "reminder" });
+        });
+        setEventsByDate(evMap);
+        setUpcomingEvents((upcomingData || []).map((ev) => ({ ...ev, kind: (ev.kind === "reminder" ? "reminder" : "event") as "event" | "reminder" })));
       }
     } catch (error) {
       console.error("Error loading calendar data:", error);
@@ -171,7 +215,82 @@ export default function Calendar() {
     return emotionalStatesByDate[dateStr] || [];
   };
 
+  const getDayEvents = (date: Date): CalendarEventItem[] => {
+    const dateStr = format(date, "yyyy-MM-dd");
+    return eventsByDate[dateStr] || [];
+  };
+
   const getDateKey = (date: Date): string => format(date, "yyyy-MM-dd");
+
+  const openEventModal = (dateStr?: string, event?: CalendarEventItem | null) => {
+    setEventModalDate(dateStr || format(new Date(), "yyyy-MM-dd"));
+    setEditingEvent(event || null);
+    setEventFormTitle(event?.title ?? "");
+    setEventFormKind(event?.kind ?? "event");
+    setEventModalOpen(true);
+  };
+
+  const closeEventModal = () => {
+    setEventModalOpen(false);
+    setEditingEvent(null);
+    setEventFormTitle("");
+    setEventFormKind("event");
+  };
+
+  const saveCalendarEvent = async () => {
+    const title = eventFormTitle.trim();
+    if (!title) return;
+    try {
+      if (dataMode === "sandbox") {
+        const key = `${CALENDAR_EVENTS_STORAGE_KEY}_sandbox`;
+        const stored = localStorage.getItem(key);
+        const list: CalendarEventItem[] = stored ? JSON.parse(stored) : [];
+        if (editingEvent) {
+          const idx = list.findIndex((e) => e.id === editingEvent.id);
+          if (idx >= 0) {
+            list[idx] = { ...list[idx], date: eventModalDate, title, kind: eventFormKind };
+          }
+        } else {
+          const newId = list.length ? Math.max(...list.map((e) => e.id)) + 1 : 1;
+          list.push({ id: newId, date: eventModalDate, title, kind: eventFormKind, created_at: new Date().toISOString() });
+        }
+        localStorage.setItem(key, JSON.stringify(list));
+      } else {
+        if (editingEvent && editingEvent.id) {
+          await invoke("update_calendar_event", {
+            id: editingEvent.id,
+            date: eventModalDate,
+            title,
+            kind: eventFormKind,
+          });
+        } else {
+          await invoke("create_calendar_event", { date: eventModalDate, title, kind: eventFormKind });
+        }
+      }
+      closeEventModal();
+      loadCalendarData();
+    } catch (e) {
+      console.error("Failed to save calendar event:", e);
+    }
+  };
+
+  const deleteCalendarEvent = async (ev: CalendarEventItem) => {
+    try {
+      if (dataMode === "sandbox") {
+        const key = `${CALENDAR_EVENTS_STORAGE_KEY}_sandbox`;
+        const stored = localStorage.getItem(key);
+        const list: CalendarEventItem[] = stored ? JSON.parse(stored) : [];
+        const next = list.filter((e) => e.id !== ev.id);
+        localStorage.setItem(key, JSON.stringify(next));
+      } else {
+        await invoke("delete_calendar_event", { id: ev.id });
+      }
+      if (editingEvent?.id === ev.id) closeEventModal();
+      loadCalendarData();
+    } catch (e) {
+      console.error("Failed to delete calendar event:", e);
+    }
+  };
 
   const getDayColor = (pnl: number | null): string => {
     if (pnl === null) return "transparent";
@@ -194,15 +313,24 @@ export default function Calendar() {
     <div
       style={{
         display: "flex",
-        flexDirection: "column",
+        flexDirection: "row",
         flex: 1,
         minHeight: 0,
-        background: "var(--bg-primary)",
-        border: "1px solid color-mix(in srgb, var(--border-color) 50%, transparent)",
-        borderRadius: "12px",
-        padding: "20px 24px",
+        gap: "24px",
       }}
     >
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          minHeight: 0,
+          background: "var(--bg-primary)",
+          border: "1px solid color-mix(in srgb, var(--border-color) 50%, transparent)",
+          borderRadius: "12px",
+          padding: "20px 24px",
+        }}
+      >
       {dataMode === "sandbox" && (
         <p style={{ margin: "0 0 20px 0", padding: "14px 18px", fontSize: "15px", fontWeight: "600", color: "var(--accent)", background: "linear-gradient(90deg, color-mix(in srgb, var(--accent) 14%, transparent), color-mix(in srgb, var(--accent) 8%, transparent))", border: "1px solid color-mix(in srgb, var(--accent) 40%, transparent)", borderRadius: "10px" }}>
           Demo mode — you are viewing demo data only.
@@ -224,6 +352,7 @@ export default function Calendar() {
           flexShrink: 0,
         }}
       >
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
         <button
           onClick={previousMonth}
           style={{
@@ -307,6 +436,26 @@ export default function Calendar() {
         >
           <ChevronRight size={22} />
         </button>
+        <button
+          type="button"
+          onClick={() => openEventModal()}
+          style={{
+            background: "linear-gradient(180deg, color-mix(in srgb, var(--accent) 18%, var(--bg-tertiary)), color-mix(in srgb, var(--accent) 10%, var(--bg-tertiary)))",
+            border: "1px solid var(--accent)",
+            borderRadius: "10px",
+            padding: "10px 16px",
+            color: "var(--accent)",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            fontWeight: "600",
+            fontSize: "14px",
+          }}
+        >
+          <CalendarPlus size={18} /> Add event
+        </button>
+        </div>
       </div>
 
       <div
@@ -343,11 +492,12 @@ export default function Calendar() {
           const dayPnL = getDayPnL(day);
           const journalEntries = getDayJournalEntries(day);
           const emotionalStates = getDayEmotionalStates(day);
+          const dayEvents = getDayEvents(day);
           const isCurrentDay = isToday(day);
           const pnlColor = getDayColor(dayPnL?.profit_loss ?? null);
           const dateKey = getDateKey(day);
           const isDropdownOpen = openJournalDate === dateKey;
-          const hasContent = dayPnL || journalEntries.length > 0 || emotionalStates.length > 0;
+          const hasContent = dayPnL || journalEntries.length > 0 || emotionalStates.length > 0 || dayEvents.length > 0;
 
           const openDetails = (e: React.MouseEvent) => {
             e.stopPropagation();
@@ -377,7 +527,7 @@ export default function Calendar() {
               }}
               title={
                 dayPnL
-                  ? `${format(day, "MMM d, yyyy")}\nP&L: $${dayPnL.profit_loss.toFixed(2)}\nTrades: ${dayPnL.trade_count}${emotionalStates.length > 0 ? `\nEmotions: ${emotionalStates.length}` : ""}${journalEntries.length > 0 ? `\nJournal: ${journalEntries.length}` : ""}`
+                  ? `${format(day, "MMM d, yyyy")}\nP&L: $${dayPnL.profit_loss.toFixed(2)}\nTrades: ${dayPnL.trade_count}${emotionalStates.length > 0 ? `\nEmotions: ${emotionalStates.length}` : ""}${journalEntries.length > 0 ? `\nJournal: ${journalEntries.length}` : ""}${dayEvents.length > 0 ? `\nEvents/Reminders: ${dayEvents.length}` : ""}`
                   : format(day, "MMM d, yyyy")
               }
             >
@@ -459,6 +609,26 @@ export default function Calendar() {
                       <span style={{ fontSize: "12px", fontWeight: "600" }}>{emotionalStates.length}</span>
                     </button>
                   )}
+                  {dayEvents.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={openDetails}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "3px",
+                        padding: "2px 4px",
+                        border: "none",
+                        background: "transparent",
+                        cursor: "pointer",
+                        color: "var(--accent)",
+                      }}
+                      title={`${dayEvents.length} event/reminder${dayEvents.length === 1 ? "" : "s"} — click for details`}
+                    >
+                      <CalendarDays size={14} />
+                      <span style={{ fontSize: "12px", fontWeight: "600" }}>{dayEvents.length}</span>
+                    </button>
+                  )}
                 </div>
               )}
               {isDropdownOpen && (
@@ -522,6 +692,33 @@ export default function Calendar() {
                               · {dayPnL.trade_count} trade{dayPnL.trade_count !== 1 ? "s" : ""} closed
                             </span>
                           </div>
+                        </div>
+                      )}
+                      {(dayEvents.length > 0 || true) && (
+                        <div style={{ marginBottom: "12px", paddingBottom: "12px", borderBottom: "1px solid var(--border-color)" }}>
+                          <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "6px", display: "flex", alignItems: "center", gap: "6px" }}>
+                            <CalendarDays size={14} style={{ color: "var(--accent)" }} />
+                            Events & reminders
+                          </div>
+                          {dayEvents.length > 0 ? (
+                            <ul style={{ listStyle: "none", padding: 0, margin: "0 0 8px 0", display: "flex", flexDirection: "column", gap: "4px" }}>
+                              {dayEvents.map((ev) => (
+                                <li key={ev.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                                  <span style={{ fontSize: "13px", color: "var(--text-primary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={ev.title}>
+                                    {ev.kind === "reminder" ? <Bell size={12} style={{ marginRight: "4px", flexShrink: 0, opacity: 0.8 }} /> : null}
+                                    {ev.title}
+                                  </span>
+                                  <span style={{ display: "flex", gap: "4px" }}>
+                                    <button type="button" onClick={() => { setOpenJournalDate(null); openEventModal(dateKey, ev); }} style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: "2px 6px", fontSize: "11px" }}>Edit</button>
+                                    <button type="button" onClick={() => deleteCalendarEvent(ev)} style={{ border: "none", background: "transparent", color: "var(--loss)", cursor: "pointer", padding: "2px 6px", fontSize: "11px" }}>Delete</button>
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                          <button type="button" onClick={() => { setOpenJournalDate(null); openEventModal(dateKey); }} style={{ padding: "6px 10px", fontSize: "12px", borderRadius: "8px", border: "1px solid var(--accent)", background: "transparent", color: "var(--accent)", cursor: "pointer", fontWeight: "600", display: "flex", alignItems: "center", gap: "6px" }}>
+                            <CalendarPlus size={14} /> Add for this day
+                          </button>
                         </div>
                       )}
                       {emotionalStates.length > 0 && (
@@ -705,7 +902,164 @@ export default function Calendar() {
           <Heart size={16} style={{ color: "var(--accent)" }} />
           <span style={{ fontWeight: "500" }}>Emotional states</span>
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <CalendarDays size={16} style={{ color: "var(--accent)" }} />
+          <span style={{ fontWeight: "500" }}>Events & reminders</span>
+        </div>
       </div>
+      </div>
+
+      {/* Upcoming events & reminders sidebar */}
+      <div
+        style={{
+          width: "280px",
+          flexShrink: 0,
+          background: "var(--bg-secondary)",
+          border: "1px solid color-mix(in srgb, var(--border-color) 50%, transparent)",
+          borderRadius: "12px",
+          padding: "16px 18px",
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+        }}
+      >
+        <div style={{ fontSize: "16px", fontWeight: "700", color: "var(--text-primary)", marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
+          <Bell size={18} style={{ color: "var(--accent)" }} />
+          Upcoming
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          {upcomingEvents.length === 0 ? (
+            <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: 0 }}>
+              No upcoming events or reminders. Click &quot;Add event&quot; or add one from a calendar day.
+            </p>
+          ) : (
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "8px" }}>
+              {upcomingEvents.map((ev) => (
+                <li
+                  key={ev.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openEventModal(ev.date, ev)}
+                  onKeyDown={(e) => e.key === "Enter" && openEventModal(ev.date, ev)}
+                  style={{
+                    padding: "10px 12px",
+                    background: "var(--bg-primary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "8px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "4px",
+                    cursor: "pointer",
+                  }}
+                  title="Click to edit"
+                >
+                  <span style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "600" }}>
+                    {format(new Date(ev.date + "T12:00:00"), "EEE, MMM d")}
+                  </span>
+                  <span style={{ fontSize: "14px", color: "var(--text-primary)", fontWeight: "500" }} title={ev.title}>
+                    {ev.title.length > 32 ? ev.title.slice(0, 32) + "…" : ev.title}
+                  </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "2px" }}>
+                    {ev.kind === "reminder" ? <Bell size={12} style={{ color: "var(--accent)" }} /> : <CalendarDays size={12} style={{ color: "var(--accent)" }} />}
+                    <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>{ev.kind === "reminder" ? "Reminder" : "Event"}</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      {/* Event / reminder modal */}
+      {eventModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={closeEventModal}
+        >
+          <div
+            style={{
+              background: "var(--bg-primary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              minWidth: "320px",
+              maxWidth: "90vw",
+              boxShadow: "0 12px 40px rgba(0,0,0,0.2)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: "0 0 20px 0", fontSize: "18px", fontWeight: "700", color: "var(--text-primary)" }}>
+              {editingEvent ? "Edit event / reminder" : "Add event or reminder"}
+            </h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px" }}>Date</label>
+                <input
+                  type="date"
+                  value={eventModalDate}
+                  onChange={(e) => setEventModalDate(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-secondary)",
+                    color: "var(--text-primary)",
+                    fontSize: "14px",
+                  }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px" }}>Title</label>
+                <input
+                  type="text"
+                  value={eventFormTitle}
+                  onChange={(e) => setEventFormTitle(e.target.value)}
+                  placeholder="e.g. Complete Monthly Review"
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-secondary)",
+                    color: "var(--text-primary)",
+                    fontSize: "14px",
+                  }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "6px" }}>Type</label>
+                <div style={{ display: "flex", gap: "12px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "14px", color: "var(--text-primary)" }}>
+                    <input type="radio" name="eventKind" checked={eventFormKind === "event"} onChange={() => setEventFormKind("event")} />
+                    <CalendarDays size={16} /> Event
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "14px", color: "var(--text-primary)" }}>
+                    <input type="radio" name="eventKind" checked={eventFormKind === "reminder"} onChange={() => setEventFormKind("reminder")} />
+                    <Bell size={16} /> Reminder
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "22px" }}>
+              <button type="button" onClick={closeEventModal} style={{ padding: "8px 16px", borderRadius: "8px", border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", cursor: "pointer", fontSize: "14px" }}>
+                Cancel
+              </button>
+              <button type="button" onClick={saveCalendarEvent} style={{ padding: "8px 16px", borderRadius: "8px", border: "none", background: "var(--accent)", color: "white", cursor: "pointer", fontSize: "14px", fontWeight: "600" }}>
+                {editingEvent ? "Save" : "Add"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

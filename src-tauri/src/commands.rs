@@ -1,4 +1,4 @@
-use crate::database::{get_connection, Trade, EmotionalState, EmotionSurvey, Strategy, JournalEntry, JournalTrade};
+use crate::database::{get_connection, Trade, EmotionalState, EmotionSurvey, Strategy, JournalEntry, JournalTrade, CalendarEvent};
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -1669,6 +1669,80 @@ pub fn get_daily_pnl(paper_only: Option<bool>) -> Result<Vec<DailyPnL>, String> 
     daily_pnl.sort_by(|a, b| b.date.cmp(&a.date));
     
     Ok(daily_pnl)
+}
+
+// ---- Calendar events and reminders ----
+#[tauri::command]
+pub fn get_calendar_events(start_date: Option<String>, end_date: Option<String>) -> Result<Vec<CalendarEvent>, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let sql = match (&start_date, &end_date) {
+        (Some(s), Some(e)) => format!(
+            "SELECT id, date, title, kind, created_at FROM calendar_events WHERE date >= '{}' AND date <= '{}' ORDER BY date ASC, id ASC",
+            s, e
+        ),
+        (Some(s), None) => format!(
+            "SELECT id, date, title, kind, created_at FROM calendar_events WHERE date >= '{}' ORDER BY date ASC, id ASC",
+            s
+        ),
+        (None, Some(e)) => format!(
+            "SELECT id, date, title, kind, created_at FROM calendar_events WHERE date <= '{}' ORDER BY date ASC, id ASC",
+            e
+        ),
+        (None, None) => "SELECT id, date, title, kind, created_at FROM calendar_events ORDER BY date ASC, id ASC".to_string(),
+    };
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(CalendarEvent {
+                id: Some(row.get(0)?),
+                date: row.get(1)?,
+                title: row.get(2)?,
+                kind: row.get(3)?,
+                created_at: Some(row.get(4)?),
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut events = Vec::new();
+    for row in rows {
+        events.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(events)
+}
+
+#[tauri::command]
+pub fn create_calendar_event(date: String, title: String, kind: String) -> Result<i64, String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let kind_val = if kind == "reminder" { "reminder" } else { "event" };
+    conn.execute(
+        "INSERT INTO calendar_events (date, title, kind) VALUES (?1, ?2, ?3)",
+        params![date, title, kind_val],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+pub fn update_calendar_event(id: i64, date: String, title: String, kind: String) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    let kind_val = if kind == "reminder" { "reminder" } else { "event" };
+    conn.execute(
+        "UPDATE calendar_events SET date = ?1, title = ?2, kind = ?3 WHERE id = ?4",
+        params![date, title, kind_val, id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_calendar_event(id: i64) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM calendar_events WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]

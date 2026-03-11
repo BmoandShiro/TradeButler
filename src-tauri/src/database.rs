@@ -76,6 +76,16 @@ pub struct Strategy {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CalendarEvent {
+    pub id: Option<i64>,
+    pub date: String,
+    pub title: String,
+    /// "event" or "reminder"
+    pub kind: String,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct JournalEntry {
     pub id: Option<i64>,
     pub date: String,
@@ -339,6 +349,22 @@ pub fn init_database(db_path: &Path) -> Result<()> {
     // Create index for journal_checklist_responses
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_journal_checklist_responses_entry ON journal_checklist_responses(journal_entry_id)",
+        [],
+    )?;
+
+    // Calendar events and reminders
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS calendar_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            title TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'event',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_calendar_events_date ON calendar_events(date)",
         [],
     )?;
 
