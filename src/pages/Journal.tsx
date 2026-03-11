@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, ChevronUp, Search, LayoutDashboard, GripVertical } from "lucide-react";
+import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, ChevronUp, Search, LayoutDashboard, GripVertical, Eye, EyeOff } from "lucide-react";
 import {
   DndContext,
   closestCenter,
@@ -332,6 +332,9 @@ const JOURNAL_SECTION_LABELS_SCROLL: Record<JournalSectionId, string> = {
 const EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED: JournalSectionId[] = ["emotional_state_during", "emotional_state_after", "emotional_state_notes"];
 
 const JOURNAL_SECTION_ORDER_KEY = "tradebutler_journal_section_order";
+const JOURNAL_DEFAULT_STRATEGY_ID_KEY = "tradebutler_journal_default_strategy_id";
+const JOURNAL_DEFAULT_SECTION_ORDER_KEY = "tradebutler_journal_default_section_order";
+const JOURNAL_HIDDEN_SECTION_IDS_KEY = "tradebutler_journal_hidden_section_ids";
 
 /** Sortable row for the Reorder sections modal (uses @dnd-kit). */
 function SortableSectionRow({
@@ -341,6 +344,8 @@ function SortableSectionRow({
   totalLength,
   onMoveUp,
   onMoveDown,
+  isHidden,
+  onToggleHide,
 }: {
   sectionId: string;
   label: string;
@@ -348,6 +353,8 @@ function SortableSectionRow({
   totalLength: number;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  isHidden?: boolean;
+  onToggleHide?: () => void;
 }) {
   const {
     attributes,
@@ -361,7 +368,7 @@ function SortableSectionRow({
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.6 : 1,
+    opacity: isDragging ? 0.6 : isHidden ? 0.6 : 1,
   };
 
   return (
@@ -373,7 +380,7 @@ function SortableSectionRow({
         alignItems: "center",
         gap: "8px",
         padding: "8px 10px",
-        backgroundColor: "var(--bg-tertiary)",
+        backgroundColor: isHidden ? "var(--bg-secondary)" : "var(--bg-tertiary)",
         borderRadius: "8px",
         border: "1px solid var(--border-color)",
       }}
@@ -392,7 +399,17 @@ function SortableSectionRow({
       >
         <GripVertical size={16} />
       </div>
-      <span style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{label}</span>
+      <span style={{ flex: 1, fontSize: "13px", color: isHidden ? "var(--text-secondary)" : "var(--text-primary)" }}>{label}{isHidden ? " (hidden)" : ""}</span>
+      {onToggleHide && (
+        <button
+          type="button"
+          onClick={onToggleHide}
+          title={isHidden ? "Show section" : "Hide section"}
+          style={{ padding: "4px 6px", background: "transparent", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-secondary)", cursor: "pointer", display: "flex" }}
+        >
+          {isHidden ? <Eye size={14} /> : <EyeOff size={14} />}
+        </button>
+      )}
       <button type="button" disabled={index === 0} onClick={onMoveUp} style={{ padding: "4px 8px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: index === 0 ? "var(--text-secondary)" : "var(--text-primary)", cursor: index === 0 ? "not-allowed" : "pointer", display: "flex" }} title="Move up"><ChevronUp size={16} /></button>
       <button type="button" disabled={index === totalLength - 1} onClick={onMoveDown} style={{ padding: "4px 8px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: index === totalLength - 1 ? "var(--text-secondary)" : "var(--text-primary)", cursor: index === totalLength - 1 ? "not-allowed" : "pointer", display: "flex" }} title="Move down"><ChevronDown size={16} /></button>
     </div>
@@ -420,20 +437,36 @@ export default function Journal() {
   // After a successful manual save, suppress background autosaves that could re-enter edit mode
   const [justSaved, setJustSaved] = useState(false);
   const [journalSectionOrder, setJournalSectionOrder] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem(JOURNAL_SECTION_ORDER_KEY);
-      if (raw) {
+    const parseOrder = (raw: string | null): string[] | null => {
+      if (!raw) return null;
+      try {
         const parsed = JSON.parse(raw) as string[];
         if (Array.isArray(parsed) && parsed.length > 0) {
           const valid = parsed.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:")));
           const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
           return [...valid, ...missing];
         }
+      } catch {
+        /* ignore */
+      }
+      return null;
+    };
+    const saved = parseOrder(localStorage.getItem(JOURNAL_SECTION_ORDER_KEY));
+    if (saved) return saved;
+    const defaultOrder = parseOrder(localStorage.getItem(JOURNAL_DEFAULT_SECTION_ORDER_KEY));
+    return defaultOrder ?? [...CORE_SECTION_ORDER];
+  });
+  const [hiddenSectionIds, setHiddenSectionIds] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(JOURNAL_HIDDEN_SECTION_IDS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) return parsed;
       }
     } catch {
-      /* use default */
+      /* ignore */
     }
-    return [...CORE_SECTION_ORDER];
+    return [];
   });
   const [showSectionOrderModal, setShowSectionOrderModal] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -783,6 +816,14 @@ export default function Journal() {
       /* ignore */
     }
   }, [journalSectionOrder]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(JOURNAL_HIDDEN_SECTION_IDS_KEY, JSON.stringify(hiddenSectionIds));
+    } catch {
+      /* ignore */
+    }
+  }, [hiddenSectionIds]);
 
   // Drag-and-drop for Reorder sections modal (handler is defined after effectiveSectionOrder)
   const sectionOrderSensors = useSensors(
@@ -1453,10 +1494,20 @@ export default function Journal() {
     setJournalTradeActualTradeIds(new Map());
     setLinkActualTradesModalJournalTradeId(null);
     setPendingEmotionalStates([]);
+    let defaultStrategyId: number | null = null;
+    try {
+      const saved = localStorage.getItem(JOURNAL_DEFAULT_STRATEGY_ID_KEY);
+      if (saved) {
+        const n = parseInt(saved, 10);
+        if (Number.isFinite(n)) defaultStrategyId = n;
+      }
+    } catch {
+      /* ignore */
+    }
     setEntryFormData({
       date: format(new Date(), "yyyy-MM-dd"),
       title: "",
-      strategy_id: null,
+      strategy_id: defaultStrategyId,
       linked_trade_ids: [],
       linked_emotional_state_ids: [],
       linked_emotional_state_link_scopes: {},
@@ -2873,7 +2924,7 @@ export default function Journal() {
     return [...ordered, ...appended];
   })();
 
-  const effectiveSectionOrder = useMemo(() => {
+  const fullSectionOrder = useMemo(() => {
     const base = journalSectionOrder.filter((id) => id !== "custom_checklists_surveys");
     const surveyItems = (currentChecklists?.get("survey") || []).filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
     const customSectionIds = [
@@ -2884,14 +2935,19 @@ export default function Journal() {
     return [...base, ...newCustom];
   }, [journalSectionOrder, customTypes, currentChecklists]);
 
+  const effectiveSectionOrder = useMemo(
+    () => fullSectionOrder.filter((id) => !hiddenSectionIds.includes(id)),
+    [fullSectionOrder, hiddenSectionIds]
+  );
+
   const handleSectionOrderDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = effectiveSectionOrder.indexOf(active.id as string);
-    const newIndex = effectiveSectionOrder.indexOf(over.id as string);
+    const oldIndex = fullSectionOrder.indexOf(active.id as string);
+    const newIndex = fullSectionOrder.indexOf(over.id as string);
     if (oldIndex === -1 || newIndex === -1) return;
-    setJournalSectionOrder(arrayMove(effectiveSectionOrder, oldIndex, newIndex));
-  }, [effectiveSectionOrder]);
+    setJournalSectionOrder(arrayMove(fullSectionOrder, oldIndex, newIndex));
+  }, [fullSectionOrder]);
 
   /** Render checklist UI for a single type (used in scrolling sections). */
   const renderChecklistForType = (type: string) => {
@@ -3809,14 +3865,32 @@ export default function Journal() {
                   </div>
                   <div style={{ flex: "0 0 140px", minWidth: "100px" }}>
                     <label style={{ display: "block", marginBottom: "2px", fontSize: "11px", fontWeight: "500", color: "var(--text-secondary)" }}>Strategy</label>
-                    <select
-                      value={entryFormData.strategy_id || ""}
-                      onChange={(e) => setEntryFormData({ ...entryFormData, strategy_id: e.target.value ? parseInt(e.target.value) : null })}
-                      style={{ width: "100%", padding: "5px 6px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "13px" }}
-                    >
-                      <option value="">Strategy...</option>
-                      {strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    </select>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <select
+                        value={entryFormData.strategy_id || ""}
+                        onChange={(e) => setEntryFormData({ ...entryFormData, strategy_id: e.target.value ? parseInt(e.target.value) : null })}
+                        style={{ flex: 1, minWidth: 0, padding: "5px 6px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "13px" }}
+                      >
+                        <option value="">Strategy...</option>
+                        {strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                      {entryFormData.strategy_id != null && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            try {
+                              localStorage.setItem(JOURNAL_DEFAULT_STRATEGY_ID_KEY, String(entryFormData.strategy_id));
+                            } catch {
+                              /* ignore */
+                            }
+                          }}
+                          title="Use this strategy as default for new journal entries"
+                          style={{ flexShrink: 0, padding: "4px 6px", fontSize: "10px", color: "var(--text-secondary)", background: "transparent", border: "1px dashed var(--border-color)", borderRadius: "4px", cursor: "pointer", whiteSpace: "nowrap" }}
+                        >
+                          Set default
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "2px", flexWrap: "wrap" }}>
                     {tradesFormData.map((trade, index) => {
@@ -7164,29 +7238,69 @@ export default function Journal() {
         <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setShowSectionOrderModal(false)}>
           <div style={{ backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "12px", padding: "20px", width: "90%", maxWidth: "420px", boxShadow: "0 8px 32px rgba(0,0,0,0.3)" }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>Reorder sections</h3>
-            <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "16px" }}>Drag order is saved automatically. Use arrows to move sections.</p>
+            <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "16px" }}>Drag to reorder. Use the eye icon to hide or show sections on the journal page.</p>
             <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "60vh", overflowY: "auto" }}>
               <DndContext
                 sensors={sectionOrderSensors}
                 collisionDetection={closestCenter}
                 onDragEnd={handleSectionOrderDragEnd}
               >
-                <SortableContext items={effectiveSectionOrder} strategy={verticalListSortingStrategy}>
-                  {effectiveSectionOrder.map((sectionId, index) => (
+                <SortableContext items={fullSectionOrder} strategy={verticalListSortingStrategy}>
+                  {fullSectionOrder.map((sectionId, index) => (
                     <SortableSectionRow
                       key={sectionId}
                       sectionId={sectionId}
                       label={getSectionLabel(sectionId)}
                       index={index}
-                      totalLength={effectiveSectionOrder.length}
-                      onMoveUp={() => setJournalSectionOrder(arrayMove(effectiveSectionOrder, index, index - 1))}
-                      onMoveDown={() => setJournalSectionOrder(arrayMove(effectiveSectionOrder, index, index + 1))}
+                      totalLength={fullSectionOrder.length}
+                      onMoveUp={() => setJournalSectionOrder(arrayMove(fullSectionOrder, index, index - 1))}
+                      onMoveDown={() => setJournalSectionOrder(arrayMove(fullSectionOrder, index, index + 1))}
+                      isHidden={hiddenSectionIds.includes(sectionId)}
+                      onToggleHide={() => setHiddenSectionIds((prev) => (prev.includes(sectionId) ? prev.filter((id) => id !== sectionId) : [...prev, sectionId]))}
                     />
                   ))}
                 </SortableContext>
               </DndContext>
             </div>
-            <div style={{ marginTop: "16px", display: "flex", justifyContent: "flex-end" }}>
+            <div style={{ marginTop: "16px", display: "flex", flexWrap: "wrap", gap: "8px", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      localStorage.setItem(JOURNAL_DEFAULT_SECTION_ORDER_KEY, JSON.stringify(journalSectionOrder));
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                  style={{ padding: "6px 12px", fontSize: "12px", color: "var(--text-secondary)", background: "transparent", border: "1px dashed var(--border-color)", borderRadius: "6px", cursor: "pointer" }}
+                >
+                  Set as default arrangement
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      const raw = localStorage.getItem(JOURNAL_DEFAULT_SECTION_ORDER_KEY);
+                      if (raw) {
+                        const parsed = JSON.parse(raw) as string[];
+                        if (Array.isArray(parsed) && parsed.length > 0) {
+                          const valid = parsed.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:")));
+                          const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
+                          setJournalSectionOrder([...valid, ...missing]);
+                        }
+                      } else {
+                        setJournalSectionOrder([...CORE_SECTION_ORDER]);
+                      }
+                    } catch {
+                      setJournalSectionOrder([...CORE_SECTION_ORDER]);
+                    }
+                  }}
+                  style={{ padding: "6px 12px", fontSize: "12px", color: "var(--text-secondary)", background: "transparent", border: "1px dashed var(--border-color)", borderRadius: "6px", cursor: "pointer" }}
+                >
+                  Reset to default arrangement
+                </button>
+              </div>
               <button type="button" onClick={() => setShowSectionOrderModal(false)} style={{ padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "13px" }}>Done</button>
             </div>
           </div>
