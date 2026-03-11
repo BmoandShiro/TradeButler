@@ -149,10 +149,13 @@ export default function Trades() {
     const saved = localStorage.getItem(PAIRING_STORAGE_KEY);
     return (saved === "LIFO" ? "LIFO" : "FIFO") as "FIFO" | "LIFO";
   });
-  const [viewMode, setViewMode] = useState<"Individual" | "Position" | "OpenPositions">(() => {
+  const [viewMode, setViewMode] = useState<"Individual" | "Position">(() => {
     const saved = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
-    if (saved === "OpenPositions" || saved === "Position" || saved === "Pair") return saved === "OpenPositions" ? "OpenPositions" : "Position";
-    return "Individual";
+    return (saved === "Position" || saved === "Pair" ? "Position" : "Individual") as "Individual" | "Position";
+  });
+  const [positionOpenClosedFilter, setPositionOpenClosedFilter] = useState<"All" | "Open" | "Closed">(() => {
+    const saved = localStorage.getItem("tradebutler_position_open_closed_filter");
+    return (saved === "Open" || saved === "Closed" ? saved : "All") as "All" | "Open" | "Closed";
   });
   const [expandedTrades, setExpandedTrades] = useState<Set<number>>(new Set());
   const [chartCollapsedForPosition, setChartCollapsedForPosition] = useState<Set<number>>(new Set());
@@ -521,9 +524,9 @@ export default function Trades() {
     loadLinks();
   }, [tradesWithPairing, dataMode]);
 
-  // Load journal/emotional links for positions (Position / Open Positions view)
+  // Load journal/emotional links for positions (Position view)
   useEffect(() => {
-    if ((viewMode !== "Position" && viewMode !== "OpenPositions") || positionGroups.length === 0) {
+    if (viewMode !== "Position" || positionGroups.length === 0) {
       return;
     }
     const pairKeys: string[] = [];
@@ -1260,7 +1263,7 @@ export default function Trades() {
     }
   };
 
-  const handleViewModeChange = (mode: "Individual" | "Position" | "OpenPositions") => {
+  const handleViewModeChange = (mode: "Individual" | "Position") => {
     setViewMode(mode);
     localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
   };
@@ -1424,9 +1427,9 @@ export default function Trades() {
     }
   };
 
-  const SortableHeader = ({ column, label, viewMode }: { column: "date" | "symbol" | "pnl" | "price" | "quantity" | "trades" | "type" | "status" | "percent" | "position_size", label: string, viewMode: "Individual" | "Position" | "OpenPositions" }) => {
+  const SortableHeader = ({ column, label, viewMode }: { column: "date" | "symbol" | "pnl" | "price" | "quantity" | "trades" | "type" | "status" | "percent" | "position_size", label: string, viewMode: "Individual" | "Position" }) => {
     const isActive = sortBy === column;
-    const showInView = viewMode === "Position" || viewMode === "OpenPositions" || column !== "trades";
+    const showInView = viewMode === "Position" || column !== "trades";
     
     if (!showInView) return null;
     
@@ -1801,48 +1804,30 @@ export default function Trades() {
     return filtered;
   }, [positionGroups, searchQuery, sortBy, sortDirection, sortBySecondary, filterSymbol, filterSide, filterType, filterStatus, filterStrategy, filterPctMin, filterPctMax, filterPnlMin, filterPnlMax, filterPositionSizeMin, filterPositionSizeMax, strategies]);
 
-  // Open positions only (final_quantity !== 0), then same filter/sort as position groups
-  const filteredAndSortedOpenPositionGroups = useMemo(() => {
-    const openGroups = positionGroups.filter((g) => Math.abs(g.final_quantity) > 0.0001);
-    let filtered = openGroups.filter((group) => {
-      const t = group.entry_trade;
-      if (!searchMatchesTrade(t)) return false;
-      const { pct, pnl } = getPercentAndPnlForGroup(group);
-      const positionSize = t.quantity * t.price;
-      if (!applyFiltersToTrade(t, { pct, pnl, positionSize })) return false;
-      return true;
-    });
-
-    const dir = sortDirection;
-    filtered.sort((a, b) => {
-      let comparison = compareGroupsForSort(a, b, sortBy, dir);
-      if (comparison === 0 && sortBySecondary !== "none") {
-        comparison = compareGroupsForSort(a, b, sortBySecondary, dir);
-      }
-      return comparison;
-    });
-
-    return filtered;
-  }, [positionGroups, searchQuery, sortBy, sortDirection, sortBySecondary, filterSymbol, filterSide, filterType, filterStatus, filterStrategy, filterPctMin, filterPctMax, filterPnlMin, filterPnlMax, filterPositionSizeMin, filterPositionSizeMax, strategies]);
-
-  const displayedPositionGroups = viewMode === "OpenPositions" ? filteredAndSortedOpenPositionGroups : filteredAndSortedPositionGroups;
+  // Apply open/closed filter to position groups (Position view only)
+  const displayedPositionGroups = useMemo(() => {
+    if (positionOpenClosedFilter === "All") return filteredAndSortedPositionGroups;
+    if (positionOpenClosedFilter === "Open") {
+      return filteredAndSortedPositionGroups.filter((g) => Math.abs(g.final_quantity) > 0.0001);
+    }
+    return filteredAndSortedPositionGroups.filter((g) => Math.abs(g.final_quantity) <= 0.0001);
+  }, [filteredAndSortedPositionGroups, positionOpenClosedFilter]);
 
   const tableSummary = useMemo(() => {
-    const isPositionView = viewMode === "Position" || viewMode === "OpenPositions";
-    const groups = viewMode === "OpenPositions" ? filteredAndSortedOpenPositionGroups : filteredAndSortedPositionGroups;
-    const count = isPositionView ? groups.length : filteredAndSortedTrades.length;
-    const totalPnl = isPositionView ? groups.reduce((sum, g) => sum + g.total_pnl, 0) : null;
-    const symbols = isPositionView
-      ? new Set(groups.map((g) => g.entry_trade.symbol))
+    const count = viewMode === "Position" ? displayedPositionGroups.length : filteredAndSortedTrades.length;
+    const totalPnl = viewMode === "Position"
+      ? displayedPositionGroups.reduce((sum, g) => sum + g.total_pnl, 0)
+      : null;
+    const symbols = viewMode === "Position"
+      ? new Set(displayedPositionGroups.map((g) => g.entry_trade.symbol))
       : new Set(filteredAndSortedTrades.map((t) => t.trade.symbol));
     return { count, totalPnl, symbolCount: symbols.size };
-  }, [viewMode, filteredAndSortedTrades, filteredAndSortedPositionGroups, filteredAndSortedOpenPositionGroups]);
+  }, [viewMode, filteredAndSortedTrades, displayedPositionGroups]);
 
   const allVisibleIdsForPaperSelection = useMemo(() => {
     const ids = new Set<number>();
-    if (viewMode === "Position" || viewMode === "OpenPositions") {
-      const groups = viewMode === "OpenPositions" ? filteredAndSortedOpenPositionGroups : filteredAndSortedPositionGroups;
-      groups.forEach((group) => {
+    if (viewMode === "Position") {
+      displayedPositionGroups.forEach((group) => {
         ids.add(group.entry_trade.id);
         const exitTrade = group.position_trades.length >= 1 ? group.position_trades[group.position_trades.length - 1] : null;
         if (exitTrade) ids.add((exitTrade as Trade).id);
@@ -1851,7 +1836,7 @@ export default function Trades() {
       filteredAndSortedTrades.forEach((item) => ids.add(item.trade.id));
     }
     return ids;
-  }, [viewMode, filteredAndSortedPositionGroups, filteredAndSortedOpenPositionGroups, filteredAndSortedTrades]);
+  }, [viewMode, displayedPositionGroups, filteredAndSortedTrades]);
 
   const selectAllForPaper = () => setSelectedTradeIdsForPaper(new Set(allVisibleIdsForPaperSelection));
   const clearPaperSelection = () => setSelectedTradeIdsForPaper(new Set());
@@ -1943,24 +1928,45 @@ export default function Trades() {
               >
                 Position
               </button>
-              <button
-                onClick={() => handleViewModeChange("OpenPositions")}
-                style={{
-                  padding: "6px 12px",
-                  borderRadius: "4px",
-                  fontSize: "13px",
-                  fontWeight: "500",
-                  cursor: "pointer",
-                  border: "none",
-                  backgroundColor: viewMode === "OpenPositions" ? "var(--accent)" : "transparent",
-                  color: viewMode === "OpenPositions" ? "white" : "var(--text-primary)",
-                  transition: "all 0.2s",
-                }}
-              >
-                Open positions
-              </button>
             </div>
           </div>
+          {viewMode === "Position" && (
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ fontSize: "14px", color: "var(--text-secondary)" }}>Positions:</span>
+              <div
+                style={{
+                  display: "flex",
+                  backgroundColor: "var(--bg-tertiary)",
+                  borderRadius: "6px",
+                  padding: "2px",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                {(["All", "Open", "Closed"] as const).map((opt) => (
+                  <button
+                    key={opt}
+                    onClick={() => {
+                      setPositionOpenClosedFilter(opt);
+                      localStorage.setItem("tradebutler_position_open_closed_filter", opt);
+                    }}
+                    style={{
+                      padding: "6px 12px",
+                      borderRadius: "4px",
+                      fontSize: "13px",
+                      fontWeight: "500",
+                      cursor: "pointer",
+                      border: "none",
+                      backgroundColor: positionOpenClosedFilter === opt ? "var(--accent)" : "transparent",
+                      color: positionOpenClosedFilter === opt ? "white" : "var(--text-primary)",
+                      transition: "all 0.2s",
+                    }}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <span style={{ fontSize: "14px", color: "var(--text-secondary)" }}>Position method:</span>
             <div
@@ -2139,7 +2145,7 @@ export default function Trades() {
               {!hidePnlDollars && <option value="pnl">P&L</option>}
               <option value="price">Price</option>
               <option value="quantity">Qty</option>
-              {(viewMode === "Position" || viewMode === "OpenPositions") && <option value="trades">Trades</option>}
+              {viewMode === "Position" && <option value="trades">Trades</option>}
               <option value="type">Type</option>
               <option value="status">Status</option>
               {!hidePnlPercent && <option value="percent">%</option>}
@@ -2183,7 +2189,7 @@ export default function Trades() {
               {!hidePnlDollars && <option value="pnl">Then: P&L</option>}
               <option value="price">Then: price</option>
               <option value="quantity">Then: qty</option>
-              {(viewMode === "Position" || viewMode === "OpenPositions") && <option value="trades">Then: trades</option>}
+              {viewMode === "Position" && <option value="trades">Then: trades</option>}
               <option value="type">Then: type</option>
               <option value="status">Then: status</option>
               {!hidePnlPercent && <option value="percent">Then: %</option>}
@@ -2200,7 +2206,7 @@ export default function Trades() {
           />
           <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
             <span
-              title={viewMode === "Position" || viewMode === "OpenPositions" ? "Position groups" : "Trades"}
+              title={viewMode === "Position" ? "Position groups" : "Trades"}
               style={{
                 padding: "6px 10px",
                 backgroundColor: "var(--bg-tertiary)",
@@ -2211,7 +2217,7 @@ export default function Trades() {
                 whiteSpace: "nowrap",
               }}
             >
-              <strong style={{ color: "var(--text-primary)", fontWeight: "600" }}>{tableSummary.count}</strong> {viewMode === "OpenPositions" ? "open positions" : viewMode === "Position" ? "positions" : "trades"}
+              <strong style={{ color: "var(--text-primary)", fontWeight: "600" }}>{tableSummary.count}</strong> {viewMode === "Position" ? "positions" : "trades"}
             </span>
             <span
               title="Unique symbols"
@@ -2227,7 +2233,7 @@ export default function Trades() {
             >
               <strong style={{ color: "var(--text-primary)", fontWeight: "600" }}>{tableSummary.symbolCount}</strong> symbols
             </span>
-            {!hidePnlDollars && (viewMode === "Position" || viewMode === "OpenPositions") && tableSummary.totalPnl !== null && (
+            {!hidePnlDollars && viewMode === "Position" && tableSummary.totalPnl !== null && (
               <span
                 title="Total P&L"
                 style={{
@@ -2738,8 +2744,8 @@ export default function Trades() {
       </div>
       </div>
 
-      {(viewMode === "Position" || viewMode === "OpenPositions") ? (
-        // Position / Open Positions View - Show entry trades with position details
+      {viewMode === "Position" ? (
+        // Position View - Show entry trades with position details
         displayedPositionGroups.length === 0 ? (
           <div
             style={{
@@ -2751,7 +2757,7 @@ export default function Trades() {
             }}
           >
             <p style={{ color: "var(--text-secondary)", marginBottom: "16px" }}>
-              {viewMode === "OpenPositions" ? "No open positions." : "No positions found. Import trades to see position groups."}
+              {positionOpenClosedFilter === "Open" ? "No open positions." : positionOpenClosedFilter === "Closed" ? "No closed positions." : "No positions found. Import trades to see position groups."}
             </p>
           </div>
         ) : (
