@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { format } from "date-fns";
-import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, BarChart3, Lock, Unlock, Search, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Filter } from "lucide-react";
+import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, BarChart3, Lock, Unlock, Search, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Filter, Info } from "lucide-react";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { TradeChart } from "../components/TradeChart";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
@@ -1295,38 +1295,38 @@ export default function Trades() {
   };
 
   const handleStrategyChange = async (tradeId: number, strategyId: number | null) => {
+    const allTradeIds = getAllTradeIdsForTrade(tradeId);
     try {
       if (dataMode === "sandbox") {
-        updateSandboxTradeStrategy(tradeId, strategyId);
+        for (const tid of allTradeIds) {
+          updateSandboxTradeStrategy(tid, strategyId);
+        }
         await loadData();
         return;
       }
-      await invoke("update_trade_strategy", { tradeId, strategyId });
-      // Update tradesWithPairing
+      for (const tid of allTradeIds) {
+        await invoke("update_trade_strategy", { tradeId: tid, strategyId });
+      }
+      // Update tradesWithPairing for all trades in the pair
       setTradesWithPairing((prev) =>
         prev.map((item) =>
-          item.trade.id === tradeId
+          allTradeIds.includes(item.trade.id)
             ? { ...item, trade: { ...item.trade, strategy_id: strategyId } }
             : item
         )
       );
-      // Update positionGroups if the trade is an entry trade
+      // Update positionGroups: entry_trade and any position_trades in the pair
       setPositionGroups((prev) =>
-        prev.map((group) =>
-          group.entry_trade.id === tradeId
-            ? {
-                ...group,
-                entry_trade: { ...group.entry_trade, strategy_id: strategyId },
-              }
-            : {
-                ...group,
-                position_trades: group.position_trades.map((trade) =>
-                  trade.id === tradeId
-                    ? { ...trade, strategy_id: strategyId }
-                    : trade
-                ),
-              }
-        )
+        prev.map((group) => {
+          const entryUpdated = allTradeIds.includes(group.entry_trade.id);
+          return {
+            ...group,
+            entry_trade: entryUpdated ? { ...group.entry_trade, strategy_id: strategyId } : group.entry_trade,
+            position_trades: group.position_trades.map((trade) =>
+              allTradeIds.includes(trade.id) ? { ...trade, strategy_id: strategyId } : trade
+            ),
+          };
+        })
       );
     } catch (error) {
       console.error("Error updating trade strategy:", error);
@@ -2757,27 +2757,33 @@ export default function Trades() {
                     <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", minWidth: "100px", whiteSpace: "nowrap" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                         <span>Strategy</span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const newLocked = !strategyLocked;
-                            setStrategyLocked(newLocked);
-                            localStorage.setItem(STRATEGY_LOCK_STORAGE_KEY, String(newLocked));
-                          }}
-                          style={{
-                            background: "transparent",
-                            border: "none",
-                            padding: "2px",
-                            cursor: "pointer",
-                            color: strategyLocked ? "#fbbf24" : "var(--text-secondary)",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                          title={strategyLocked ? "Unlock strategies to allow editing" : "Lock strategies to prevent editing"}
+                        <span
+                          title="All trades in a pair share the same strategy, journal, and emotional state links. Changing any of these for one trade updates the whole pair."
+                          style={{ display: "inline-flex", cursor: "help", color: "var(--text-secondary)" }}
                         >
-                          {strategyLocked ? <Lock size={14} /> : <Unlock size={14} />}
-                        </button>
+                          <Info size={14} />
+                        </span>
+                        <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const newLocked = !strategyLocked;
+                              setStrategyLocked(newLocked);
+                              localStorage.setItem(STRATEGY_LOCK_STORAGE_KEY, String(newLocked));
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              padding: "2px",
+                              cursor: "pointer",
+                              color: strategyLocked ? "#fbbf24" : "var(--text-secondary)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title={strategyLocked ? "Unlock strategies to allow editing" : "Lock strategies to prevent editing"}
+                          >
+                            {strategyLocked ? <Lock size={14} /> : <Unlock size={14} />}
+                          </button>
                       </div>
                     </th>
                     <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", minWidth: "90px", whiteSpace: "nowrap" }}>Journal</th>
@@ -3664,25 +3670,31 @@ export default function Trades() {
                   <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", minWidth: "100px", whiteSpace: "nowrap" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                       <span>Strategy</span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const newLocked = !strategyLocked;
-                          setStrategyLocked(newLocked);
-                          localStorage.setItem(STRATEGY_LOCK_STORAGE_KEY, String(newLocked));
-                        }}
-                        style={{
-                          background: "transparent",
-                          border: "none",
-                          padding: "2px",
-                          cursor: "pointer",
-                          color: strategyLocked ? "var(--accent)" : "var(--text-secondary)",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                        }}
-                        title={strategyLocked ? "Unlock strategies to allow editing" : "Lock strategies to prevent editing"}
+                      <span
+                        title="All trades in a pair share the same strategy, journal, and emotional state links. Changing any of these for one trade updates the whole pair."
+                        style={{ display: "inline-flex", cursor: "help", color: "var(--text-secondary)" }}
                       >
+                        <Info size={14} />
+                      </span>
+                      <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newLocked = !strategyLocked;
+                            setStrategyLocked(newLocked);
+                            localStorage.setItem(STRATEGY_LOCK_STORAGE_KEY, String(newLocked));
+                          }}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            padding: "2px",
+                            cursor: "pointer",
+                            color: strategyLocked ? "var(--accent)" : "var(--text-secondary)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                          title={strategyLocked ? "Unlock strategies to allow editing" : "Lock strategies to prevent editing"}
+                        >
                         {strategyLocked ? <Lock size={14} /> : <Unlock size={14} />}
                       </button>
                     </div>
