@@ -130,6 +130,8 @@ const FILTER_POSITION_SIZE_MAX_KEY = "tradebutler_filter_position_size_max";
 const SORT_SECONDARY_KEY = "tradebutler_sort_secondary";
 const JOURNAL_MAP_STORAGE_KEY_BASE = "tradebutler_trade_journal_map_";
 const EMO_STATE_MAP_STORAGE_KEY_BASE = "tradebutler_trade_emotional_state_map_";
+const JOURNAL_PAIR_MAP_STORAGE_KEY_BASE = "tradebutler_pair_journal_map_";
+const EMO_PAIR_MAP_STORAGE_KEY_BASE = "tradebutler_pair_emotional_state_map_";
 
 interface PositionGroup {
   entry_trade: Trade;
@@ -238,6 +240,12 @@ export default function Trades() {
   const [emotionPopoverTradeId, setEmotionPopoverTradeId] = useState<number | null>(null);
   const journalPopoverRef = useRef<HTMLDivElement>(null);
   const emotionPopoverRef = useRef<HTMLDivElement>(null);
+  const [journalEntryIdsByPairKey, setJournalEntryIdsByPairKey] = useState<Record<string, number[]>>({});
+  const [emotionalStateIdsByPairKey, setEmotionalStateIdsByPairKey] = useState<Record<string, number[]>>({});
+  const [journalPairPopoverKey, setJournalPairPopoverKey] = useState<string | null>(null);
+  const [emotionPairPopoverKey, setEmotionPairPopoverKey] = useState<string | null>(null);
+  const journalPairPopoverRef = useRef<HTMLDivElement>(null);
+  const emotionPairPopoverRef = useRef<HTMLDivElement>(null);
 
   const JOURNAL_ENTRIES_PER_PAGE = 10;
 
@@ -512,6 +520,104 @@ export default function Trades() {
     loadLinks();
   }, [tradesWithPairing, dataMode]);
 
+  // Load journal/emotional links for pairs (Pair view)
+  useEffect(() => {
+    if (viewMode !== "Pair" || positionGroups.length === 0) {
+      return;
+    }
+    const pairKeys: string[] = [];
+    for (const group of positionGroups) {
+      if (group.position_trades.length >= 1) {
+        const exitId = group.position_trades[group.position_trades.length - 1].id;
+        pairKeys.push(`${group.entry_trade.id}_${exitId}`);
+      }
+    }
+    if (pairKeys.length === 0) return;
+
+    const loadPairLinks = async () => {
+      try {
+        let entries = journalEntriesForLink;
+        let emoStates = emotionalStatesForLink;
+        if (entries.length === 0 && emoStates.length === 0 && dataMode !== "sandbox") {
+          const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+          const [e, s] = await Promise.all([
+            invoke<JournalEntryForLink[]>("get_journal_entries", paperArgs),
+            invoke<TradeEmotionalState[]>("get_emotional_states", paperArgs),
+          ]);
+          entries = e;
+          emoStates = s;
+        }
+
+        let storedJournal: Record<string, number[]> = {};
+        let storedEmo: Record<string, number[]> = {};
+        try {
+          const rj = localStorage.getItem(`${JOURNAL_PAIR_MAP_STORAGE_KEY_BASE}${dataMode}`);
+          if (rj) {
+            const p = JSON.parse(rj) as Record<string, number[]>;
+            storedJournal = Object.fromEntries(Object.entries(p).map(([k, v]) => [k, Array.isArray(v) ? v : []]));
+          }
+        } catch {
+          storedJournal = {};
+        }
+        try {
+          const re = localStorage.getItem(`${EMO_PAIR_MAP_STORAGE_KEY_BASE}${dataMode}`);
+          if (re) {
+            const p = JSON.parse(re) as Record<string, number[]>;
+            storedEmo = Object.fromEntries(Object.entries(p).map(([k, v]) => [k, Array.isArray(v) ? v : []]));
+          }
+        } catch {
+          storedEmo = {};
+        }
+
+        const journalMap: Record<string, number[]> = {};
+        const emoMap: Record<string, number[]> = {};
+        for (const key of pairKeys) {
+          const [entryId, exitId] = key.split("_").map(Number);
+          journalMap[key] = [];
+          for (const entry of entries) {
+            if (!entry.linked_trade_ids) continue;
+            try {
+              const ids = JSON.parse(entry.linked_trade_ids) as number[];
+              if (Array.isArray(ids) && ids.includes(entryId) && ids.includes(exitId)) {
+                journalMap[key].push(entry.id);
+              }
+            } catch {
+              // ignore
+            }
+          }
+          emoMap[key] = [];
+          for (const s of emoStates) {
+            let tids: number[] = [];
+            if (s.trade_ids) {
+              try {
+                const arr = JSON.parse(s.trade_ids) as number[];
+                if (Array.isArray(arr)) tids = arr;
+              } catch {
+                if (s.trade_id != null) tids = [s.trade_id];
+              }
+            } else if (s.trade_id != null) {
+              tids = [s.trade_id];
+            }
+            if (tids.includes(entryId) && tids.includes(exitId)) {
+              emoMap[key].push(s.id);
+            }
+          }
+          if (storedJournal[key]?.length) {
+            journalMap[key] = [...new Set([...journalMap[key], ...storedJournal[key]])].filter((id) => entries.some((e) => e.id === id));
+          }
+          if (storedEmo[key]?.length) {
+            emoMap[key] = [...new Set([...emoMap[key], ...storedEmo[key]])].filter((id) => emoStates.some((s) => s.id === id));
+          }
+        }
+        setJournalEntryIdsByPairKey(journalMap);
+        setEmotionalStateIdsByPairKey(emoMap);
+      } catch (e) {
+        console.error("Failed to load pair links:", e);
+      }
+    };
+    loadPairLinks();
+  }, [viewMode, positionGroups, dataMode, journalEntriesForLink.length, emotionalStatesForLink.length]);
+
   // Close journal/emotion popovers on outside click
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -522,10 +628,16 @@ export default function Trades() {
       if (emotionPopoverTradeId != null && emotionPopoverRef.current && !emotionPopoverRef.current.contains(t)) {
         setEmotionPopoverTradeId(null);
       }
+      if (journalPairPopoverKey != null && journalPairPopoverRef.current && !journalPairPopoverRef.current.contains(t)) {
+        setJournalPairPopoverKey(null);
+      }
+      if (emotionPairPopoverKey != null && emotionPairPopoverRef.current && !emotionPairPopoverRef.current.contains(t)) {
+        setEmotionPairPopoverKey(null);
+      }
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [journalPopoverTradeId, emotionPopoverTradeId]);
+  }, [journalPopoverTradeId, emotionPopoverTradeId, journalPairPopoverKey, emotionPairPopoverKey]);
 
   const loadData = async () => {
     try {
@@ -698,10 +810,46 @@ export default function Trades() {
     return { ids };
   };
 
+  // For a given trade, return all trade IDs that belong to the same pair(s)
+  // (entry + exit) so that linked journals/emotions stay in sync across the pair.
+  const getAllTradeIdsForTrade = (tradeId: number): number[] => {
+    const tw = tradesWithPairing.find((t) => t.trade.id === tradeId);
+    if (!tw) return [tradeId];
+    const ids = new Set<number>([tradeId]);
+    tw.entry_pairs.forEach((p) => {
+      ids.add(p.entry_trade_id);
+      ids.add(p.exit_trade_id);
+    });
+    tw.exit_pairs.forEach((p) => {
+      ids.add(p.entry_trade_id);
+      ids.add(p.exit_trade_id);
+    });
+    return Array.from(ids);
+  };
+
   const handleToggleJournalLink = async (tradeId: number, entryId: number, checked: boolean) => {
     const entry = journalEntriesForLink.find((e) => e.id === entryId);
     if (!entry) return;
-    const { ids } = updateEntryLinkedTradeIds(entry, tradeId, checked);
+
+    const allTradeIds = getAllTradeIdsForTrade(tradeId);
+
+    // Keep the underlying journal's linked_trade_ids in sync for the whole pair
+    let ids: number[] = [];
+    if (entry.linked_trade_ids) {
+      try {
+        const parsed = JSON.parse(entry.linked_trade_ids) as number[];
+        if (Array.isArray(parsed)) ids = parsed;
+      } catch {
+        ids = [];
+      }
+    }
+    if (checked) {
+      for (const tid of allTradeIds) {
+        if (!ids.includes(tid)) ids.push(tid);
+      }
+    } else {
+      ids = ids.filter((id) => !allTradeIds.includes(id));
+    }
     try {
       if (dataMode === "sandbox") {
         updateSandboxJournalEntry(entryId, { linked_trade_ids: ids.length > 0 ? JSON.stringify(ids) : null });
@@ -720,9 +868,14 @@ export default function Trades() {
         )
       );
       setJournalEntryIdsByTradeId((prev) => {
-        const current = prev[tradeId] ?? [];
-        const next = checked ? (current.includes(entryId) ? current : [...current, entryId]) : current.filter((id) => id !== entryId);
-        const nextMap = { ...prev, [tradeId]: next };
+        const nextMap: Record<number, number[]> = { ...prev };
+        for (const tid of allTradeIds) {
+          const current = nextMap[tid] ?? [];
+          const next = checked
+            ? (current.includes(entryId) ? current : [...current, entryId])
+            : current.filter((id) => id !== entryId);
+          nextMap[tid] = next;
+        }
         saveJournalMapForMode(nextMap, dataMode);
         return nextMap;
       });
@@ -754,27 +907,35 @@ export default function Trades() {
             } else if (s.trade_id != null) {
               stateTradeIds = [s.trade_id];
             }
-            if (!stateTradeIds.includes(tradeId)) {
-              stateTradeIds.push(tradeId);
-              const tradeIdsJson = JSON.stringify(stateTradeIds);
-              if (dataMode === "sandbox") {
-                updateSandboxEmotionalState(s.id, { trade_ids: tradeIdsJson });
-              } else {
-                await invoke("update_emotional_state_links", {
-                  id: s.id,
-                  journal_entry_ids: s.journal_entry_ids ?? null,
-                  trade_ids: tradeIdsJson,
-                });
+            let changed = false;
+            for (const tid of allTradeIds) {
+              if (!stateTradeIds.includes(tid)) {
+                stateTradeIds.push(tid);
+                changed = true;
               }
-              setEmotionalStatesForLink((prev) =>
-                prev.map((st) => (st.id === s.id ? { ...st, trade_ids: tradeIdsJson } : st))
-              );
             }
+            if (!changed) continue;
+            const tradeIdsJson = JSON.stringify(stateTradeIds);
+            if (dataMode === "sandbox") {
+              updateSandboxEmotionalState(s.id, { trade_ids: tradeIdsJson });
+            } else {
+              await invoke("update_emotional_state_links", {
+                id: s.id,
+                journal_entry_ids: s.journal_entry_ids ?? null,
+                trade_ids: tradeIdsJson,
+              });
+            }
+            setEmotionalStatesForLink((prev) =>
+              prev.map((st) => (st.id === s.id ? { ...st, trade_ids: tradeIdsJson } : st))
+            );
           }
           if (toAdd.length > 0) {
             setEmotionalStateIdsByTradeId((prev) => {
-              const next = [...(prev[tradeId] ?? []), ...toAdd.map((s) => s.id)];
-              const nextMap = { ...prev, [tradeId]: [...new Set(next)] };
+              const nextMap: Record<number, number[]> = { ...prev };
+              for (const tid of allTradeIds) {
+                const next = [...(nextMap[tid] ?? []), ...toAdd.map((s) => s.id)];
+                nextMap[tid] = [...new Set(next)];
+              }
               saveEmotionalStateMapForMode(nextMap, dataMode);
               return nextMap;
             });
@@ -791,6 +952,9 @@ export default function Trades() {
   const handleToggleEmotionalStateLink = async (tradeId: number, stateId: number, checked: boolean) => {
     const state = emotionalStatesForLink.find((s) => s.id === stateId);
     if (!state) return;
+
+    const allTradeIds = getAllTradeIdsForTrade(tradeId);
+
     let ids: number[] = [];
     if (state.trade_ids) {
       try {
@@ -803,9 +967,11 @@ export default function Trades() {
       ids = [state.trade_id];
     }
     if (checked) {
-      if (!ids.includes(tradeId)) ids.push(tradeId);
+      for (const tid of allTradeIds) {
+        if (!ids.includes(tid)) ids.push(tid);
+      }
     } else {
-      ids = ids.filter((id) => id !== tradeId);
+      ids = ids.filter((id) => !allTradeIds.includes(id));
     }
     const tradeIdsJson = ids.length > 0 ? JSON.stringify(ids) : null;
     try {
@@ -822,9 +988,14 @@ export default function Trades() {
         prev.map((s) => (s.id === stateId ? { ...s, trade_ids: tradeIdsJson } : s))
       );
       setEmotionalStateIdsByTradeId((prev) => {
-        const current = prev[tradeId] ?? [];
-        const next = checked ? (current.includes(stateId) ? current : [...current, stateId]) : current.filter((id) => id !== stateId);
-        const nextMap = { ...prev, [tradeId]: next };
+        const nextMap: Record<number, number[]> = { ...prev };
+        for (const tid of allTradeIds) {
+          const current = nextMap[tid] ?? [];
+          const next = checked
+            ? (current.includes(stateId) ? current : [...current, stateId])
+            : current.filter((id) => id !== stateId);
+          nextMap[tid] = next;
+        }
         saveEmotionalStateMapForMode(nextMap, dataMode);
         return nextMap;
       });
@@ -846,28 +1017,48 @@ export default function Trades() {
         for (const entryId of entryIdsToAdd) {
           const entry = journalEntriesForLink.find((e) => e.id === entryId);
           if (!entry) continue;
-          const { ids: entryTradeIds } = updateEntryLinkedTradeIds(entry, tradeId, true);
+          let entryTradeIds: number[] = [];
+          if (entry.linked_trade_ids) {
+            try {
+              const parsed = JSON.parse(entry.linked_trade_ids) as number[];
+              if (Array.isArray(parsed)) entryTradeIds = parsed;
+            } catch {
+              entryTradeIds = [];
+            }
+          }
+          let changed = false;
+          for (const tid of allTradeIds) {
+            if (!entryTradeIds.includes(tid)) {
+              entryTradeIds.push(tid);
+              changed = true;
+            }
+          }
+          if (!changed) continue;
+          const linkedTradeIdsJson = entryTradeIds.length > 0 ? JSON.stringify(entryTradeIds) : null;
           if (dataMode === "sandbox") {
-            updateSandboxJournalEntry(entryId, { linked_trade_ids: entryTradeIds.length > 0 ? JSON.stringify(entryTradeIds) : null });
+            updateSandboxJournalEntry(entryId, { linked_trade_ids: linkedTradeIdsJson });
           } else {
             await invoke("update_journal_entry", {
               id: entry.id,
               date: entry.date,
               title: entry.title,
               strategyId: entry.strategy_id,
-              linked_trade_ids: entryTradeIds.length > 0 ? JSON.stringify(entryTradeIds) : null,
+              linked_trade_ids: linkedTradeIdsJson,
             });
           }
           setJournalEntriesForLink((prev) =>
             prev.map((e) =>
-              e.id === entryId ? { ...e, linked_trade_ids: entryTradeIds.length > 0 ? JSON.stringify(entryTradeIds) : null } : e
+              e.id === entryId ? { ...e, linked_trade_ids: linkedTradeIdsJson } : e
             )
           );
         }
         if (entryIdsToAdd.length > 0) {
           setJournalEntryIdsByTradeId((prev) => {
-            const next = [...(prev[tradeId] ?? []), ...entryIdsToAdd];
-            const nextMap = { ...prev, [tradeId]: [...new Set(next)] };
+            const nextMap: Record<number, number[]> = { ...prev };
+            for (const tid of allTradeIds) {
+              const next = [...(nextMap[tid] ?? []), ...entryIdsToAdd];
+              nextMap[tid] = [...new Set(next)];
+            }
             saveJournalMapForMode(nextMap, dataMode);
             return nextMap;
           });
@@ -875,6 +1066,196 @@ export default function Trades() {
       }
     } catch (e) {
       console.error("Failed to toggle emotional state link:", e);
+    }
+  };
+
+  const saveJournalPairMapForMode = (map: Record<string, number[]>, mode: DataMode) => {
+    try {
+      localStorage.setItem(`${JOURNAL_PAIR_MAP_STORAGE_KEY_BASE}${mode}`, JSON.stringify(map));
+    } catch {
+      // ignore
+    }
+  };
+  const saveEmotionalStatePairMapForMode = (map: Record<string, number[]>, mode: DataMode) => {
+    try {
+      localStorage.setItem(`${EMO_PAIR_MAP_STORAGE_KEY_BASE}${mode}`, JSON.stringify(map));
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleToggleJournalLinkForPair = async (pairKey: string, entryId: number, checked: boolean) => {
+    const [entryTradeId, exitTradeId] = pairKey.split("_").map(Number);
+    const entry = journalEntriesForLink.find((e) => e.id === entryId);
+    if (!entry) return;
+    let ids: number[] = [];
+    if (entry.linked_trade_ids) {
+      try {
+        const parsed = JSON.parse(entry.linked_trade_ids) as number[];
+        if (Array.isArray(parsed)) ids = parsed;
+      } catch {
+        ids = [];
+      }
+    }
+    if (checked) {
+      if (!ids.includes(entryTradeId)) ids.push(entryTradeId);
+      if (!ids.includes(exitTradeId)) ids.push(exitTradeId);
+    } else {
+      ids = ids.filter((id) => id !== entryTradeId && id !== exitTradeId);
+    }
+    const linkedTradeIdsJson = ids.length > 0 ? JSON.stringify(ids) : null;
+    try {
+      if (dataMode === "sandbox") {
+        updateSandboxJournalEntry(entryId, { linked_trade_ids: linkedTradeIdsJson });
+      } else {
+        await invoke("update_journal_entry", {
+          id: entry.id,
+          date: entry.date,
+          title: entry.title,
+          strategyId: entry.strategy_id,
+          linked_trade_ids: linkedTradeIdsJson,
+        });
+      }
+      setJournalEntriesForLink((prev) =>
+        prev.map((e) => (e.id === entryId ? { ...e, linked_trade_ids: linkedTradeIdsJson } : e))
+      );
+      setJournalEntryIdsByPairKey((prev) => {
+        const current = prev[pairKey] ?? [];
+        const next = checked ? (current.includes(entryId) ? current : [...current, entryId]) : current.filter((id) => id !== entryId);
+        const nextMap = { ...prev, [pairKey]: next };
+        saveJournalPairMapForMode(nextMap, dataMode);
+        return nextMap;
+      });
+
+      if (checked) {
+        let statesForEntry: TradeEmotionalState[] = [];
+        if (dataMode === "sandbox") {
+          statesForEntry = getSandboxEmotionalStatesForJournal(entryId) as unknown as TradeEmotionalState[];
+        } else {
+          const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+          statesForEntry = await invoke<TradeEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId, ...paperArgs });
+        }
+        const currentEmoIds = emotionalStateIdsByPairKey[pairKey] ?? [];
+        const toAdd = statesForEntry.filter((s) => !currentEmoIds.includes(s.id));
+        for (const s of toAdd) {
+          let stateTradeIds: number[] = [];
+          if (s.trade_ids) {
+            try {
+              const parsed = JSON.parse(s.trade_ids) as number[];
+              if (Array.isArray(parsed)) stateTradeIds = parsed;
+            } catch {
+              if (s.trade_id != null) stateTradeIds = [s.trade_id];
+            }
+          } else if (s.trade_id != null) {
+            stateTradeIds = [s.trade_id];
+          }
+          if (!stateTradeIds.includes(entryTradeId)) stateTradeIds.push(entryTradeId);
+          if (!stateTradeIds.includes(exitTradeId)) stateTradeIds.push(exitTradeId);
+          const tradeIdsJson = JSON.stringify(stateTradeIds);
+          if (dataMode === "sandbox") {
+            updateSandboxEmotionalState(s.id, { trade_ids: tradeIdsJson });
+          } else {
+            await invoke("update_emotional_state_links", { id: s.id, journal_entry_ids: s.journal_entry_ids ?? null, trade_ids: tradeIdsJson });
+          }
+          setEmotionalStatesForLink((prev) => prev.map((st) => (st.id === s.id ? { ...st, trade_ids: tradeIdsJson } : st)));
+        }
+        if (toAdd.length > 0) {
+          setEmotionalStateIdsByPairKey((prev) => {
+            const next = [...(prev[pairKey] ?? []), ...toAdd.map((s) => s.id)];
+            const nextMap = { ...prev, [pairKey]: [...new Set(next)] };
+            saveEmotionalStatePairMapForMode(nextMap, dataMode);
+            return nextMap;
+          });
+        }
+      }
+    } catch (e) {
+      console.error("Failed to toggle journal link for pair:", e);
+    }
+  };
+
+  const handleToggleEmotionalStateLinkForPair = async (pairKey: string, stateId: number, checked: boolean) => {
+    const [entryTradeId, exitTradeId] = pairKey.split("_").map(Number);
+    const state = emotionalStatesForLink.find((s) => s.id === stateId);
+    if (!state) return;
+    let ids: number[] = [];
+    if (state.trade_ids) {
+      try {
+        const parsed = JSON.parse(state.trade_ids) as number[];
+        if (Array.isArray(parsed)) ids = parsed;
+      } catch {
+        ids = [];
+      }
+    } else if (state.trade_id != null) {
+      ids = [state.trade_id];
+    }
+    if (checked) {
+      if (!ids.includes(entryTradeId)) ids.push(entryTradeId);
+      if (!ids.includes(exitTradeId)) ids.push(exitTradeId);
+    } else {
+      ids = ids.filter((id) => id !== entryTradeId && id !== exitTradeId);
+    }
+    const tradeIdsJson = ids.length > 0 ? JSON.stringify(ids) : null;
+    try {
+      if (dataMode === "sandbox") {
+        updateSandboxEmotionalState(stateId, { trade_ids: tradeIdsJson });
+      } else {
+        await invoke("update_emotional_state_links", { id: stateId, journal_entry_ids: state.journal_entry_ids ?? null, trade_ids: tradeIdsJson });
+      }
+      setEmotionalStatesForLink((prev) => prev.map((s) => (s.id === stateId ? { ...s, trade_ids: tradeIdsJson } : s)));
+      setEmotionalStateIdsByPairKey((prev) => {
+        const current = prev[pairKey] ?? [];
+        const next = checked ? (current.includes(stateId) ? current : [...current, stateId]) : current.filter((id) => id !== stateId);
+        const nextMap = { ...prev, [pairKey]: next };
+        saveEmotionalStatePairMapForMode(nextMap, dataMode);
+        return nextMap;
+      });
+
+      if (checked) {
+        const journalEntryIdsFromState: number[] = [];
+        if (state.journal_entry_id != null) journalEntryIdsFromState.push(state.journal_entry_id);
+        if (state.journal_entry_ids) {
+          try {
+            const arr = JSON.parse(state.journal_entry_ids) as number[];
+            if (Array.isArray(arr)) arr.forEach((id) => { if (!journalEntryIdsFromState.includes(id)) journalEntryIdsFromState.push(id); });
+          } catch {
+            // ignore
+          }
+        }
+        const currentJournalIds = journalEntryIdsByPairKey[pairKey] ?? [];
+        const entryIdsToAdd = journalEntryIdsFromState.filter((id) => !currentJournalIds.includes(id));
+        for (const entryId of entryIdsToAdd) {
+          const entry = journalEntriesForLink.find((e) => e.id === entryId);
+          if (!entry) continue;
+          let entryIds: number[] = [];
+          if (entry.linked_trade_ids) {
+            try {
+              const parsed = JSON.parse(entry.linked_trade_ids) as number[];
+              if (Array.isArray(parsed)) entryIds = parsed;
+            } catch {
+              entryIds = [];
+            }
+          }
+          if (!entryIds.includes(entryTradeId)) entryIds.push(entryTradeId);
+          if (!entryIds.includes(exitTradeId)) entryIds.push(exitTradeId);
+          const linkedTradeIdsJson = JSON.stringify(entryIds);
+          if (dataMode === "sandbox") {
+            updateSandboxJournalEntry(entryId, { linked_trade_ids: linkedTradeIdsJson });
+          } else {
+            await invoke("update_journal_entry", { id: entry.id, date: entry.date, title: entry.title, strategyId: entry.strategy_id, linked_trade_ids: linkedTradeIdsJson });
+          }
+          setJournalEntriesForLink((prev) => prev.map((e) => (e.id === entryId ? { ...e, linked_trade_ids: linkedTradeIdsJson } : e)));
+        }
+        if (entryIdsToAdd.length > 0) {
+          setJournalEntryIdsByPairKey((prev) => {
+            const next = [...(prev[pairKey] ?? []), ...entryIdsToAdd];
+            const nextMap = { ...prev, [pairKey]: [...new Set(next)] };
+            saveJournalPairMapForMode(nextMap, dataMode);
+            return nextMap;
+          });
+        }
+      }
+    } catch (e) {
+      console.error("Failed to toggle emotional state link for pair:", e);
     }
   };
 
@@ -2399,6 +2780,8 @@ export default function Trades() {
                         </button>
                       </div>
                     </th>
+                    <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", minWidth: "90px", whiteSpace: "nowrap" }}>Journal</th>
+                    <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", minWidth: "90px", whiteSpace: "nowrap" }}>Emotional state</th>
                     <th style={{ padding: "12px 8px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--text-primary)", textTransform: "uppercase", minWidth: "90px", whiteSpace: "nowrap", backgroundColor: "var(--bg-secondary)" }} title={dataMode === "paper" ? "Select to mark as real" : "Select to mark as paper"} onClick={(e) => e.stopPropagation()}>
                       <label style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px", cursor: "pointer", margin: 0 }}>
                         <input
@@ -2518,6 +2901,12 @@ export default function Trades() {
                                 e.stopPropagation();
                                 const newStrategyId = e.target.value ? parseInt(e.target.value, 10) : null;
                                 handleStrategyChange(group.entry_trade.id, newStrategyId);
+                                if (group.position_trades.length >= 1) {
+                                  const exitTrade = group.position_trades[group.position_trades.length - 1] as Trade;
+                                  if (exitTrade.id !== group.entry_trade.id) {
+                                    handleStrategyChange(exitTrade.id, newStrategyId);
+                                  }
+                                }
                               }}
                               onClick={(e) => e.stopPropagation()}
                               onMouseDown={(e) => e.stopPropagation()}
@@ -2549,6 +2938,144 @@ export default function Trades() {
                               ))}
                             </select>
                           </td>
+                          {group.position_trades.length >= 1 ? (() => {
+                            const exitId = (group.position_trades[group.position_trades.length - 1] as Trade).id;
+                            const pairKey = `${group.entry_trade.id}_${exitId}`;
+                            const entryId = group.entry_trade.id;
+                            const journalIds = [...new Set([
+                              ...(journalEntryIdsByPairKey[pairKey] ?? []),
+                              ...(journalEntryIdsByTradeId[entryId] ?? []),
+                              ...(journalEntryIdsByTradeId[exitId] ?? []),
+                            ])];
+                            const emoIds = [...new Set([
+                              ...(emotionalStateIdsByPairKey[pairKey] ?? []),
+                              ...(emotionalStateIdsByTradeId[entryId] ?? []),
+                              ...(emotionalStateIdsByTradeId[exitId] ?? []),
+                            ])];
+                            return (
+                              <>
+                                <td style={{ padding: "8px 12px", verticalAlign: "middle" }} onClick={(e) => e.stopPropagation()}>
+                                  <div ref={journalPairPopoverKey === pairKey ? journalPairPopoverRef : undefined} style={{ position: "relative", display: "inline-block" }}>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setJournalPairPopoverKey((prev) => (prev === pairKey ? null : pairKey));
+                                      }}
+                                      style={{
+                                        padding: "6px 10px",
+                                        fontSize: "12px",
+                                        border: "1px solid var(--border-color)",
+                                        borderRadius: "6px",
+                                        background: "var(--bg-tertiary)",
+                                        color: "var(--text-primary)",
+                                        cursor: "pointer",
+                                        whiteSpace: "nowrap",
+                                      }}
+                                    >
+                                      {journalIds.length === 0 ? "Link" : `${journalIds.length} linked`}
+                                    </button>
+                                    {journalPairPopoverKey === pairKey && (
+                                      <div
+                                        style={{
+                                          position: "absolute",
+                                          left: 0,
+                                          top: "100%",
+                                          marginTop: "4px",
+                                          zIndex: 20,
+                                          minWidth: "200px",
+                                          maxHeight: "280px",
+                                          overflowY: "auto",
+                                          background: "var(--bg-secondary)",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "8px",
+                                          boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                                          padding: "8px",
+                                        }}
+                                      >
+                                        {journalEntriesForLink.length === 0 ? (
+                                          <div style={{ padding: "8px", fontSize: "12px", color: "var(--text-secondary)" }}>No journal entries</div>
+                                        ) : (
+                                          journalEntriesForLink.map((je) => (
+                                            <label key={je.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 8px", cursor: "pointer", borderRadius: "4px" }}>
+                                              <input
+                                                type="checkbox"
+                                                checked={journalIds.includes(je.id)}
+                                                onChange={(e) => handleToggleJournalLinkForPair(pairKey, je.id, e.target.checked)}
+                                              />
+                                              <span style={{ fontSize: "13px" }}>{je.title || `Entry ${je.id}`}</span>
+                                            </label>
+                                          ))
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                </td>
+                                <td style={{ padding: "8px 12px", verticalAlign: "middle" }} onClick={(e) => e.stopPropagation()}>
+                                  <div ref={emotionPairPopoverKey === pairKey ? emotionPairPopoverRef : undefined} style={{ position: "relative", display: "inline-block" }}>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setEmotionPairPopoverKey((prev) => (prev === pairKey ? null : pairKey));
+                                      }}
+                                      style={{
+                                        padding: "6px 10px",
+                                        fontSize: "12px",
+                                        border: "1px solid var(--border-color)",
+                                        borderRadius: "6px",
+                                        background: "var(--bg-tertiary)",
+                                        color: "var(--text-primary)",
+                                        cursor: "pointer",
+                                        whiteSpace: "nowrap",
+                                      }}
+                                    >
+                                      {emoIds.length === 0 ? "Link" : `${emoIds.length} linked`}
+                                    </button>
+                                    {emotionPairPopoverKey === pairKey && (
+                                      <div
+                                        style={{
+                                          position: "absolute",
+                                          left: 0,
+                                          top: "100%",
+                                          marginTop: "4px",
+                                          zIndex: 20,
+                                          minWidth: "200px",
+                                          maxHeight: "280px",
+                                          overflowY: "auto",
+                                          background: "var(--bg-secondary)",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "8px",
+                                          boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                                          padding: "8px",
+                                        }}
+                                      >
+                                        {emotionalStatesForLink.length === 0 ? (
+                                          <div style={{ padding: "8px", fontSize: "12px", color: "var(--text-secondary)" }}>No emotional states</div>
+                                        ) : (
+                                          emotionalStatesForLink.map((es) => (
+                                            <label key={es.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 8px", cursor: "pointer", borderRadius: "4px" }}>
+                                              <input
+                                                type="checkbox"
+                                                checked={emoIds.includes(es.id)}
+                                                onChange={(e) => handleToggleEmotionalStateLinkForPair(pairKey, es.id, e.target.checked)}
+                                              />
+                                              <span style={{ fontSize: "13px" }}>{es.name || `State ${es.id}`}</span>
+                                            </label>
+                                          ))
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                </td>
+                              </>
+                            );
+                          })() : (
+                            <>
+                              <td style={{ padding: "8px 12px", color: "var(--text-secondary)", fontSize: "12px" }}>—</td>
+                              <td style={{ padding: "8px 12px", color: "var(--text-secondary)", fontSize: "12px" }}>—</td>
+                            </>
+                          )}
                           <td style={{ padding: "12px 8px", textAlign: "center", fontSize: "12px", width: "52px" }} onClick={(e) => e.stopPropagation()}>
                             <label title="Select this pair for Mark as paper" style={{ display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", margin: 0 }}>
                               <input
@@ -2583,7 +3110,7 @@ export default function Trades() {
                         </tr>
                         {isExpanded && (
                           <tr key={`${group.entry_trade.id}-details`}>
-                            <td colSpan={11} style={{ padding: "0", backgroundColor: "var(--bg-tertiary)" }}>
+                            <td colSpan={12 + (hidePnlDollars ? 0 : 1) + (hidePnlPercent ? 0 : 1)} style={{ padding: "0", backgroundColor: "var(--bg-tertiary)" }}>
                               <div style={{ padding: "20px" }}>
                                 <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px" }}>
                                   Position Trades ({group.position_trades.length})
