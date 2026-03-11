@@ -245,7 +245,15 @@ export default function Documentation() {
   };
 
   return (
-    <div style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}>
+    <div
+      style={{
+        display: "flex",
+        flex: 1,
+        minHeight: 0,
+        height: "100%",
+        overflow: "hidden",
+      }}
+    >
       {/* Sidebar */}
       <aside
         style={{
@@ -467,6 +475,7 @@ export default function Documentation() {
           flexDirection: "column",
           overflow: "auto",
           padding: "24px",
+          height: "100%",
         }}
       >
         {selectedPage ? (
