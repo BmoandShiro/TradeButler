@@ -622,6 +622,88 @@ export default function Layout({ children }: LayoutProps) {
     };
   }, [location.pathname]);
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if user is typing in an input/textarea
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable ||
+        isAppLocked
+      ) {
+        return;
+      }
+
+      // Don't trigger if a modal is open
+      if (showAddTradeModal || pendingCsvImport) {
+        return;
+      }
+
+      // N - Navigate to News
+      if (e.key.toLowerCase() === "n" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        navigate("/news");
+      }
+
+      // R - Refresh (dispatch custom event for news components to listen)
+      if (e.key.toLowerCase() === "r" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("tradeButlerRefreshNews"));
+      }
+
+      // J - Navigate to Journal
+      if (e.key.toLowerCase() === "j" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        navigate("/journal");
+      }
+
+      // T - Navigate to Trades
+      if (e.key.toLowerCase() === "t" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        navigate("/trades");
+      }
+
+      // D - Navigate to Dashboard
+      if (e.key.toLowerCase() === "d" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        navigate("/");
+      }
+
+      // C - Navigate to Calendar
+      if (e.key.toLowerCase() === "c" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        navigate("/calendar");
+      }
+
+      // A - Navigate to Analytics
+      if (e.key.toLowerCase() === "a" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        navigate("/analytics");
+      }
+
+      // ? - Show keyboard shortcuts help (Shift + /)
+      if (e.key === "?" && e.shiftKey) {
+        e.preventDefault();
+        alert(
+          "Keyboard Shortcuts:\n\n" +
+          "D - Dashboard\n" +
+          "T - Trades\n" +
+          "C - Calendar\n" +
+          "N - News\n" +
+          "J - Journal\n" +
+          "A - Analytics\n" +
+          "R - Refresh news\n" +
+          "? - Show this help"
+        );
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [navigate, isAppLocked, showAddTradeModal, pendingCsvImport]);
+
   const navItems = [
     { path: "/", icon: LayoutDashboard, label: "Dashboard" },
     { path: "/trades", icon: TrendingUp, label: "Trades" },

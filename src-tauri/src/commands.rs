@@ -8141,27 +8141,42 @@ pub async fn fetch_news_batch(symbols: Vec<String>) -> Result<Vec<NewsItem>, Str
 /// Fetch calendar events (earnings, dividends) for a symbol from Yahoo Finance
 #[tauri::command]
 pub async fn fetch_calendar_events(symbol: String) -> Result<Vec<CalendarEvent>, String> {
-    let url = format!(
-        "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=calendarEvents,summaryDetail",
-        symbol.to_uppercase()
-    );
+    let symbol_upper = symbol.to_uppercase();
     
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    // Try quoteSummary API (may require auth in some regions/times)
+    let url = format!(
+        "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=calendarEvents,summaryDetail",
+        symbol_upper
+    );
     
     let response = client
         .get(&url)
         .header("Accept", "application/json")
+        .header("Accept-Language", "en-US,en;q=0.9")
         .header("Referer", "https://finance.yahoo.com/")
+        .header("Origin", "https://finance.yahoo.com")
         .send()
-        .await
-        .map_err(|e| format!("Network error: {}", e))?;
+        .await;
     
-    if !response.status().is_success() {
-        return Err(format!("Failed to fetch calendar data: {}", response.status()));
-    }
+    // If quoteSummary fails (401, etc), return empty events gracefully
+    // News feed will still work, just without calendar events
+    let response = match response {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            eprintln!("Yahoo quoteSummary returned {} for {}", r.status(), symbol_upper);
+            return Ok(Vec::new());
+        }
+        Err(e) => {
+            eprintln!("Network error fetching calendar for {}: {}", symbol_upper, e);
+            return Ok(Vec::new());
+        }
+    };
     
     let data: serde_json::Value = response.json().await
         .map_err(|e| format!("Failed to parse JSON: {}", e))?;

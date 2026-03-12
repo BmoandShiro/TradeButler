@@ -126,13 +126,18 @@ export default function Calendar() {
       const allSymbols = [...new Set([...watchedSymbols, ...openSymbols])];
       
       if (allSymbols.length > 0) {
-        const events = await invoke<CalendarEvent[]>("fetch_calendar_events_batch", { symbols: allSymbols });
-        const eventsMap: Record<string, CalendarEvent[]> = {};
-        events.forEach(event => {
-          if (!eventsMap[event.date]) eventsMap[event.date] = [];
-          eventsMap[event.date].push(event);
-        });
-        setCalendarEvents(eventsMap);
+        try {
+          const events = await invoke<CalendarEvent[]>("fetch_calendar_events_batch", { symbols: allSymbols });
+          const eventsMap: Record<string, CalendarEvent[]> = {};
+          events.forEach(event => {
+            if (!eventsMap[event.date]) eventsMap[event.date] = [];
+            eventsMap[event.date].push(event);
+          });
+          setCalendarEvents(eventsMap);
+        } catch (e) {
+          console.warn("Failed to fetch symbol calendar events (API may require auth):", e);
+          setCalendarEvents({});
+        }
       }
       
       // Fetch economic events for current month
