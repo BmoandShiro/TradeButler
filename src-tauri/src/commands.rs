@@ -8643,6 +8643,53 @@ pub struct FinnhubBasicFinancials {
     pub debt_to_equity: Option<f64>,
     pub revenue_per_share: Option<f64>,
     pub return_on_equity: Option<f64>,
+    // Additional metrics
+    pub gross_margin: Option<f64>,
+    pub operating_margin: Option<f64>,
+    pub profit_margin: Option<f64>,
+    pub current_ratio: Option<f64>,
+    pub quick_ratio: Option<f64>,
+    pub peg_ratio: Option<f64>,
+    pub price_to_sales: Option<f64>,
+    pub free_cash_flow_per_share: Option<f64>,
+    pub revenue_growth_3y: Option<f64>,
+    pub revenue_growth_5y: Option<f64>,
+    pub eps_growth_3y: Option<f64>,
+    pub eps_growth_5y: Option<f64>,
+    pub dividend_growth_5y: Option<f64>,
+    pub payout_ratio: Option<f64>,
+    pub book_value_per_share: Option<f64>,
+    pub tangible_book_value_per_share: Option<f64>,
+    pub enterprise_value: Option<f64>,
+    pub ev_to_ebitda: Option<f64>,
+    pub forward_pe: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubCompanyProfile {
+    pub symbol: String,
+    pub name: Option<String>,
+    pub country: Option<String>,
+    pub currency: Option<String>,
+    pub exchange: Option<String>,
+    pub industry: Option<String>,
+    pub sector: Option<String>,
+    pub ipo: Option<String>,
+    pub market_cap: Option<f64>,
+    pub shares_outstanding: Option<f64>,
+    pub logo: Option<String>,
+    pub phone: Option<String>,
+    pub weburl: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubEarningsSurprise {
+    pub symbol: String,
+    pub period: String,
+    pub actual: Option<f64>,
+    pub estimate: Option<f64>,
+    pub surprise: Option<f64>,
+    pub surprise_percent: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -8903,6 +8950,37 @@ pub async fn fetch_finnhub_basic_financials(
         debt_to_equity: metric.get("totalDebt/totalEquityQuarterly").and_then(|v| v.as_f64()),
         revenue_per_share: metric.get("revenuePerShareTTM").and_then(|v| v.as_f64()),
         return_on_equity: metric.get("roeTTM").and_then(|v| v.as_f64()),
+        // Additional metrics
+        gross_margin: metric.get("grossMarginTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("grossMarginAnnual").and_then(|v| v.as_f64())),
+        operating_margin: metric.get("operatingMarginTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("operatingMarginAnnual").and_then(|v| v.as_f64())),
+        profit_margin: metric.get("netProfitMarginTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("netProfitMarginAnnual").and_then(|v| v.as_f64())),
+        current_ratio: metric.get("currentRatioQuarterly").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("currentRatioAnnual").and_then(|v| v.as_f64())),
+        quick_ratio: metric.get("quickRatioQuarterly").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("quickRatioAnnual").and_then(|v| v.as_f64())),
+        peg_ratio: metric.get("pegRatio").and_then(|v| v.as_f64()),
+        price_to_sales: metric.get("psTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("psAnnual").and_then(|v| v.as_f64())),
+        free_cash_flow_per_share: metric.get("freeCashFlowPerShareTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("freeCashFlowPerShareAnnual").and_then(|v| v.as_f64())),
+        revenue_growth_3y: metric.get("revenueGrowth3Y").and_then(|v| v.as_f64()),
+        revenue_growth_5y: metric.get("revenueGrowth5Y").and_then(|v| v.as_f64()),
+        eps_growth_3y: metric.get("epsGrowth3Y").and_then(|v| v.as_f64()),
+        eps_growth_5y: metric.get("epsGrowth5Y").and_then(|v| v.as_f64()),
+        dividend_growth_5y: metric.get("dividendGrowthRate5Y").and_then(|v| v.as_f64()),
+        payout_ratio: metric.get("payoutRatioTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("payoutRatioAnnual").and_then(|v| v.as_f64())),
+        book_value_per_share: metric.get("bookValuePerShareQuarterly").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("bookValuePerShareAnnual").and_then(|v| v.as_f64())),
+        tangible_book_value_per_share: metric.get("tangibleBookValuePerShareQuarterly").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("tangibleBookValuePerShareAnnual").and_then(|v| v.as_f64())),
+        enterprise_value: metric.get("enterpriseValue").and_then(|v| v.as_f64()),
+        ev_to_ebitda: metric.get("evToEBITDA").and_then(|v| v.as_f64()),
+        forward_pe: metric.get("forwardPE").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("peNTM").and_then(|v| v.as_f64())),
     })
 }
 
@@ -9076,4 +9154,139 @@ pub async fn fetch_finnhub_earnings_batch(
         .collect();
     
     Ok(filtered)
+}
+
+/// Fetch company profile from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_company_profile(
+    api_key: String,
+    symbol: String,
+) -> Result<FinnhubCompanyProfile, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/profile2?symbol={}&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    Ok(FinnhubCompanyProfile {
+        symbol: symbol.to_uppercase(),
+        name: data.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        country: data.get("country").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        currency: data.get("currency").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        exchange: data.get("exchange").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        industry: data.get("finnhubIndustry").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        sector: data.get("gsector").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        ipo: data.get("ipo").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        market_cap: data.get("marketCapitalization").and_then(|v| v.as_f64()),
+        shares_outstanding: data.get("shareOutstanding").and_then(|v| v.as_f64()),
+        logo: data.get("logo").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        phone: data.get("phone").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        weburl: data.get("weburl").and_then(|v| v.as_str()).map(|s| s.to_string()),
+    })
+}
+
+/// Fetch company peers from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_peers(
+    api_key: String,
+    symbol: String,
+) -> Result<Vec<String>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/peers?symbol={}&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let peers: Vec<String> = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    // Filter out the original symbol and limit to first 10
+    let filtered: Vec<String> = peers
+        .into_iter()
+        .filter(|p| p.to_uppercase() != symbol.to_uppercase())
+        .take(10)
+        .collect();
+    
+    Ok(filtered)
+}
+
+/// Fetch earnings surprises from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_earnings_surprises(
+    api_key: String,
+    symbol: String,
+) -> Result<Vec<FinnhubEarningsSurprise>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/earnings?symbol={}&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let earnings = data.as_array()
+        .map(|arr| {
+            arr.iter()
+                .take(8) // Last 8 quarters
+                .map(|item| {
+                    FinnhubEarningsSurprise {
+                        symbol: symbol.to_uppercase(),
+                        period: item.get("period").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        actual: item.get("actual").and_then(|v| v.as_f64()),
+                        estimate: item.get("estimate").and_then(|v| v.as_f64()),
+                        surprise: item.get("surprise").and_then(|v| v.as_f64()),
+                        surprise_percent: item.get("surprisePercent").and_then(|v| v.as_f64()),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    
+    Ok(earnings)
 }
