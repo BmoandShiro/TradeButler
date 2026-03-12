@@ -14,6 +14,7 @@ import Evaluation from "./pages/Evaluation";
 import Tools from "./pages/Tools";
 import Settings from "./pages/Settings";
 import News from "./pages/News";
+import SecFilingViewer from "./pages/SecFilingViewer";
 
 function App() {
   return (
@@ -33,6 +34,7 @@ function App() {
           <Route path="/tools" element={<Tools />} />
           <Route path="/average-down-calculator" element={<Navigate to="/tools" replace />} />
           <Route path="/dividend-calculator" element={<Navigate to="/tools?calc=dividend" replace />} />
+          <Route path="/sec-filing" element={<SecFilingViewer />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </Layout>

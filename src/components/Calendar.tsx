@@ -65,9 +65,20 @@ interface FinnhubEconomicEvent {
   unit: string | null;
 }
 
+interface IpoEvent {
+  symbol: string | null;
+  name: string | null;
+  date: string | null;
+  exchange: string | null;
+  price: string | null;
+  shares: number | null;
+  status: string | null;
+}
+
 const CALENDAR_SHOW_EARNINGS_KEY = "tradebutler_calendar_show_earnings";
 const CALENDAR_SHOW_DIVIDENDS_KEY = "tradebutler_calendar_show_dividends";
 const CALENDAR_SHOW_ECONOMIC_KEY = "tradebutler_calendar_show_economic";
+const CALENDAR_SHOW_IPO_KEY = "tradebutler_calendar_show_ipo";
 
 // Cache keys and duration
 const CALENDAR_EVENTS_CACHE_KEY = "tradebutler_calendar_events_cache_v2";
@@ -196,6 +207,11 @@ export default function Calendar() {
     const saved = localStorage.getItem(CALENDAR_SHOW_ECONOMIC_KEY);
     return saved ? JSON.parse(saved) : true;
   });
+  const [showIPOs, setShowIPOs] = useState(() => {
+    const saved = localStorage.getItem(CALENDAR_SHOW_IPO_KEY);
+    return saved ? JSON.parse(saved) : true;
+  });
+  const [ipoEvents, setIpoEvents] = useState<Record<string, IpoEvent[]>>({});
   const [showEventSettings, setShowEventSettings] = useState(false);
 
   // Save toggle settings
@@ -208,6 +224,9 @@ export default function Calendar() {
   useEffect(() => {
     localStorage.setItem(CALENDAR_SHOW_ECONOMIC_KEY, JSON.stringify(showEconomicEvents));
   }, [showEconomicEvents]);
+  useEffect(() => {
+    localStorage.setItem(CALENDAR_SHOW_IPO_KEY, JSON.stringify(showIPOs));
+  }, [showIPOs]);
 
   useEffect(() => {
     const unsub = subscribeToDataMode(setDataMode);
@@ -402,6 +421,28 @@ export default function Calendar() {
         econMap[event.date].push(event);
       });
       setEconomicEvents(econMap);
+      
+      // Fetch IPO calendar (if Finnhub API key is available)
+      if (finnhubApiKey) {
+        try {
+          const ipoData = await invoke<IpoEvent[]>("fetch_finnhub_ipo_calendar", {
+            apiKey: finnhubApiKey,
+            fromDate,
+            toDate,
+          });
+          
+          const ipoMap: Record<string, IpoEvent[]> = {};
+          ipoData.forEach(ipo => {
+            if (ipo.date) {
+              if (!ipoMap[ipo.date]) ipoMap[ipo.date] = [];
+              ipoMap[ipo.date].push(ipo);
+            }
+          });
+          setIpoEvents(ipoMap);
+        } catch (e) {
+          console.warn("Failed to fetch IPO calendar:", e);
+        }
+      }
       
       // Cache the economic events
       setCachedEconomicEvents(monthKey, econMap);
@@ -917,6 +958,29 @@ export default function Calendar() {
                       Economic Events
                     </span>
                   </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={showIPOs}
+                      onChange={(e) => setShowIPOs(e.target.checked)}
+                      style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                    />
+                    <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--text-primary)", fontSize: "13px" }}>
+                      <span style={{ 
+                        display: "inline-flex", 
+                        alignItems: "center", 
+                        justifyContent: "center",
+                        width: "20px", 
+                        height: "20px", 
+                        borderRadius: "4px", 
+                        backgroundColor: "#F59E0B",
+                        color: "white",
+                        fontSize: "9px",
+                        fontWeight: "700"
+                      }}>IPO</span>
+                      IPO Events
+                    </span>
+                  </label>
                 </div>
               </div>
             )}
@@ -969,9 +1033,10 @@ export default function Calendar() {
           const earningsEvents = showEarnings ? dayCalEvents.filter(e => e.event_type === "earnings") : [];
           const dividendEvents = showDividends ? dayCalEvents.filter(e => e.event_type.startsWith("dividend")) : [];
           const filteredEconEvents = showEconomicEvents ? dayEconEvents : [];
+          const dayIpoEvents = showIPOs ? (ipoEvents[dateKey] || []) : [];
           
           const hasContent = dayPnL || journalEntries.length > 0 || emotionalStates.length > 0 ||
-            earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0;
+            earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0 || dayIpoEvents.length > 0;
 
           const openDetails = (e: React.MouseEvent) => {
             e.stopPropagation();
@@ -1033,7 +1098,7 @@ export default function Calendar() {
                   </span>
                 </>
               )}
-              {(journalEntries.length > 0 || emotionalStates.length > 0 || earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0) && (
+              {(journalEntries.length > 0 || emotionalStates.length > 0 || earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0 || dayIpoEvents.length > 0) && (
                 <div
                   style={{
                     display: "flex",
@@ -1146,6 +1211,27 @@ export default function Calendar() {
                       title={`${event.title}${event.description ? ` - ${event.description}` : ""}`}
                     >
                       {getEventBadgeLabel(event.event_type)}
+                    </span>
+                  ))}
+                  {dayIpoEvents.map((ipo, idx) => (
+                    <span
+                      key={`ipo-${idx}`}
+                      onClick={openDetails}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "2px 5px",
+                        borderRadius: "4px",
+                        backgroundColor: "#F59E0B",
+                        color: "white",
+                        fontSize: "9px",
+                        fontWeight: "700",
+                        cursor: "pointer",
+                      }}
+                      title={`IPO: ${ipo.name || ipo.symbol || "Unknown"}`}
+                    >
+                      IPO
                     </span>
                   ))}
                 </div>
@@ -1268,7 +1354,7 @@ export default function Calendar() {
                         </div>
                       )}
                       {/* Events section */}
-                      {(earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0) && (
+                      {(earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0 || dayIpoEvents.length > 0) && (
                         <div style={{ marginBottom: "14px", paddingBottom: "14px", borderBottom: journalEntries.length > 0 ? "1px solid var(--border-color)" : "none" }}>
                           <div style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "10px", display: "flex", alignItems: "center", gap: "8px" }}>
                             <CalendarIcon size={14} style={{ color: "var(--accent)" }} />
@@ -1369,6 +1455,62 @@ export default function Calendar() {
                                 {event.description && (
                                   <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "var(--text-secondary)" }}>{event.description}</p>
                                 )}
+                              </div>
+                            ))}
+                            {dayIpoEvents.map((ipo, idx) => (
+                              <div
+                                key={`ipo-detail-${idx}`}
+                                style={{
+                                  padding: "10px 12px",
+                                  background: "var(--bg-tertiary)",
+                                  borderRadius: "8px",
+                                  borderLeft: "3px solid #F59E0B",
+                                }}
+                              >
+                                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                                  <span style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    padding: "2px 5px",
+                                    borderRadius: "4px",
+                                    backgroundColor: "#F59E0B",
+                                    color: "white",
+                                    fontSize: "9px",
+                                    fontWeight: "700",
+                                  }}>
+                                    IPO
+                                  </span>
+                                  {ipo.symbol && (
+                                    <span style={{
+                                      fontSize: "10px",
+                                      padding: "2px 6px",
+                                      borderRadius: "4px",
+                                      backgroundColor: "var(--accent)",
+                                      color: "var(--bg-primary)",
+                                      fontWeight: "600",
+                                    }}>
+                                      {ipo.symbol}
+                                    </span>
+                                  )}
+                                  {ipo.status && (
+                                    <span style={{
+                                      fontSize: "10px",
+                                      padding: "2px 6px",
+                                      borderRadius: "4px",
+                                      backgroundColor: ipo.status.toLowerCase() === "priced" ? "rgba(16, 185, 129, 0.2)" : "var(--bg-secondary)",
+                                      color: ipo.status.toLowerCase() === "priced" ? "#10B981" : "var(--text-secondary)",
+                                      fontWeight: "600",
+                                    }}>
+                                      {ipo.status}
+                                    </span>
+                                  )}
+                                </div>
+                                <p style={{ margin: 0, fontSize: "14px", color: "var(--text-primary)", fontWeight: "500" }}>{ipo.name || "Unknown Company"}</p>
+                                <div style={{ display: "flex", gap: "12px", marginTop: "6px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                                  {ipo.exchange && <span>Exchange: {ipo.exchange}</span>}
+                                  {ipo.price && <span>Price: ${ipo.price}</span>}
+                                </div>
                               </div>
                             ))}
                           </div>

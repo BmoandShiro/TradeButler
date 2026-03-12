@@ -19,6 +19,10 @@ import {
   PieChart,
   Percent,
   Activity,
+  FileText,
+  UserCheck,
+  ArrowUpRight,
+  ArrowDownRight,
 } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { getFinnhubApiKey, hasFinnhubApiKey } from "../utils/finnhubManager";
@@ -101,6 +105,63 @@ interface EarningsSurprise {
   surprise_percent: number | null;
 }
 
+interface DividendInfo {
+  symbol: string;
+  ex_date: string | null;
+  payment_date: string | null;
+  record_date: string | null;
+  declaration_date: string | null;
+  amount: number | null;
+  frequency: string | null;
+  dividend_type: string | null;
+}
+
+interface InsiderTransaction {
+  symbol: string;
+  name: string | null;
+  share: number | null;
+  change: number | null;
+  filing_date: string | null;
+  transaction_date: string | null;
+  transaction_code: string | null;
+  transaction_price: number | null;
+}
+
+interface SecFiling {
+  symbol: string;
+  access_number: string | null;
+  form: string | null;
+  filed_date: string | null;
+  accepted_date: string | null;
+  report_url: string | null;
+  filing_url: string | null;
+}
+
+interface PricePerformance {
+  symbol: string;
+  current_price: number | null;
+  change_1d: number | null;
+  change_1d_percent: number | null;
+  change_1w: number | null;
+  change_1w_percent: number | null;
+  change_1m: number | null;
+  change_1m_percent: number | null;
+  change_3m: number | null;
+  change_3m_percent: number | null;
+  change_ytd: number | null;
+  change_ytd_percent: number | null;
+  change_1y: number | null;
+  change_1y_percent: number | null;
+}
+
+interface ShortInterest {
+  symbol: string;
+  short_interest: number | null;
+  short_ratio: number | null;
+  short_percent_of_float: number | null;
+  shares_short_prior_month: number | null;
+}
+
 interface ChartDataPoint {
   date: string;
   price: number;
@@ -119,6 +180,12 @@ export default function BasicFinancials() {
   const [companyProfile, setCompanyProfile] = useState<CompanyProfile | null>(null);
   const [peers, setPeers] = useState<string[]>([]);
   const [earningsSurprises, setEarningsSurprises] = useState<EarningsSurprise[]>([]);
+  const [dividendHistory, setDividendHistory] = useState<DividendInfo[]>([]);
+  const [insiderTransactions, setInsiderTransactions] = useState<InsiderTransaction[]>([]);
+  const [secFilings, setSecFilings] = useState<SecFiling[]>([]);
+  const [pricePerformance, setPricePerformance] = useState<PricePerformance | null>(null);
+  const [shortInterest, setShortInterest] = useState<ShortInterest | null>(null);
+  const [earningsDate, setEarningsDate] = useState<string | null>(null);
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -215,6 +282,12 @@ export default function BasicFinancials() {
         profileData,
         peersData,
         earningsData,
+        dividendsData,
+        insidersData,
+        filingsData,
+        perfData,
+        shortData,
+        earningsDateData,
       ] = await Promise.allSettled([
         invoke<BasicFinancials>("fetch_finnhub_basic_financials", { apiKey, symbol: sym }),
         invoke<PriceTarget>("fetch_finnhub_price_target", { apiKey, symbol: sym }),
@@ -223,6 +296,12 @@ export default function BasicFinancials() {
         invoke<CompanyProfile>("fetch_finnhub_company_profile", { apiKey, symbol: sym }),
         invoke<string[]>("fetch_finnhub_peers", { apiKey, symbol: sym }),
         invoke<EarningsSurprise[]>("fetch_finnhub_earnings_surprises", { apiKey, symbol: sym }),
+        invoke<DividendInfo[]>("fetch_finnhub_dividends", { apiKey, symbol: sym }),
+        invoke<InsiderTransaction[]>("fetch_finnhub_insider_transactions", { apiKey, symbol: sym }),
+        invoke<SecFiling[]>("fetch_finnhub_sec_filings", { apiKey, symbol: sym }),
+        invoke<PricePerformance>("fetch_price_performance", { symbol: sym }),
+        invoke<ShortInterest>("fetch_short_interest", { symbol: sym }),
+        invoke<string | null>("fetch_earnings_date", { symbol: sym }),
       ]);
 
       if (financialsData.status === "fulfilled") {
@@ -244,8 +323,26 @@ export default function BasicFinancials() {
       if (peersData.status === "fulfilled") {
         setPeers(peersData.value);
       }
+      if (dividendsData.status === "fulfilled") {
+        setDividendHistory(dividendsData.value);
+      }
       if (earningsData.status === "fulfilled") {
         setEarningsSurprises(earningsData.value);
+      }
+      if (insidersData.status === "fulfilled") {
+        setInsiderTransactions(insidersData.value);
+      }
+      if (filingsData.status === "fulfilled") {
+        setSecFilings(filingsData.value);
+      }
+      if (perfData.status === "fulfilled") {
+        setPricePerformance(perfData.value);
+      }
+      if (shortData.status === "fulfilled") {
+        setShortInterest(shortData.value);
+      }
+      if (earningsDateData.status === "fulfilled") {
+        setEarningsDate(earningsDateData.value);
       }
 
       // Fetch chart data
@@ -486,19 +583,31 @@ export default function BasicFinancials() {
           >
             <div style={{ display: "flex", alignItems: "flex-start", gap: "20px" }}>
               {companyProfile?.logo && (
-                <img
-                  src={companyProfile.logo}
-                  alt={`${symbol} logo`}
+                <div
                   style={{
                     width: "64px",
                     height: "64px",
                     borderRadius: "12px",
-                    objectFit: "contain",
-                    backgroundColor: "white",
-                    padding: "8px",
+                    backgroundColor: "var(--bg-primary)",
+                    border: "1px solid var(--border-color)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    overflow: "hidden",
+                    flexShrink: 0,
                   }}
-                  onError={(e) => (e.currentTarget.style.display = "none")}
-                />
+                >
+                  <img
+                    src={companyProfile.logo}
+                    alt={`${symbol} logo`}
+                    style={{
+                      maxWidth: "48px",
+                      maxHeight: "48px",
+                      objectFit: "contain",
+                    }}
+                    onError={(e) => (e.currentTarget.parentElement!.style.display = "none")}
+                  />
+                </div>
               )}
               <div style={{ flex: 1 }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: "12px", marginBottom: "4px" }}>
@@ -773,7 +882,7 @@ export default function BasicFinancials() {
                 <DollarSign size={18} />
                 Dividends
               </h3>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginBottom: dividendHistory.length > 0 ? "16px" : 0 }}>
                 <MetricItem label="Dividend Yield" value={formatPercent(financials?.dividend_yield ? financials.dividend_yield / 100 : null)} />
                 <MetricItem label="Payout Ratio" value={formatPercent(financials?.payout_ratio, true)} />
                 <MetricItem 
@@ -781,7 +890,93 @@ export default function BasicFinancials() {
                   value={formatPercent(financials?.dividend_growth_5y, true)}
                   color={financials?.dividend_growth_5y && financials.dividend_growth_5y > 0 ? "#10B981" : undefined}
                 />
+                {dividendHistory.length > 0 && dividendHistory[0].amount && (
+                  <MetricItem label="Last Dividend" value={`$${dividendHistory[0].amount.toFixed(4)}`} />
+                )}
               </div>
+              
+              {/* Upcoming/Recent Dividend Dates */}
+              {dividendHistory.length > 0 && (() => {
+                const today = new Date().toISOString().split('T')[0];
+                const upcomingDividends = dividendHistory.filter(d => d.ex_date && d.ex_date >= today);
+                const nextDividend = upcomingDividends.length > 0 ? upcomingDividends[upcomingDividends.length - 1] : null;
+                
+                return (
+                  <>
+                    {nextDividend && (
+                      <div style={{ 
+                        padding: "12px", 
+                        backgroundColor: "rgba(16, 185, 129, 0.1)", 
+                        borderRadius: "8px", 
+                        marginBottom: "12px",
+                        border: "1px solid rgba(16, 185, 129, 0.2)",
+                      }}>
+                        <p style={{ fontSize: "12px", color: "#10B981", fontWeight: "600", marginBottom: "8px" }}>
+                          Upcoming Dividend
+                        </p>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                          {nextDividend.ex_date && (
+                            <div>
+                              <p style={{ fontSize: "11px", color: "var(--text-secondary)" }}>Ex-Dividend Date</p>
+                              <p style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-primary)" }}>{nextDividend.ex_date}</p>
+                            </div>
+                          )}
+                          {nextDividend.payment_date && (
+                            <div>
+                              <p style={{ fontSize: "11px", color: "var(--text-secondary)" }}>Payment Date</p>
+                              <p style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-primary)" }}>{nextDividend.payment_date}</p>
+                            </div>
+                          )}
+                          {nextDividend.amount && (
+                            <div>
+                              <p style={{ fontSize: "11px", color: "var(--text-secondary)" }}>Amount</p>
+                              <p style={{ fontSize: "13px", fontWeight: "600", color: "#10B981" }}>${nextDividend.amount.toFixed(4)}</p>
+                            </div>
+                          )}
+                          {nextDividend.frequency && (
+                            <div>
+                              <p style={{ fontSize: "11px", color: "var(--text-secondary)" }}>Frequency</p>
+                              <p style={{ fontSize: "13px", fontWeight: "500", color: "var(--text-primary)" }}>{nextDividend.frequency}</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Dividend History */}
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "8px", fontWeight: "600" }}>
+                      Recent Dividend History
+                    </p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "150px", overflowY: "auto" }}>
+                      {dividendHistory.slice(0, 6).map((div, idx) => (
+                        <div
+                          key={idx}
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            padding: "8px 10px",
+                            backgroundColor: "var(--bg-primary)",
+                            borderRadius: "6px",
+                            fontSize: "12px",
+                          }}
+                        >
+                          <span style={{ color: "var(--text-secondary)" }}>{div.ex_date || "—"}</span>
+                          <span style={{ color: "var(--text-primary)", fontWeight: "600" }}>
+                            ${div.amount?.toFixed(4) || "—"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
+              
+              {dividendHistory.length === 0 && !financials?.dividend_yield && (
+                <p style={{ fontSize: "13px", color: "var(--text-secondary)", fontStyle: "italic" }}>
+                  No dividend data available
+                </p>
+              )}
             </div>
 
             {/* Price Targets Card */}
@@ -975,6 +1170,338 @@ export default function BasicFinancials() {
                       </div>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* Price Performance Card */}
+            {pricePerformance && (
+              <div
+                style={{
+                  backgroundColor: "var(--bg-secondary)",
+                  borderRadius: "12px",
+                  border: "1px solid var(--border-color)",
+                  padding: "20px",
+                  overflow: "hidden",
+                }}
+              >
+                <h3 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Activity size={18} />
+                  Price Performance
+                </h3>
+                
+                {/* Upcoming Earnings Alert */}
+                {earningsDate && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      padding: "12px 14px",
+                      backgroundColor: "rgba(139, 92, 246, 0.15)",
+                      borderRadius: "8px",
+                      marginBottom: "16px",
+                      border: "1px solid rgba(139, 92, 246, 0.3)",
+                    }}
+                  >
+                    <Calendar size={18} style={{ color: "#8B5CF6", flexShrink: 0 }} />
+                    <div style={{ overflow: "hidden" }}>
+                      <p style={{ margin: 0, fontSize: "13px", fontWeight: "600", color: "#8B5CF6" }}>
+                        Upcoming Earnings
+                      </p>
+                      <p style={{ margin: 0, fontSize: "14px", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {earningsDate}
+                      </p>
+                    </div>
+                  </div>
+                )}
+                
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "10px" }}>
+                  {[
+                    { label: "1 Day", value: pricePerformance.change_1d_percent },
+                    { label: "1 Week", value: pricePerformance.change_1w_percent },
+                    { label: "1 Month", value: pricePerformance.change_1m_percent },
+                    { label: "3 Months", value: pricePerformance.change_3m_percent },
+                    { label: "YTD", value: pricePerformance.change_ytd_percent },
+                    { label: "1 Year", value: pricePerformance.change_1y_percent },
+                  ].map((item) => (
+                    <div
+                      key={item.label}
+                      style={{
+                        padding: "10px 8px",
+                        backgroundColor: "var(--bg-primary)",
+                        borderRadius: "8px",
+                        textAlign: "center",
+                        minWidth: 0,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <p style={{ margin: 0, fontSize: "10px", color: "var(--text-secondary)", marginBottom: "4px", whiteSpace: "nowrap" }}>
+                        {item.label}
+                      </p>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "2px" }}>
+                        {item.value !== null && item.value !== undefined ? (
+                          <>
+                            {item.value >= 0 ? (
+                              <ArrowUpRight size={12} style={{ color: "#10B981", flexShrink: 0 }} />
+                            ) : (
+                              <ArrowDownRight size={12} style={{ color: "#EF4444", flexShrink: 0 }} />
+                            )}
+                            <span
+                              style={{
+                                fontSize: "13px",
+                                fontWeight: "600",
+                                color: item.value >= 0 ? "#10B981" : "#EF4444",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {item.value >= 0 ? "+" : ""}{item.value.toFixed(2)}%
+                            </span>
+                          </>
+                        ) : (
+                          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>—</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Short Interest Card */}
+            {shortInterest && (shortInterest.short_interest || shortInterest.short_ratio || shortInterest.short_percent_of_float) && (
+              <div
+                style={{
+                  backgroundColor: "var(--bg-secondary)",
+                  borderRadius: "12px",
+                  border: "1px solid var(--border-color)",
+                  padding: "20px",
+                }}
+              >
+                <h3 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Percent size={18} />
+                  Short Interest
+                </h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "16px" }}>
+                  <div style={{ padding: "14px", backgroundColor: "var(--bg-primary)", borderRadius: "8px" }}>
+                    <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Shares Short</p>
+                    <p style={{ margin: 0, fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>
+                      {shortInterest.short_interest ? `${(shortInterest.short_interest / 1e6).toFixed(2)}M` : "—"}
+                    </p>
+                  </div>
+                  <div style={{ padding: "14px", backgroundColor: "var(--bg-primary)", borderRadius: "8px" }}>
+                    <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Short Ratio</p>
+                    <p style={{ margin: 0, fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>
+                      {shortInterest.short_ratio?.toFixed(2) ?? "—"}
+                    </p>
+                  </div>
+                  <div style={{ padding: "14px", backgroundColor: "var(--bg-primary)", borderRadius: "8px" }}>
+                    <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>% of Float</p>
+                    <p style={{ margin: 0, fontSize: "18px", fontWeight: "600", color: shortInterest.short_percent_of_float && shortInterest.short_percent_of_float > 0.1 ? "#F59E0B" : "var(--text-primary)" }}>
+                      {shortInterest.short_percent_of_float ? `${(shortInterest.short_percent_of_float * 100).toFixed(2)}%` : "—"}
+                    </p>
+                  </div>
+                  <div style={{ padding: "14px", backgroundColor: "var(--bg-primary)", borderRadius: "8px" }}>
+                    <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>Prior Month</p>
+                    <p style={{ margin: 0, fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>
+                      {shortInterest.shares_short_prior_month ? `${(shortInterest.shares_short_prior_month / 1e6).toFixed(2)}M` : "—"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* SEC Filings Card */}
+            {secFilings.length > 0 && (
+              <div
+                style={{
+                  backgroundColor: "var(--bg-secondary)",
+                  borderRadius: "12px",
+                  border: "1px solid var(--border-color)",
+                  padding: "20px",
+                }}
+              >
+                <h3 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <FileText size={18} />
+                  SEC Filings
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "300px", overflowY: "auto" }}>
+                  {secFilings.slice(0, 10).map((filing, idx) => {
+                    const getFormDescription = (form: string | null): string => {
+                      if (!form) return "";
+                      if (form.includes("10-K")) return "Annual Report";
+                      if (form.includes("10-Q")) return "Quarterly Report";
+                      if (form.includes("8-K")) return "Current Report";
+                      if (form === "4") return "Insider Transaction";
+                      if (form === "3") return "Initial Ownership";
+                      if (form === "5") return "Annual Ownership";
+                      if (form.includes("DEF 14A")) return "Proxy Statement";
+                      if (form.includes("13F")) return "Holdings Report";
+                      return "";
+                    };
+                    
+                    const formDesc = getFormDescription(filing.form);
+                    const fileUrl = filing.report_url || filing.filing_url;
+                    
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => {
+                          if (fileUrl) {
+                            navigate(`/sec-filing?url=${encodeURIComponent(fileUrl)}&symbol=${symbol}&form=${encodeURIComponent(filing.form || "")}&date=${encodeURIComponent(filing.filed_date || "")}`);
+                          }
+                        }}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          padding: "14px 16px",
+                          backgroundColor: "var(--bg-primary)",
+                          borderRadius: "8px",
+                          textDecoration: "none",
+                          transition: "all 0.15s ease",
+                          border: "1px solid transparent",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          width: "100%",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = "var(--accent)";
+                          e.currentTarget.style.backgroundColor = "color-mix(in srgb, var(--accent) 10%, var(--bg-primary))";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = "transparent";
+                          e.currentTarget.style.backgroundColor = "var(--bg-primary)";
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "14px", minWidth: 0 }}>
+                          <span
+                            style={{
+                              padding: "6px 10px",
+                              borderRadius: "6px",
+                              backgroundColor: filing.form?.includes("10-K") ? "rgba(139, 92, 246, 0.2)" :
+                                             filing.form?.includes("10-Q") ? "rgba(16, 185, 129, 0.2)" :
+                                             filing.form?.includes("8-K") ? "rgba(245, 158, 11, 0.2)" :
+                                             filing.form === "4" || filing.form === "3" || filing.form === "5" ? "rgba(59, 130, 246, 0.2)" :
+                                             "var(--bg-secondary)",
+                              color: filing.form?.includes("10-K") ? "#8B5CF6" :
+                                    filing.form?.includes("10-Q") ? "#10B981" :
+                                    filing.form?.includes("8-K") ? "#F59E0B" :
+                                    filing.form === "4" || filing.form === "3" || filing.form === "5" ? "#3B82F6" :
+                                    "var(--text-secondary)",
+                              fontSize: "13px",
+                              fontWeight: "700",
+                              minWidth: "fit-content",
+                            }}
+                          >
+                            {filing.form || "Filing"}
+                          </span>
+                          <div style={{ minWidth: 0 }}>
+                            <p style={{ margin: 0, fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {formDesc || "SEC Filing"}
+                            </p>
+                            <p style={{ margin: "2px 0 0", fontSize: "12px", color: "var(--text-secondary)" }}>
+                              Filed: {filing.filed_date || "—"}
+                            </p>
+                          </div>
+                        </div>
+                        <ExternalLink size={16} style={{ color: "var(--accent)", flexShrink: 0 }} />
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Insider Transactions Card */}
+            {insiderTransactions.length > 0 && (
+              <div
+                style={{
+                  backgroundColor: "var(--bg-secondary)",
+                  borderRadius: "12px",
+                  border: "1px solid var(--border-color)",
+                  padding: "20px",
+                }}
+              >
+                <h3 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <UserCheck size={18} />
+                  Insider Transactions
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "300px", overflowY: "auto" }}>
+                  {insiderTransactions.slice(0, 10).map((tx, idx) => {
+                    const isBuy = tx.change && tx.change > 0;
+                    const transactionTypes: Record<string, string> = {
+                      P: "Purchase",
+                      S: "Sale",
+                      A: "Award",
+                      D: "Disposition",
+                      G: "Gift",
+                      F: "Tax Payment",
+                      M: "Option Exercise",
+                      C: "Conversion",
+                      X: "Exercise Expired",
+                    };
+                    const txType = tx.transaction_code ? transactionTypes[tx.transaction_code] || tx.transaction_code : "—";
+                    
+                    return (
+                      <div
+                        key={idx}
+                        style={{
+                          padding: "12px 14px",
+                          backgroundColor: "var(--bg-primary)",
+                          borderRadius: "8px",
+                          borderLeft: `3px solid ${isBuy ? "#10B981" : "#EF4444"}`,
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "6px" }}>
+                          <div>
+                            <p style={{ margin: 0, fontSize: "14px", fontWeight: "500", color: "var(--text-primary)" }}>
+                              {tx.name || "Unknown Insider"}
+                            </p>
+                            <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)" }}>
+                              {tx.transaction_date || tx.filing_date || "—"}
+                            </p>
+                          </div>
+                          <span
+                            style={{
+                              padding: "3px 8px",
+                              borderRadius: "4px",
+                              backgroundColor: isBuy ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
+                              color: isBuy ? "#10B981" : "#EF4444",
+                              fontSize: "11px",
+                              fontWeight: "600",
+                            }}
+                          >
+                            {txType}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", gap: "16px", fontSize: "13px" }}>
+                          <div>
+                            <span style={{ color: "var(--text-secondary)" }}>Shares: </span>
+                            <span style={{ color: isBuy ? "#10B981" : "#EF4444", fontWeight: "600" }}>
+                              {tx.change ? `${isBuy ? "+" : ""}${tx.change.toLocaleString()}` : "—"}
+                            </span>
+                          </div>
+                          {tx.transaction_price && (
+                            <div>
+                              <span style={{ color: "var(--text-secondary)" }}>Price: </span>
+                              <span style={{ color: "var(--text-primary)", fontWeight: "500" }}>
+                                ${tx.transaction_price.toFixed(2)}
+                              </span>
+                            </div>
+                          )}
+                          {tx.share && (
+                            <div>
+                              <span style={{ color: "var(--text-secondary)" }}>Total: </span>
+                              <span style={{ color: "var(--text-primary)", fontWeight: "500" }}>
+                                {tx.share.toLocaleString()}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

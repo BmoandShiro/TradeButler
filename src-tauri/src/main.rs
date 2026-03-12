@@ -132,6 +132,14 @@ fn main() {
             commands::fetch_finnhub_company_profile,
             commands::fetch_finnhub_peers,
             commands::fetch_finnhub_earnings_surprises,
+            commands::fetch_finnhub_dividends,
+            commands::fetch_finnhub_insider_transactions,
+            commands::fetch_finnhub_sec_filings,
+            commands::fetch_finnhub_ipo_calendar,
+            commands::fetch_price_performance,
+            commands::fetch_short_interest,
+            commands::fetch_earnings_date,
+            commands::fetch_sec_filing_content,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
