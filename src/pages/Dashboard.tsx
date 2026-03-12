@@ -42,6 +42,7 @@ import {
   LayoutDashboard,
   ListOrdered,
   Save,
+  RefreshCw,
 } from "lucide-react";
 import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY, DASHBOARD_LOCKED_ROW_HEIGHT_KEY, DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY, DASHBOARD_METRICS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY, DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY, DASHBOARD_PADDING_KEY, DASHBOARD_SPLIT_GRID_KEY, DASHBOARD_SECTIONS_ON_TOP_KEY, DEFAULT_LAYOUT, DEFAULT_COLOR_RANGE, COLOR_RANGE_KEY } from "../components/MetricsConfig";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
@@ -359,6 +360,7 @@ const DASHBOARD_DISPLAY_ORDER_KEY = "tradebutler_dashboard_display_order";
 const DASHBOARD_LAYOUT_PRESETS_KEY = "tradebutler_dashboard_layout_presets";
 const DASHBOARD_SECTION_SIZES_KEY = "tradebutler_dashboard_section_sizes";
 const OPEN_POSITIONS_DISPLAY_MODE_KEY = "tradebutler_open_positions_display_mode";
+const OPEN_POSITIONS_REFRESH_INTERVAL_KEY = "tradebutler_open_positions_refresh_interval";
 const METRIC_CARDS_ORDER_KEY = "tradebutler_metric_cards_order";
 const METRIC_INSTANCES_KEY = "tradebutler_metric_instances";
 const DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY = "tradebutler_dashboard_locked_column_widths";
@@ -2141,30 +2143,34 @@ export default function Dashboard() {
   }, []);
 
   // Fetch current prices for open position symbols (Real/Paper only)
-  useEffect(() => {
+  const fetchOpenPositionQuotes = async (showLoading = true) => {
     if (dataMode === "sandbox" || openPositionGroups.length === 0) {
       setOpenPositionQuotes({});
       return;
     }
     const symbols = [...new Set(openPositionGroups.map((g) => g.entry_trade.symbol))];
-    let cancelled = false;
-    const fetchQuotes = async () => {
-      const next: Record<string, number | null> = {};
-      for (const symbol of symbols) {
-        if (cancelled) return;
-        try {
-          const quote = await invoke<{ current_price: number | null }>("fetch_stock_quote", { symbol });
-          if (!cancelled) next[symbol] = quote.current_price;
-        } catch {
-          if (!cancelled) next[symbol] = null;
-        }
+    if (showLoading) setIsRefreshingQuotes(true);
+    const next: Record<string, number | null> = {};
+    for (const symbol of symbols) {
+      try {
+        const quote = await invoke<{ current_price: number | null }>("fetch_stock_quote", { symbol });
+        next[symbol] = quote.current_price;
+      } catch {
+        next[symbol] = null;
       }
-      if (!cancelled) setOpenPositionQuotes((prev) => ({ ...prev, ...next }));
-    };
-    fetchQuotes();
-    return () => {
-      cancelled = true;
-    };
+    }
+    setOpenPositionQuotes((prev) => ({ ...prev, ...next }));
+    setLastQuoteRefresh(new Date());
+    if (showLoading) setIsRefreshingQuotes(false);
+  };
+
+  // Initial fetch and when positions change
+  useEffect(() => {
+    if (dataMode === "sandbox" || openPositionGroups.length === 0) {
+      setOpenPositionQuotes({});
+      return;
+    }
+    fetchOpenPositionQuotes(true);
   }, [dataMode, openPositionGroups]);
 
   const [strategyFilterForMetrics, setStrategyFilterForMetrics] = useState<Record<string, number | null>>(() => {
@@ -2429,6 +2435,29 @@ export default function Dashboard() {
     if (saved === "compact" || saved === "card") return saved;
     return "card";
   });
+  const [openPositionsRefreshInterval, setOpenPositionsRefreshInterval] = useState<number>(() => {
+    const saved = localStorage.getItem(OPEN_POSITIONS_REFRESH_INTERVAL_KEY);
+    if (saved) {
+      const parsed = parseInt(saved, 10);
+      if (!isNaN(parsed) && [0, 1, 2, 3, 5, 10, 15, 30, 60].includes(parsed)) return parsed;
+    }
+    return 0; // 0 = manual
+  });
+  const [isRefreshingQuotes, setIsRefreshingQuotes] = useState(false);
+  const [lastQuoteRefresh, setLastQuoteRefresh] = useState<Date | null>(null);
+
+  // Auto-refresh interval for open position quotes
+  useEffect(() => {
+    if (dataMode === "sandbox" || openPositionGroups.length === 0 || openPositionsRefreshInterval === 0) {
+      return;
+    }
+    const intervalMs = openPositionsRefreshInterval * 60 * 1000;
+    const intervalId = setInterval(() => {
+      fetchOpenPositionQuotes(false);
+    }, intervalMs);
+    return () => clearInterval(intervalId);
+  }, [dataMode, openPositionGroups, openPositionsRefreshInterval]);
+
   const [metricCardOrder, setMetricCardOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem(METRIC_CARDS_ORDER_KEY);
     if (saved) {
@@ -5601,7 +5630,36 @@ export default function Dashboard() {
                         <Activity size={20} color="var(--accent)" />
                         <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Open Positions</h2>
                       </div>
-                      <div style={{ position: "relative" }}>
+                      <div style={{ position: "relative", display: "flex", alignItems: "center", gap: "4px" }}>
+                        {dataMode !== "sandbox" && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              fetchOpenPositionQuotes(true);
+                            }}
+                            onMouseDown={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                            }}
+                            disabled={isRefreshingQuotes}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              padding: "4px",
+                              cursor: isRefreshingQuotes ? "not-allowed" : "pointer",
+                              color: "var(--text-secondary)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              borderRadius: "4px",
+                              opacity: isRefreshingQuotes ? 0.5 : 1,
+                            }}
+                            title={lastQuoteRefresh ? `Refresh prices (last: ${format(lastQuoteRefresh, "h:mm:ss a")})` : "Refresh prices"}
+                          >
+                            <RefreshCw size={16} style={{ animation: isRefreshingQuotes ? "spin 1s linear infinite" : "none" }} />
+                          </button>
+                        )}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -5815,6 +5873,50 @@ export default function Dashboard() {
                                   </button>
                                 </div>
                               </div>
+                              {dataMode !== "sandbox" && (
+                                <>
+                                  <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                                  <div style={{ padding: "4px 0" }}>
+                                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>Auto-Refresh Prices</div>
+                                    <select
+                                      value={openPositionsRefreshInterval}
+                                      onChange={(e) => {
+                                        e.stopPropagation();
+                                        const val = parseInt(e.target.value, 10);
+                                        setOpenPositionsRefreshInterval(val);
+                                        localStorage.setItem(OPEN_POSITIONS_REFRESH_INTERVAL_KEY, String(val));
+                                      }}
+                                      onClick={(e) => e.stopPropagation()}
+                                      style={{
+                                        width: "100%",
+                                        padding: "6px 8px",
+                                        fontSize: "13px",
+                                        background: "var(--bg-tertiary)",
+                                        border: "1px solid var(--border-color)",
+                                        borderRadius: "4px",
+                                        color: "var(--text-primary)",
+                                        cursor: "pointer",
+                                        outline: "none",
+                                      }}
+                                    >
+                                      <option value={0} style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}>Manual</option>
+                                      <option value={1} style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}>1 min</option>
+                                      <option value={2} style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}>2 min</option>
+                                      <option value={3} style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}>3 min</option>
+                                      <option value={5} style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}>5 min</option>
+                                      <option value={10} style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}>10 min</option>
+                                      <option value={15} style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}>15 min</option>
+                                      <option value={30} style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}>30 min</option>
+                                      <option value={60} style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}>60 min</option>
+                                    </select>
+                                    {lastQuoteRefresh && (
+                                      <div style={{ fontSize: "10px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                                        Last refresh: {format(lastQuoteRefresh, "h:mm:ss a")}
+                                      </div>
+                                    )}
+                                  </div>
+                                </>
+                              )}
                             </div>
                           </div>,
                           document.body
@@ -5831,7 +5933,7 @@ export default function Dashboard() {
                           <div
                             style={{
                               display: "grid",
-                              gridTemplateColumns: "minmax(60px, 1fr) minmax(50px, auto) minmax(56px, auto) minmax(70px, auto) minmax(70px, auto) minmax(80px, auto) minmax(80px, auto) minmax(72px, auto) minmax(48px, auto)",
+                              gridTemplateColumns: "minmax(60px, 1fr) minmax(50px, auto) minmax(56px, auto) minmax(70px, auto) minmax(70px, auto) minmax(80px, auto) minmax(56px, auto) minmax(80px, auto) minmax(72px, auto) minmax(48px, auto)",
                               gap: "0 12px",
                               alignItems: "center",
                               fontSize: "12px",
@@ -5848,6 +5950,7 @@ export default function Dashboard() {
                             <span>Avg</span>
                             <span>Current</span>
                             <span>Unrealized</span>
+                            <span>%</span>
                             <span>Realized</span>
                             <span>Entry</span>
                             <span>#</span>
@@ -5870,6 +5973,12 @@ export default function Dashboard() {
                                   ? (currentPrice - avgPrice) * qty
                                   : (avgPrice - currentPrice) * qty
                                 : null;
+                            const unrealizedPct =
+                              currentPrice != null && currentPrice > 0 && avgPrice > 0
+                                ? isLong
+                                  ? ((currentPrice - avgPrice) / avgPrice) * 100
+                                  : ((avgPrice - currentPrice) / avgPrice) * 100
+                                : null;
                             return (
                               <div
                                 key={group.entry_trade.id}
@@ -5886,7 +5995,7 @@ export default function Dashboard() {
                                 }}
                                 style={{
                                   display: "grid",
-                                  gridTemplateColumns: "minmax(60px, 1fr) minmax(50px, auto) minmax(56px, auto) minmax(70px, auto) minmax(70px, auto) minmax(80px, auto) minmax(80px, auto) minmax(72px, auto) minmax(48px, auto)",
+                                  gridTemplateColumns: "minmax(60px, 1fr) minmax(50px, auto) minmax(56px, auto) minmax(70px, auto) minmax(70px, auto) minmax(80px, auto) minmax(56px, auto) minmax(80px, auto) minmax(72px, auto) minmax(48px, auto)",
                                   gap: "0 12px",
                                   alignItems: "center",
                                   padding: "8px 12px",
@@ -5918,6 +6027,14 @@ export default function Dashboard() {
                                   }}
                                 >
                                   {unrealizedPnl != null ? (unrealizedPnl >= 0 ? "+" : "") + `$${formatWithCommas(unrealizedPnl, { decimals: 2 })}` : "—"}
+                                </span>
+                                <span
+                                  style={{
+                                    fontWeight: "600",
+                                    color: unrealizedPct != null ? (unrealizedPct >= 0 ? "var(--profit)" : "var(--loss)") : "var(--text-secondary)",
+                                  }}
+                                >
+                                  {unrealizedPct != null ? (unrealizedPct >= 0 ? "+" : "") + `${unrealizedPct.toFixed(2)}%` : "—"}
                                 </span>
                                 <span
                                   style={{
@@ -5953,6 +6070,12 @@ export default function Dashboard() {
                               ? isLong
                                 ? (currentPrice - avgPrice) * qty
                                 : (avgPrice - currentPrice) * qty
+                              : null;
+                          const unrealizedPct =
+                            currentPrice != null && currentPrice > 0 && avgPrice > 0
+                              ? isLong
+                                ? ((currentPrice - avgPrice) / avgPrice) * 100
+                                : ((avgPrice - currentPrice) / avgPrice) * 100
                               : null;
                           return (
                             <div
@@ -6002,6 +6125,11 @@ export default function Dashboard() {
                                       }}
                                     >
                                       Unrealized: {unrealizedPnl >= 0 ? "+" : ""}${formatWithCommas(unrealizedPnl, { decimals: 2 })}
+                                      {unrealizedPct != null && (
+                                        <span style={{ marginLeft: "6px", fontSize: "13px" }}>
+                                          ({unrealizedPct >= 0 ? "+" : ""}{unrealizedPct.toFixed(2)}%)
+                                        </span>
+                                      )}
                                     </span>
                                   )}
                                   {group.total_pnl !== 0 && (
