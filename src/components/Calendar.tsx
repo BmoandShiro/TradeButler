@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useNavigate } from "react-router-dom";
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isToday } from "date-fns";
-import { ChevronLeft, ChevronRight, Heart, BookOpen } from "lucide-react";
+import { ChevronLeft, ChevronRight, Heart, BookOpen, DollarSign, TrendingUp, Calendar as CalendarIcon, RefreshCw, Settings } from "lucide-react";
 import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import type { DataMode } from "../utils/dataMode";
 import { loadSandboxState, getSandboxEmotionalStates } from "../utils/sandboxStore";
@@ -27,6 +27,26 @@ interface CalendarEmotionalState {
   intensity: number;
 }
 
+interface CalendarEvent {
+  date: string;
+  symbol: string | null;
+  event_type: string;
+  title: string;
+  details: string | null;
+}
+
+interface EconomicEvent {
+  date: string;
+  event_type: string;
+  title: string;
+  description: string | null;
+  importance: string;
+}
+
+const CALENDAR_SHOW_EARNINGS_KEY = "tradebutler_calendar_show_earnings";
+const CALENDAR_SHOW_DIVIDENDS_KEY = "tradebutler_calendar_show_dividends";
+const CALENDAR_SHOW_ECONOMIC_KEY = "tradebutler_calendar_show_economic";
+
 export default function Calendar() {
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -38,6 +58,37 @@ export default function Calendar() {
   const [openJournalPage, setOpenJournalPage] = useState<number>(0);
   const navigate = useNavigate();
 
+  // New state for calendar events
+  const [calendarEvents, setCalendarEvents] = useState<Record<string, CalendarEvent[]>>({});
+  const [economicEvents, setEconomicEvents] = useState<Record<string, EconomicEvent[]>>({});
+  const [loadingEvents, setLoadingEvents] = useState(false);
+  
+  // Toggle state for showing different event types
+  const [showEarnings, setShowEarnings] = useState(() => {
+    const saved = localStorage.getItem(CALENDAR_SHOW_EARNINGS_KEY);
+    return saved ? JSON.parse(saved) : true;
+  });
+  const [showDividends, setShowDividends] = useState(() => {
+    const saved = localStorage.getItem(CALENDAR_SHOW_DIVIDENDS_KEY);
+    return saved ? JSON.parse(saved) : true;
+  });
+  const [showEconomicEvents, setShowEconomicEvents] = useState(() => {
+    const saved = localStorage.getItem(CALENDAR_SHOW_ECONOMIC_KEY);
+    return saved ? JSON.parse(saved) : true;
+  });
+  const [showEventSettings, setShowEventSettings] = useState(false);
+
+  // Save toggle settings
+  useEffect(() => {
+    localStorage.setItem(CALENDAR_SHOW_EARNINGS_KEY, JSON.stringify(showEarnings));
+  }, [showEarnings]);
+  useEffect(() => {
+    localStorage.setItem(CALENDAR_SHOW_DIVIDENDS_KEY, JSON.stringify(showDividends));
+  }, [showDividends]);
+  useEffect(() => {
+    localStorage.setItem(CALENDAR_SHOW_ECONOMIC_KEY, JSON.stringify(showEconomicEvents));
+  }, [showEconomicEvents]);
+
   useEffect(() => {
     const unsub = subscribeToDataMode(setDataMode);
     return unsub;
@@ -46,6 +97,69 @@ export default function Calendar() {
   useEffect(() => {
     loadCalendarData();
   }, [currentDate, dataMode]);
+
+  // Fetch calendar events (earnings, dividends)
+  const fetchCalendarEvents = useCallback(async () => {
+    if (dataMode === "sandbox") return;
+    
+    setLoadingEvents(true);
+    try {
+      // Get watched symbols from news settings (shared with News page)
+      const savedSymbols = localStorage.getItem("tradebutler_news_watched_symbols");
+      const watchedSymbols: string[] = savedSymbols ? JSON.parse(savedSymbols) : [];
+      
+      // Get open position symbols
+      const paperOnly = dataMode === "paper";
+      let openSymbols: string[] = [];
+      try {
+        const groups = await invoke<Array<{ entry_trade: { symbol: string }; final_quantity: number }>>(
+          "get_position_groups",
+          { pairingMethod: "fifo", startDate: null, endDate: null, paperOnly, includePaper: !paperOnly }
+        );
+        openSymbols = groups
+          .filter(g => g.final_quantity !== 0)
+          .map(g => g.entry_trade.symbol.toUpperCase());
+      } catch (e) {
+        console.error("Failed to fetch open positions:", e);
+      }
+      
+      const allSymbols = [...new Set([...watchedSymbols, ...openSymbols])];
+      
+      if (allSymbols.length > 0) {
+        const events = await invoke<CalendarEvent[]>("fetch_calendar_events_batch", { symbols: allSymbols });
+        const eventsMap: Record<string, CalendarEvent[]> = {};
+        events.forEach(event => {
+          if (!eventsMap[event.date]) eventsMap[event.date] = [];
+          eventsMap[event.date].push(event);
+        });
+        setCalendarEvents(eventsMap);
+      }
+      
+      // Fetch economic events for current month
+      const monthStart = startOfMonth(currentDate);
+      const monthEnd = endOfMonth(currentDate);
+      const economicData = await invoke<EconomicEvent[]>("get_economic_calendar_range", {
+        startDate: format(monthStart, "yyyy-MM-dd"),
+        endDate: format(monthEnd, "yyyy-MM-dd"),
+      });
+      
+      const econMap: Record<string, EconomicEvent[]> = {};
+      economicData.forEach(event => {
+        if (!econMap[event.date]) econMap[event.date] = [];
+        econMap[event.date].push(event);
+      });
+      setEconomicEvents(econMap);
+    } catch (e) {
+      console.error("Failed to fetch calendar events:", e);
+    } finally {
+      setLoadingEvents(false);
+    }
+  }, [dataMode, currentDate]);
+
+  // Fetch events when month changes
+  useEffect(() => {
+    fetchCalendarEvents();
+  }, [fetchCalendarEvents]);
 
   const loadCalendarData = async () => {
     try {
@@ -171,7 +285,50 @@ export default function Calendar() {
     return emotionalStatesByDate[dateStr] || [];
   };
 
+  const getDayCalendarEvents = (date: Date): CalendarEvent[] => {
+    const dateStr = format(date, "yyyy-MM-dd");
+    return calendarEvents[dateStr] || [];
+  };
+
+  const getDayEconomicEvents = (date: Date): EconomicEvent[] => {
+    const dateStr = format(date, "yyyy-MM-dd");
+    return economicEvents[dateStr] || [];
+  };
+
   const getDateKey = (date: Date): string => format(date, "yyyy-MM-dd");
+
+  // Event type colors
+  const getEventBadgeColor = (eventType: string): string => {
+    switch (eventType) {
+      case "earnings": return "#8B5CF6";
+      case "dividend_ex": return "#10B981";
+      case "dividend_pay": return "#34D399";
+      case "split": return "#F59E0B";
+      case "fomc": return "#EF4444";
+      case "cpi": return "#F97316";
+      case "gdp": return "#3B82F6";
+      case "jobs": return "#6366F1";
+      case "ppi": return "#EC4899";
+      case "retail_sales": return "#14B8A6";
+      default: return "var(--accent)";
+    }
+  };
+
+  const getEventBadgeLabel = (eventType: string): string => {
+    switch (eventType) {
+      case "earnings": return "E";
+      case "dividend_ex": return "D";
+      case "dividend_pay": return "D$";
+      case "split": return "S";
+      case "fomc": return "FOMC";
+      case "cpi": return "CPI";
+      case "gdp": return "GDP";
+      case "jobs": return "NFP";
+      case "ppi": return "PPI";
+      case "retail_sales": return "RET";
+      default: return eventType.charAt(0).toUpperCase();
+    }
+  };
 
   const getDayColor = (pnl: number | null): string => {
     if (pnl === null) return "transparent";
@@ -312,31 +469,192 @@ export default function Calendar() {
             })}
           </select>
         </div>
-        <button
-          onClick={nextMonth}
-          style={{
-            background: "var(--bg-secondary)",
-            border: "1px solid var(--border-color)",
-            borderRadius: "10px",
-            padding: "10px 14px",
-            color: "var(--text-primary)",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            transition: "background 0.15s ease, border-color 0.15s ease",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--bg-tertiary)";
-            e.currentTarget.style.borderColor = "var(--accent)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "var(--bg-secondary)";
-            e.currentTarget.style.borderColor = "var(--border-color)";
-          }}
-        >
-          <ChevronRight size={20} />
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <button
+            onClick={nextMonth}
+            style={{
+              background: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "10px",
+              padding: "10px 14px",
+              color: "var(--text-primary)",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              transition: "background 0.15s ease, border-color 0.15s ease",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--bg-tertiary)";
+              e.currentTarget.style.borderColor = "var(--accent)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "var(--bg-secondary)";
+              e.currentTarget.style.borderColor = "var(--border-color)";
+            }}
+          >
+            <ChevronRight size={20} />
+          </button>
+          
+          {/* Refresh events button */}
+          <button
+            onClick={fetchCalendarEvents}
+            disabled={loadingEvents}
+            title="Refresh events"
+            style={{
+              background: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "10px",
+              padding: "10px 14px",
+              color: loadingEvents ? "var(--text-secondary)" : "var(--text-primary)",
+              cursor: loadingEvents ? "not-allowed" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              transition: "background 0.15s ease, border-color 0.15s ease",
+            }}
+            onMouseEnter={(e) => {
+              if (!loadingEvents) {
+                e.currentTarget.style.background = "var(--bg-tertiary)";
+                e.currentTarget.style.borderColor = "var(--accent)";
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "var(--bg-secondary)";
+              e.currentTarget.style.borderColor = "var(--border-color)";
+            }}
+          >
+            <RefreshCw size={18} className={loadingEvents ? "spin" : ""} />
+          </button>
+          
+          {/* Event settings button */}
+          <div style={{ position: "relative" }}>
+            <button
+              onClick={() => setShowEventSettings(!showEventSettings)}
+              title="Event settings"
+              style={{
+                background: showEventSettings ? "var(--accent)" : "var(--bg-secondary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "10px",
+                padding: "10px 14px",
+                color: showEventSettings ? "var(--bg-primary)" : "var(--text-primary)",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                transition: "background 0.15s ease, border-color 0.15s ease",
+              }}
+              onMouseEnter={(e) => {
+                if (!showEventSettings) {
+                  e.currentTarget.style.background = "var(--bg-tertiary)";
+                  e.currentTarget.style.borderColor = "var(--accent)";
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!showEventSettings) {
+                  e.currentTarget.style.background = "var(--bg-secondary)";
+                  e.currentTarget.style.borderColor = "var(--border-color)";
+                }
+              }}
+            >
+              <Settings size={18} />
+            </button>
+            
+            {showEventSettings && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  right: 0,
+                  marginTop: "8px",
+                  background: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "12px",
+                  padding: "16px",
+                  boxShadow: "0 8px 24px rgba(0, 0, 0, 0.3)",
+                  zIndex: 100,
+                  minWidth: "200px",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h4 style={{ margin: "0 0 12px 0", fontSize: "14px", fontWeight: "600", color: "var(--text-primary)" }}>
+                  Show Events
+                </h4>
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={showEarnings}
+                      onChange={(e) => setShowEarnings(e.target.checked)}
+                      style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                    />
+                    <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--text-primary)", fontSize: "13px" }}>
+                      <span style={{ 
+                        display: "inline-flex", 
+                        alignItems: "center", 
+                        justifyContent: "center",
+                        width: "20px", 
+                        height: "20px", 
+                        borderRadius: "4px", 
+                        backgroundColor: "#8B5CF6",
+                        color: "white",
+                        fontSize: "10px",
+                        fontWeight: "700"
+                      }}>E</span>
+                      Earnings
+                    </span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={showDividends}
+                      onChange={(e) => setShowDividends(e.target.checked)}
+                      style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                    />
+                    <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--text-primary)", fontSize: "13px" }}>
+                      <span style={{ 
+                        display: "inline-flex", 
+                        alignItems: "center", 
+                        justifyContent: "center",
+                        width: "20px", 
+                        height: "20px", 
+                        borderRadius: "4px", 
+                        backgroundColor: "#10B981",
+                        color: "white",
+                        fontSize: "10px",
+                        fontWeight: "700"
+                      }}>D</span>
+                      Dividends
+                    </span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={showEconomicEvents}
+                      onChange={(e) => setShowEconomicEvents(e.target.checked)}
+                      style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                    />
+                    <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--text-primary)", fontSize: "13px" }}>
+                      <span style={{ 
+                        display: "inline-flex", 
+                        alignItems: "center", 
+                        justifyContent: "center",
+                        width: "20px", 
+                        height: "20px", 
+                        borderRadius: "4px", 
+                        backgroundColor: "#EF4444",
+                        color: "white",
+                        fontSize: "8px",
+                        fontWeight: "700"
+                      }}>FOMC</span>
+                      Economic Events
+                    </span>
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       <div
@@ -373,11 +691,20 @@ export default function Calendar() {
           const dayPnL = getDayPnL(day);
           const journalEntries = getDayJournalEntries(day);
           const emotionalStates = getDayEmotionalStates(day);
+          const dayCalEvents = getDayCalendarEvents(day);
+          const dayEconEvents = getDayEconomicEvents(day);
           const isCurrentDay = isToday(day);
           const pnlColor = getDayColor(dayPnL?.profit_loss ?? null);
           const dateKey = getDateKey(day);
           const isDropdownOpen = openJournalDate === dateKey;
-          const hasContent = dayPnL || journalEntries.length > 0 || emotionalStates.length > 0;
+          
+          // Filter events based on settings
+          const earningsEvents = showEarnings ? dayCalEvents.filter(e => e.event_type === "earnings") : [];
+          const dividendEvents = showDividends ? dayCalEvents.filter(e => e.event_type.startsWith("dividend")) : [];
+          const filteredEconEvents = showEconomicEvents ? dayEconEvents : [];
+          
+          const hasContent = dayPnL || journalEntries.length > 0 || emotionalStates.length > 0 ||
+            earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0;
 
           const openDetails = (e: React.MouseEvent) => {
             e.stopPropagation();
@@ -490,6 +817,70 @@ export default function Calendar() {
                       <span style={{ fontSize: "14px", fontWeight: "600" }}>{emotionalStates.length}</span>
                     </button>
                   )}
+                  {/* Event badges */}
+                  {earningsEvents.map((event, idx) => (
+                    <span
+                      key={`earnings-${idx}`}
+                      onClick={openDetails}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "2px 5px",
+                        borderRadius: "4px",
+                        backgroundColor: getEventBadgeColor("earnings"),
+                        color: "white",
+                        fontSize: "10px",
+                        fontWeight: "700",
+                        cursor: "pointer",
+                      }}
+                      title={`${event.title}${event.details ? ` - ${event.details}` : ""}`}
+                    >
+                      E
+                    </span>
+                  ))}
+                  {dividendEvents.map((event, idx) => (
+                    <span
+                      key={`dividend-${idx}`}
+                      onClick={openDetails}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "2px 5px",
+                        borderRadius: "4px",
+                        backgroundColor: getEventBadgeColor(event.event_type),
+                        color: "white",
+                        fontSize: "10px",
+                        fontWeight: "700",
+                        cursor: "pointer",
+                      }}
+                      title={`${event.title}${event.details ? ` - ${event.details}` : ""}`}
+                    >
+                      D
+                    </span>
+                  ))}
+                  {filteredEconEvents.map((event, idx) => (
+                    <span
+                      key={`econ-${idx}`}
+                      onClick={openDetails}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "2px 5px",
+                        borderRadius: "4px",
+                        backgroundColor: getEventBadgeColor(event.event_type),
+                        color: "white",
+                        fontSize: "9px",
+                        fontWeight: "700",
+                        cursor: "pointer",
+                      }}
+                      title={`${event.title}${event.description ? ` - ${event.description}` : ""}`}
+                    >
+                      {getEventBadgeLabel(event.event_type)}
+                    </span>
+                  ))}
                 </div>
               )}
               {isDropdownOpen && (
@@ -607,6 +998,113 @@ export default function Calendar() {
                           >
                             Open Emotions
                           </button>
+                        </div>
+                      )}
+                      {/* Events section */}
+                      {(earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0) && (
+                        <div style={{ marginBottom: "14px", paddingBottom: "14px", borderBottom: journalEntries.length > 0 ? "1px solid var(--border-color)" : "none" }}>
+                          <div style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "10px", display: "flex", alignItems: "center", gap: "8px" }}>
+                            <CalendarIcon size={14} style={{ color: "var(--accent)" }} />
+                            Events
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                            {earningsEvents.map((event, idx) => (
+                              <div
+                                key={`earnings-detail-${idx}`}
+                                style={{
+                                  padding: "10px 12px",
+                                  background: "var(--bg-tertiary)",
+                                  borderRadius: "8px",
+                                  borderLeft: `3px solid ${getEventBadgeColor("earnings")}`,
+                                }}
+                              >
+                                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                                  <TrendingUp size={14} color={getEventBadgeColor("earnings")} />
+                                  <span style={{ fontSize: "12px", fontWeight: "600", color: getEventBadgeColor("earnings"), textTransform: "uppercase" }}>
+                                    Earnings
+                                  </span>
+                                  {event.symbol && (
+                                    <span style={{ fontSize: "11px", padding: "2px 6px", borderRadius: "4px", backgroundColor: "var(--bg-secondary)", color: "var(--text-primary)", fontWeight: "600" }}>
+                                      {event.symbol}
+                                    </span>
+                                  )}
+                                </div>
+                                <p style={{ margin: 0, fontSize: "14px", color: "var(--text-primary)", fontWeight: "500" }}>{event.title}</p>
+                                {event.details && (
+                                  <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "var(--text-secondary)" }}>{event.details}</p>
+                                )}
+                              </div>
+                            ))}
+                            {dividendEvents.map((event, idx) => (
+                              <div
+                                key={`dividend-detail-${idx}`}
+                                style={{
+                                  padding: "10px 12px",
+                                  background: "var(--bg-tertiary)",
+                                  borderRadius: "8px",
+                                  borderLeft: `3px solid ${getEventBadgeColor(event.event_type)}`,
+                                }}
+                              >
+                                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                                  <DollarSign size={14} color={getEventBadgeColor(event.event_type)} />
+                                  <span style={{ fontSize: "12px", fontWeight: "600", color: getEventBadgeColor(event.event_type), textTransform: "uppercase" }}>
+                                    {event.event_type === "dividend_ex" ? "Ex-Dividend" : "Dividend Pay"}
+                                  </span>
+                                  {event.symbol && (
+                                    <span style={{ fontSize: "11px", padding: "2px 6px", borderRadius: "4px", backgroundColor: "var(--bg-secondary)", color: "var(--text-primary)", fontWeight: "600" }}>
+                                      {event.symbol}
+                                    </span>
+                                  )}
+                                </div>
+                                <p style={{ margin: 0, fontSize: "14px", color: "var(--text-primary)", fontWeight: "500" }}>{event.title}</p>
+                                {event.details && (
+                                  <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "var(--text-secondary)" }}>{event.details}</p>
+                                )}
+                              </div>
+                            ))}
+                            {filteredEconEvents.map((event, idx) => (
+                              <div
+                                key={`econ-detail-${idx}`}
+                                style={{
+                                  padding: "10px 12px",
+                                  background: "var(--bg-tertiary)",
+                                  borderRadius: "8px",
+                                  borderLeft: `3px solid ${getEventBadgeColor(event.event_type)}`,
+                                }}
+                              >
+                                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                                  <span style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    padding: "2px 5px",
+                                    borderRadius: "4px",
+                                    backgroundColor: getEventBadgeColor(event.event_type),
+                                    color: "white",
+                                    fontSize: "9px",
+                                    fontWeight: "700",
+                                  }}>
+                                    {getEventBadgeLabel(event.event_type)}
+                                  </span>
+                                  <span style={{
+                                    fontSize: "10px",
+                                    padding: "2px 6px",
+                                    borderRadius: "4px",
+                                    backgroundColor: event.importance === "high" ? "rgba(239, 68, 68, 0.2)" : "var(--bg-secondary)",
+                                    color: event.importance === "high" ? "#EF4444" : "var(--text-secondary)",
+                                    fontWeight: "600",
+                                    textTransform: "uppercase",
+                                  }}>
+                                    {event.importance}
+                                  </span>
+                                </div>
+                                <p style={{ margin: 0, fontSize: "14px", color: "var(--text-primary)", fontWeight: "500" }}>{event.title}</p>
+                                {event.description && (
+                                  <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "var(--text-secondary)" }}>{event.description}</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                       {journalEntries.length > 0 && (
@@ -744,7 +1242,36 @@ export default function Calendar() {
           <Heart size={16} style={{ color: "var(--accent)" }} />
           <span style={{ fontWeight: "500" }}>Emotional states</span>
         </div>
+        {showEarnings && (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "16px", height: "16px", borderRadius: "4px", backgroundColor: "#8B5CF6", color: "white", fontSize: "10px", fontWeight: "700" }}>E</span>
+            <span style={{ fontWeight: "500" }}>Earnings</span>
+          </div>
+        )}
+        {showDividends && (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "16px", height: "16px", borderRadius: "4px", backgroundColor: "#10B981", color: "white", fontSize: "10px", fontWeight: "700" }}>D</span>
+            <span style={{ fontWeight: "500" }}>Dividends</span>
+          </div>
+        )}
+        {showEconomicEvents && (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "16px", height: "16px", borderRadius: "4px", backgroundColor: "#EF4444", color: "white", fontSize: "8px", fontWeight: "700" }}>$</span>
+            <span style={{ fontWeight: "500" }}>Economic events</span>
+          </div>
+        )}
       </div>
+
+      {/* CSS for spin animation */}
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        .spin {
+          animation: spin 1s linear infinite;
+        }
+      `}</style>
     </div>
   );
 }

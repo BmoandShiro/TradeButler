@@ -16,7 +16,8 @@ import {
   Settings,
   Lock,
   Unlock,
-  Plus
+  Plus,
+  Newspaper
 } from "lucide-react";
 import { format } from "date-fns";
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
@@ -32,6 +33,7 @@ import AuroraLockScreen from "./AuroraLockScreen";
 import MilkyWayLockScreen from "./MilkyWayLockScreen";
 import SphereLockScreen from "./SphereLockScreen";
 import GalaxyBackground from "./GalaxyBackground";
+import NewsNotification from "./NewsNotification";
 import { isLocked, hasPassword, lockApp } from "../utils/passwordManager";
 import { getLockScreenStyle } from "../utils/lockScreenManager";
 import { getGalaxyThemeSettings } from "../utils/galaxyThemeManager";
@@ -99,7 +101,7 @@ export default function Layout({ children }: LayoutProps) {
   // Initialize: Load saved scroll positions from localStorage
   useEffect(() => {
     // Load all saved scroll positions on mount
-    const paths = ["/", "/trades", "/calendar", "/strategies", "/journal", "/resources", "/emotions", "/analytics", "/evaluation", "/tools", "/settings"];
+    const paths = ["/", "/trades", "/calendar", "/news", "/strategies", "/journal", "/resources", "/emotions", "/analytics", "/evaluation", "/tools", "/settings"];
     paths.forEach(path => {
       const saved = localStorage.getItem(`scroll_${path}`);
       if (saved) {
@@ -624,6 +626,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: "/", icon: LayoutDashboard, label: "Dashboard" },
     { path: "/trades", icon: TrendingUp, label: "Trades" },
     { path: "/calendar", icon: Calendar, label: "Calendar" },
+    { path: "/news", icon: Newspaper, label: "News" },
     { path: "/strategies", icon: Target, label: "Strategies" },
     { path: "/journal", icon: FileText, label: "Journal" },
     { path: "/resources", icon: BookOpen, label: "Resources" },
@@ -1234,6 +1237,9 @@ export default function Layout({ children }: LayoutProps) {
         </div>,
         document.body
       )}
+
+      {/* News notifications */}
+      <NewsNotification />
     </div>
   );
 }

@@ -109,6 +109,37 @@ pub struct JournalTrade {
     pub updated_at: Option<String>,
 }
 
+/// News item from Yahoo Finance RSS feed
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct NewsItem {
+    pub id: String,           // GUID from RSS
+    pub symbol: String,
+    pub title: String,
+    pub link: String,
+    pub pub_date: String,     // ISO timestamp
+    pub source: String,
+}
+
+/// Calendar event for earnings, dividends, splits, economic events
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CalendarEvent {
+    pub date: String,
+    pub symbol: Option<String>,
+    pub event_type: String,   // "earnings", "dividend_ex", "dividend_pay", "split", "economic"
+    pub title: String,
+    pub details: Option<String>,
+}
+
+/// Economic event (FOMC, CPI, GDP, etc.)
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EconomicEvent {
+    pub date: String,
+    pub event_type: String,   // "fomc", "cpi", "gdp", "jobs", "ppi", "retail_sales", etc.
+    pub title: String,
+    pub description: Option<String>,
+    pub importance: String,   // "high", "medium", "low"
+}
+
 pub fn init_database(db_path: &Path) -> Result<()> {
     let conn = Connection::open(db_path)?;
 

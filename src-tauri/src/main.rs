@@ -112,6 +112,13 @@ fn main() {
             commands::download_portable_update,
             commands::download_and_install_update,
             commands::exit_app,
+            // News system commands
+            commands::fetch_news,
+            commands::fetch_news_batch,
+            commands::fetch_calendar_events,
+            commands::fetch_calendar_events_batch,
+            commands::get_economic_calendar,
+            commands::get_economic_calendar_range,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

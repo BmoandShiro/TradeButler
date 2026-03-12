@@ -1,4 +1,4 @@
-use crate::database::{get_connection, Trade, EmotionalState, EmotionSurvey, Strategy, JournalEntry, JournalTrade};
+use crate::database::{get_connection, Trade, EmotionalState, EmotionSurvey, Strategy, JournalEntry, JournalTrade, NewsItem, CalendarEvent, EconomicEvent};
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -8049,4 +8049,462 @@ pub async fn download_and_install_update(download_url: String, download_filename
     }
     
     Ok(())
+}
+
+// ============================================================================
+// NEWS SYSTEM COMMANDS
+// ============================================================================
+
+/// Fetch news for a single symbol from Yahoo Finance RSS feed
+#[tauri::command]
+pub async fn fetch_news(symbol: String) -> Result<Vec<NewsItem>, String> {
+    let url = format!(
+        "https://feeds.finance.yahoo.com/rss/2.0/headline?s={}&region=US&lang=en-US",
+        symbol.to_uppercase()
+    );
+    
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .header("Accept", "application/rss+xml, application/xml, text/xml")
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("Failed to fetch news: {}", response.status()));
+    }
+    
+    let xml_text = response.text().await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+    
+    // Parse RSS XML manually (simple parsing for Yahoo Finance RSS format)
+    let mut news_items = Vec::new();
+    
+    // Split by <item> tags
+    for item in xml_text.split("<item>").skip(1) {
+        if let Some(end_idx) = item.find("</item>") {
+            let item_xml = &item[..end_idx];
+            
+            // Extract fields with helper function
+            let title = extract_xml_field(item_xml, "title").unwrap_or_default();
+            let link = extract_xml_field(item_xml, "link").unwrap_or_default();
+            let guid = extract_xml_field(item_xml, "guid").unwrap_or_else(|| link.clone());
+            let pub_date = extract_xml_field(item_xml, "pubDate").unwrap_or_default();
+            let source = extract_xml_field(item_xml, "source").unwrap_or_else(|| "Yahoo Finance".to_string());
+            
+            if !title.is_empty() && !link.is_empty() {
+                // Convert pub_date to ISO format
+                let iso_date = parse_rss_date(&pub_date).unwrap_or(pub_date);
+                
+                news_items.push(NewsItem {
+                    id: guid,
+                    symbol: symbol.to_uppercase(),
+                    title: decode_html_entities(&title),
+                    link,
+                    pub_date: iso_date,
+                    source: decode_html_entities(&source),
+                });
+            }
+        }
+    }
+    
+    Ok(news_items)
+}
+
+/// Fetch news for multiple symbols
+#[tauri::command]
+pub async fn fetch_news_batch(symbols: Vec<String>) -> Result<Vec<NewsItem>, String> {
+    let mut all_news = Vec::new();
+    
+    for symbol in symbols {
+        match fetch_news(symbol).await {
+            Ok(news) => all_news.extend(news),
+            Err(e) => eprintln!("Failed to fetch news for symbol: {}", e),
+        }
+    }
+    
+    // Sort by date descending
+    all_news.sort_by(|a, b| b.pub_date.cmp(&a.pub_date));
+    
+    // Remove duplicates by ID
+    let mut seen_ids = std::collections::HashSet::new();
+    all_news.retain(|item| seen_ids.insert(item.id.clone()));
+    
+    Ok(all_news)
+}
+
+/// Fetch calendar events (earnings, dividends) for a symbol from Yahoo Finance
+#[tauri::command]
+pub async fn fetch_calendar_events(symbol: String) -> Result<Vec<CalendarEvent>, String> {
+    let url = format!(
+        "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=calendarEvents,summaryDetail",
+        symbol.to_uppercase()
+    );
+    
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .header("Referer", "https://finance.yahoo.com/")
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("Failed to fetch calendar data: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+    
+    let mut events = Vec::new();
+    let symbol_upper = symbol.to_uppercase();
+    
+    // Extract calendar events from response
+    if let Some(result) = data.get("quoteSummary")
+        .and_then(|q| q.get("result"))
+        .and_then(|r| r.get(0)) 
+    {
+        // Earnings dates
+        if let Some(calendar) = result.get("calendarEvents") {
+            // Earnings date
+            if let Some(earnings) = calendar.get("earnings") {
+                if let Some(earnings_date) = earnings.get("earningsDate")
+                    .and_then(|d| d.get(0))
+                    .and_then(|d| d.get("fmt"))
+                    .and_then(|d| d.as_str())
+                {
+                    let eps_estimate = earnings.get("earningsAverage")
+                        .and_then(|e| e.get("fmt"))
+                        .and_then(|e| e.as_str())
+                        .map(|e| format!("EPS Est: {}", e));
+                    
+                    events.push(CalendarEvent {
+                        date: earnings_date.to_string(),
+                        symbol: Some(symbol_upper.clone()),
+                        event_type: "earnings".to_string(),
+                        title: format!("{} Earnings", symbol_upper),
+                        details: eps_estimate,
+                    });
+                }
+            }
+            
+            // Ex-dividend date
+            if let Some(ex_div) = calendar.get("exDividendDate")
+                .and_then(|d| d.get("fmt"))
+                .and_then(|d| d.as_str())
+            {
+                let div_rate = calendar.get("dividendDate")
+                    .and_then(|d| d.get("fmt"))
+                    .and_then(|d| d.as_str())
+                    .map(|d| format!("Pay date: {}", d));
+                
+                events.push(CalendarEvent {
+                    date: ex_div.to_string(),
+                    symbol: Some(symbol_upper.clone()),
+                    event_type: "dividend_ex".to_string(),
+                    title: format!("{} Ex-Dividend", symbol_upper),
+                    details: div_rate,
+                });
+            }
+        }
+        
+        // Dividend info from summaryDetail
+        if let Some(summary) = result.get("summaryDetail") {
+            if let Some(div_date) = summary.get("exDividendDate")
+                .and_then(|d| d.get("fmt"))
+                .and_then(|d| d.as_str())
+            {
+                // Only add if not already added from calendarEvents
+                let already_has = events.iter().any(|e| 
+                    e.event_type == "dividend_ex" && 
+                    e.symbol.as_ref() == Some(&symbol_upper) &&
+                    e.date == div_date
+                );
+                
+                if !already_has {
+                    let div_rate = summary.get("dividendRate")
+                        .and_then(|r| r.get("fmt"))
+                        .and_then(|r| r.as_str())
+                        .map(|r| format!("Dividend: {}", r));
+                    
+                    events.push(CalendarEvent {
+                        date: div_date.to_string(),
+                        symbol: Some(symbol_upper.clone()),
+                        event_type: "dividend_ex".to_string(),
+                        title: format!("{} Ex-Dividend", symbol_upper),
+                        details: div_rate,
+                    });
+                }
+            }
+        }
+    }
+    
+    Ok(events)
+}
+
+/// Fetch calendar events for multiple symbols
+#[tauri::command]
+pub async fn fetch_calendar_events_batch(symbols: Vec<String>) -> Result<Vec<CalendarEvent>, String> {
+    let mut all_events = Vec::new();
+    
+    for symbol in symbols {
+        match fetch_calendar_events(symbol).await {
+            Ok(events) => all_events.extend(events),
+            Err(e) => eprintln!("Failed to fetch calendar events: {}", e),
+        }
+    }
+    
+    // Sort by date
+    all_events.sort_by(|a, b| a.date.cmp(&b.date));
+    
+    Ok(all_events)
+}
+
+/// Get economic calendar events for a given year/month
+/// Returns major economic events like FOMC, CPI, GDP, Jobs reports
+#[tauri::command]
+pub fn get_economic_calendar(year: i32, month: u32) -> Result<Vec<EconomicEvent>, String> {
+    // Static economic calendar data
+    // In a production app, this could be fetched from an API or updated periodically
+    let events = get_economic_events_for_month(year, month);
+    Ok(events)
+}
+
+/// Get all economic events for a date range
+#[tauri::command]
+pub fn get_economic_calendar_range(start_date: String, end_date: String) -> Result<Vec<EconomicEvent>, String> {
+    // Parse dates
+    let start = chrono::NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid start date: {}", e))?;
+    let end = chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid end date: {}", e))?;
+    
+    let mut all_events = Vec::new();
+    let mut current = start;
+    
+    while current <= end {
+        let events = get_economic_events_for_month(current.year(), current.month());
+        for event in events {
+            if let Ok(event_date) = chrono::NaiveDate::parse_from_str(&event.date, "%Y-%m-%d") {
+                if event_date >= start && event_date <= end {
+                    all_events.push(event);
+                }
+            }
+        }
+        // Move to next month
+        current = if current.month() == 12 {
+            chrono::NaiveDate::from_ymd_opt(current.year() + 1, 1, 1).unwrap_or(current)
+        } else {
+            chrono::NaiveDate::from_ymd_opt(current.year(), current.month() + 1, 1).unwrap_or(current)
+        };
+    }
+    
+    // Sort and deduplicate
+    all_events.sort_by(|a, b| a.date.cmp(&b.date));
+    all_events.dedup_by(|a, b| a.date == b.date && a.event_type == b.event_type);
+    
+    Ok(all_events)
+}
+
+// Helper function to extract XML field content
+fn extract_xml_field(xml: &str, field: &str) -> Option<String> {
+    let start_tag = format!("<{}>", field);
+    let end_tag = format!("</{}>", field);
+    
+    // Try CDATA first
+    let cdata_start = format!("<{}><![CDATA[", field);
+    if let Some(start_idx) = xml.find(&cdata_start) {
+        let content_start = start_idx + cdata_start.len();
+        if let Some(end_idx) = xml[content_start..].find("]]>") {
+            return Some(xml[content_start..content_start + end_idx].to_string());
+        }
+    }
+    
+    // Regular tag
+    if let Some(start_idx) = xml.find(&start_tag) {
+        let content_start = start_idx + start_tag.len();
+        if let Some(end_idx) = xml[content_start..].find(&end_tag) {
+            return Some(xml[content_start..content_start + end_idx].to_string());
+        }
+    }
+    
+    None
+}
+
+// Helper function to decode common HTML entities
+fn decode_html_entities(text: &str) -> String {
+    text.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&#x27;", "'")
+        .replace("&nbsp;", " ")
+}
+
+// Helper function to parse RSS date format to ISO
+fn parse_rss_date(date_str: &str) -> Option<String> {
+    // RSS date format: "Mon, 10 Mar 2025 14:30:00 +0000"
+    // Convert to ISO format: "2025-03-10T14:30:00Z"
+    
+    use chrono::DateTime;
+    
+    // Try parsing RFC 2822 format (common RSS date format)
+    if let Ok(dt) = DateTime::parse_from_rfc2822(date_str) {
+        return Some(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+    }
+    
+    // Try parsing RFC 3339 (ISO 8601)
+    if let Ok(dt) = DateTime::parse_from_rfc3339(date_str) {
+        return Some(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+    }
+    
+    None
+}
+
+// Static economic calendar data generator
+fn get_economic_events_for_month(year: i32, month: u32) -> Vec<EconomicEvent> {
+    let mut events = Vec::new();
+    
+    // FOMC Meeting Dates (8 meetings per year, typically 2-day meetings ending on Wednesday)
+    // 2025 FOMC dates
+    let fomc_dates_2025 = vec![
+        ("2025-01-29", "FOMC Meeting"),
+        ("2025-03-19", "FOMC Meeting"),
+        ("2025-05-07", "FOMC Meeting"),
+        ("2025-06-18", "FOMC Meeting"),
+        ("2025-07-30", "FOMC Meeting"),
+        ("2025-09-17", "FOMC Meeting"),
+        ("2025-11-05", "FOMC Meeting"),
+        ("2025-12-17", "FOMC Meeting"),
+    ];
+    
+    // 2026 FOMC dates (projected)
+    let fomc_dates_2026 = vec![
+        ("2026-01-28", "FOMC Meeting"),
+        ("2026-03-18", "FOMC Meeting"),
+        ("2026-05-06", "FOMC Meeting"),
+        ("2026-06-17", "FOMC Meeting"),
+        ("2026-07-29", "FOMC Meeting"),
+        ("2026-09-16", "FOMC Meeting"),
+        ("2026-11-04", "FOMC Meeting"),
+        ("2026-12-16", "FOMC Meeting"),
+    ];
+    
+    let fomc_dates = if year == 2025 { &fomc_dates_2025 } else { &fomc_dates_2026 };
+    
+    for (date, title) in fomc_dates {
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+            if d.year() == year && d.month() == month {
+                events.push(EconomicEvent {
+                    date: date.to_string(),
+                    event_type: "fomc".to_string(),
+                    title: title.to_string(),
+                    description: Some("Federal Reserve interest rate decision and policy statement".to_string()),
+                    importance: "high".to_string(),
+                });
+            }
+        }
+    }
+    
+    // CPI (Consumer Price Index) - Usually released around 10th-14th of month
+    // Approximate dates based on typical release schedule
+    let cpi_day = match month {
+        1 => 15, 2 => 12, 3 => 12, 4 => 10, 5 => 13, 6 => 11,
+        7 => 11, 8 => 14, 9 => 11, 10 => 10, 11 => 13, 12 => 11,
+        _ => 12,
+    };
+    
+    if let Some(date) = chrono::NaiveDate::from_ymd_opt(year, month, cpi_day) {
+        events.push(EconomicEvent {
+            date: date.format("%Y-%m-%d").to_string(),
+            event_type: "cpi".to_string(),
+            title: "CPI Report".to_string(),
+            description: Some("Consumer Price Index - measures inflation".to_string()),
+            importance: "high".to_string(),
+        });
+    }
+    
+    // Jobs Report (Non-Farm Payrolls) - First Friday of month
+    if let Some(first_day) = chrono::NaiveDate::from_ymd_opt(year, month, 1) {
+        let weekday = first_day.weekday();
+        let days_to_friday = match weekday {
+            chrono::Weekday::Sat => 6,
+            chrono::Weekday::Sun => 5,
+            chrono::Weekday::Mon => 4,
+            chrono::Weekday::Tue => 3,
+            chrono::Weekday::Wed => 2,
+            chrono::Weekday::Thu => 1,
+            chrono::Weekday::Fri => 0,
+        };
+        let first_friday = first_day + chrono::Duration::days(days_to_friday);
+        
+        events.push(EconomicEvent {
+            date: first_friday.format("%Y-%m-%d").to_string(),
+            event_type: "jobs".to_string(),
+            title: "Jobs Report (NFP)".to_string(),
+            description: Some("Non-Farm Payrolls - employment situation report".to_string()),
+            importance: "high".to_string(),
+        });
+    }
+    
+    // GDP (Quarterly, released end of month following quarter end)
+    // Q1 GDP in late April, Q2 in late July, Q3 in late October, Q4 in late January
+    let gdp_month = match month {
+        1 => Some(("Q4 GDP (Advance)", 30)),
+        4 => Some(("Q1 GDP (Advance)", 25)),
+        7 => Some(("Q2 GDP (Advance)", 25)),
+        10 => Some(("Q3 GDP (Advance)", 25)),
+        _ => None,
+    };
+    
+    if let Some((title, day)) = gdp_month {
+        if let Some(date) = chrono::NaiveDate::from_ymd_opt(year, month, day) {
+            events.push(EconomicEvent {
+                date: date.format("%Y-%m-%d").to_string(),
+                event_type: "gdp".to_string(),
+                title: title.to_string(),
+                description: Some("Gross Domestic Product growth rate".to_string()),
+                importance: "high".to_string(),
+            });
+        }
+    }
+    
+    // PPI (Producer Price Index) - Usually day after or same week as CPI
+    let ppi_day = cpi_day + 1;
+    if ppi_day <= 28 {
+        if let Some(date) = chrono::NaiveDate::from_ymd_opt(year, month, ppi_day) {
+            events.push(EconomicEvent {
+                date: date.format("%Y-%m-%d").to_string(),
+                event_type: "ppi".to_string(),
+                title: "PPI Report".to_string(),
+                description: Some("Producer Price Index - wholesale inflation".to_string()),
+                importance: "medium".to_string(),
+            });
+        }
+    }
+    
+    // Retail Sales - Usually mid-month
+    if let Some(date) = chrono::NaiveDate::from_ymd_opt(year, month, 16) {
+        events.push(EconomicEvent {
+            date: date.format("%Y-%m-%d").to_string(),
+            event_type: "retail_sales".to_string(),
+            title: "Retail Sales".to_string(),
+            description: Some("Monthly retail sales data".to_string()),
+            importance: "medium".to_string(),
+        });
+    }
+    
+    events
 }

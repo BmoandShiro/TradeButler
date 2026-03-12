@@ -13,6 +13,7 @@ import Documentation from "./pages/Documentation";
 import Evaluation from "./pages/Evaluation";
 import Tools from "./pages/Tools";
 import Settings from "./pages/Settings";
+import News from "./pages/News";
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/trades" element={<PageErrorBoundary pageName="Trades"><Trades /></PageErrorBoundary>} />
           <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/news" element={<News />} />
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/journal" element={<Journal />} />
           <Route path="/resources" element={<Documentation />} />
