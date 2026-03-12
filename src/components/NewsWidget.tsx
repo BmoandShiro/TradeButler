@@ -43,6 +43,14 @@ interface NewsWidgetProps {
   maxItems?: number;
   showRefresh?: boolean;
   compact?: boolean;
+  externalSearchQuery?: string;
+  externalIncludePositions?: boolean;
+  externalShowSentiment?: boolean;
+  onSearchQueryChange?: (query: string) => void;
+  onIncludePositionsChange?: (value: boolean) => void;
+  onShowSentimentChange?: (value: boolean) => void;
+  hideInternalSettings?: boolean;
+  showSearchInHeader?: boolean;
 }
 
 const NEWS_WATCHED_SYMBOLS_KEY = "tradebutler_news_watched_symbols";
@@ -60,7 +68,19 @@ const NEGATIVE_KEYWORDS = [
   "sell", "underperform", "fail", "struggle", "lawsuit", "investigation"
 ];
 
-export default function NewsWidget({ maxItems = 5, showRefresh = true, compact = false }: NewsWidgetProps) {
+export default function NewsWidget({ 
+  maxItems = 5, 
+  showRefresh = true, 
+  compact = false,
+  externalSearchQuery,
+  externalIncludePositions,
+  externalShowSentiment,
+  onSearchQueryChange,
+  onIncludePositionsChange,
+  onShowSentimentChange,
+  hideInternalSettings = false,
+  showSearchInHeader = false,
+}: NewsWidgetProps) {
   const navigate = useNavigate();
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [news, setNews] = useState<NewsItemWithMeta[]>([]);
@@ -68,17 +88,36 @@ export default function NewsWidget({ maxItems = 5, showRefresh = true, compact =
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
   
-  // Settings state
+  // Settings state - use external values if provided
   const [showSettings, setShowSettings] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [includePositions, setIncludePositions] = useState(() => {
+  const [internalSearchQuery, setInternalSearchQuery] = useState("");
+  const [internalIncludePositions, setInternalIncludePositions] = useState(() => {
     const saved = localStorage.getItem(NEWS_INCLUDE_POSITIONS_KEY);
     return saved ? JSON.parse(saved) : true;
   });
-  const [showSentiment, setShowSentiment] = useState(() => {
+  const [internalShowSentiment, setInternalShowSentiment] = useState(() => {
     const saved = localStorage.getItem(NEWS_SHOW_SENTIMENT_KEY);
     return saved ? JSON.parse(saved) : true;
   });
+
+  // Use external or internal values
+  const searchQuery = externalSearchQuery !== undefined ? externalSearchQuery : internalSearchQuery;
+  const includePositions = externalIncludePositions !== undefined ? externalIncludePositions : internalIncludePositions;
+  const showSentiment = externalShowSentiment !== undefined ? externalShowSentiment : internalShowSentiment;
+
+  // Setters that call external handlers if provided
+  const setSearchQuery = (value: string) => {
+    if (onSearchQueryChange) onSearchQueryChange(value);
+    else setInternalSearchQuery(value);
+  };
+  const setIncludePositions = (value: boolean) => {
+    if (onIncludePositionsChange) onIncludePositionsChange(value);
+    else setInternalIncludePositions(value);
+  };
+  const setShowSentiment = (value: boolean) => {
+    if (onShowSentimentChange) onShowSentimentChange(value);
+    else setInternalShowSentiment(value);
+  };
 
   useEffect(() => {
     return subscribeToDataMode(setDataMode);
@@ -165,14 +204,18 @@ export default function NewsWidget({ maxItems = 5, showRefresh = true, compact =
     }
   }, [dataMode, maxItems, includePositions]);
 
-  // Save settings to localStorage
+  // Save settings to localStorage only when using internal state
   useEffect(() => {
-    localStorage.setItem(NEWS_INCLUDE_POSITIONS_KEY, JSON.stringify(includePositions));
-  }, [includePositions]);
+    if (externalIncludePositions === undefined) {
+      localStorage.setItem(NEWS_INCLUDE_POSITIONS_KEY, JSON.stringify(internalIncludePositions));
+    }
+  }, [internalIncludePositions, externalIncludePositions]);
 
   useEffect(() => {
-    localStorage.setItem(NEWS_SHOW_SENTIMENT_KEY, JSON.stringify(showSentiment));
-  }, [showSentiment]);
+    if (externalShowSentiment === undefined) {
+      localStorage.setItem(NEWS_SHOW_SENTIMENT_KEY, JSON.stringify(internalShowSentiment));
+    }
+  }, [internalShowSentiment, externalShowSentiment]);
 
   // Filter news by search query
   const filteredNews = news
@@ -224,27 +267,52 @@ export default function NewsWidget({ maxItems = 5, showRefresh = true, compact =
             color: "var(--text-primary)",
             display: "flex",
             alignItems: "center",
-            gap: "6px"
+            gap: "6px",
+            flexShrink: 0,
           }}>
             <Newspaper size={16} />
             News
           </span>
-          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-            <button
-              onClick={(e) => { e.stopPropagation(); setShowSettings(!showSettings); }}
-              style={{
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                color: showSettings ? "var(--accent)" : "var(--text-secondary)",
-                padding: "4px",
-                display: "flex",
-                alignItems: "center",
-              }}
-              title="Settings"
-            >
-              <Settings size={14} />
-            </button>
+          {showSearchInHeader && (
+            <div style={{ flex: 1, maxWidth: "200px", margin: "0 12px" }}>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search news..."
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{
+                  width: "100%",
+                  padding: "5px 10px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                  backgroundColor: "var(--bg-tertiary)",
+                  color: "var(--text-primary)",
+                  fontSize: "12px",
+                  boxSizing: "border-box",
+                }}
+              />
+            </div>
+          )}
+          <div style={{ display: "flex", gap: "8px", alignItems: "center", flexShrink: 0 }}>
+            {!hideInternalSettings && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowSettings(!showSettings); }}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: showSettings ? "var(--accent)" : "var(--text-secondary)",
+                  padding: "4px",
+                  display: "flex",
+                  alignItems: "center",
+                }}
+                title="Settings"
+              >
+                <Settings size={14} />
+              </button>
+            )}
             {showRefresh && (
               <button
                 onClick={(e) => { e.stopPropagation(); fetchNews(); }}
@@ -284,7 +352,7 @@ export default function NewsWidget({ maxItems = 5, showRefresh = true, compact =
         </div>
 
         {/* Settings Panel */}
-        {showSettings && (
+        {showSettings && !hideInternalSettings && (
           <div style={{
             padding: "12px",
             marginBottom: "12px",
@@ -483,9 +551,13 @@ export default function NewsWidget({ maxItems = 5, showRefresh = true, compact =
                   <span style={{
                     display: "flex",
                     alignItems: "center",
+                    justifyContent: "center",
+                    padding: "3px 6px",
+                    borderRadius: "4px",
+                    backgroundColor: item.sentiment === "positive" ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
                     color: getSentimentColor(item.sentiment),
                   }}>
-                    {item.sentiment === "positive" ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+                    {item.sentiment === "positive" ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
                   </span>
                 )}
                 <span style={{ 
@@ -561,21 +633,23 @@ export default function NewsWidget({ maxItems = 5, showRefresh = true, compact =
           Latest News
         </h3>
         <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-          <button
-            onClick={(e) => { e.stopPropagation(); setShowSettings(!showSettings); }}
-            style={{
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              color: showSettings ? "var(--accent)" : "var(--text-secondary)",
-              padding: "4px",
-              display: "flex",
-              alignItems: "center",
-            }}
-            title="Settings"
-          >
-            <Settings size={16} />
-          </button>
+          {!hideInternalSettings && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowSettings(!showSettings); }}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: showSettings ? "var(--accent)" : "var(--text-secondary)",
+                padding: "4px",
+                display: "flex",
+                alignItems: "center",
+              }}
+              title="Settings"
+            >
+              <Settings size={16} />
+            </button>
+          )}
           {showRefresh && (
             <button
               onClick={(e) => { e.stopPropagation(); fetchNews(); }}
@@ -615,7 +689,7 @@ export default function NewsWidget({ maxItems = 5, showRefresh = true, compact =
       </div>
 
       {/* Settings Panel */}
-      {showSettings && (
+      {showSettings && !hideInternalSettings && (
         <div style={{
           padding: "16px 20px",
           borderBottom: "1px solid var(--border-color)",
@@ -828,16 +902,16 @@ export default function NewsWidget({ maxItems = 5, showRefresh = true, compact =
                     <span style={{
                       display: "flex",
                       alignItems: "center",
-                      gap: "4px",
-                      padding: "2px 6px",
-                      borderRadius: "4px",
-                      backgroundColor: item.sentiment === "positive" ? "rgba(16, 185, 129, 0.1)" : "rgba(239, 68, 68, 0.1)",
+                      gap: "5px",
+                      padding: "4px 10px",
+                      borderRadius: "6px",
+                      backgroundColor: item.sentiment === "positive" ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
                       color: getSentimentColor(item.sentiment),
-                      fontSize: "10px",
-                      fontWeight: "500",
+                      fontSize: "12px",
+                      fontWeight: "600",
                       textTransform: "capitalize",
                     }}>
-                      {item.sentiment === "positive" ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+                      {item.sentiment === "positive" ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
                       {item.sentiment}
                     </span>
                   )}

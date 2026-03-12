@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, Lock, Eye, EyeOff, ChevronDown, ChevronRight } from "lucide-react";
+import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, Lock, Eye, EyeOff, ChevronDown, ChevronRight, Key, ExternalLink, Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { save } from "@tauri-apps/api/dialog";
 import { createPortal } from "react-dom";
@@ -46,6 +46,7 @@ import {
 } from "../utils/sphereThemeManager";
 import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import type { DataMode } from "../utils/dataMode";
+import { getFinnhubApiKey, setFinnhubApiKey, removeFinnhubApiKey, hasFinnhubApiKey } from "../utils/finnhubManager";
 
 interface VersionInfo {
   current: string;
@@ -112,6 +113,12 @@ export default function Settings() {
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
 
+  // Finnhub API state
+  const [finnhubApiKey, setFinnhubApiKeyState] = useState(() => getFinnhubApiKey() || "");
+  const [showFinnhubApiKey, setShowFinnhubApiKey] = useState(false);
+  const [finnhubTestStatus, setFinnhubTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
+  const [finnhubTestError, setFinnhubTestError] = useState<string | null>(null);
+
   const handleClearAllData = () => {
     setShowClearDataModal(true);
     setDeleteConfirmText("");
@@ -137,6 +144,47 @@ export default function Settings() {
   const handleCancelClearData = () => {
     setShowClearDataModal(false);
     setDeleteConfirmText("");
+  };
+
+  // Finnhub API key handlers
+  const handleSaveFinnhubApiKey = () => {
+    if (finnhubApiKey.trim()) {
+      setFinnhubApiKey(finnhubApiKey.trim());
+      setFinnhubTestStatus("idle");
+      setFinnhubTestError(null);
+    }
+  };
+
+  const handleRemoveFinnhubApiKey = () => {
+    removeFinnhubApiKey();
+    setFinnhubApiKeyState("");
+    setFinnhubTestStatus("idle");
+    setFinnhubTestError(null);
+  };
+
+  const handleTestFinnhubConnection = async () => {
+    if (!finnhubApiKey.trim()) {
+      setFinnhubTestError("Please enter an API key first");
+      return;
+    }
+    
+    setFinnhubTestStatus("testing");
+    setFinnhubTestError(null);
+    
+    try {
+      const result = await invoke<boolean>("test_finnhub_connection", { apiKey: finnhubApiKey.trim() });
+      if (result) {
+        setFinnhubTestStatus("success");
+        // Save the key if test was successful
+        setFinnhubApiKey(finnhubApiKey.trim());
+      } else {
+        setFinnhubTestStatus("error");
+        setFinnhubTestError("Invalid API key or connection failed");
+      }
+    } catch (e) {
+      setFinnhubTestStatus("error");
+      setFinnhubTestError(typeof e === "string" ? e : "Connection test failed");
+    }
   };
 
   const updateGalaxySetting = <K extends keyof GalaxyThemeSettings>(
@@ -3090,6 +3138,219 @@ export default function Settings() {
               </div>
             </div>
           )}
+        </div>
+
+        {/* API Keys Section */}
+        <div
+          style={{
+            backgroundColor: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "12px",
+            padding: "24px",
+            marginBottom: "24px",
+          }}
+        >
+          <h2
+            style={{
+              fontSize: "20px",
+              fontWeight: "600",
+              color: "var(--text-primary)",
+              marginBottom: "16px",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            <Key size={20} />
+            API Keys
+          </h2>
+          <p
+            style={{
+              fontSize: "14px",
+              color: "var(--text-secondary)",
+              marginBottom: "20px",
+              lineHeight: "1.6",
+            }}
+          >
+            Configure external API keys for enhanced features like earnings calendar, analyst ratings, and financial data.
+          </p>
+
+          {/* Finnhub API Key */}
+          <div style={{ marginBottom: "20px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+              <label
+                style={{
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  color: "var(--text-primary)",
+                }}
+              >
+                Finnhub API Key
+              </label>
+              <a
+                href="https://finnhub.io/register"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  fontSize: "12px",
+                  color: "var(--accent)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  textDecoration: "none",
+                }}
+              >
+                Get free API key
+                <ExternalLink size={12} />
+              </a>
+            </div>
+            <p
+              style={{
+                fontSize: "13px",
+                color: "var(--text-secondary)",
+                marginBottom: "12px",
+              }}
+            >
+              Used for earnings calendar, company news with sentiment, price targets, and analyst recommendations.
+            </p>
+            <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ position: "relative", flex: "1", minWidth: "200px" }}>
+                <input
+                  type={showFinnhubApiKey ? "text" : "password"}
+                  value={finnhubApiKey}
+                  onChange={(e) => {
+                    setFinnhubApiKeyState(e.target.value);
+                    setFinnhubTestStatus("idle");
+                    setFinnhubTestError(null);
+                  }}
+                  placeholder="Enter your Finnhub API key"
+                  style={{
+                    width: "100%",
+                    padding: "10px 40px 10px 12px",
+                    borderRadius: "6px",
+                    border: "1px solid var(--border-color)",
+                    backgroundColor: "var(--bg-primary)",
+                    color: "var(--text-primary)",
+                    fontSize: "14px",
+                    boxSizing: "border-box",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowFinnhubApiKey(!showFinnhubApiKey)}
+                  style={{
+                    position: "absolute",
+                    right: "8px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    color: "var(--text-secondary)",
+                    padding: "4px",
+                    display: "flex",
+                    alignItems: "center",
+                  }}
+                >
+                  {showFinnhubApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              <button
+                onClick={handleTestFinnhubConnection}
+                disabled={finnhubTestStatus === "testing" || !finnhubApiKey.trim()}
+                style={{
+                  padding: "10px 16px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                  backgroundColor: finnhubTestStatus === "success" ? "var(--profit)" : "var(--bg-tertiary)",
+                  color: finnhubTestStatus === "success" ? "white" : "var(--text-primary)",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor: finnhubTestStatus === "testing" || !finnhubApiKey.trim() ? "not-allowed" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  opacity: !finnhubApiKey.trim() ? 0.5 : 1,
+                }}
+              >
+                {finnhubTestStatus === "testing" ? (
+                  <>
+                    <Loader2 size={16} className="spin" />
+                    Testing...
+                  </>
+                ) : finnhubTestStatus === "success" ? (
+                  <>
+                    <CheckCircle size={16} />
+                    Connected
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw size={16} />
+                    Test Connection
+                  </>
+                )}
+              </button>
+              {hasFinnhubApiKey() && (
+                <button
+                  onClick={handleRemoveFinnhubApiKey}
+                  style={{
+                    padding: "10px 16px",
+                    borderRadius: "6px",
+                    border: "1px solid var(--danger)",
+                    backgroundColor: "transparent",
+                    color: "var(--danger)",
+                    fontSize: "14px",
+                    fontWeight: "500",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                >
+                  <Trash2 size={16} />
+                  Remove
+                </button>
+              )}
+            </div>
+            {finnhubTestStatus === "error" && finnhubTestError && (
+              <div
+                style={{
+                  marginTop: "8px",
+                  padding: "8px 12px",
+                  borderRadius: "6px",
+                  backgroundColor: "rgba(239, 68, 68, 0.1)",
+                  border: "1px solid rgba(239, 68, 68, 0.3)",
+                  color: "var(--danger)",
+                  fontSize: "13px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
+              >
+                <XCircle size={16} />
+                {finnhubTestError}
+              </div>
+            )}
+            {finnhubTestStatus === "success" && (
+              <div
+                style={{
+                  marginTop: "8px",
+                  padding: "8px 12px",
+                  borderRadius: "6px",
+                  backgroundColor: "rgba(16, 185, 129, 0.1)",
+                  border: "1px solid rgba(16, 185, 129, 0.3)",
+                  color: "var(--profit)",
+                  fontSize: "13px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
+              >
+                <CheckCircle size={16} />
+                API key saved and connection verified!
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Danger Zone - Clear All Data */}

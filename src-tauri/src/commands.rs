@@ -6,6 +6,7 @@ use chrono::{Timelike, Datelike};
 use std::fs;
 use std::process::Command;
 use evalexpr::{eval_float_with_context, HashMapContext, Value, ContextWithMutableVariables, DefaultNumericTypes};
+use reqwest::cookie::CookieStore;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CsvTrade {
@@ -8138,31 +8139,107 @@ pub async fn fetch_news_batch(symbols: Vec<String>) -> Result<Vec<NewsItem>, Str
     Ok(all_news)
 }
 
+/// Helper function to get Yahoo Finance crumb and cookie for authenticated requests
+async fn get_yahoo_auth() -> Result<(String, String), String> {
+    // Build a cookie-storing client
+    let jar = std::sync::Arc::new(reqwest::cookie::Jar::default());
+    let client: reqwest::Client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .cookie_store(true)
+        .cookie_provider(jar.clone())
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    // Step 1: Visit Yahoo Finance to establish session cookies
+    let consent_response: reqwest::Response = client
+        .get("https://finance.yahoo.com/")
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch Yahoo Finance: {}", e))?;
+    
+    if !consent_response.status().is_success() && consent_response.status() != reqwest::StatusCode::FOUND {
+        return Err(format!("Yahoo Finance returned: {}", consent_response.status()));
+    }
+    
+    // Step 2: Fetch the crumb from the dedicated crumb endpoint
+    let crumb_response: reqwest::Response = client
+        .get("https://query1.finance.yahoo.com/v1/test/getcrumb")
+        .header("Accept", "*/*")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .header("Referer", "https://finance.yahoo.com/")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get crumb: {}", e))?;
+    
+    if !crumb_response.status().is_success() {
+        return Err(format!("Crumb request returned: {}", crumb_response.status()));
+    }
+    
+    let crumb: String = crumb_response.text().await
+        .map_err(|e| format!("Failed to read crumb: {}", e))?;
+    
+    // Extract cookies from jar
+    let url = reqwest::Url::parse("https://finance.yahoo.com/").unwrap();
+    let cookie_str: String = jar.cookies(&url)
+        .map(|header| header.to_str().unwrap_or("").to_string())
+        .unwrap_or_default();
+    
+    if crumb.is_empty() {
+        return Err("Empty crumb received".to_string());
+    }
+    
+    Ok((cookie_str, crumb))
+}
+
 /// Fetch calendar events (earnings, dividends) for a symbol from Yahoo Finance
 #[tauri::command]
 pub async fn fetch_calendar_events(symbol: String) -> Result<Vec<CalendarEvent>, String> {
     let symbol_upper = symbol.to_uppercase();
     
+    // Try to get authenticated session first
+    let (cookie, crumb) = match get_yahoo_auth().await {
+        Ok((c, cr)) => (Some(c), Some(cr)),
+        Err(e) => {
+            eprintln!("Failed to get Yahoo auth (will try without): {}", e);
+            (None, None)
+        }
+    };
+    
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
     
-    // Try quoteSummary API (may require auth in some regions/times)
-    let url = format!(
-        "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=calendarEvents,summaryDetail",
-        symbol_upper
-    );
+    // Build URL with crumb if available
+    let url = if let Some(ref cr) = crumb {
+        format!(
+            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=calendarEvents,summaryDetail&crumb={}",
+            symbol_upper, cr
+        )
+    } else {
+        format!(
+            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=calendarEvents,summaryDetail",
+            symbol_upper
+        )
+    };
     
-    let response = client
+    let mut request = client
         .get(&url)
         .header("Accept", "application/json")
         .header("Accept-Language", "en-US,en;q=0.9")
         .header("Referer", "https://finance.yahoo.com/")
-        .header("Origin", "https://finance.yahoo.com")
-        .send()
-        .await;
+        .header("Origin", "https://finance.yahoo.com");
+    
+    // Add cookie header if available
+    if let Some(ref c) = cookie {
+        request = request.header("Cookie", c.as_str());
+    }
+    
+    let response = request.send().await;
     
     // If quoteSummary fails (401, etc), return empty events gracefully
     // News feed will still work, just without calendar events
@@ -8522,4 +8599,481 @@ fn get_economic_events_for_month(year: i32, month: u32) -> Vec<EconomicEvent> {
     }
     
     events
+}
+
+// ============================================================================
+// Finnhub API Integration
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubEarning {
+    pub date: String,
+    pub symbol: String,
+    pub eps_estimate: Option<f64>,
+    pub eps_actual: Option<f64>,
+    pub revenue_estimate: Option<f64>,
+    pub revenue_actual: Option<f64>,
+    pub hour: Option<String>, // "bmo" (before market open), "amc" (after market close)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubNews {
+    pub id: i64,
+    pub headline: String,
+    pub summary: String,
+    pub source: String,
+    pub url: String,
+    pub datetime: i64, // Unix timestamp
+    pub related: String, // Symbol
+    pub category: String,
+    pub sentiment: Option<f64>, // -1 to 1 sentiment score
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubBasicFinancials {
+    pub symbol: String,
+    pub pe_ratio: Option<f64>,
+    pub eps: Option<f64>,
+    pub market_cap: Option<f64>,
+    pub week_52_high: Option<f64>,
+    pub week_52_low: Option<f64>,
+    pub beta: Option<f64>,
+    pub dividend_yield: Option<f64>,
+    pub price_to_book: Option<f64>,
+    pub debt_to_equity: Option<f64>,
+    pub revenue_per_share: Option<f64>,
+    pub return_on_equity: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubPriceTarget {
+    pub symbol: String,
+    pub target_high: Option<f64>,
+    pub target_low: Option<f64>,
+    pub target_mean: Option<f64>,
+    pub target_median: Option<f64>,
+    pub last_updated: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubRecommendation {
+    pub symbol: String,
+    pub period: String,
+    pub strong_buy: i32,
+    pub buy: i32,
+    pub hold: i32,
+    pub sell: i32,
+    pub strong_sell: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubEconomicEvent {
+    pub date: String,
+    pub country: String,
+    pub event: String,
+    pub impact: String,
+    pub actual: Option<f64>,
+    pub estimate: Option<f64>,
+    pub prev: Option<f64>,
+    pub unit: Option<String>,
+}
+
+/// Test Finnhub API connection
+#[tauri::command]
+pub async fn test_finnhub_connection(api_key: String) -> Result<bool, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/quote?symbol=AAPL&token={}",
+        api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if response.status().is_success() {
+        let data: serde_json::Value = response.json().await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        
+        // Check if we got valid data (not an error response)
+        if data.get("error").is_some() {
+            return Ok(false);
+        }
+        
+        // If we got a current price, the API key is valid
+        if data.get("c").is_some() {
+            return Ok(true);
+        }
+    }
+    
+    Ok(false)
+}
+
+/// Fetch earnings calendar from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_earnings(
+    api_key: String,
+    from_date: String,
+    to_date: String,
+    symbol: Option<String>,
+) -> Result<Vec<FinnhubEarning>, String> {
+    let mut url = format!(
+        "https://finnhub.io/api/v1/calendar/earnings?from={}&to={}&token={}",
+        from_date, to_date, api_key
+    );
+    
+    if let Some(sym) = &symbol {
+        url = format!("{}&symbol={}", url, sym.to_uppercase());
+    }
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let mut earnings = Vec::new();
+    
+    if let Some(earnings_calendar) = data.get("earningsCalendar").and_then(|e| e.as_array()) {
+        for item in earnings_calendar {
+            let earning = FinnhubEarning {
+                date: item.get("date").and_then(|d| d.as_str()).unwrap_or("").to_string(),
+                symbol: item.get("symbol").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                eps_estimate: item.get("epsEstimate").and_then(|e| e.as_f64()),
+                eps_actual: item.get("epsActual").and_then(|e| e.as_f64()),
+                revenue_estimate: item.get("revenueEstimate").and_then(|r| r.as_f64()),
+                revenue_actual: item.get("revenueActual").and_then(|r| r.as_f64()),
+                hour: item.get("hour").and_then(|h| h.as_str()).map(|s| s.to_string()),
+            };
+            
+            // Filter by symbol if provided
+            if symbol.is_none() || earning.symbol.eq_ignore_ascii_case(symbol.as_ref().unwrap()) {
+                earnings.push(earning);
+            }
+        }
+    }
+    
+    Ok(earnings)
+}
+
+/// Fetch company news from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_news(
+    api_key: String,
+    symbol: String,
+    from_date: String,
+    to_date: String,
+) -> Result<Vec<FinnhubNews>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/company-news?symbol={}&from={}&to={}&token={}",
+        symbol.to_uppercase(), from_date, to_date, api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let mut news = Vec::new();
+    
+    if let Some(news_array) = data.as_array() {
+        for item in news_array.iter().take(50) { // Limit to 50 news items
+            let news_item = FinnhubNews {
+                id: item.get("id").and_then(|i| i.as_i64()).unwrap_or(0),
+                headline: item.get("headline").and_then(|h| h.as_str()).unwrap_or("").to_string(),
+                summary: item.get("summary").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                source: item.get("source").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                url: item.get("url").and_then(|u| u.as_str()).unwrap_or("").to_string(),
+                datetime: item.get("datetime").and_then(|d| d.as_i64()).unwrap_or(0),
+                related: symbol.to_uppercase(),
+                category: item.get("category").and_then(|c| c.as_str()).unwrap_or("").to_string(),
+                sentiment: None, // Sentiment requires separate API call
+            };
+            news.push(news_item);
+        }
+    }
+    
+    Ok(news)
+}
+
+/// Fetch news for multiple symbols from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_news_batch(
+    api_key: String,
+    symbols: Vec<String>,
+    from_date: String,
+    to_date: String,
+) -> Result<Vec<FinnhubNews>, String> {
+    let mut all_news = Vec::new();
+    
+    for symbol in symbols {
+        match fetch_finnhub_news(api_key.clone(), symbol, from_date.clone(), to_date.clone()).await {
+            Ok(news) => all_news.extend(news),
+            Err(e) => eprintln!("Failed to fetch news for symbol: {}", e),
+        }
+    }
+    
+    // Sort by datetime descending (most recent first)
+    all_news.sort_by(|a, b| b.datetime.cmp(&a.datetime));
+    
+    // Deduplicate by id
+    all_news.dedup_by(|a, b| a.id == b.id);
+    
+    // Limit total news items
+    all_news.truncate(100);
+    
+    Ok(all_news)
+}
+
+/// Fetch basic financials from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_basic_financials(
+    api_key: String,
+    symbol: String,
+) -> Result<FinnhubBasicFinancials, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/metric?symbol={}&metric=all&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let metric = data.get("metric").unwrap_or(&serde_json::Value::Null);
+    
+    Ok(FinnhubBasicFinancials {
+        symbol: symbol.to_uppercase(),
+        pe_ratio: metric.get("peBasicExclExtraTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("peTTM").and_then(|v| v.as_f64())),
+        eps: metric.get("epsBasicExclExtraItemsTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("epsTTM").and_then(|v| v.as_f64())),
+        market_cap: metric.get("marketCapitalization").and_then(|v| v.as_f64()),
+        week_52_high: metric.get("52WeekHigh").and_then(|v| v.as_f64()),
+        week_52_low: metric.get("52WeekLow").and_then(|v| v.as_f64()),
+        beta: metric.get("beta").and_then(|v| v.as_f64()),
+        dividend_yield: metric.get("dividendYieldIndicatedAnnual").and_then(|v| v.as_f64()),
+        price_to_book: metric.get("pbQuarterly").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("pbAnnual").and_then(|v| v.as_f64())),
+        debt_to_equity: metric.get("totalDebt/totalEquityQuarterly").and_then(|v| v.as_f64()),
+        revenue_per_share: metric.get("revenuePerShareTTM").and_then(|v| v.as_f64()),
+        return_on_equity: metric.get("roeTTM").and_then(|v| v.as_f64()),
+    })
+}
+
+/// Fetch price target from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_price_target(
+    api_key: String,
+    symbol: String,
+) -> Result<FinnhubPriceTarget, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/price-target?symbol={}&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    Ok(FinnhubPriceTarget {
+        symbol: symbol.to_uppercase(),
+        target_high: data.get("targetHigh").and_then(|v| v.as_f64()),
+        target_low: data.get("targetLow").and_then(|v| v.as_f64()),
+        target_mean: data.get("targetMean").and_then(|v| v.as_f64()),
+        target_median: data.get("targetMedian").and_then(|v| v.as_f64()),
+        last_updated: data.get("lastUpdated").and_then(|v| v.as_str()).map(|s| s.to_string()),
+    })
+}
+
+/// Fetch analyst recommendations from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_recommendations(
+    api_key: String,
+    symbol: String,
+) -> Result<Vec<FinnhubRecommendation>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/recommendation?symbol={}&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let mut recommendations = Vec::new();
+    
+    if let Some(recs_array) = data.as_array() {
+        for item in recs_array.iter().take(12) { // Last 12 months of recommendations
+            let rec = FinnhubRecommendation {
+                symbol: symbol.to_uppercase(),
+                period: item.get("period").and_then(|p| p.as_str()).unwrap_or("").to_string(),
+                strong_buy: item.get("strongBuy").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                buy: item.get("buy").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                hold: item.get("hold").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                sell: item.get("sell").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                strong_sell: item.get("strongSell").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            };
+            recommendations.push(rec);
+        }
+    }
+    
+    Ok(recommendations)
+}
+
+/// Fetch economic calendar from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_economic_calendar(
+    api_key: String,
+    from_date: String,
+    to_date: String,
+) -> Result<Vec<FinnhubEconomicEvent>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/calendar/economic?from={}&to={}&token={}",
+        from_date, to_date, api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let mut events = Vec::new();
+    
+    if let Some(calendar) = data.get("economicCalendar").and_then(|c| c.as_array()) {
+        for item in calendar {
+            // Filter for US events primarily
+            let country = item.get("country").and_then(|c| c.as_str()).unwrap_or("");
+            if country != "US" && country != "United States" {
+                continue;
+            }
+            
+            let event = FinnhubEconomicEvent {
+                date: item.get("time").and_then(|t| t.as_str())
+                    .map(|t| t.split('T').next().unwrap_or(t).to_string())
+                    .unwrap_or_default(),
+                country: country.to_string(),
+                event: item.get("event").and_then(|e| e.as_str()).unwrap_or("").to_string(),
+                impact: item.get("impact").and_then(|i| i.as_str()).unwrap_or("medium").to_string(),
+                actual: item.get("actual").and_then(|a| a.as_f64()),
+                estimate: item.get("estimate").and_then(|e| e.as_f64()),
+                prev: item.get("prev").and_then(|p| p.as_f64()),
+                unit: item.get("unit").and_then(|u| u.as_str()).map(|s| s.to_string()),
+            };
+            events.push(event);
+        }
+    }
+    
+    Ok(events)
+}
+
+/// Fetch earnings for multiple symbols from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_earnings_batch(
+    api_key: String,
+    symbols: Vec<String>,
+    from_date: String,
+    to_date: String,
+) -> Result<Vec<FinnhubEarning>, String> {
+    // Fetch all earnings for the date range
+    let all_earnings = fetch_finnhub_earnings(api_key, from_date, to_date, None).await?;
+    
+    // Filter to only include requested symbols
+    let symbol_set: std::collections::HashSet<String> = symbols
+        .iter()
+        .map(|s| s.to_uppercase())
+        .collect();
+    
+    let filtered: Vec<FinnhubEarning> = all_earnings
+        .into_iter()
+        .filter(|e| symbol_set.contains(&e.symbol.to_uppercase()))
+        .collect();
+    
+    Ok(filtered)
 }

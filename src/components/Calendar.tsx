@@ -7,6 +7,7 @@ import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import type { DataMode } from "../utils/dataMode";
 import { loadSandboxState, getSandboxEmotionalStates } from "../utils/sandboxStore";
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
+import { getFinnhubApiKey } from "../utils/finnhubManager";
 
 interface DailyPnL {
   date: string;
@@ -43,9 +44,127 @@ interface EconomicEvent {
   importance: string;
 }
 
+interface FinnhubEarning {
+  date: string;
+  symbol: string;
+  eps_estimate: number | null;
+  eps_actual: number | null;
+  revenue_estimate: number | null;
+  revenue_actual: number | null;
+  hour: string | null;
+}
+
+interface FinnhubEconomicEvent {
+  date: string;
+  country: string;
+  event: string;
+  impact: string;
+  actual: number | null;
+  estimate: number | null;
+  prev: number | null;
+  unit: string | null;
+}
+
 const CALENDAR_SHOW_EARNINGS_KEY = "tradebutler_calendar_show_earnings";
 const CALENDAR_SHOW_DIVIDENDS_KEY = "tradebutler_calendar_show_dividends";
 const CALENDAR_SHOW_ECONOMIC_KEY = "tradebutler_calendar_show_economic";
+
+// Cache keys and duration
+const CALENDAR_EVENTS_CACHE_KEY = "tradebutler_calendar_events_cache_v2";
+const ECONOMIC_EVENTS_CACHE_KEY = "tradebutler_economic_events_cache_v2";
+const CACHE_DURATION_MS = 60 * 60 * 1000; // 1 hour
+const MAX_CACHED_MONTHS = 6; // Keep up to 6 months cached
+
+interface MonthCacheEntry<T> {
+  timestamp: number;
+  events: T;
+}
+
+interface MultiMonthCache<T> {
+  months: Record<string, MonthCacheEntry<T>>;
+}
+
+const getCachedEvents = (month: string): MonthCacheEntry<Record<string, CalendarEvent[]>> | null => {
+  try {
+    const cached = localStorage.getItem(CALENDAR_EVENTS_CACHE_KEY);
+    if (!cached) return null;
+    const data: MultiMonthCache<Record<string, CalendarEvent[]>> = JSON.parse(cached);
+    const monthData = data.months?.[month];
+    if (monthData && Date.now() - monthData.timestamp < CACHE_DURATION_MS) {
+      return monthData;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const setCachedEvents = (month: string, events: Record<string, CalendarEvent[]>) => {
+  try {
+    const cached = localStorage.getItem(CALENDAR_EVENTS_CACHE_KEY);
+    const data: MultiMonthCache<Record<string, CalendarEvent[]>> = cached 
+      ? JSON.parse(cached) 
+      : { months: {} };
+    
+    // Add the new month's data
+    data.months[month] = {
+      timestamp: Date.now(),
+      events,
+    };
+    
+    // Clean up old entries (keep only MAX_CACHED_MONTHS most recent)
+    const sortedMonths = Object.entries(data.months)
+      .sort((a, b) => b[1].timestamp - a[1].timestamp)
+      .slice(0, MAX_CACHED_MONTHS);
+    
+    data.months = Object.fromEntries(sortedMonths);
+    
+    localStorage.setItem(CALENDAR_EVENTS_CACHE_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.warn("Failed to cache calendar events:", e);
+  }
+};
+
+const getCachedEconomicEvents = (month: string): MonthCacheEntry<Record<string, EconomicEvent[]>> | null => {
+  try {
+    const cached = localStorage.getItem(ECONOMIC_EVENTS_CACHE_KEY);
+    if (!cached) return null;
+    const data: MultiMonthCache<Record<string, EconomicEvent[]>> = JSON.parse(cached);
+    const monthData = data.months?.[month];
+    if (monthData && Date.now() - monthData.timestamp < CACHE_DURATION_MS) {
+      return monthData;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const setCachedEconomicEvents = (month: string, events: Record<string, EconomicEvent[]>) => {
+  try {
+    const cached = localStorage.getItem(ECONOMIC_EVENTS_CACHE_KEY);
+    const data: MultiMonthCache<Record<string, EconomicEvent[]>> = cached 
+      ? JSON.parse(cached) 
+      : { months: {} };
+    
+    // Add the new month's data
+    data.months[month] = {
+      timestamp: Date.now(),
+      events,
+    };
+    
+    // Clean up old entries
+    const sortedMonths = Object.entries(data.months)
+      .sort((a, b) => b[1].timestamp - a[1].timestamp)
+      .slice(0, MAX_CACHED_MONTHS);
+    
+    data.months = Object.fromEntries(sortedMonths);
+    
+    localStorage.setItem(ECONOMIC_EVENTS_CACHE_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.warn("Failed to cache economic events:", e);
+  }
+};
 
 export default function Calendar() {
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
@@ -62,6 +181,7 @@ export default function Calendar() {
   const [calendarEvents, setCalendarEvents] = useState<Record<string, CalendarEvent[]>>({});
   const [economicEvents, setEconomicEvents] = useState<Record<string, EconomicEvent[]>>({});
   const [loadingEvents, setLoadingEvents] = useState(false);
+  const [cacheTimestamp, setCacheTimestamp] = useState<number | null>(null);
   
   // Toggle state for showing different event types
   const [showEarnings, setShowEarnings] = useState(() => {
@@ -98,9 +218,64 @@ export default function Calendar() {
     loadCalendarData();
   }, [currentDate, dataMode]);
 
-  // Fetch calendar events (earnings, dividends)
-  const fetchCalendarEvents = useCallback(async () => {
-    if (dataMode === "sandbox") return;
+  // Helper function to deduplicate calendar events
+  // Prefers Finnhub data when both sources have the same event
+  const deduplicateEvents = (finnhubEvents: CalendarEvent[], yahooEvents: CalendarEvent[]): CalendarEvent[] => {
+    const seen = new Set<string>();
+    const dedupedEvents: CalendarEvent[] = [];
+    
+    // Add all Finnhub events first (preferred source)
+    finnhubEvents.forEach(event => {
+      const key = `${event.symbol}_${event.event_type}_${event.date}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        dedupedEvents.push(event);
+      }
+    });
+    
+    // Add Yahoo events only if no matching Finnhub event exists
+    yahooEvents.forEach(event => {
+      const key = `${event.symbol}_${event.event_type}_${event.date}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        dedupedEvents.push(event);
+      }
+    });
+    
+    return dedupedEvents;
+  };
+
+  // Fetch calendar events (earnings, dividends) from both Yahoo and Finnhub
+  const fetchCalendarEvents = useCallback(async (forceRefresh = false) => {
+    const monthKey = format(currentDate, "yyyy-MM");
+    
+    // Check cache first (unless force refresh)
+    if (!forceRefresh) {
+      const cachedEvents = getCachedEvents(monthKey);
+      const cachedEconomic = getCachedEconomicEvents(monthKey);
+      
+      // Use cached data if available (check each independently)
+      let usedCalendarCache = false;
+      let usedEconomicCache = false;
+      
+      if (cachedEvents) {
+        setCalendarEvents(cachedEvents.events);
+        setCacheTimestamp(cachedEvents.timestamp);
+        usedCalendarCache = true;
+        console.log("Using cached calendar events (cache age:", Math.round((Date.now() - cachedEvents.timestamp) / 60000), "minutes)");
+      }
+      
+      if (cachedEconomic) {
+        setEconomicEvents(cachedEconomic.events);
+        usedEconomicCache = true;
+        console.log("Using cached economic events (cache age:", Math.round((Date.now() - cachedEconomic.timestamp) / 60000), "minutes)");
+      }
+      
+      // If both caches are valid, we're done
+      if (usedCalendarCache && usedEconomicCache) {
+        return;
+      }
+    }
     
     setLoadingEvents(true);
     try {
@@ -108,45 +283,118 @@ export default function Calendar() {
       const savedSymbols = localStorage.getItem("tradebutler_news_watched_symbols");
       const watchedSymbols: string[] = savedSymbols ? JSON.parse(savedSymbols) : [];
       
-      // Get open position symbols
-      const paperOnly = dataMode === "paper";
+      // Get open position symbols (skip in sandbox mode since sandbox doesn't have real positions)
       let openSymbols: string[] = [];
-      try {
-        const groups = await invoke<Array<{ entry_trade: { symbol: string }; final_quantity: number }>>(
-          "get_position_groups",
-          { pairingMethod: "fifo", startDate: null, endDate: null, paperOnly, includePaper: !paperOnly }
-        );
-        openSymbols = groups
-          .filter(g => g.final_quantity !== 0)
-          .map(g => g.entry_trade.symbol.toUpperCase());
-      } catch (e) {
-        console.error("Failed to fetch open positions:", e);
-      }
-      
-      const allSymbols = [...new Set([...watchedSymbols, ...openSymbols])];
-      
-      if (allSymbols.length > 0) {
+      if (dataMode !== "sandbox") {
+        const paperOnly = dataMode === "paper";
         try {
-          const events = await invoke<CalendarEvent[]>("fetch_calendar_events_batch", { symbols: allSymbols });
-          const eventsMap: Record<string, CalendarEvent[]> = {};
-          events.forEach(event => {
-            if (!eventsMap[event.date]) eventsMap[event.date] = [];
-            eventsMap[event.date].push(event);
-          });
-          setCalendarEvents(eventsMap);
+          const groups = await invoke<Array<{ entry_trade: { symbol: string }; final_quantity: number }>>(
+            "get_position_groups",
+            { pairingMethod: "fifo", startDate: null, endDate: null, paperOnly, includePaper: !paperOnly }
+          );
+          openSymbols = groups
+            .filter(g => g.final_quantity !== 0)
+            .map(g => g.entry_trade.symbol.toUpperCase());
         } catch (e) {
-          console.warn("Failed to fetch symbol calendar events (API may require auth):", e);
-          setCalendarEvents({});
+          console.error("Failed to fetch open positions:", e);
         }
       }
       
-      // Fetch economic events for current month
+      const allSymbols = [...new Set([...watchedSymbols, ...openSymbols])];
       const monthStart = startOfMonth(currentDate);
       const monthEnd = endOfMonth(currentDate);
-      const economicData = await invoke<EconomicEvent[]>("get_economic_calendar_range", {
-        startDate: format(monthStart, "yyyy-MM-dd"),
-        endDate: format(monthEnd, "yyyy-MM-dd"),
+      const fromDate = format(monthStart, "yyyy-MM-dd");
+      const toDate = format(monthEnd, "yyyy-MM-dd");
+      
+      let yahooEvents: CalendarEvent[] = [];
+      let finnhubCalendarEvents: CalendarEvent[] = [];
+      
+      if (allSymbols.length > 0) {
+        // Fetch from Yahoo Finance
+        try {
+          yahooEvents = await invoke<CalendarEvent[]>("fetch_calendar_events_batch", { symbols: allSymbols });
+        } catch (e) {
+          console.warn("Failed to fetch Yahoo calendar events:", e);
+        }
+        
+        // Fetch from Finnhub (if API key is available)
+        const finnhubApiKey = getFinnhubApiKey();
+        if (finnhubApiKey) {
+          try {
+            const finnhubEarnings = await invoke<FinnhubEarning[]>("fetch_finnhub_earnings_batch", {
+              apiKey: finnhubApiKey,
+              symbols: allSymbols,
+              fromDate,
+              toDate,
+            });
+            
+            // Convert Finnhub earnings to CalendarEvent format
+            finnhubCalendarEvents = finnhubEarnings.map(earning => ({
+              date: earning.date,
+              symbol: earning.symbol,
+              event_type: "earnings",
+              title: `${earning.symbol} Earnings`,
+              details: [
+                earning.hour === "bmo" ? "Before Market Open" : earning.hour === "amc" ? "After Market Close" : null,
+                earning.eps_estimate != null ? `EPS Est: $${earning.eps_estimate.toFixed(2)}` : null,
+                earning.eps_actual != null ? `EPS Actual: $${earning.eps_actual.toFixed(2)}` : null,
+              ].filter(Boolean).join(" | ") || null,
+            }));
+          } catch (e) {
+            console.warn("Failed to fetch Finnhub earnings:", e);
+          }
+        }
+      }
+      
+      // Deduplicate events, preferring Finnhub data
+      const allEvents = deduplicateEvents(finnhubCalendarEvents, yahooEvents);
+      
+      const eventsMap: Record<string, CalendarEvent[]> = {};
+      allEvents.forEach(event => {
+        if (!eventsMap[event.date]) eventsMap[event.date] = [];
+        eventsMap[event.date].push(event);
       });
+      setCalendarEvents(eventsMap);
+      
+      // Cache the calendar events
+      setCachedEvents(monthKey, eventsMap);
+      
+      // Fetch economic events - try Finnhub first if API key available, fallback to static
+      let economicData: EconomicEvent[] = [];
+      const finnhubApiKey = getFinnhubApiKey();
+      
+      if (finnhubApiKey) {
+        try {
+          const finnhubEconEvents = await invoke<FinnhubEconomicEvent[]>("fetch_finnhub_economic_calendar", {
+            apiKey: finnhubApiKey,
+            fromDate,
+            toDate,
+          });
+          
+          // Convert Finnhub economic events to our format
+          economicData = finnhubEconEvents.map(event => ({
+            date: event.date,
+            event_type: event.event.toLowerCase().replace(/\s+/g, "_"),
+            title: event.event,
+            description: [
+              event.actual != null ? `Actual: ${event.actual}${event.unit || ""}` : null,
+              event.estimate != null ? `Est: ${event.estimate}${event.unit || ""}` : null,
+              event.prev != null ? `Prev: ${event.prev}${event.unit || ""}` : null,
+            ].filter(Boolean).join(" | ") || null,
+            importance: event.impact || "medium",
+          }));
+        } catch (e) {
+          console.warn("Failed to fetch Finnhub economic calendar, using static data:", e);
+        }
+      }
+      
+      // Fallback to static economic events if Finnhub didn't return any
+      if (economicData.length === 0) {
+        economicData = await invoke<EconomicEvent[]>("get_economic_calendar_range", {
+          startDate: fromDate,
+          endDate: toDate,
+        });
+      }
       
       const econMap: Record<string, EconomicEvent[]> = {};
       economicData.forEach(event => {
@@ -154,6 +402,12 @@ export default function Calendar() {
         econMap[event.date].push(event);
       });
       setEconomicEvents(econMap);
+      
+      // Cache the economic events
+      setCachedEconomicEvents(monthKey, econMap);
+      setCacheTimestamp(Date.now());
+      
+      console.log("Fetched and cached calendar events for", monthKey);
     } catch (e) {
       console.error("Failed to fetch calendar events:", e);
     } finally {
@@ -503,9 +757,11 @@ export default function Calendar() {
           
           {/* Refresh events button */}
           <button
-            onClick={fetchCalendarEvents}
+            onClick={() => fetchCalendarEvents(true)}
             disabled={loadingEvents}
-            title="Refresh events"
+            title={cacheTimestamp 
+              ? `Refresh events (last updated ${Math.round((Date.now() - cacheTimestamp) / 60000)} min ago)` 
+              : "Refresh events"}
             style={{
               background: "var(--bg-secondary)",
               border: "1px solid var(--border-color)",
@@ -516,6 +772,7 @@ export default function Calendar() {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
+              gap: "6px",
               transition: "background 0.15s ease, border-color 0.15s ease",
             }}
             onMouseEnter={(e) => {
@@ -530,6 +787,11 @@ export default function Calendar() {
             }}
           >
             <RefreshCw size={18} className={loadingEvents ? "spin" : ""} />
+            {cacheTimestamp && (
+              <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                {Math.round((Date.now() - cacheTimestamp) / 60000)}m
+              </span>
+            )}
           </button>
           
           {/* Event settings button */}
@@ -771,7 +1033,7 @@ export default function Calendar() {
                   </span>
                 </>
               )}
-              {(journalEntries.length > 0 || emotionalStates.length > 0) && (
+              {(journalEntries.length > 0 || emotionalStates.length > 0 || earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0) && (
                 <div
                   style={{
                     display: "flex",

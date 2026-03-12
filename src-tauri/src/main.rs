@@ -119,6 +119,16 @@ fn main() {
             commands::fetch_calendar_events_batch,
             commands::get_economic_calendar,
             commands::get_economic_calendar_range,
+            // Finnhub API commands
+            commands::test_finnhub_connection,
+            commands::fetch_finnhub_earnings,
+            commands::fetch_finnhub_earnings_batch,
+            commands::fetch_finnhub_news,
+            commands::fetch_finnhub_news_batch,
+            commands::fetch_finnhub_basic_financials,
+            commands::fetch_finnhub_price_target,
+            commands::fetch_finnhub_recommendations,
+            commands::fetch_finnhub_economic_calendar,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

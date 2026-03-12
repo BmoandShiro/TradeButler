@@ -24,8 +24,9 @@ import {
   Trash2,
   Settings
 } from "lucide-react";
-import { formatDistanceToNow, parseISO } from "date-fns";
+import { formatDistanceToNow, parseISO, format } from "date-fns";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import { getFinnhubApiKey } from "../utils/finnhubManager";
 
 interface NewsItem {
   id: string;
@@ -50,6 +51,16 @@ interface CalendarEvent {
   details: string | null;
 }
 
+interface FinnhubEarning {
+  date: string;
+  symbol: string;
+  eps_estimate: number | null;
+  eps_actual: number | null;
+  revenue_estimate: number | null;
+  revenue_actual: number | null;
+  hour: string | null;
+}
+
 interface OpenPositionGroup {
   entry_trade: { 
     id: number; 
@@ -69,6 +80,37 @@ const NEWS_MUTED_SYMBOLS_KEY = "tradebutler_news_muted_symbols";
 const NEWS_WATCHLISTS_KEY = "tradebutler_news_watchlists";
 const NEWS_SHOW_SENTIMENT_KEY = "tradebutler_news_show_sentiment";
 const NEWS_SHOW_PRICE_CHANGE_KEY = "tradebutler_news_show_price_change";
+const NEWS_CALENDAR_CACHE_KEY = "tradebutler_news_calendar_cache";
+const NEWS_CACHE_DURATION_MS = 60 * 60 * 1000; // 1 hour
+
+interface CachedNewsCalendarData {
+  timestamp: number;
+  symbolsHash: string;
+  events: CalendarEvent[];
+}
+
+const getNewsCalendarCache = (symbolsHash: string): CachedNewsCalendarData | null => {
+  try {
+    const cached = localStorage.getItem(NEWS_CALENDAR_CACHE_KEY);
+    if (!cached) return null;
+    const data: CachedNewsCalendarData = JSON.parse(cached);
+    if (data.symbolsHash === symbolsHash && Date.now() - data.timestamp < NEWS_CACHE_DURATION_MS) {
+      return data;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const setNewsCalendarCache = (symbolsHash: string, events: CalendarEvent[]) => {
+  const data: CachedNewsCalendarData = {
+    timestamp: Date.now(),
+    symbolsHash,
+    events,
+  };
+  localStorage.setItem(NEWS_CALENDAR_CACHE_KEY, JSON.stringify(data));
+};
 
 // Sentiment keywords for basic analysis
 const POSITIVE_KEYWORDS = [
@@ -204,6 +246,32 @@ export default function News() {
     setPriceData(prices);
   }, []);
 
+  // Helper to deduplicate calendar events, preferring Finnhub data
+  const deduplicateCalendarEvents = (finnhubEvents: CalendarEvent[], yahooEvents: CalendarEvent[]): CalendarEvent[] => {
+    const seen = new Set<string>();
+    const dedupedEvents: CalendarEvent[] = [];
+    
+    // Add Finnhub events first (preferred source)
+    finnhubEvents.forEach(event => {
+      const key = `${event.symbol}_${event.event_type}_${event.date}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        dedupedEvents.push(event);
+      }
+    });
+    
+    // Add Yahoo events only if no matching Finnhub event
+    yahooEvents.forEach(event => {
+      const key = `${event.symbol}_${event.event_type}_${event.date}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        dedupedEvents.push(event);
+      }
+    });
+    
+    return dedupedEvents;
+  };
+
   // Fetch news for all symbols
   const fetchNews = useCallback(async () => {
     const symbols = getAllSymbols();
@@ -218,30 +286,77 @@ export default function News() {
     setError(null);
 
     try {
-      // Fetch news and calendar events separately so one failure doesn't break the other
-      const [newsResult, eventsResult] = await Promise.allSettled([
-        invoke<NewsItem[]>("fetch_news_batch", { symbols }),
-        invoke<CalendarEvent[]>("fetch_calendar_events_batch", { symbols }),
-      ]);
+      // Fetch news from Yahoo
+      const newsResult = await invoke<NewsItem[]>("fetch_news_batch", { symbols }).catch(e => {
+        console.error("Failed to fetch news:", e);
+        return [] as NewsItem[];
+      });
       
-      // Handle news data
-      if (newsResult.status === "fulfilled") {
-        const newsWithMeta: NewsItemWithMeta[] = newsResult.value.map(item => ({
-          ...item,
-          sentiment: analyzeSentiment(item.title),
-        }));
-        setNews(newsWithMeta);
-      } else {
-        console.error("Failed to fetch news:", newsResult.reason);
-        setError("Failed to fetch news");
-      }
+      const newsWithMeta: NewsItemWithMeta[] = newsResult.map(item => ({
+        ...item,
+        sentiment: analyzeSentiment(item.title),
+      }));
+      setNews(newsWithMeta);
       
-      // Handle calendar events - fail silently, just log
-      if (eventsResult.status === "fulfilled") {
-        setCalendarEvents(eventsResult.value);
+      // Fetch calendar events from both Yahoo and Finnhub (with caching)
+      const symbolsHash = symbols.sort().join(",");
+      const cachedCalendar = getNewsCalendarCache(symbolsHash);
+      
+      if (cachedCalendar) {
+        // Use cached calendar events
+        setCalendarEvents(cachedCalendar.events);
+        console.log("Using cached calendar events (cache age:", Math.round((Date.now() - cachedCalendar.timestamp) / 60000), "minutes)");
       } else {
-        console.warn("Failed to fetch calendar events:", eventsResult.reason);
-        setCalendarEvents([]);
+        // Fetch fresh calendar events
+        let yahooEvents: CalendarEvent[] = [];
+        let finnhubCalendarEvents: CalendarEvent[] = [];
+        
+        // Yahoo calendar events
+        try {
+          yahooEvents = await invoke<CalendarEvent[]>("fetch_calendar_events_batch", { symbols });
+        } catch (e) {
+          console.warn("Failed to fetch Yahoo calendar events:", e);
+        }
+        
+        // Finnhub earnings (if API key available)
+        const finnhubApiKey = getFinnhubApiKey();
+        if (finnhubApiKey) {
+          try {
+            const today = new Date();
+            const futureDate = new Date(today);
+            futureDate.setDate(futureDate.getDate() + 60); // Look ahead 60 days
+            
+            const finnhubEarnings = await invoke<FinnhubEarning[]>("fetch_finnhub_earnings_batch", {
+              apiKey: finnhubApiKey,
+              symbols,
+              fromDate: format(today, "yyyy-MM-dd"),
+              toDate: format(futureDate, "yyyy-MM-dd"),
+            });
+            
+            // Convert Finnhub earnings to CalendarEvent format
+            finnhubCalendarEvents = finnhubEarnings.map(earning => ({
+              date: earning.date,
+              symbol: earning.symbol,
+              event_type: "earnings",
+              title: `${earning.symbol} Earnings`,
+              details: [
+                earning.hour === "bmo" ? "Before Market Open" : earning.hour === "amc" ? "After Market Close" : null,
+                earning.eps_estimate != null ? `EPS Est: $${earning.eps_estimate.toFixed(2)}` : null,
+                earning.eps_actual != null ? `EPS Actual: $${earning.eps_actual.toFixed(2)}` : null,
+              ].filter(Boolean).join(" | ") || null,
+            }));
+          } catch (e) {
+            console.warn("Failed to fetch Finnhub earnings:", e);
+          }
+        }
+        
+        // Deduplicate events, preferring Finnhub data
+        const allEvents = deduplicateCalendarEvents(finnhubCalendarEvents, yahooEvents);
+        setCalendarEvents(allEvents);
+        
+        // Cache the calendar events
+        setNewsCalendarCache(symbolsHash, allEvents);
+        console.log("Fetched and cached calendar events for", symbols.length, "symbols");
       }
       
       setLastRefresh(new Date());

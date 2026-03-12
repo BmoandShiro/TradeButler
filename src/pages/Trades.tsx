@@ -21,6 +21,7 @@ import {
 } from "../utils/sandboxStore";
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 import { LoadingSphere } from "../components/LoadingSphere";
+import ViewFinancialsButton from "../components/ViewFinancialsButton";
 
 interface JournalEntrySummary {
   id: number;
@@ -2908,7 +2909,10 @@ export default function Trades() {
                             {formatDate(group.entry_trade.timestamp)}
                           </td>
                           <td style={{ padding: "12px 16px", fontSize: "14px", fontWeight: "600" }}>
-                            {group.entry_trade.symbol}
+                            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                              {group.entry_trade.symbol}
+                              <ViewFinancialsButton symbol={group.entry_trade.symbol} size={12} />
+                            </div>
                           </td>
                           <td style={{ padding: "12px 16px", fontSize: "14px", textAlign: "right" }}>
                             {formatWithCommas(group.entry_trade.quantity, { minDecimals: 4, maxDecimals: 4 })}
@@ -3834,7 +3838,10 @@ export default function Trades() {
                           {formatDate(trade.timestamp)}
                         </td>
                         <td style={{ padding: "12px 16px", fontSize: "14px", fontWeight: "600" }}>
-                          {trade.symbol}
+                          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                            {trade.symbol}
+                            <ViewFinancialsButton symbol={trade.symbol} size={12} />
+                          </div>
                         </td>
                         <td style={{ padding: "12px 16px", fontSize: "14px" }}>
                           <span

@@ -69,6 +69,7 @@ import {
   EXAMPLE_SYMBOL_PNL,
 } from "../exampleData";
 import NewsWidget from "../components/NewsWidget";
+import ViewFinancialsButton from "../components/ViewFinancialsButton";
 
 interface Metrics {
   total_trades: number;
@@ -2889,6 +2890,29 @@ export default function Dashboard() {
     openPositions: { top: 0, right: 0 },
     news: { top: 0, right: 0 },
   });
+
+  // News widget settings (controlled from dashboard settings menu)
+  const NEWS_INCLUDE_POSITIONS_KEY = "tradebutler_news_include_positions";
+  const NEWS_SHOW_SENTIMENT_KEY = "tradebutler_news_show_sentiment";
+  const [newsSearchQuery, setNewsSearchQuery] = useState("");
+  const [newsIncludePositions, setNewsIncludePositions] = useState(() => {
+    const saved = localStorage.getItem(NEWS_INCLUDE_POSITIONS_KEY);
+    return saved ? JSON.parse(saved) : true;
+  });
+  const [newsShowSentiment, setNewsShowSentiment] = useState(() => {
+    const saved = localStorage.getItem(NEWS_SHOW_SENTIMENT_KEY);
+    return saved ? JSON.parse(saved) : true;
+  });
+
+  // Save news settings to localStorage
+  useEffect(() => {
+    localStorage.setItem(NEWS_INCLUDE_POSITIONS_KEY, JSON.stringify(newsIncludePositions));
+  }, [newsIncludePositions]);
+
+  useEffect(() => {
+    localStorage.setItem(NEWS_SHOW_SENTIMENT_KEY, JSON.stringify(newsShowSentiment));
+  }, [newsShowSentiment]);
+
   const [timeframe, setTimeframe] = useState<Timeframe>(() => {
     const saved = localStorage.getItem("tradebutler_dashboard_timeframe");
     return (saved as Timeframe) || "all";
@@ -6009,7 +6033,10 @@ export default function Dashboard() {
                                   backgroundColor: "var(--bg-tertiary)",
                                 }}
                               >
-                                <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>{group.entry_trade.symbol}</span>
+                                <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                                  <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>{group.entry_trade.symbol}</span>
+                                  <ViewFinancialsButton symbol={group.entry_trade.symbol} size={12} />
+                                </span>
                                 <span
                                   style={{
                                     fontSize: "11px",
@@ -6106,6 +6133,7 @@ export default function Dashboard() {
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                   <span style={{ fontWeight: "600", fontSize: "15px" }}>{group.entry_trade.symbol}</span>
+                                  <ViewFinancialsButton symbol={group.entry_trade.symbol} size={14} />
                                   <span
                                     style={{
                                       fontSize: "12px",
@@ -6327,6 +6355,51 @@ export default function Dashboard() {
                                   </button>
                                 </>
                               )}
+                              {/* News Settings */}
+                              <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                              <div style={{ padding: "4px 0" }}>
+                                <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>News Settings</div>
+                                <label
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "8px",
+                                    fontSize: "12px",
+                                    color: "var(--text-primary)",
+                                    cursor: "pointer",
+                                    padding: "4px 0",
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={newsIncludePositions}
+                                    onChange={(e) => setNewsIncludePositions(e.target.checked)}
+                                    style={{ accentColor: "var(--accent)" }}
+                                  />
+                                  Include open positions
+                                </label>
+                                <label
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "8px",
+                                    fontSize: "12px",
+                                    color: "var(--text-primary)",
+                                    cursor: "pointer",
+                                    padding: "4px 0",
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={newsShowSentiment}
+                                    onChange={(e) => setNewsShowSentiment(e.target.checked)}
+                                    style={{ accentColor: "var(--accent)" }}
+                                  />
+                                  Show sentiment
+                                </label>
+                              </div>
                               <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                               <button
                                 onClick={(e) => {
@@ -6372,7 +6445,18 @@ export default function Dashboard() {
                       </div>
                     </div>
                     <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-                      <NewsWidget compact maxItems={5} />
+                      <NewsWidget 
+                        compact 
+                        maxItems={5}
+                        externalSearchQuery={newsSearchQuery}
+                        externalIncludePositions={newsIncludePositions}
+                        externalShowSentiment={newsShowSentiment}
+                        onSearchQueryChange={setNewsSearchQuery}
+                        onIncludePositionsChange={setNewsIncludePositions}
+                        onShowSentimentChange={setNewsShowSentiment}
+                        hideInternalSettings
+                        showSearchInHeader
+                      />
                     </div>
                   </div>
                   </SectionCardResizeWrapper>

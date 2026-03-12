@@ -1,17 +1,26 @@
 import { useSearchParams } from "react-router-dom";
-import { Calculator, DollarSign } from "lucide-react";
+import { Calculator, DollarSign, BarChart3 } from "lucide-react";
 import AverageDownCalculator from "./AverageDownCalculator";
 import DividendCalculator from "./DividendCalculator";
+import BasicFinancials from "./BasicFinancials";
 
-type ToolTab = "average-down" | "dividend";
+type ToolTab = "average-down" | "dividend" | "basic-financials";
 
 export default function Tools() {
   const [searchParams, setSearchParams] = useSearchParams();
   const calc = (searchParams.get("calc") || "average-down") as ToolTab;
-  const validCalc = calc === "dividend" ? "dividend" : "average-down";
+  const validCalc = ["average-down", "dividend", "basic-financials"].includes(calc) ? calc : "average-down";
 
   const setCalc = (value: ToolTab) => {
-    setSearchParams(value === "average-down" ? {} : { calc: value });
+    // Preserve symbol parameter when switching to basic-financials
+    const symbol = searchParams.get("symbol");
+    if (value === "average-down") {
+      setSearchParams({});
+    } else if (value === "basic-financials" && symbol) {
+      setSearchParams({ calc: value, symbol });
+    } else {
+      setSearchParams({ calc: value });
+    }
   };
 
   return (
@@ -67,9 +76,31 @@ export default function Tools() {
           <DollarSign size={18} />
           Dividend Calculator
         </button>
+        <button
+          type="button"
+          onClick={() => setCalc("basic-financials")}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            padding: "10px 16px",
+            borderRadius: "8px",
+            border: validCalc === "basic-financials" ? "1px solid var(--accent)" : "1px solid var(--border-color)",
+            backgroundColor: validCalc === "basic-financials" ? "color-mix(in srgb, var(--accent) 14%, transparent)" : "var(--bg-secondary)",
+            color: validCalc === "basic-financials" ? "var(--accent)" : "var(--text-secondary)",
+            fontSize: "14px",
+            fontWeight: "600",
+            cursor: "pointer",
+          }}
+        >
+          <BarChart3 size={18} />
+          Basic Financials
+        </button>
       </div>
       <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-        {validCalc === "average-down" ? <AverageDownCalculator /> : <DividendCalculator />}
+        {validCalc === "average-down" && <AverageDownCalculator />}
+        {validCalc === "dividend" && <DividendCalculator />}
+        {validCalc === "basic-financials" && <BasicFinancials />}
       </div>
     </div>
   );
