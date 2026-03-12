@@ -926,7 +926,9 @@ export default function Layout({ children }: LayoutProps) {
                 onClick={(e) => {
                   if (isJournal && isJournalActive) {
                     e.preventDefault();
-                    navigate("/journal?overview=1");
+                    localStorage.removeItem(`journal_selected_entry_id_${getCurrentDataMode()}`);
+                    localStorage.removeItem("journal_work_in_progress");
+                    navigate(`/journal?overview=1&t=${Date.now()}`, { replace: true });
                   }
                 }}
                 style={{
