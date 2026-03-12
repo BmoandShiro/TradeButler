@@ -12,7 +12,7 @@ import {
   getSandboxJournalEntries,
 } from "../utils/sandboxStore";
 import { Plus, TrendingUp, AlertTriangle, Target, Shield, BarChart3, Maximize2, Minimize2, Edit2, Trash2, ArrowLeft, RotateCcw, ExternalLink, ChevronDown, Info, X, BarChart2 } from "lucide-react";
-import { LineChart, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Brush } from "recharts";
+import { LineChart, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
 import { sampleTimeSeries, CHART_MAX_POINTS, xAxisInterval } from "../utils/chartDataSampling";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import RichTextEditor from "../components/RichTextEditor";
@@ -1399,7 +1399,7 @@ function MetricsDisplay({
 
   // Safe 1–5 value for survey fields (avoids NaN when sandbox/localStorage has missing keys)
   const surveyVal = (s: EmotionSurvey, key: keyof EmotionSurvey): number => {
-    const v = Number((s as Record<string, unknown>)[key]);
+    const v = Number(s[key]);
     return Number.isFinite(v) ? Math.max(1, Math.min(5, v)) : 3;
   };
 
@@ -2749,8 +2749,8 @@ export default function Emotions() {
     }
   };
 
-  // Restore scroll position
-  const restoreScrollPosition = () => {
+  // Restore scroll position (reserved for future use)
+  const _restoreScrollPosition = () => {
     if (mainScrollRef.current) {
       const saved = localStorage.getItem('emotions_scroll_position');
       if (saved) {
@@ -2766,6 +2766,7 @@ export default function Emotions() {
       }
     }
   };
+  void _restoreScrollPosition;
 
   // Save form state
   useEffect(() => {

@@ -798,7 +798,7 @@ export default function Trades() {
     }
   };
 
-  const updateEntryLinkedTradeIds = (entry: JournalEntryForLink, tradeId: number, add: boolean): { ids: number[] } => {
+  const _updateEntryLinkedTradeIds = (entry: JournalEntryForLink, tradeId: number, add: boolean): { ids: number[] } => {
     let ids: number[] = [];
     if (entry.linked_trade_ids) {
       try {
@@ -815,6 +815,7 @@ export default function Trades() {
     }
     return { ids };
   };
+  void _updateEntryLinkedTradeIds;
 
   // For a given trade, return all trade IDs that belong to the same pair(s)
   // (entry + exit) so that linked journals/emotions stay in sync across the pair.
@@ -3129,7 +3130,7 @@ export default function Trades() {
                                                 checked={emoIds.includes(es.id)}
                                                 onChange={(e) => handleToggleEmotionalStateLinkForPair(pairKey, es.id, e.target.checked)}
                                               />
-                                              <span style={{ fontSize: "13px" }}>{es.name || `State ${es.id}`}</span>
+                                              <span style={{ fontSize: "13px" }}>{`State ${es.id}`}</span>
                                             </label>
                                           ))
                                         )}

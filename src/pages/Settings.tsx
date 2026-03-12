@@ -146,14 +146,15 @@ export default function Settings() {
     setDeleteConfirmText("");
   };
 
-  // Finnhub API key handlers
-  const handleSaveFinnhubApiKey = () => {
+  // Finnhub API key handlers (reserved for manual save button)
+  const _handleSaveFinnhubApiKey = () => {
     if (finnhubApiKey.trim()) {
       setFinnhubApiKey(finnhubApiKey.trim());
       setFinnhubTestStatus("idle");
       setFinnhubTestError(null);
     }
   };
+  void _handleSaveFinnhubApiKey;
 
   const handleRemoveFinnhubApiKey = () => {
     removeFinnhubApiKey();

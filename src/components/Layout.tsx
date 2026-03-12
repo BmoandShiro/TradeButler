@@ -8,7 +8,6 @@ import {
   Target,
   Upload,
   Download,
-  Trash2,
   TrendingDown,
   Calculator,
   FileText,
