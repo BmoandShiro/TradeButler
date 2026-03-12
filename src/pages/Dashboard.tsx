@@ -2365,6 +2365,39 @@ export default function Dashboard() {
     
     setConfigKey(prev => prev + 1);
   };
+  
+  // Helper to remove all instances of a metric type
+  const removeAllInstancesOfMetric = (baseMetricId: string) => {
+    const instancesToRemove = metricInstances.filter(m => m.baseMetricId === baseMetricId);
+    if (instancesToRemove.length === 0) return;
+    
+    const instanceIdsToRemove = instancesToRemove.map(m => m.instanceId);
+    
+    // Remove from instances
+    const updatedInstances = metricInstances.filter(m => m.baseMetricId !== baseMetricId);
+    setMetricInstances(updatedInstances);
+    localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updatedInstances));
+    
+    // Remove from card order
+    setMetricCardOrder(prev => {
+      const newOrder = prev.filter(id => !instanceIdsToRemove.includes(id));
+      localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(newOrder));
+      return newOrder;
+    });
+    
+    // Disable the base metric
+    if (metricsConfigHook.metrics.find(m => m.id === baseMetricId)?.enabled) {
+      metricsConfigHook.toggleMetric(baseMetricId);
+    }
+    
+    setConfigKey(prev => prev + 1);
+  };
+  
+  // Helper to get instance count for a metric
+  const getMetricInstanceCount = (baseMetricId: string): number => {
+    return metricInstances.filter(m => m.baseMetricId === baseMetricId).length;
+  };
+  
   const [expandedTrades, setExpandedTrades] = useState<Set<number>>(new Set());
   const [tradesPerPage, setTradesPerPage] = useState<number>(() => {
     const saved = localStorage.getItem("tradebutler_trades_per_page");
@@ -2927,7 +2960,7 @@ export default function Dashboard() {
   const [_selectedPositionGroupId, setSelectedPositionGroupId] = useState<number | null>(null);
   const [selectedPositionGroup, setSelectedPositionGroup] = useState<any>(null);
 
-  // Close settings menus when clicking outside
+  // Close settings menus when clicking outside or scrolling
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
@@ -2941,12 +2974,25 @@ export default function Dashboard() {
       }
     };
     
+    const handleScroll = () => {
+      // Close menus when user scrolls
+      if (openMetricSettings || openSectionSettings) {
+        setOpenMetricSettings(null);
+        setOpenSectionSettings(null);
+      }
+    };
+    
     if (openMetricSettings || openSectionSettings) {
       // Use a small delay to allow the click event on the button to complete first
       setTimeout(() => {
         document.addEventListener("mousedown", handleClickOutside);
       }, 0);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
+      // Close on scroll - listen to window and any scrollable container
+      window.addEventListener("scroll", handleScroll, true);
+      return () => {
+        document.removeEventListener("mousedown", handleClickOutside);
+        window.removeEventListener("scroll", handleScroll, true);
+      };
     }
   }, [openMetricSettings, openSectionSettings]);
   
@@ -6912,6 +6958,8 @@ export default function Dashboard() {
             }}
             onConfigChange={() => setConfigKey(prev => prev + 1)}
             onAddMetricInstance={addMetricInstance}
+            onRemoveAllInstances={removeAllInstancesOfMetric}
+            getInstanceCount={getMetricInstanceCount}
             metrics={metricsConfigHook.metrics}
             onToggleMetric={(id) => {
               metricsConfigHook.toggleMetric(id);

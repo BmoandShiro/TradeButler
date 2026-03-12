@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Settings, Plus } from "lucide-react";
+import { Settings, Plus, Trash2 } from "lucide-react";
 
 export interface MetricConfig {
   id: string;
@@ -189,16 +189,19 @@ interface MetricsConfigPanelProps {
   onClose: () => void;
   onConfigChange?: () => void; // Callback when config changes
   onAddMetricInstance?: (baseMetricId: string) => void; // Callback to add new metric instance
+  onRemoveAllInstances?: (baseMetricId: string) => void; // Callback to remove all instances of a metric type
+  getInstanceCount?: (baseMetricId: string) => number; // Callback to get count of instances for a metric
   /** When provided, use these instead of internal hook so Panel and parent share the same source of truth */
   metrics?: MetricConfig[];
   onToggleMetric?: (id: string) => void;
   onResetToDefaults?: () => void;
 }
 
-export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetricInstance, metrics: propsMetrics, onToggleMetric: propsToggleMetric, onResetToDefaults: propsResetToDefaults }: MetricsConfigPanelProps) {
+export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetricInstance, onRemoveAllInstances, getInstanceCount, metrics: propsMetrics, onToggleMetric: propsToggleMetric, onResetToDefaults: propsResetToDefaults }: MetricsConfigPanelProps) {
   const hook = useMetricsConfig();
   const metrics = propsMetrics ?? hook.metrics;
-  const toggleMetric = propsToggleMetric ?? hook.toggleMetric;
+  const _toggleMetric = propsToggleMetric ?? hook.toggleMetric;
+  void _toggleMetric; // Reserved for future use
   const resetToDefaults = propsResetToDefaults ?? hook.resetToDefaults;
   
   // Color range state
@@ -926,60 +929,102 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
                 {category}
               </h3>
               <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {categoryMetrics.map((metric) => (
-                  <div
-                    key={metric.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      padding: "12px",
-                      backgroundColor: "var(--bg-tertiary)",
-                      borderRadius: "6px",
-                      border: "1px solid var(--border-color)",
-                      gap: "8px",
-                    }}
-                  >
-                    <label style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1, cursor: "pointer", minWidth: 0 }}>
-                      <input
-                        type="checkbox"
-                        checked={metric.enabled}
-                        onChange={() => {
-                          toggleMetric(metric.id);
-                          onConfigChange?.();
-                        }}
-                        style={{ width: "18px", height: "18px", accentColor: "var(--accent)", flexShrink: 0 }}
-                        title={metric.enabled ? "Hide from dashboard" : "Show on dashboard"}
-                      />
-                      <span style={{ color: "var(--text-primary)" }}>{metric.label}</span>
-                    </label>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (onAddMetricInstance) {
-                          onAddMetricInstance(metric.id);
-                        }
-                      }}
+                {categoryMetrics.map((metric) => {
+                  const instanceCount = getInstanceCount ? getInstanceCount(metric.id) : 0;
+                  const hasInstances = instanceCount > 0;
+                  
+                  return (
+                    <div
+                      key={metric.id}
                       style={{
-                        background: "transparent",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: "4px",
-                        padding: "4px 8px",
-                        cursor: "pointer",
-                        color: "var(--text-primary)",
                         display: "flex",
                         alignItems: "center",
-                        justifyContent: "center",
-                        fontSize: "16px",
-                        minWidth: "32px",
-                        height: "32px",
+                        justifyContent: "space-between",
+                        padding: "12px",
+                        backgroundColor: hasInstances ? "color-mix(in srgb, var(--accent) 8%, var(--bg-tertiary))" : "var(--bg-tertiary)",
+                        borderRadius: "6px",
+                        border: "1px solid var(--border-color)",
+                        gap: "8px",
                       }}
-                      title="Add new instance"
                     >
-                      <Plus size={16} />
-                    </button>
-                  </div>
-                ))}
+                      <div style={{ display: "flex", alignItems: "center", gap: "12px", flex: 1, minWidth: 0 }}>
+                        <span style={{ color: "var(--text-primary)", flex: 1 }}>{metric.label}</span>
+                        {hasInstances && (
+                          <span
+                            style={{
+                              fontSize: "13px",
+                              padding: "4px 10px",
+                              borderRadius: "6px",
+                              backgroundColor: "var(--bg-primary)",
+                              color: "var(--accent)",
+                              fontWeight: "700",
+                              border: "1px solid var(--border-color)",
+                              minWidth: "28px",
+                              textAlign: "center",
+                            }}
+                            title={`${instanceCount} instance${instanceCount > 1 ? 's' : ''} on dashboard`}
+                          >
+                            {instanceCount}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", gap: "6px" }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (onAddMetricInstance) {
+                              onAddMetricInstance(metric.id);
+                            }
+                          }}
+                          style={{
+                            background: "transparent",
+                            border: "1px solid var(--accent)",
+                            borderRadius: "4px",
+                            padding: "4px 10px",
+                            cursor: "pointer",
+                            color: "var(--accent)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: "13px",
+                            fontWeight: "600",
+                            gap: "4px",
+                            height: "32px",
+                          }}
+                          title="Add this metric to the dashboard"
+                        >
+                          <Plus size={14} />
+                          Add
+                        </button>
+                        {hasInstances && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (onRemoveAllInstances) {
+                                onRemoveAllInstances(metric.id);
+                              }
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid rgba(239, 68, 68, 0.5)",
+                              borderRadius: "4px",
+                              padding: "4px 8px",
+                              cursor: "pointer",
+                              color: "#EF4444",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              height: "32px",
+                            }}
+                            title={`Remove all ${instanceCount} instance${instanceCount > 1 ? 's' : ''} of this metric`}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ))}
