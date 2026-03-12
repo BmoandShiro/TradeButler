@@ -20,6 +20,7 @@ import {
   updateSandboxJournalEntry,
 } from "../utils/sandboxStore";
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
+import { LoadingSphere } from "../components/LoadingSphere";
 
 interface JournalEntrySummary {
   id: number;
@@ -1851,8 +1852,16 @@ export default function Trades() {
 
   if (loading) {
     return (
-      <div style={{ padding: "40px", textAlign: "center" }}>
-        <p>Loading trades...</p>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100%",
+          width: "100%",
+        }}
+      >
+        <LoadingSphere size={100} message="Loading trades..." />
       </div>
     );
   }
