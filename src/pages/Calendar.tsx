@@ -26,7 +26,7 @@ export default function CalendarPage() {
           letterSpacing: "-0.02em",
         }}
       >
-        Trading Calendar
+        Calendar
       </h1>
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <Calendar />

@@ -227,18 +227,27 @@ export default function Calendar() {
         <button
           onClick={previousMonth}
           style={{
-            background: "linear-gradient(180deg, var(--bg-tertiary), color-mix(in srgb, var(--accent) 8%, var(--bg-tertiary)))",
+            background: "var(--bg-secondary)",
             border: "1px solid var(--border-color)",
             borderRadius: "10px",
-            padding: "10px 12px",
+            padding: "10px 14px",
             color: "var(--text-primary)",
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+            justifyContent: "center",
+            transition: "background 0.15s ease, border-color 0.15s ease",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "var(--bg-tertiary)";
+            e.currentTarget.style.borderColor = "var(--accent)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "var(--bg-secondary)";
+            e.currentTarget.style.borderColor = "var(--border-color)";
           }}
         >
-          <ChevronLeft size={22} />
+          <ChevronLeft size={20} />
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <select
@@ -248,22 +257,28 @@ export default function Calendar() {
               setCurrentDate(new Date(currentDate.getFullYear(), newMonth, 1));
             }}
             style={{
-              padding: "10px 14px",
-              background: "linear-gradient(180deg, var(--bg-tertiary), color-mix(in srgb, var(--accent) 6%, var(--bg-tertiary)))",
+              padding: "12px 16px",
+              background: "var(--bg-secondary)",
               border: "1px solid var(--border-color)",
               borderRadius: "10px",
               color: "var(--text-primary)",
-              fontSize: "18px",
+              fontSize: "16px",
               fontWeight: "600",
               cursor: "pointer",
               outline: "none",
+              appearance: "none",
+              WebkitAppearance: "none",
+              backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`,
+              backgroundRepeat: "no-repeat",
+              backgroundPosition: "right 12px center",
+              paddingRight: "36px",
             }}
           >
             {[
               "January", "February", "March", "April", "May", "June",
               "July", "August", "September", "October", "November", "December",
             ].map((month, index) => (
-              <option key={month} value={index}>{month}</option>
+              <option key={month} value={index} style={{ background: "var(--bg-secondary)", color: "var(--text-primary)", padding: "8px 12px" }}>{month}</option>
             ))}
           </select>
           <select
@@ -273,39 +288,54 @@ export default function Calendar() {
               setCurrentDate(new Date(newYear, currentDate.getMonth(), 1));
             }}
             style={{
-              padding: "10px 14px",
-              background: "linear-gradient(180deg, var(--bg-tertiary), color-mix(in srgb, var(--accent) 6%, var(--bg-tertiary)))",
+              padding: "12px 16px",
+              background: "var(--bg-secondary)",
               border: "1px solid var(--border-color)",
               borderRadius: "10px",
               color: "var(--text-primary)",
-              fontSize: "18px",
+              fontSize: "16px",
               fontWeight: "600",
               cursor: "pointer",
               outline: "none",
-              minWidth: "96px",
+              minWidth: "100px",
+              appearance: "none",
+              WebkitAppearance: "none",
+              backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`,
+              backgroundRepeat: "no-repeat",
+              backgroundPosition: "right 12px center",
+              paddingRight: "36px",
             }}
           >
             {Array.from({ length: 30 }, (_, i) => {
               const year = new Date().getFullYear() - 10 + i;
-              return <option key={year} value={year}>{year}</option>;
+              return <option key={year} value={year} style={{ background: "var(--bg-secondary)", color: "var(--text-primary)", padding: "8px 12px" }}>{year}</option>;
             })}
           </select>
         </div>
         <button
           onClick={nextMonth}
           style={{
-            background: "linear-gradient(180deg, var(--bg-tertiary), color-mix(in srgb, var(--accent) 8%, var(--bg-tertiary)))",
+            background: "var(--bg-secondary)",
             border: "1px solid var(--border-color)",
             borderRadius: "10px",
-            padding: "10px 12px",
+            padding: "10px 14px",
             color: "var(--text-primary)",
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+            justifyContent: "center",
+            transition: "background 0.15s ease, border-color 0.15s ease",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "var(--bg-tertiary)";
+            e.currentTarget.style.borderColor = "var(--accent)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "var(--bg-secondary)";
+            e.currentTarget.style.borderColor = "var(--border-color)";
           }}
         >
-          <ChevronRight size={22} />
+          <ChevronRight size={20} />
         </button>
       </div>
 
@@ -364,7 +394,7 @@ export default function Calendar() {
                 minHeight: 0,
                 border: isCurrentDay ? "2px solid var(--accent)" : "1px solid color-mix(in srgb, var(--border-color) 60%, transparent)",
                 borderRadius: "10px",
-                padding: "10px",
+                padding: "12px",
                 background: pnlColor !== "transparent"
                   ? `linear-gradient(180deg, color-mix(in srgb, ${pnlColor} 14%, var(--bg-primary)), color-mix(in srgb, ${pnlColor} 6%, var(--bg-primary)))`
                   : "transparent",
@@ -383,10 +413,10 @@ export default function Calendar() {
             >
               <span
                 style={{
-                  fontSize: "17px",
+                  fontSize: "20px",
                   fontWeight: isCurrentDay ? "700" : "600",
                   color: isCurrentDay ? "var(--accent)" : "var(--text-primary)",
-                  marginBottom: "2px",
+                  marginBottom: "3px",
                 }}
               >
                 {format(day, "d")}
@@ -395,15 +425,16 @@ export default function Calendar() {
                 <>
                   <span
                     style={{
-                      fontSize: "12px",
-                      fontWeight: "600",
+                      fontSize: "16px",
+                      fontWeight: "700",
                       color: dayPnL.profit_loss >= 0 ? "var(--profit)" : "var(--loss)",
+                      marginTop: "3px",
                     }}
                   >
                     {dayPnL.profit_loss >= 0 ? "+" : ""}
                     ${Math.abs(dayPnL.profit_loss).toFixed(0)}
                   </span>
-                  <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "2px" }}>
+                  <span style={{ fontSize: "14px", color: "var(--text-secondary)", marginTop: "4px", fontWeight: "500" }}>
                     {dayPnL.trade_count} trade{dayPnL.trade_count !== 1 ? "s" : ""}
                   </span>
                 </>
@@ -413,8 +444,8 @@ export default function Calendar() {
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: "8px",
-                    marginTop: "6px",
+                    gap: "10px",
+                    marginTop: "8px",
                     flexWrap: "wrap",
                     justifyContent: "center",
                   }}
@@ -426,8 +457,8 @@ export default function Calendar() {
                       style={{
                         display: "flex",
                         alignItems: "center",
-                        gap: "3px",
-                        padding: "2px 4px",
+                        gap: "4px",
+                        padding: "3px 6px",
                         border: "none",
                         background: "transparent",
                         cursor: "pointer",
@@ -435,8 +466,8 @@ export default function Calendar() {
                       }}
                       title={`${journalEntries.length} journal entr${journalEntries.length === 1 ? "y" : "ies"} — click for details`}
                     >
-                      <BookOpen size={14} />
-                      <span style={{ fontSize: "12px", fontWeight: "600" }}>{journalEntries.length}</span>
+                      <BookOpen size={16} />
+                      <span style={{ fontSize: "14px", fontWeight: "600" }}>{journalEntries.length}</span>
                     </button>
                   )}
                   {emotionalStates.length > 0 && (
@@ -446,8 +477,8 @@ export default function Calendar() {
                       style={{
                         display: "flex",
                         alignItems: "center",
-                        gap: "3px",
-                        padding: "2px 4px",
+                        gap: "4px",
+                        padding: "3px 6px",
                         border: "none",
                         background: "transparent",
                         cursor: "pointer",
@@ -455,8 +486,8 @@ export default function Calendar() {
                       }}
                       title={`${emotionalStates.length} emotional state${emotionalStates.length === 1 ? "" : "s"} — click for details`}
                     >
-                      <Heart size={14} />
-                      <span style={{ fontSize: "12px", fontWeight: "600" }}>{emotionalStates.length}</span>
+                      <Heart size={16} />
+                      <span style={{ fontSize: "14px", fontWeight: "600" }}>{emotionalStates.length}</span>
                     </button>
                   )}
                 </div>
@@ -469,15 +500,15 @@ export default function Calendar() {
                         left: 0,
                         marginTop: "6px",
                         zIndex: 10,
-                        minWidth: "220px",
-                        maxWidth: "280px",
-                        maxHeight: "320px",
+                        minWidth: "240px",
+                        maxWidth: "300px",
+                        maxHeight: "360px",
                         overflowY: "auto",
-                        background: "var(--bg-primary)",
+                        background: "var(--bg-secondary)",
                         border: "1px solid var(--border-color)",
                         borderRadius: "12px",
-                        boxShadow: "0 10px 28px rgba(0, 0, 0, 0.25)",
-                        padding: "12px",
+                        boxShadow: "0 12px 32px rgba(0, 0, 0, 0.4)",
+                        padding: "16px",
                       }}
                       onClick={(e) => e.stopPropagation()}
                     >
@@ -486,13 +517,12 @@ export default function Calendar() {
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "space-between",
-                          marginBottom: "10px",
-                          fontSize: "13px",
-                          fontWeight: 600,
-                          color: "var(--text-secondary)",
+                          marginBottom: "14px",
+                          paddingBottom: "12px",
+                          borderBottom: "1px solid var(--border-color)",
                         }}
                       >
-                        <span>{format(day, "MMM d, yyyy")}</span>
+                        <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)" }}>{format(day, "MMM d, yyyy")}</span>
                         <button
                           type="button"
                           onClick={() => {
@@ -500,51 +530,54 @@ export default function Calendar() {
                             setOpenJournalDate(null);
                           }}
                           style={{
-                            border: "none",
-                            background: "transparent",
+                            border: "1px solid var(--border-color)",
+                            background: "var(--bg-tertiary)",
                             color: "var(--text-secondary)",
                             fontSize: "12px",
                             cursor: "pointer",
-                            padding: "2px 6px",
+                            padding: "4px 10px",
+                            borderRadius: "6px",
+                            fontWeight: "500",
                           }}
                         >
                           Close
                         </button>
                       </div>
                       {dayPnL && (
-                        <div style={{ marginBottom: "12px", paddingBottom: "12px", borderBottom: "1px solid var(--border-color)" }}>
-                          <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "4px" }}>Trading</div>
-                          <div style={{ fontSize: "13px", color: "var(--text-primary)" }}>
-                            <span style={{ color: dayPnL.profit_loss >= 0 ? "var(--profit)" : "var(--loss)", fontWeight: "600" }}>
+                        <div style={{ marginBottom: "14px", paddingBottom: "14px", borderBottom: "1px solid var(--border-color)" }}>
+                          <div style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "8px" }}>Trading</div>
+                          <div style={{ fontSize: "15px", color: "var(--text-primary)" }}>
+                            <span style={{ color: dayPnL.profit_loss >= 0 ? "var(--profit)" : "var(--loss)", fontWeight: "700" }}>
                               {dayPnL.profit_loss >= 0 ? "+" : ""}${dayPnL.profit_loss.toFixed(2)}
                             </span>
-                            <span style={{ color: "var(--text-secondary)", marginLeft: "8px" }}>
+                            <span style={{ color: "var(--text-secondary)", marginLeft: "10px", fontWeight: "500" }}>
                               · {dayPnL.trade_count} trade{dayPnL.trade_count !== 1 ? "s" : ""} closed
                             </span>
                           </div>
                         </div>
                       )}
                       {emotionalStates.length > 0 && (
-                        <div style={{ marginBottom: "12px" }}>
-                          <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "6px", display: "flex", alignItems: "center", gap: "6px" }}>
+                        <div style={{ marginBottom: "14px", paddingBottom: "14px", borderBottom: journalEntries.length > 0 ? "1px solid var(--border-color)" : "none" }}>
+                          <div style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "10px", display: "flex", alignItems: "center", gap: "8px" }}>
                             <Heart size={14} style={{ color: "var(--accent)" }} />
                             Emotional states
                           </div>
-                          <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "6px" }}>
                             {emotionalStates.slice(0, 5).map((es) => (
                               <li key={es.id}>
                                 <button
                                   onClick={() => navigate("/emotions")}
                                   style={{
                                     border: "none",
-                                    background: "transparent",
-                                    padding: "4px 0",
+                                    background: "var(--bg-tertiary)",
+                                    padding: "8px 12px",
                                     textAlign: "left",
-                                    fontSize: "13px",
+                                    fontSize: "14px",
                                     color: "var(--text-primary)",
                                     cursor: "pointer",
                                     width: "100%",
                                     display: "block",
+                                    borderRadius: "8px",
                                   }}
                                   title={`${es.emotion} (intensity ${es.intensity})`}
                                 >
@@ -553,7 +586,7 @@ export default function Calendar() {
                               </li>
                             ))}
                             {emotionalStates.length > 5 && (
-                              <li style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                              <li style={{ fontSize: "13px", color: "var(--text-secondary)", paddingLeft: "12px" }}>
                                 +{emotionalStates.length - 5} more
                               </li>
                             )}
@@ -561,9 +594,9 @@ export default function Calendar() {
                           <button
                             onClick={() => navigate("/emotions")}
                             style={{
-                              marginTop: "6px",
-                              padding: "6px 10px",
-                              fontSize: "12px",
+                              marginTop: "10px",
+                              padding: "8px 14px",
+                              fontSize: "13px",
                               borderRadius: "8px",
                               border: "1px solid var(--accent)",
                               background: "transparent",
@@ -578,10 +611,11 @@ export default function Calendar() {
                       )}
                       {journalEntries.length > 0 && (
                         <div>
-                          <div style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          <div style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "10px", display: "flex", alignItems: "center", gap: "8px" }}>
+                            <BookOpen size={14} style={{ color: "var(--accent)" }} />
                             Journal entries
                           </div>
-                          <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "6px" }}>
                             {(() => {
                               const entriesPerPage = 10;
                               const totalPages = Math.ceil(journalEntries.length / entriesPerPage) || 1;
@@ -597,16 +631,17 @@ export default function Calendar() {
                                         onClick={() => navigate("/journal", { state: { openEntryId: entry.id } })}
                                         style={{
                                           border: "none",
-                                          background: "transparent",
-                                          padding: "4px 0",
+                                          background: "var(--bg-tertiary)",
+                                          padding: "8px 12px",
                                           textAlign: "left",
-                                          fontSize: "13px",
+                                          fontSize: "14px",
                                           color: "var(--accent)",
                                           cursor: "pointer",
                                           whiteSpace: "nowrap",
                                           overflow: "hidden",
                                           textOverflow: "ellipsis",
                                           width: "100%",
+                                          borderRadius: "8px",
                                         }}
                                         title={entry.title}
                                       >
@@ -615,32 +650,36 @@ export default function Calendar() {
                                     </li>
                                   ))}
                                   {totalPages > 1 && (
-                                    <li style={{ marginTop: "8px", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: "var(--text-secondary)" }}>
+                                    <li style={{ marginTop: "10px", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "13px", color: "var(--text-secondary)" }}>
                                       <button
                                         onClick={() => setOpenJournalPage((prev) => (prev > 0 ? prev - 1 : prev))}
                                         disabled={currentPage === 0}
                                         style={{
-                                          border: "none",
-                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          background: currentPage === 0 ? "transparent" : "var(--bg-tertiary)",
                                           color: currentPage === 0 ? "var(--text-muted)" : "var(--accent)",
                                           cursor: currentPage === 0 ? "default" : "pointer",
-                                          padding: 0,
+                                          padding: "6px 10px",
                                           fontSize: "12px",
+                                          borderRadius: "6px",
+                                          fontWeight: "500",
                                         }}
                                       >
                                         ‹ Prev
                                       </button>
-                                      <span>Page {currentPage + 1} of {totalPages}</span>
+                                      <span style={{ fontWeight: "500" }}>Page {currentPage + 1} of {totalPages}</span>
                                       <button
                                         onClick={() => setOpenJournalPage((prev) => (prev < totalPages - 1 ? prev + 1 : prev))}
                                         disabled={currentPage >= totalPages - 1}
                                         style={{
-                                          border: "none",
-                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          background: currentPage >= totalPages - 1 ? "transparent" : "var(--bg-tertiary)",
                                           color: currentPage >= totalPages - 1 ? "var(--text-muted)" : "var(--accent)",
                                           cursor: currentPage >= totalPages - 1 ? "default" : "pointer",
-                                          padding: 0,
+                                          padding: "6px 10px",
                                           fontSize: "12px",
+                                          borderRadius: "6px",
+                                          fontWeight: "500",
                                         }}
                                       >
                                         Next ›
