@@ -30,6 +30,7 @@ import LockScreen from "./LockScreen";
 import GalaxyLockScreen from "./GalaxyLockScreen";
 import AuroraLockScreen from "./AuroraLockScreen";
 import MilkyWayLockScreen from "./MilkyWayLockScreen";
+import SphereLockScreen from "./SphereLockScreen";
 import GalaxyBackground from "./GalaxyBackground";
 import { isLocked, hasPassword, lockApp } from "../utils/passwordManager";
 import { getLockScreenStyle } from "../utils/lockScreenManager";
@@ -977,6 +978,8 @@ export default function Layout({ children }: LayoutProps) {
             return <AuroraLockScreen onUnlock={handleUnlock} />;
           } else if (style === "milkyway") {
             return <MilkyWayLockScreen onUnlock={handleUnlock} />;
+          } else if (style === "sphere") {
+            return <SphereLockScreen onUnlock={handleUnlock} />;
           } else {
             return <LockScreen onUnlock={handleUnlock} />;
           }

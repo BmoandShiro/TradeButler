@@ -37,6 +37,12 @@ import {
   resetGalaxyThemeSettings,
   GalaxyThemeSettings,
 } from "../utils/galaxyThemeManager";
+import {
+  getSphereThemeSettings,
+  setSphereThemeSettings,
+  resetSphereThemeSettings,
+  SphereThemeSettings,
+} from "../utils/sphereThemeManager";
 import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import type { DataMode } from "../utils/dataMode";
 
@@ -96,6 +102,7 @@ export default function Settings() {
   const [removePinDigits, setRemovePinDigits] = useState<string[]>(["", "", "", "", "", ""]);
   const [lockScreenStyle, setLockScreenStyle] = useState<LockScreenStyle>(() => getLockScreenStyle());
   const [galaxySettings, setGalaxySettings] = useState<GalaxyThemeSettings>(() => getGalaxyThemeSettings());
+  const [sphereSettings, setSphereSettings] = useState<SphereThemeSettings>(() => getSphereThemeSettings());
   const newPasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const confirmPasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const removePasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -144,6 +151,20 @@ export default function Settings() {
     window.dispatchEvent(new StorageEvent("storage", {
       key: "tradebutler_galaxy_theme_settings",
       newValue: JSON.stringify({ ...getGalaxyThemeSettings(), [key]: value }),
+    }));
+  };
+
+  const updateSphereSetting = <K extends keyof SphereThemeSettings>(
+    key: K,
+    value: SphereThemeSettings[K]
+  ) => {
+    const updated = { ...sphereSettings, [key]: value };
+    setSphereSettings(updated);
+    setSphereThemeSettings({ [key]: value });
+    window.dispatchEvent(new CustomEvent("sphereSettingsChanged", { detail: { key, value } }));
+    window.dispatchEvent(new StorageEvent("storage", {
+      key: "tradebutler_sphere_theme_settings",
+      newValue: JSON.stringify({ ...getSphereThemeSettings(), [key]: value }),
     }));
   };
 
@@ -1143,6 +1164,28 @@ export default function Settings() {
                     >
                       Milky Way
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newStyle: LockScreenStyle = "sphere";
+                        setLockScreenStyle(newStyle);
+                        saveLockScreenStyle(newStyle);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                        border: "none",
+                        backgroundColor: lockScreenStyle === "sphere" ? "var(--accent)" : "transparent",
+                        color: lockScreenStyle === "sphere" ? "white" : "var(--text-primary)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      Sphere
+                    </button>
                   </div>
                 </div>
               </div>
@@ -1494,6 +1537,272 @@ export default function Settings() {
                       onClick={() => {
                         resetGalaxyThemeSettings();
                         setGalaxySettings(getGalaxyThemeSettings());
+                      }}
+                      style={{
+                        padding: "10px 16px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        color: "var(--text-primary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "6px",
+                        fontSize: "13px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Reset to Defaults
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Sphere Theme Customization */}
+            {lockScreenStyle === "sphere" && (
+              <div>
+                <h3 style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "12px" }}>
+                  Sphere Theme Settings
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                  {/* Colors */}
+                  <div>
+                    <h4 style={{ fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+                      Colors
+                    </h4>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px" }}>
+                      <div>
+                        <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                          Dot Color
+                        </label>
+                        <input
+                          type="color"
+                          value={sphereSettings.dotColor}
+                          onChange={(e) => updateSphereSetting("dotColor", e.target.value)}
+                          style={{ width: "100%", height: "32px", cursor: "pointer", border: "1px solid var(--border-color)", borderRadius: "4px" }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                          Line Color
+                        </label>
+                        <input
+                          type="color"
+                          value={sphereSettings.lineColor}
+                          onChange={(e) => updateSphereSetting("lineColor", e.target.value)}
+                          style={{ width: "100%", height: "32px", cursor: "pointer", border: "1px solid var(--border-color)", borderRadius: "4px" }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                          Background
+                        </label>
+                        <input
+                          type="color"
+                          value={sphereSettings.backgroundColor}
+                          onChange={(e) => updateSphereSetting("backgroundColor", e.target.value)}
+                          style={{ width: "100%", height: "32px", cursor: "pointer", border: "1px solid var(--border-color)", borderRadius: "4px" }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Sphere Size & Structure */}
+                  <div>
+                    <h4 style={{ fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+                      Sphere Structure
+                    </h4>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      <div>
+                        <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                          Sphere Radius: {sphereSettings.sphereRadius}px
+                        </label>
+                        <input
+                          type="range"
+                          min="100"
+                          max="500"
+                          step="10"
+                          value={sphereSettings.sphereRadius}
+                          onChange={(e) => updateSphereSetting("sphereRadius", parseInt(e.target.value))}
+                          style={{ width: "100%" }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                          Rings: {sphereSettings.rings}
+                        </label>
+                        <input
+                          type="range"
+                          min="4"
+                          max="20"
+                          step="1"
+                          value={sphereSettings.rings}
+                          onChange={(e) => updateSphereSetting("rings", parseInt(e.target.value))}
+                          style={{ width: "100%" }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                          Dots Per Ring: {sphereSettings.dotsPerRing}
+                        </label>
+                        <input
+                          type="range"
+                          min="8"
+                          max="40"
+                          step="2"
+                          value={sphereSettings.dotsPerRing}
+                          onChange={(e) => updateSphereSetting("dotsPerRing", parseInt(e.target.value))}
+                          style={{ width: "100%" }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                          Dot Size: {sphereSettings.dotSize}px
+                        </label>
+                        <input
+                          type="range"
+                          min="1"
+                          max="8"
+                          step="0.5"
+                          value={sphereSettings.dotSize}
+                          onChange={(e) => updateSphereSetting("dotSize", parseFloat(e.target.value))}
+                          style={{ width: "100%" }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Animation */}
+                  <div>
+                    <h4 style={{ fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+                      Animation
+                    </h4>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      <div>
+                        <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                          Rotation Speed: {(sphereSettings.rotationSpeed * 1000).toFixed(1)}
+                        </label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="0.02"
+                          step="0.001"
+                          value={sphereSettings.rotationSpeed}
+                          onChange={(e) => updateSphereSetting("rotationSpeed", parseFloat(e.target.value))}
+                          style={{ width: "100%" }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                          Mouse Force: {sphereSettings.mouseForce.toFixed(2)}
+                        </label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="0.5"
+                          step="0.01"
+                          value={sphereSettings.mouseForce}
+                          onChange={(e) => updateSphereSetting("mouseForce", parseFloat(e.target.value))}
+                          style={{ width: "100%" }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={sphereSettings.reverseMouseEffect}
+                            onChange={(e) => updateSphereSetting("reverseMouseEffect", e.target.checked)}
+                            style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                          />
+                          <span>Reverse Mouse Effect (Pull Instead of Push)</span>
+                        </label>
+                      </div>
+                      <div>
+                        <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                          Return Force: {sphereSettings.returnForce.toFixed(3)}
+                        </label>
+                        <input
+                          type="range"
+                          min="0.005"
+                          max="0.1"
+                          step="0.005"
+                          value={sphereSettings.returnForce}
+                          onChange={(e) => updateSphereSetting("returnForce", parseFloat(e.target.value))}
+                          style={{ width: "100%" }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                          Friction: {sphereSettings.friction.toFixed(2)}
+                        </label>
+                        <input
+                          type="range"
+                          min="0.8"
+                          max="0.99"
+                          step="0.01"
+                          value={sphereSettings.friction}
+                          onChange={(e) => updateSphereSetting("friction", parseFloat(e.target.value))}
+                          style={{ width: "100%" }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Effects */}
+                  <div>
+                    <h4 style={{ fontSize: "14px", fontWeight: "500", color: "var(--text-primary)", marginBottom: "8px" }}>
+                      Effects
+                    </h4>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      <div>
+                        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={sphereSettings.showConnections}
+                            onChange={(e) => updateSphereSetting("showConnections", e.target.checked)}
+                            style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                          />
+                          <span>Show Connection Lines</span>
+                        </label>
+                      </div>
+                      {sphereSettings.showConnections && (
+                        <div>
+                          <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                            Connection Distance: {sphereSettings.connectionDistance}px
+                          </label>
+                          <input
+                            type="range"
+                            min="20"
+                            max="600"
+                            step="10"
+                            value={sphereSettings.connectionDistance}
+                            onChange={(e) => updateSphereSetting("connectionDistance", parseInt(e.target.value))}
+                            style={{ width: "100%" }}
+                          />
+                        </div>
+                      )}
+                      <div>
+                        <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                          Glow Intensity: {sphereSettings.glowIntensity.toFixed(2)}
+                        </label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="0.5"
+                          step="0.05"
+                          value={sphereSettings.glowIntensity}
+                          onChange={(e) => updateSphereSetting("glowIntensity", parseFloat(e.target.value))}
+                          style={{ width: "100%" }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Reset Button */}
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetSphereThemeSettings();
+                        setSphereSettings(getSphereThemeSettings());
                       }}
                       style={{
                         padding: "10px 16px",
