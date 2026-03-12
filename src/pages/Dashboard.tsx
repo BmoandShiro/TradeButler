@@ -68,6 +68,8 @@ import {
   EXAMPLE_RECENT_TRADES,
   EXAMPLE_SYMBOL_PNL,
 } from "../exampleData";
+import NewsWidget from "../components/NewsWidget";
+import ViewFinancialsButton from "../components/ViewFinancialsButton";
 
 interface Metrics {
   total_trades: number;
@@ -404,6 +406,7 @@ interface DashboardSections {
   showRecentTrades: boolean;
   showTrades: boolean;
   showOpenPositions: boolean;
+  showNews: boolean;
 }
 
 const defaultDashboardSections: DashboardSections = {
@@ -412,16 +415,17 @@ const defaultDashboardSections: DashboardSections = {
   showRecentTrades: true,
   showTrades: true,
   showOpenPositions: true,
+  showNews: true,
 };
 
-type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades" | "trades" | "openPositions";
+type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades" | "trades" | "openPositions" | "news";
 
-const SECTION_IDS: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions"];
+const SECTION_IDS: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
 function isSectionId(id: string): id is SectionId {
   return SECTION_IDS.includes(id as SectionId);
 }
 
-const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "openPositions", "trades"];
+const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "news", "openPositions", "trades"];
 
 export type SectionSizes = Record<SectionId, { columnSpan?: number; height?: number; rowSpan?: number }>;
 
@@ -2397,7 +2401,7 @@ export default function Dashboard() {
       try {
         const parsed = JSON.parse(saved);
         // Validate that all sections are present - include all possible sections
-        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions"];
+        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
         const validOrder = allSections.filter(id => parsed.includes(id));
         const missing = allSections.filter(id => !parsed.includes(id));
         return [...validOrder, ...missing];
@@ -2412,7 +2416,7 @@ export default function Dashboard() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved) as SectionSizes;
-        const allIds: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions"];
+        const allIds: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
         const out: SectionSizes = {} as SectionSizes;
         allIds.forEach((id) => {
           const s = parsed[id];
@@ -2884,7 +2888,31 @@ export default function Dashboard() {
     recentTrades: { top: 0, right: 0 },
     trades: { top: 0, right: 0 },
     openPositions: { top: 0, right: 0 },
+    news: { top: 0, right: 0 },
   });
+
+  // News widget settings (controlled from dashboard settings menu)
+  const NEWS_INCLUDE_POSITIONS_KEY = "tradebutler_news_include_positions";
+  const NEWS_SHOW_SENTIMENT_KEY = "tradebutler_news_show_sentiment";
+  const [newsSearchQuery, setNewsSearchQuery] = useState("");
+  const [newsIncludePositions, setNewsIncludePositions] = useState(() => {
+    const saved = localStorage.getItem(NEWS_INCLUDE_POSITIONS_KEY);
+    return saved ? JSON.parse(saved) : true;
+  });
+  const [newsShowSentiment, setNewsShowSentiment] = useState(() => {
+    const saved = localStorage.getItem(NEWS_SHOW_SENTIMENT_KEY);
+    return saved ? JSON.parse(saved) : true;
+  });
+
+  // Save news settings to localStorage
+  useEffect(() => {
+    localStorage.setItem(NEWS_INCLUDE_POSITIONS_KEY, JSON.stringify(newsIncludePositions));
+  }, [newsIncludePositions]);
+
+  useEffect(() => {
+    localStorage.setItem(NEWS_SHOW_SENTIMENT_KEY, JSON.stringify(newsShowSentiment));
+  }, [newsShowSentiment]);
+
   const [timeframe, setTimeframe] = useState<Timeframe>(() => {
     const saved = localStorage.getItem("tradebutler_dashboard_timeframe");
     return (saved as Timeframe) || "all";
@@ -3387,7 +3415,7 @@ export default function Dashboard() {
         setDashboardSections(newSections);
         
         // Ensure all enabled sections are in the sectionOrder
-        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions"];
+        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
         setSectionOrder(prevOrder => {
           const enabledSections = allSections.filter(id => {
             const key = `show${id.charAt(0).toUpperCase() + id.slice(1)}` as keyof typeof newSections;
@@ -6005,7 +6033,10 @@ export default function Dashboard() {
                                   backgroundColor: "var(--bg-tertiary)",
                                 }}
                               >
-                                <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>{group.entry_trade.symbol}</span>
+                                <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                                  <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>{group.entry_trade.symbol}</span>
+                                  <ViewFinancialsButton symbol={group.entry_trade.symbol} size={12} />
+                                </span>
                                 <span
                                   style={{
                                     fontSize: "11px",
@@ -6102,6 +6133,7 @@ export default function Dashboard() {
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                   <span style={{ fontWeight: "600", fontSize: "15px" }}>{group.entry_trade.symbol}</span>
+                                  <ViewFinancialsButton symbol={group.entry_trade.symbol} size={14} />
                                   <span
                                     style={{
                                       fontSize: "12px",
@@ -6174,6 +6206,257 @@ export default function Dashboard() {
                           );
                         })
                       )}
+                    </div>
+                  </div>
+                  </SectionCardResizeWrapper>
+                )}
+              </SortableSection>
+            );
+          }
+
+          // News Section
+          if (sectionId === "news" && dashboardSections.showNews) {
+            const newsSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.news?.columnSpan ?? 1));
+            return (
+              <SortableSection
+                key="news"
+                id="news"
+                wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: layoutLocked ? "visible" : "hidden",
+                  boxSizing: "border-box",
+                  ...(newsSpan > 1 ? { gridColumn: `span ${newsSpan}` as const } : {}),
+                  ...(sectionSizes.news?.height != null ? { minHeight: `${sectionSizes.news.height}px` } : {}),
+                }}
+              >
+                {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper sectionId="news" sectionSizes={sectionSizes} setSectionSizes={setSectionSizes} layoutLocked={layoutLocked} lockedRowHeight={lockedRowHeight}>
+                  <div
+                    style={{
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                      padding: "20px",
+                      cursor: isDragging ? "grabbing" : "grab",
+                      display: "flex",
+                      flexDirection: "column",
+                      minHeight: 0,
+                      minWidth: 0,
+                      height: "100%",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px", flexShrink: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <div {...dragHandleProps} style={{ cursor: "grab" }}>
+                          <GripVertical size={16} color="var(--text-secondary)" />
+                        </div>
+                      </div>
+                      <div style={{ position: "relative" }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                            setSectionMenuPosition({
+                              ...sectionMenuPosition,
+                              news: {
+                                top: rect.bottom + 4,
+                                right: window.innerWidth - rect.right,
+                              },
+                            });
+                            setOpenSectionSettings(openSectionSettings === "news" ? null : "news");
+                          }}
+                          onMouseDown={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                          }}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            padding: "4px",
+                            cursor: "pointer",
+                            color: "var(--text-secondary)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            borderRadius: "4px",
+                          }}
+                          title="Settings"
+                        >
+                          <Settings size={16} />
+                        </button>
+                        {openSectionSettings === "news" && createPortal(
+                          <div
+                            data-settings-menu
+                            style={{
+                              position: "fixed",
+                              top: `${sectionMenuPosition.news.top}px`,
+                              right: `${sectionMenuPosition.news.right}px`,
+                              backgroundColor: "var(--bg-secondary)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "8px",
+                              padding: "8px",
+                              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                              zIndex: 99999,
+                              minWidth: "120px",
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                              {layoutLocked && moveInLockedGridRef?.current ? (
+                                <>
+                                  <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("news", "up"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronUp size={14} /><span>Move up</span></button>
+                                  <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("news", "down"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronDown size={14} /><span>Move down</span></button>
+                                  <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("news", "left"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronLeft size={14} /><span>Move left</span></button>
+                                  <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); moveInLockedGridRef.current?.("news", "right"); setOpenSectionSettings(null); }} style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}><ChevronRight size={14} /><span>Move right</span></button>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      const currentIndex = sectionOrder.indexOf("news");
+                                      if (currentIndex > 0) {
+                                        const newOrder = [...sectionOrder];
+                                        [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
+                                        setSectionOrder(newOrder);
+                                        localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                      }
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    disabled={sectionOrder.indexOf("news") === 0}
+                                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sectionOrder.indexOf("news") === 0 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sectionOrder.indexOf("news") === 0 ? 0.3 : 1 }}
+                                  >
+                                    <ChevronUp size={14} />
+                                    <span>Move Up</span>
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      const currentIndex = sectionOrder.indexOf("news");
+                                      if (currentIndex < sectionOrder.length - 1) {
+                                        const newOrder = [...sectionOrder];
+                                        [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
+                                        setSectionOrder(newOrder);
+                                        localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                      }
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    disabled={sectionOrder.indexOf("news") === sectionOrder.length - 1}
+                                    style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: sectionOrder.indexOf("news") === sectionOrder.length - 1 ? "not-allowed" : "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", opacity: sectionOrder.indexOf("news") === sectionOrder.length - 1 ? 0.3 : 1 }}
+                                  >
+                                    <ChevronDown size={14} />
+                                    <span>Move Down</span>
+                                  </button>
+                                </>
+                              )}
+                              {/* News Settings */}
+                              <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                              <div style={{ padding: "4px 0" }}>
+                                <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>News Settings</div>
+                                <label
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "8px",
+                                    fontSize: "12px",
+                                    color: "var(--text-primary)",
+                                    cursor: "pointer",
+                                    padding: "4px 0",
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={newsIncludePositions}
+                                    onChange={(e) => setNewsIncludePositions(e.target.checked)}
+                                    style={{ accentColor: "var(--accent)" }}
+                                  />
+                                  Include open positions
+                                </label>
+                                <label
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "8px",
+                                    fontSize: "12px",
+                                    color: "var(--text-primary)",
+                                    cursor: "pointer",
+                                    padding: "4px 0",
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={newsShowSentiment}
+                                    onChange={(e) => setNewsShowSentiment(e.target.checked)}
+                                    style={{ accentColor: "var(--accent)" }}
+                                  />
+                                  Show sentiment
+                                </label>
+                              </div>
+                              <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  setSectionSizes((prev) => {
+                                    const next = { ...prev, news: {} };
+                                    localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                    return next;
+                                  });
+                                  setOpenSectionSettings(null);
+                                }}
+                                style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                              >
+                                <RotateCcw size={14} />
+                                <span>Reset Size</span>
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  setDashboardSections((prev) => {
+                                    const next = { ...prev, showNews: false };
+                                    localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                    return next;
+                                  });
+                                  setSectionOrder((prev) => {
+                                    const newOrder = prev.filter((id) => id !== "news");
+                                    localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                    return newOrder;
+                                  });
+                                  setOpenSectionSettings(null);
+                                }}
+                                style={{ background: "transparent", border: "1px solid var(--border-color)", borderRadius: "4px", padding: "6px 8px", cursor: "pointer", color: "var(--loss)", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+                              >
+                                <Trash2 size={14} />
+                                <span>Hide Section</span>
+                              </button>
+                            </div>
+                          </div>,
+                          document.body
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+                      <NewsWidget 
+                        compact 
+                        maxItems={5}
+                        externalSearchQuery={newsSearchQuery}
+                        externalIncludePositions={newsIncludePositions}
+                        externalShowSentiment={newsShowSentiment}
+                        onSearchQueryChange={setNewsSearchQuery}
+                        onIncludePositionsChange={setNewsIncludePositions}
+                        onShowSentimentChange={setNewsShowSentiment}
+                        hideInternalSettings
+                        showSearchInHeader
+                      />
                     </div>
                   </div>
                   </SectionCardResizeWrapper>

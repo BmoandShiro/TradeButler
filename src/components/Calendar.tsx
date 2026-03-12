@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useNavigate } from "react-router-dom";
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isToday } from "date-fns";
-import { ChevronLeft, ChevronRight, Heart, BookOpen } from "lucide-react";
+import { ChevronLeft, ChevronRight, Heart, BookOpen, DollarSign, TrendingUp, Calendar as CalendarIcon, RefreshCw, Settings } from "lucide-react";
 import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import type { DataMode } from "../utils/dataMode";
 import { loadSandboxState, getSandboxEmotionalStates } from "../utils/sandboxStore";
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
+import { getFinnhubApiKey } from "../utils/finnhubManager";
 
 interface DailyPnL {
   date: string;
@@ -27,6 +28,155 @@ interface CalendarEmotionalState {
   intensity: number;
 }
 
+interface CalendarEvent {
+  date: string;
+  symbol: string | null;
+  event_type: string;
+  title: string;
+  details: string | null;
+}
+
+interface EconomicEvent {
+  date: string;
+  event_type: string;
+  title: string;
+  description: string | null;
+  importance: string;
+}
+
+interface FinnhubEarning {
+  date: string;
+  symbol: string;
+  eps_estimate: number | null;
+  eps_actual: number | null;
+  revenue_estimate: number | null;
+  revenue_actual: number | null;
+  hour: string | null;
+}
+
+interface FinnhubEconomicEvent {
+  date: string;
+  country: string;
+  event: string;
+  impact: string;
+  actual: number | null;
+  estimate: number | null;
+  prev: number | null;
+  unit: string | null;
+}
+
+interface IpoEvent {
+  symbol: string | null;
+  name: string | null;
+  date: string | null;
+  exchange: string | null;
+  price: string | null;
+  shares: number | null;
+  status: string | null;
+}
+
+const CALENDAR_SHOW_EARNINGS_KEY = "tradebutler_calendar_show_earnings";
+const CALENDAR_SHOW_DIVIDENDS_KEY = "tradebutler_calendar_show_dividends";
+const CALENDAR_SHOW_ECONOMIC_KEY = "tradebutler_calendar_show_economic";
+const CALENDAR_SHOW_IPO_KEY = "tradebutler_calendar_show_ipo";
+
+// Cache keys and duration
+const CALENDAR_EVENTS_CACHE_KEY = "tradebutler_calendar_events_cache_v2";
+const ECONOMIC_EVENTS_CACHE_KEY = "tradebutler_economic_events_cache_v2";
+const CACHE_DURATION_MS = 60 * 60 * 1000; // 1 hour
+const MAX_CACHED_MONTHS = 6; // Keep up to 6 months cached
+
+interface MonthCacheEntry<T> {
+  timestamp: number;
+  events: T;
+}
+
+interface MultiMonthCache<T> {
+  months: Record<string, MonthCacheEntry<T>>;
+}
+
+const getCachedEvents = (month: string): MonthCacheEntry<Record<string, CalendarEvent[]>> | null => {
+  try {
+    const cached = localStorage.getItem(CALENDAR_EVENTS_CACHE_KEY);
+    if (!cached) return null;
+    const data: MultiMonthCache<Record<string, CalendarEvent[]>> = JSON.parse(cached);
+    const monthData = data.months?.[month];
+    if (monthData && Date.now() - monthData.timestamp < CACHE_DURATION_MS) {
+      return monthData;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const setCachedEvents = (month: string, events: Record<string, CalendarEvent[]>) => {
+  try {
+    const cached = localStorage.getItem(CALENDAR_EVENTS_CACHE_KEY);
+    const data: MultiMonthCache<Record<string, CalendarEvent[]>> = cached 
+      ? JSON.parse(cached) 
+      : { months: {} };
+    
+    // Add the new month's data
+    data.months[month] = {
+      timestamp: Date.now(),
+      events,
+    };
+    
+    // Clean up old entries (keep only MAX_CACHED_MONTHS most recent)
+    const sortedMonths = Object.entries(data.months)
+      .sort((a, b) => b[1].timestamp - a[1].timestamp)
+      .slice(0, MAX_CACHED_MONTHS);
+    
+    data.months = Object.fromEntries(sortedMonths);
+    
+    localStorage.setItem(CALENDAR_EVENTS_CACHE_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.warn("Failed to cache calendar events:", e);
+  }
+};
+
+const getCachedEconomicEvents = (month: string): MonthCacheEntry<Record<string, EconomicEvent[]>> | null => {
+  try {
+    const cached = localStorage.getItem(ECONOMIC_EVENTS_CACHE_KEY);
+    if (!cached) return null;
+    const data: MultiMonthCache<Record<string, EconomicEvent[]>> = JSON.parse(cached);
+    const monthData = data.months?.[month];
+    if (monthData && Date.now() - monthData.timestamp < CACHE_DURATION_MS) {
+      return monthData;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const setCachedEconomicEvents = (month: string, events: Record<string, EconomicEvent[]>) => {
+  try {
+    const cached = localStorage.getItem(ECONOMIC_EVENTS_CACHE_KEY);
+    const data: MultiMonthCache<Record<string, EconomicEvent[]>> = cached 
+      ? JSON.parse(cached) 
+      : { months: {} };
+    
+    // Add the new month's data
+    data.months[month] = {
+      timestamp: Date.now(),
+      events,
+    };
+    
+    // Clean up old entries
+    const sortedMonths = Object.entries(data.months)
+      .sort((a, b) => b[1].timestamp - a[1].timestamp)
+      .slice(0, MAX_CACHED_MONTHS);
+    
+    data.months = Object.fromEntries(sortedMonths);
+    
+    localStorage.setItem(ECONOMIC_EVENTS_CACHE_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.warn("Failed to cache economic events:", e);
+  }
+};
+
 export default function Calendar() {
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -38,6 +188,46 @@ export default function Calendar() {
   const [openJournalPage, setOpenJournalPage] = useState<number>(0);
   const navigate = useNavigate();
 
+  // New state for calendar events
+  const [calendarEvents, setCalendarEvents] = useState<Record<string, CalendarEvent[]>>({});
+  const [economicEvents, setEconomicEvents] = useState<Record<string, EconomicEvent[]>>({});
+  const [loadingEvents, setLoadingEvents] = useState(false);
+  const [cacheTimestamp, setCacheTimestamp] = useState<number | null>(null);
+  
+  // Toggle state for showing different event types
+  const [showEarnings, setShowEarnings] = useState(() => {
+    const saved = localStorage.getItem(CALENDAR_SHOW_EARNINGS_KEY);
+    return saved ? JSON.parse(saved) : true;
+  });
+  const [showDividends, setShowDividends] = useState(() => {
+    const saved = localStorage.getItem(CALENDAR_SHOW_DIVIDENDS_KEY);
+    return saved ? JSON.parse(saved) : true;
+  });
+  const [showEconomicEvents, setShowEconomicEvents] = useState(() => {
+    const saved = localStorage.getItem(CALENDAR_SHOW_ECONOMIC_KEY);
+    return saved ? JSON.parse(saved) : true;
+  });
+  const [showIPOs, setShowIPOs] = useState(() => {
+    const saved = localStorage.getItem(CALENDAR_SHOW_IPO_KEY);
+    return saved ? JSON.parse(saved) : true;
+  });
+  const [ipoEvents, setIpoEvents] = useState<Record<string, IpoEvent[]>>({});
+  const [showEventSettings, setShowEventSettings] = useState(false);
+
+  // Save toggle settings
+  useEffect(() => {
+    localStorage.setItem(CALENDAR_SHOW_EARNINGS_KEY, JSON.stringify(showEarnings));
+  }, [showEarnings]);
+  useEffect(() => {
+    localStorage.setItem(CALENDAR_SHOW_DIVIDENDS_KEY, JSON.stringify(showDividends));
+  }, [showDividends]);
+  useEffect(() => {
+    localStorage.setItem(CALENDAR_SHOW_ECONOMIC_KEY, JSON.stringify(showEconomicEvents));
+  }, [showEconomicEvents]);
+  useEffect(() => {
+    localStorage.setItem(CALENDAR_SHOW_IPO_KEY, JSON.stringify(showIPOs));
+  }, [showIPOs]);
+
   useEffect(() => {
     const unsub = subscribeToDataMode(setDataMode);
     return unsub;
@@ -46,6 +236,230 @@ export default function Calendar() {
   useEffect(() => {
     loadCalendarData();
   }, [currentDate, dataMode]);
+
+  // Helper function to deduplicate calendar events
+  // Prefers Finnhub data when both sources have the same event
+  const deduplicateEvents = (finnhubEvents: CalendarEvent[], yahooEvents: CalendarEvent[]): CalendarEvent[] => {
+    const seen = new Set<string>();
+    const dedupedEvents: CalendarEvent[] = [];
+    
+    // Add all Finnhub events first (preferred source)
+    finnhubEvents.forEach(event => {
+      const key = `${event.symbol}_${event.event_type}_${event.date}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        dedupedEvents.push(event);
+      }
+    });
+    
+    // Add Yahoo events only if no matching Finnhub event exists
+    yahooEvents.forEach(event => {
+      const key = `${event.symbol}_${event.event_type}_${event.date}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        dedupedEvents.push(event);
+      }
+    });
+    
+    return dedupedEvents;
+  };
+
+  // Fetch calendar events (earnings, dividends) from both Yahoo and Finnhub
+  const fetchCalendarEvents = useCallback(async (forceRefresh = false) => {
+    const monthKey = format(currentDate, "yyyy-MM");
+    
+    // Check cache first (unless force refresh)
+    if (!forceRefresh) {
+      const cachedEvents = getCachedEvents(monthKey);
+      const cachedEconomic = getCachedEconomicEvents(monthKey);
+      
+      // Use cached data if available (check each independently)
+      let usedCalendarCache = false;
+      let usedEconomicCache = false;
+      
+      if (cachedEvents) {
+        setCalendarEvents(cachedEvents.events);
+        setCacheTimestamp(cachedEvents.timestamp);
+        usedCalendarCache = true;
+        console.log("Using cached calendar events (cache age:", Math.round((Date.now() - cachedEvents.timestamp) / 60000), "minutes)");
+      }
+      
+      if (cachedEconomic) {
+        setEconomicEvents(cachedEconomic.events);
+        usedEconomicCache = true;
+        console.log("Using cached economic events (cache age:", Math.round((Date.now() - cachedEconomic.timestamp) / 60000), "minutes)");
+      }
+      
+      // If both caches are valid, we're done
+      if (usedCalendarCache && usedEconomicCache) {
+        return;
+      }
+    }
+    
+    setLoadingEvents(true);
+    try {
+      // Get watched symbols from news settings (shared with News page)
+      const savedSymbols = localStorage.getItem("tradebutler_news_watched_symbols");
+      const watchedSymbols: string[] = savedSymbols ? JSON.parse(savedSymbols) : [];
+      
+      // Get open position symbols (skip in sandbox mode since sandbox doesn't have real positions)
+      let openSymbols: string[] = [];
+      if (dataMode !== "sandbox") {
+        const paperOnly = dataMode === "paper";
+        try {
+          const groups = await invoke<Array<{ entry_trade: { symbol: string }; final_quantity: number }>>(
+            "get_position_groups",
+            { pairingMethod: "fifo", startDate: null, endDate: null, paperOnly, includePaper: !paperOnly }
+          );
+          openSymbols = groups
+            .filter(g => g.final_quantity !== 0)
+            .map(g => g.entry_trade.symbol.toUpperCase());
+        } catch (e) {
+          console.error("Failed to fetch open positions:", e);
+        }
+      }
+      
+      const allSymbols = [...new Set([...watchedSymbols, ...openSymbols])];
+      const monthStart = startOfMonth(currentDate);
+      const monthEnd = endOfMonth(currentDate);
+      const fromDate = format(monthStart, "yyyy-MM-dd");
+      const toDate = format(monthEnd, "yyyy-MM-dd");
+      
+      let yahooEvents: CalendarEvent[] = [];
+      let finnhubCalendarEvents: CalendarEvent[] = [];
+      
+      if (allSymbols.length > 0) {
+        // Fetch from Yahoo Finance
+        try {
+          yahooEvents = await invoke<CalendarEvent[]>("fetch_calendar_events_batch", { symbols: allSymbols });
+        } catch (e) {
+          console.warn("Failed to fetch Yahoo calendar events:", e);
+        }
+        
+        // Fetch from Finnhub (if API key is available)
+        const finnhubApiKey = getFinnhubApiKey();
+        if (finnhubApiKey) {
+          try {
+            const finnhubEarnings = await invoke<FinnhubEarning[]>("fetch_finnhub_earnings_batch", {
+              apiKey: finnhubApiKey,
+              symbols: allSymbols,
+              fromDate,
+              toDate,
+            });
+            
+            // Convert Finnhub earnings to CalendarEvent format
+            finnhubCalendarEvents = finnhubEarnings.map(earning => ({
+              date: earning.date,
+              symbol: earning.symbol,
+              event_type: "earnings",
+              title: `${earning.symbol} Earnings`,
+              details: [
+                earning.hour === "bmo" ? "Before Market Open" : earning.hour === "amc" ? "After Market Close" : null,
+                earning.eps_estimate != null ? `EPS Est: $${earning.eps_estimate.toFixed(2)}` : null,
+                earning.eps_actual != null ? `EPS Actual: $${earning.eps_actual.toFixed(2)}` : null,
+              ].filter(Boolean).join(" | ") || null,
+            }));
+          } catch (e) {
+            console.warn("Failed to fetch Finnhub earnings:", e);
+          }
+        }
+      }
+      
+      // Deduplicate events, preferring Finnhub data
+      const allEvents = deduplicateEvents(finnhubCalendarEvents, yahooEvents);
+      
+      const eventsMap: Record<string, CalendarEvent[]> = {};
+      allEvents.forEach(event => {
+        if (!eventsMap[event.date]) eventsMap[event.date] = [];
+        eventsMap[event.date].push(event);
+      });
+      setCalendarEvents(eventsMap);
+      
+      // Cache the calendar events
+      setCachedEvents(monthKey, eventsMap);
+      
+      // Fetch economic events - try Finnhub first if API key available, fallback to static
+      let economicData: EconomicEvent[] = [];
+      const finnhubApiKey = getFinnhubApiKey();
+      
+      if (finnhubApiKey) {
+        try {
+          const finnhubEconEvents = await invoke<FinnhubEconomicEvent[]>("fetch_finnhub_economic_calendar", {
+            apiKey: finnhubApiKey,
+            fromDate,
+            toDate,
+          });
+          
+          // Convert Finnhub economic events to our format
+          economicData = finnhubEconEvents.map(event => ({
+            date: event.date,
+            event_type: event.event.toLowerCase().replace(/\s+/g, "_"),
+            title: event.event,
+            description: [
+              event.actual != null ? `Actual: ${event.actual}${event.unit || ""}` : null,
+              event.estimate != null ? `Est: ${event.estimate}${event.unit || ""}` : null,
+              event.prev != null ? `Prev: ${event.prev}${event.unit || ""}` : null,
+            ].filter(Boolean).join(" | ") || null,
+            importance: event.impact || "medium",
+          }));
+        } catch (e) {
+          console.warn("Failed to fetch Finnhub economic calendar, using static data:", e);
+        }
+      }
+      
+      // Fallback to static economic events if Finnhub didn't return any
+      if (economicData.length === 0) {
+        economicData = await invoke<EconomicEvent[]>("get_economic_calendar_range", {
+          startDate: fromDate,
+          endDate: toDate,
+        });
+      }
+      
+      const econMap: Record<string, EconomicEvent[]> = {};
+      economicData.forEach(event => {
+        if (!econMap[event.date]) econMap[event.date] = [];
+        econMap[event.date].push(event);
+      });
+      setEconomicEvents(econMap);
+      
+      // Fetch IPO calendar (if Finnhub API key is available)
+      if (finnhubApiKey) {
+        try {
+          const ipoData = await invoke<IpoEvent[]>("fetch_finnhub_ipo_calendar", {
+            apiKey: finnhubApiKey,
+            fromDate,
+            toDate,
+          });
+          
+          const ipoMap: Record<string, IpoEvent[]> = {};
+          ipoData.forEach(ipo => {
+            if (ipo.date) {
+              if (!ipoMap[ipo.date]) ipoMap[ipo.date] = [];
+              ipoMap[ipo.date].push(ipo);
+            }
+          });
+          setIpoEvents(ipoMap);
+        } catch (e) {
+          console.warn("Failed to fetch IPO calendar:", e);
+        }
+      }
+      
+      // Cache the economic events
+      setCachedEconomicEvents(monthKey, econMap);
+      setCacheTimestamp(Date.now());
+      
+      console.log("Fetched and cached calendar events for", monthKey);
+    } catch (e) {
+      console.error("Failed to fetch calendar events:", e);
+    } finally {
+      setLoadingEvents(false);
+    }
+  }, [dataMode, currentDate]);
+
+  // Fetch events when month changes
+  useEffect(() => {
+    fetchCalendarEvents();
+  }, [fetchCalendarEvents]);
 
   const loadCalendarData = async () => {
     try {
@@ -171,7 +585,50 @@ export default function Calendar() {
     return emotionalStatesByDate[dateStr] || [];
   };
 
+  const getDayCalendarEvents = (date: Date): CalendarEvent[] => {
+    const dateStr = format(date, "yyyy-MM-dd");
+    return calendarEvents[dateStr] || [];
+  };
+
+  const getDayEconomicEvents = (date: Date): EconomicEvent[] => {
+    const dateStr = format(date, "yyyy-MM-dd");
+    return economicEvents[dateStr] || [];
+  };
+
   const getDateKey = (date: Date): string => format(date, "yyyy-MM-dd");
+
+  // Event type colors
+  const getEventBadgeColor = (eventType: string): string => {
+    switch (eventType) {
+      case "earnings": return "#8B5CF6";
+      case "dividend_ex": return "#10B981";
+      case "dividend_pay": return "#34D399";
+      case "split": return "#F59E0B";
+      case "fomc": return "#EF4444";
+      case "cpi": return "#F97316";
+      case "gdp": return "#3B82F6";
+      case "jobs": return "#6366F1";
+      case "ppi": return "#EC4899";
+      case "retail_sales": return "#14B8A6";
+      default: return "var(--accent)";
+    }
+  };
+
+  const getEventBadgeLabel = (eventType: string): string => {
+    switch (eventType) {
+      case "earnings": return "E";
+      case "dividend_ex": return "D";
+      case "dividend_pay": return "D$";
+      case "split": return "S";
+      case "fomc": return "FOMC";
+      case "cpi": return "CPI";
+      case "gdp": return "GDP";
+      case "jobs": return "NFP";
+      case "ppi": return "PPI";
+      case "retail_sales": return "RET";
+      default: return eventType.charAt(0).toUpperCase();
+    }
+  };
 
   const getDayColor = (pnl: number | null): string => {
     if (pnl === null) return "transparent";
@@ -312,31 +769,223 @@ export default function Calendar() {
             })}
           </select>
         </div>
-        <button
-          onClick={nextMonth}
-          style={{
-            background: "var(--bg-secondary)",
-            border: "1px solid var(--border-color)",
-            borderRadius: "10px",
-            padding: "10px 14px",
-            color: "var(--text-primary)",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            transition: "background 0.15s ease, border-color 0.15s ease",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--bg-tertiary)";
-            e.currentTarget.style.borderColor = "var(--accent)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "var(--bg-secondary)";
-            e.currentTarget.style.borderColor = "var(--border-color)";
-          }}
-        >
-          <ChevronRight size={20} />
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <button
+            onClick={nextMonth}
+            style={{
+              background: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "10px",
+              padding: "10px 14px",
+              color: "var(--text-primary)",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              transition: "background 0.15s ease, border-color 0.15s ease",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--bg-tertiary)";
+              e.currentTarget.style.borderColor = "var(--accent)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "var(--bg-secondary)";
+              e.currentTarget.style.borderColor = "var(--border-color)";
+            }}
+          >
+            <ChevronRight size={20} />
+          </button>
+          
+          {/* Refresh events button */}
+          <button
+            onClick={() => fetchCalendarEvents(true)}
+            disabled={loadingEvents}
+            title={cacheTimestamp 
+              ? `Refresh events (last updated ${Math.round((Date.now() - cacheTimestamp) / 60000)} min ago)` 
+              : "Refresh events"}
+            style={{
+              background: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "10px",
+              padding: "10px 14px",
+              color: loadingEvents ? "var(--text-secondary)" : "var(--text-primary)",
+              cursor: loadingEvents ? "not-allowed" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "6px",
+              transition: "background 0.15s ease, border-color 0.15s ease",
+            }}
+            onMouseEnter={(e) => {
+              if (!loadingEvents) {
+                e.currentTarget.style.background = "var(--bg-tertiary)";
+                e.currentTarget.style.borderColor = "var(--accent)";
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "var(--bg-secondary)";
+              e.currentTarget.style.borderColor = "var(--border-color)";
+            }}
+          >
+            <RefreshCw size={18} className={loadingEvents ? "spin" : ""} />
+            {cacheTimestamp && (
+              <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                {Math.round((Date.now() - cacheTimestamp) / 60000)}m
+              </span>
+            )}
+          </button>
+          
+          {/* Event settings button */}
+          <div style={{ position: "relative" }}>
+            <button
+              onClick={() => setShowEventSettings(!showEventSettings)}
+              title="Event settings"
+              style={{
+                background: showEventSettings ? "var(--accent)" : "var(--bg-secondary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "10px",
+                padding: "10px 14px",
+                color: showEventSettings ? "var(--bg-primary)" : "var(--text-primary)",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                transition: "background 0.15s ease, border-color 0.15s ease",
+              }}
+              onMouseEnter={(e) => {
+                if (!showEventSettings) {
+                  e.currentTarget.style.background = "var(--bg-tertiary)";
+                  e.currentTarget.style.borderColor = "var(--accent)";
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!showEventSettings) {
+                  e.currentTarget.style.background = "var(--bg-secondary)";
+                  e.currentTarget.style.borderColor = "var(--border-color)";
+                }
+              }}
+            >
+              <Settings size={18} />
+            </button>
+            
+            {showEventSettings && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  right: 0,
+                  marginTop: "8px",
+                  background: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "12px",
+                  padding: "16px",
+                  boxShadow: "0 8px 24px rgba(0, 0, 0, 0.3)",
+                  zIndex: 100,
+                  minWidth: "200px",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h4 style={{ margin: "0 0 12px 0", fontSize: "14px", fontWeight: "600", color: "var(--text-primary)" }}>
+                  Show Events
+                </h4>
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={showEarnings}
+                      onChange={(e) => setShowEarnings(e.target.checked)}
+                      style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                    />
+                    <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--text-primary)", fontSize: "13px" }}>
+                      <span style={{ 
+                        display: "inline-flex", 
+                        alignItems: "center", 
+                        justifyContent: "center",
+                        width: "20px", 
+                        height: "20px", 
+                        borderRadius: "4px", 
+                        backgroundColor: "#8B5CF6",
+                        color: "white",
+                        fontSize: "10px",
+                        fontWeight: "700"
+                      }}>E</span>
+                      Earnings
+                    </span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={showDividends}
+                      onChange={(e) => setShowDividends(e.target.checked)}
+                      style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                    />
+                    <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--text-primary)", fontSize: "13px" }}>
+                      <span style={{ 
+                        display: "inline-flex", 
+                        alignItems: "center", 
+                        justifyContent: "center",
+                        width: "20px", 
+                        height: "20px", 
+                        borderRadius: "4px", 
+                        backgroundColor: "#10B981",
+                        color: "white",
+                        fontSize: "10px",
+                        fontWeight: "700"
+                      }}>D</span>
+                      Dividends
+                    </span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={showEconomicEvents}
+                      onChange={(e) => setShowEconomicEvents(e.target.checked)}
+                      style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                    />
+                    <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--text-primary)", fontSize: "13px" }}>
+                      <span style={{ 
+                        display: "inline-flex", 
+                        alignItems: "center", 
+                        justifyContent: "center",
+                        width: "20px", 
+                        height: "20px", 
+                        borderRadius: "4px", 
+                        backgroundColor: "#EF4444",
+                        color: "white",
+                        fontSize: "8px",
+                        fontWeight: "700"
+                      }}>FOMC</span>
+                      Economic Events
+                    </span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={showIPOs}
+                      onChange={(e) => setShowIPOs(e.target.checked)}
+                      style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                    />
+                    <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--text-primary)", fontSize: "13px" }}>
+                      <span style={{ 
+                        display: "inline-flex", 
+                        alignItems: "center", 
+                        justifyContent: "center",
+                        width: "20px", 
+                        height: "20px", 
+                        borderRadius: "4px", 
+                        backgroundColor: "#F59E0B",
+                        color: "white",
+                        fontSize: "9px",
+                        fontWeight: "700"
+                      }}>IPO</span>
+                      IPO Events
+                    </span>
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       <div
@@ -373,11 +1022,21 @@ export default function Calendar() {
           const dayPnL = getDayPnL(day);
           const journalEntries = getDayJournalEntries(day);
           const emotionalStates = getDayEmotionalStates(day);
+          const dayCalEvents = getDayCalendarEvents(day);
+          const dayEconEvents = getDayEconomicEvents(day);
           const isCurrentDay = isToday(day);
           const pnlColor = getDayColor(dayPnL?.profit_loss ?? null);
           const dateKey = getDateKey(day);
           const isDropdownOpen = openJournalDate === dateKey;
-          const hasContent = dayPnL || journalEntries.length > 0 || emotionalStates.length > 0;
+          
+          // Filter events based on settings
+          const earningsEvents = showEarnings ? dayCalEvents.filter(e => e.event_type === "earnings") : [];
+          const dividendEvents = showDividends ? dayCalEvents.filter(e => e.event_type.startsWith("dividend")) : [];
+          const filteredEconEvents = showEconomicEvents ? dayEconEvents : [];
+          const dayIpoEvents = showIPOs ? (ipoEvents[dateKey] || []) : [];
+          
+          const hasContent = dayPnL || journalEntries.length > 0 || emotionalStates.length > 0 ||
+            earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0 || dayIpoEvents.length > 0;
 
           const openDetails = (e: React.MouseEvent) => {
             e.stopPropagation();
@@ -439,7 +1098,7 @@ export default function Calendar() {
                   </span>
                 </>
               )}
-              {(journalEntries.length > 0 || emotionalStates.length > 0) && (
+              {(journalEntries.length > 0 || emotionalStates.length > 0 || earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0 || dayIpoEvents.length > 0) && (
                 <div
                   style={{
                     display: "flex",
@@ -490,6 +1149,91 @@ export default function Calendar() {
                       <span style={{ fontSize: "14px", fontWeight: "600" }}>{emotionalStates.length}</span>
                     </button>
                   )}
+                  {/* Event badges */}
+                  {earningsEvents.map((event, idx) => (
+                    <span
+                      key={`earnings-${idx}`}
+                      onClick={openDetails}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "2px 5px",
+                        borderRadius: "4px",
+                        backgroundColor: getEventBadgeColor("earnings"),
+                        color: "white",
+                        fontSize: "10px",
+                        fontWeight: "700",
+                        cursor: "pointer",
+                      }}
+                      title={`${event.title}${event.details ? ` - ${event.details}` : ""}`}
+                    >
+                      E
+                    </span>
+                  ))}
+                  {dividendEvents.map((event, idx) => (
+                    <span
+                      key={`dividend-${idx}`}
+                      onClick={openDetails}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "2px 5px",
+                        borderRadius: "4px",
+                        backgroundColor: getEventBadgeColor(event.event_type),
+                        color: "white",
+                        fontSize: "10px",
+                        fontWeight: "700",
+                        cursor: "pointer",
+                      }}
+                      title={`${event.title}${event.details ? ` - ${event.details}` : ""}`}
+                    >
+                      D
+                    </span>
+                  ))}
+                  {filteredEconEvents.map((event, idx) => (
+                    <span
+                      key={`econ-${idx}`}
+                      onClick={openDetails}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "2px 5px",
+                        borderRadius: "4px",
+                        backgroundColor: getEventBadgeColor(event.event_type),
+                        color: "white",
+                        fontSize: "9px",
+                        fontWeight: "700",
+                        cursor: "pointer",
+                      }}
+                      title={`${event.title}${event.description ? ` - ${event.description}` : ""}`}
+                    >
+                      {getEventBadgeLabel(event.event_type)}
+                    </span>
+                  ))}
+                  {dayIpoEvents.map((ipo, idx) => (
+                    <span
+                      key={`ipo-${idx}`}
+                      onClick={openDetails}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "2px 5px",
+                        borderRadius: "4px",
+                        backgroundColor: "#F59E0B",
+                        color: "white",
+                        fontSize: "9px",
+                        fontWeight: "700",
+                        cursor: "pointer",
+                      }}
+                      title={`IPO: ${ipo.name || ipo.symbol || "Unknown"}`}
+                    >
+                      IPO
+                    </span>
+                  ))}
                 </div>
               )}
               {isDropdownOpen && (
@@ -607,6 +1351,169 @@ export default function Calendar() {
                           >
                             Open Emotions
                           </button>
+                        </div>
+                      )}
+                      {/* Events section */}
+                      {(earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0 || dayIpoEvents.length > 0) && (
+                        <div style={{ marginBottom: "14px", paddingBottom: "14px", borderBottom: journalEntries.length > 0 ? "1px solid var(--border-color)" : "none" }}>
+                          <div style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "10px", display: "flex", alignItems: "center", gap: "8px" }}>
+                            <CalendarIcon size={14} style={{ color: "var(--accent)" }} />
+                            Events
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                            {earningsEvents.map((event, idx) => (
+                              <div
+                                key={`earnings-detail-${idx}`}
+                                style={{
+                                  padding: "10px 12px",
+                                  background: "var(--bg-tertiary)",
+                                  borderRadius: "8px",
+                                  borderLeft: `3px solid ${getEventBadgeColor("earnings")}`,
+                                }}
+                              >
+                                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                                  <TrendingUp size={14} color={getEventBadgeColor("earnings")} />
+                                  <span style={{ fontSize: "12px", fontWeight: "600", color: getEventBadgeColor("earnings"), textTransform: "uppercase" }}>
+                                    Earnings
+                                  </span>
+                                  {event.symbol && (
+                                    <span style={{ fontSize: "11px", padding: "2px 6px", borderRadius: "4px", backgroundColor: "var(--bg-secondary)", color: "var(--text-primary)", fontWeight: "600" }}>
+                                      {event.symbol}
+                                    </span>
+                                  )}
+                                </div>
+                                <p style={{ margin: 0, fontSize: "14px", color: "var(--text-primary)", fontWeight: "500" }}>{event.title}</p>
+                                {event.details && (
+                                  <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "var(--text-secondary)" }}>{event.details}</p>
+                                )}
+                              </div>
+                            ))}
+                            {dividendEvents.map((event, idx) => (
+                              <div
+                                key={`dividend-detail-${idx}`}
+                                style={{
+                                  padding: "10px 12px",
+                                  background: "var(--bg-tertiary)",
+                                  borderRadius: "8px",
+                                  borderLeft: `3px solid ${getEventBadgeColor(event.event_type)}`,
+                                }}
+                              >
+                                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                                  <DollarSign size={14} color={getEventBadgeColor(event.event_type)} />
+                                  <span style={{ fontSize: "12px", fontWeight: "600", color: getEventBadgeColor(event.event_type), textTransform: "uppercase" }}>
+                                    {event.event_type === "dividend_ex" ? "Ex-Dividend" : "Dividend Pay"}
+                                  </span>
+                                  {event.symbol && (
+                                    <span style={{ fontSize: "11px", padding: "2px 6px", borderRadius: "4px", backgroundColor: "var(--bg-secondary)", color: "var(--text-primary)", fontWeight: "600" }}>
+                                      {event.symbol}
+                                    </span>
+                                  )}
+                                </div>
+                                <p style={{ margin: 0, fontSize: "14px", color: "var(--text-primary)", fontWeight: "500" }}>{event.title}</p>
+                                {event.details && (
+                                  <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "var(--text-secondary)" }}>{event.details}</p>
+                                )}
+                              </div>
+                            ))}
+                            {filteredEconEvents.map((event, idx) => (
+                              <div
+                                key={`econ-detail-${idx}`}
+                                style={{
+                                  padding: "10px 12px",
+                                  background: "var(--bg-tertiary)",
+                                  borderRadius: "8px",
+                                  borderLeft: `3px solid ${getEventBadgeColor(event.event_type)}`,
+                                }}
+                              >
+                                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                                  <span style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    padding: "2px 5px",
+                                    borderRadius: "4px",
+                                    backgroundColor: getEventBadgeColor(event.event_type),
+                                    color: "white",
+                                    fontSize: "9px",
+                                    fontWeight: "700",
+                                  }}>
+                                    {getEventBadgeLabel(event.event_type)}
+                                  </span>
+                                  <span style={{
+                                    fontSize: "10px",
+                                    padding: "2px 6px",
+                                    borderRadius: "4px",
+                                    backgroundColor: event.importance === "high" ? "rgba(239, 68, 68, 0.2)" : "var(--bg-secondary)",
+                                    color: event.importance === "high" ? "#EF4444" : "var(--text-secondary)",
+                                    fontWeight: "600",
+                                    textTransform: "uppercase",
+                                  }}>
+                                    {event.importance}
+                                  </span>
+                                </div>
+                                <p style={{ margin: 0, fontSize: "14px", color: "var(--text-primary)", fontWeight: "500" }}>{event.title}</p>
+                                {event.description && (
+                                  <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "var(--text-secondary)" }}>{event.description}</p>
+                                )}
+                              </div>
+                            ))}
+                            {dayIpoEvents.map((ipo, idx) => (
+                              <div
+                                key={`ipo-detail-${idx}`}
+                                style={{
+                                  padding: "10px 12px",
+                                  background: "var(--bg-tertiary)",
+                                  borderRadius: "8px",
+                                  borderLeft: "3px solid #F59E0B",
+                                }}
+                              >
+                                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                                  <span style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    padding: "2px 5px",
+                                    borderRadius: "4px",
+                                    backgroundColor: "#F59E0B",
+                                    color: "white",
+                                    fontSize: "9px",
+                                    fontWeight: "700",
+                                  }}>
+                                    IPO
+                                  </span>
+                                  {ipo.symbol && (
+                                    <span style={{
+                                      fontSize: "10px",
+                                      padding: "2px 6px",
+                                      borderRadius: "4px",
+                                      backgroundColor: "var(--accent)",
+                                      color: "var(--bg-primary)",
+                                      fontWeight: "600",
+                                    }}>
+                                      {ipo.symbol}
+                                    </span>
+                                  )}
+                                  {ipo.status && (
+                                    <span style={{
+                                      fontSize: "10px",
+                                      padding: "2px 6px",
+                                      borderRadius: "4px",
+                                      backgroundColor: ipo.status.toLowerCase() === "priced" ? "rgba(16, 185, 129, 0.2)" : "var(--bg-secondary)",
+                                      color: ipo.status.toLowerCase() === "priced" ? "#10B981" : "var(--text-secondary)",
+                                      fontWeight: "600",
+                                    }}>
+                                      {ipo.status}
+                                    </span>
+                                  )}
+                                </div>
+                                <p style={{ margin: 0, fontSize: "14px", color: "var(--text-primary)", fontWeight: "500" }}>{ipo.name || "Unknown Company"}</p>
+                                <div style={{ display: "flex", gap: "12px", marginTop: "6px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                                  {ipo.exchange && <span>Exchange: {ipo.exchange}</span>}
+                                  {ipo.price && <span>Price: ${ipo.price}</span>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                       {journalEntries.length > 0 && (
@@ -744,7 +1651,36 @@ export default function Calendar() {
           <Heart size={16} style={{ color: "var(--accent)" }} />
           <span style={{ fontWeight: "500" }}>Emotional states</span>
         </div>
+        {showEarnings && (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "16px", height: "16px", borderRadius: "4px", backgroundColor: "#8B5CF6", color: "white", fontSize: "10px", fontWeight: "700" }}>E</span>
+            <span style={{ fontWeight: "500" }}>Earnings</span>
+          </div>
+        )}
+        {showDividends && (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "16px", height: "16px", borderRadius: "4px", backgroundColor: "#10B981", color: "white", fontSize: "10px", fontWeight: "700" }}>D</span>
+            <span style={{ fontWeight: "500" }}>Dividends</span>
+          </div>
+        )}
+        {showEconomicEvents && (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "16px", height: "16px", borderRadius: "4px", backgroundColor: "#EF4444", color: "white", fontSize: "8px", fontWeight: "700" }}>$</span>
+            <span style={{ fontWeight: "500" }}>Economic events</span>
+          </div>
+        )}
       </div>
+
+      {/* CSS for spin animation */}
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        .spin {
+          animation: spin 1s linear infinite;
+        }
+      `}</style>
     </div>
   );
 }

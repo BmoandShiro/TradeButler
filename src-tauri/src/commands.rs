@@ -1,11 +1,12 @@
-use crate::database::{get_connection, Trade, EmotionalState, EmotionSurvey, Strategy, JournalEntry, JournalTrade};
+use crate::database::{get_connection, Trade, EmotionalState, EmotionSurvey, Strategy, JournalEntry, JournalTrade, NewsItem, CalendarEvent, EconomicEvent};
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use chrono::{Timelike, Datelike};
+use chrono::{Timelike, Datelike, Utc};
 use std::fs;
 use std::process::Command;
 use evalexpr::{eval_float_with_context, HashMapContext, Value, ContextWithMutableVariables, DefaultNumericTypes};
+use reqwest::cookie::CookieStore;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CsvTrade {
@@ -7507,7 +7508,7 @@ pub struct VersionInfo {
     pub latest: String,
     pub is_up_to_date: bool,
     pub download_url: Option<String>,
-    /// Asset filename (e.g. TradeButler-1.3.3.msi) for installer temp file; API URL does not contain it.
+    /// Asset filename (e.g. TradeButler-1.4.0.msi) for installer temp file; API URL does not contain it.
     pub download_filename: Option<String>,
     pub release_notes: Option<String>,
     pub is_installer: bool,
@@ -8049,4 +8050,1881 @@ pub async fn download_and_install_update(download_url: String, download_filename
     }
     
     Ok(())
+}
+
+// ============================================================================
+// NEWS SYSTEM COMMANDS
+// ============================================================================
+
+/// Fetch news for a single symbol from Yahoo Finance RSS feed
+#[tauri::command]
+pub async fn fetch_news(symbol: String) -> Result<Vec<NewsItem>, String> {
+    let url = format!(
+        "https://feeds.finance.yahoo.com/rss/2.0/headline?s={}&region=US&lang=en-US",
+        symbol.to_uppercase()
+    );
+    
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .header("Accept", "application/rss+xml, application/xml, text/xml")
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("Failed to fetch news: {}", response.status()));
+    }
+    
+    let xml_text = response.text().await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+    
+    // Parse RSS XML manually (simple parsing for Yahoo Finance RSS format)
+    let mut news_items = Vec::new();
+    
+    // Split by <item> tags
+    for item in xml_text.split("<item>").skip(1) {
+        if let Some(end_idx) = item.find("</item>") {
+            let item_xml = &item[..end_idx];
+            
+            // Extract fields with helper function
+            let title = extract_xml_field(item_xml, "title").unwrap_or_default();
+            let link = extract_xml_field(item_xml, "link").unwrap_or_default();
+            let guid = extract_xml_field(item_xml, "guid").unwrap_or_else(|| link.clone());
+            let pub_date = extract_xml_field(item_xml, "pubDate").unwrap_or_default();
+            let source = extract_xml_field(item_xml, "source").unwrap_or_else(|| "Yahoo Finance".to_string());
+            
+            if !title.is_empty() && !link.is_empty() {
+                // Convert pub_date to ISO format
+                let iso_date = parse_rss_date(&pub_date).unwrap_or(pub_date);
+                
+                news_items.push(NewsItem {
+                    id: guid,
+                    symbol: symbol.to_uppercase(),
+                    title: decode_html_entities(&title),
+                    link,
+                    pub_date: iso_date,
+                    source: decode_html_entities(&source),
+                });
+            }
+        }
+    }
+    
+    Ok(news_items)
+}
+
+/// Fetch news for multiple symbols
+#[tauri::command]
+pub async fn fetch_news_batch(symbols: Vec<String>) -> Result<Vec<NewsItem>, String> {
+    let mut all_news = Vec::new();
+    
+    for symbol in symbols {
+        match fetch_news(symbol).await {
+            Ok(news) => all_news.extend(news),
+            Err(e) => eprintln!("Failed to fetch news for symbol: {}", e),
+        }
+    }
+    
+    // Sort by date descending
+    all_news.sort_by(|a, b| b.pub_date.cmp(&a.pub_date));
+    
+    // Remove duplicates by ID
+    let mut seen_ids = std::collections::HashSet::new();
+    all_news.retain(|item| seen_ids.insert(item.id.clone()));
+    
+    Ok(all_news)
+}
+
+/// Helper function to get Yahoo Finance crumb and cookie for authenticated requests
+async fn get_yahoo_auth() -> Result<(String, String), String> {
+    // Build a cookie-storing client
+    let jar = std::sync::Arc::new(reqwest::cookie::Jar::default());
+    let client: reqwest::Client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .cookie_store(true)
+        .cookie_provider(jar.clone())
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    // Step 1: Visit Yahoo Finance to establish session cookies
+    let consent_response: reqwest::Response = client
+        .get("https://finance.yahoo.com/")
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch Yahoo Finance: {}", e))?;
+    
+    if !consent_response.status().is_success() && consent_response.status() != reqwest::StatusCode::FOUND {
+        return Err(format!("Yahoo Finance returned: {}", consent_response.status()));
+    }
+    
+    // Step 2: Fetch the crumb from the dedicated crumb endpoint
+    let crumb_response: reqwest::Response = client
+        .get("https://query1.finance.yahoo.com/v1/test/getcrumb")
+        .header("Accept", "*/*")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .header("Referer", "https://finance.yahoo.com/")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get crumb: {}", e))?;
+    
+    if !crumb_response.status().is_success() {
+        return Err(format!("Crumb request returned: {}", crumb_response.status()));
+    }
+    
+    let crumb: String = crumb_response.text().await
+        .map_err(|e| format!("Failed to read crumb: {}", e))?;
+    
+    // Extract cookies from jar
+    let url = reqwest::Url::parse("https://finance.yahoo.com/").unwrap();
+    let cookie_str: String = jar.cookies(&url)
+        .map(|header| header.to_str().unwrap_or("").to_string())
+        .unwrap_or_default();
+    
+    if crumb.is_empty() {
+        return Err("Empty crumb received".to_string());
+    }
+    
+    Ok((cookie_str, crumb))
+}
+
+/// Fetch calendar events (earnings, dividends) for a symbol from Yahoo Finance
+#[tauri::command]
+pub async fn fetch_calendar_events(symbol: String) -> Result<Vec<CalendarEvent>, String> {
+    let symbol_upper = symbol.to_uppercase();
+    
+    // Try to get authenticated session first
+    let (cookie, crumb) = match get_yahoo_auth().await {
+        Ok((c, cr)) => (Some(c), Some(cr)),
+        Err(e) => {
+            eprintln!("Failed to get Yahoo auth (will try without): {}", e);
+            (None, None)
+        }
+    };
+    
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    // Build URL with crumb if available
+    let url = if let Some(ref cr) = crumb {
+        format!(
+            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=calendarEvents,summaryDetail&crumb={}",
+            symbol_upper, cr
+        )
+    } else {
+        format!(
+            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=calendarEvents,summaryDetail",
+            symbol_upper
+        )
+    };
+    
+    let mut request = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .header("Referer", "https://finance.yahoo.com/")
+        .header("Origin", "https://finance.yahoo.com");
+    
+    // Add cookie header if available
+    if let Some(ref c) = cookie {
+        request = request.header("Cookie", c.as_str());
+    }
+    
+    let response = request.send().await;
+    
+    // If quoteSummary fails (401, etc), return empty events gracefully
+    // News feed will still work, just without calendar events
+    let response = match response {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            eprintln!("Yahoo quoteSummary returned {} for {}", r.status(), symbol_upper);
+            return Ok(Vec::new());
+        }
+        Err(e) => {
+            eprintln!("Network error fetching calendar for {}: {}", symbol_upper, e);
+            return Ok(Vec::new());
+        }
+    };
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+    
+    let mut events = Vec::new();
+    let symbol_upper = symbol.to_uppercase();
+    
+    // Extract calendar events from response
+    if let Some(result) = data.get("quoteSummary")
+        .and_then(|q| q.get("result"))
+        .and_then(|r| r.get(0)) 
+    {
+        // Earnings dates
+        if let Some(calendar) = result.get("calendarEvents") {
+            // Earnings date
+            if let Some(earnings) = calendar.get("earnings") {
+                if let Some(earnings_date) = earnings.get("earningsDate")
+                    .and_then(|d| d.get(0))
+                    .and_then(|d| d.get("fmt"))
+                    .and_then(|d| d.as_str())
+                {
+                    let eps_estimate = earnings.get("earningsAverage")
+                        .and_then(|e| e.get("fmt"))
+                        .and_then(|e| e.as_str())
+                        .map(|e| format!("EPS Est: {}", e));
+                    
+                    events.push(CalendarEvent {
+                        date: earnings_date.to_string(),
+                        symbol: Some(symbol_upper.clone()),
+                        event_type: "earnings".to_string(),
+                        title: format!("{} Earnings", symbol_upper),
+                        details: eps_estimate,
+                    });
+                }
+            }
+            
+            // Ex-dividend date
+            if let Some(ex_div) = calendar.get("exDividendDate")
+                .and_then(|d| d.get("fmt"))
+                .and_then(|d| d.as_str())
+            {
+                let div_rate = calendar.get("dividendDate")
+                    .and_then(|d| d.get("fmt"))
+                    .and_then(|d| d.as_str())
+                    .map(|d| format!("Pay date: {}", d));
+                
+                events.push(CalendarEvent {
+                    date: ex_div.to_string(),
+                    symbol: Some(symbol_upper.clone()),
+                    event_type: "dividend_ex".to_string(),
+                    title: format!("{} Ex-Dividend", symbol_upper),
+                    details: div_rate,
+                });
+            }
+        }
+        
+        // Dividend info from summaryDetail
+        if let Some(summary) = result.get("summaryDetail") {
+            if let Some(div_date) = summary.get("exDividendDate")
+                .and_then(|d| d.get("fmt"))
+                .and_then(|d| d.as_str())
+            {
+                // Only add if not already added from calendarEvents
+                let already_has = events.iter().any(|e| 
+                    e.event_type == "dividend_ex" && 
+                    e.symbol.as_ref() == Some(&symbol_upper) &&
+                    e.date == div_date
+                );
+                
+                if !already_has {
+                    let div_rate = summary.get("dividendRate")
+                        .and_then(|r| r.get("fmt"))
+                        .and_then(|r| r.as_str())
+                        .map(|r| format!("Dividend: {}", r));
+                    
+                    events.push(CalendarEvent {
+                        date: div_date.to_string(),
+                        symbol: Some(symbol_upper.clone()),
+                        event_type: "dividend_ex".to_string(),
+                        title: format!("{} Ex-Dividend", symbol_upper),
+                        details: div_rate,
+                    });
+                }
+            }
+        }
+    }
+    
+    Ok(events)
+}
+
+/// Fetch calendar events for multiple symbols
+#[tauri::command]
+pub async fn fetch_calendar_events_batch(symbols: Vec<String>) -> Result<Vec<CalendarEvent>, String> {
+    let mut all_events = Vec::new();
+    
+    for symbol in symbols {
+        match fetch_calendar_events(symbol).await {
+            Ok(events) => all_events.extend(events),
+            Err(e) => eprintln!("Failed to fetch calendar events: {}", e),
+        }
+    }
+    
+    // Sort by date
+    all_events.sort_by(|a, b| a.date.cmp(&b.date));
+    
+    Ok(all_events)
+}
+
+/// Get economic calendar events for a given year/month
+/// Returns major economic events like FOMC, CPI, GDP, Jobs reports
+#[tauri::command]
+pub fn get_economic_calendar(year: i32, month: u32) -> Result<Vec<EconomicEvent>, String> {
+    // Static economic calendar data
+    // In a production app, this could be fetched from an API or updated periodically
+    let events = get_economic_events_for_month(year, month);
+    Ok(events)
+}
+
+/// Get all economic events for a date range
+#[tauri::command]
+pub fn get_economic_calendar_range(start_date: String, end_date: String) -> Result<Vec<EconomicEvent>, String> {
+    // Parse dates
+    let start = chrono::NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid start date: {}", e))?;
+    let end = chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid end date: {}", e))?;
+    
+    let mut all_events = Vec::new();
+    let mut current = start;
+    
+    while current <= end {
+        let events = get_economic_events_for_month(current.year(), current.month());
+        for event in events {
+            if let Ok(event_date) = chrono::NaiveDate::parse_from_str(&event.date, "%Y-%m-%d") {
+                if event_date >= start && event_date <= end {
+                    all_events.push(event);
+                }
+            }
+        }
+        // Move to next month
+        current = if current.month() == 12 {
+            chrono::NaiveDate::from_ymd_opt(current.year() + 1, 1, 1).unwrap_or(current)
+        } else {
+            chrono::NaiveDate::from_ymd_opt(current.year(), current.month() + 1, 1).unwrap_or(current)
+        };
+    }
+    
+    // Sort and deduplicate
+    all_events.sort_by(|a, b| a.date.cmp(&b.date));
+    all_events.dedup_by(|a, b| a.date == b.date && a.event_type == b.event_type);
+    
+    Ok(all_events)
+}
+
+// Helper function to extract XML field content
+fn extract_xml_field(xml: &str, field: &str) -> Option<String> {
+    let start_tag = format!("<{}>", field);
+    let end_tag = format!("</{}>", field);
+    
+    // Try CDATA first
+    let cdata_start = format!("<{}><![CDATA[", field);
+    if let Some(start_idx) = xml.find(&cdata_start) {
+        let content_start = start_idx + cdata_start.len();
+        if let Some(end_idx) = xml[content_start..].find("]]>") {
+            return Some(xml[content_start..content_start + end_idx].to_string());
+        }
+    }
+    
+    // Regular tag
+    if let Some(start_idx) = xml.find(&start_tag) {
+        let content_start = start_idx + start_tag.len();
+        if let Some(end_idx) = xml[content_start..].find(&end_tag) {
+            return Some(xml[content_start..content_start + end_idx].to_string());
+        }
+    }
+    
+    None
+}
+
+// Helper function to decode common HTML entities
+fn decode_html_entities(text: &str) -> String {
+    text.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&#x27;", "'")
+        .replace("&nbsp;", " ")
+}
+
+// Helper function to parse RSS date format to ISO
+fn parse_rss_date(date_str: &str) -> Option<String> {
+    // RSS date format: "Mon, 10 Mar 2025 14:30:00 +0000"
+    // Convert to ISO format: "2025-03-10T14:30:00Z"
+    
+    use chrono::DateTime;
+    
+    // Try parsing RFC 2822 format (common RSS date format)
+    if let Ok(dt) = DateTime::parse_from_rfc2822(date_str) {
+        return Some(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+    }
+    
+    // Try parsing RFC 3339 (ISO 8601)
+    if let Ok(dt) = DateTime::parse_from_rfc3339(date_str) {
+        return Some(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+    }
+    
+    None
+}
+
+// Static economic calendar data generator
+fn get_economic_events_for_month(year: i32, month: u32) -> Vec<EconomicEvent> {
+    let mut events = Vec::new();
+    
+    // FOMC Meeting Dates (8 meetings per year, typically 2-day meetings ending on Wednesday)
+    // 2025 FOMC dates
+    let fomc_dates_2025 = vec![
+        ("2025-01-29", "FOMC Meeting"),
+        ("2025-03-19", "FOMC Meeting"),
+        ("2025-05-07", "FOMC Meeting"),
+        ("2025-06-18", "FOMC Meeting"),
+        ("2025-07-30", "FOMC Meeting"),
+        ("2025-09-17", "FOMC Meeting"),
+        ("2025-11-05", "FOMC Meeting"),
+        ("2025-12-17", "FOMC Meeting"),
+    ];
+    
+    // 2026 FOMC dates (projected)
+    let fomc_dates_2026 = vec![
+        ("2026-01-28", "FOMC Meeting"),
+        ("2026-03-18", "FOMC Meeting"),
+        ("2026-05-06", "FOMC Meeting"),
+        ("2026-06-17", "FOMC Meeting"),
+        ("2026-07-29", "FOMC Meeting"),
+        ("2026-09-16", "FOMC Meeting"),
+        ("2026-11-04", "FOMC Meeting"),
+        ("2026-12-16", "FOMC Meeting"),
+    ];
+    
+    let fomc_dates = if year == 2025 { &fomc_dates_2025 } else { &fomc_dates_2026 };
+    
+    for (date, title) in fomc_dates {
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+            if d.year() == year && d.month() == month {
+                events.push(EconomicEvent {
+                    date: date.to_string(),
+                    event_type: "fomc".to_string(),
+                    title: title.to_string(),
+                    description: Some("Federal Reserve interest rate decision and policy statement".to_string()),
+                    importance: "high".to_string(),
+                });
+            }
+        }
+    }
+    
+    // CPI (Consumer Price Index) - Usually released around 10th-14th of month
+    // Approximate dates based on typical release schedule
+    let cpi_day = match month {
+        1 => 15, 2 => 12, 3 => 12, 4 => 10, 5 => 13, 6 => 11,
+        7 => 11, 8 => 14, 9 => 11, 10 => 10, 11 => 13, 12 => 11,
+        _ => 12,
+    };
+    
+    if let Some(date) = chrono::NaiveDate::from_ymd_opt(year, month, cpi_day) {
+        events.push(EconomicEvent {
+            date: date.format("%Y-%m-%d").to_string(),
+            event_type: "cpi".to_string(),
+            title: "CPI Report".to_string(),
+            description: Some("Consumer Price Index - measures inflation".to_string()),
+            importance: "high".to_string(),
+        });
+    }
+    
+    // Jobs Report (Non-Farm Payrolls) - First Friday of month
+    if let Some(first_day) = chrono::NaiveDate::from_ymd_opt(year, month, 1) {
+        let weekday = first_day.weekday();
+        let days_to_friday = match weekday {
+            chrono::Weekday::Sat => 6,
+            chrono::Weekday::Sun => 5,
+            chrono::Weekday::Mon => 4,
+            chrono::Weekday::Tue => 3,
+            chrono::Weekday::Wed => 2,
+            chrono::Weekday::Thu => 1,
+            chrono::Weekday::Fri => 0,
+        };
+        let first_friday = first_day + chrono::Duration::days(days_to_friday);
+        
+        events.push(EconomicEvent {
+            date: first_friday.format("%Y-%m-%d").to_string(),
+            event_type: "jobs".to_string(),
+            title: "Jobs Report (NFP)".to_string(),
+            description: Some("Non-Farm Payrolls - employment situation report".to_string()),
+            importance: "high".to_string(),
+        });
+    }
+    
+    // GDP (Quarterly, released end of month following quarter end)
+    // Q1 GDP in late April, Q2 in late July, Q3 in late October, Q4 in late January
+    let gdp_month = match month {
+        1 => Some(("Q4 GDP (Advance)", 30)),
+        4 => Some(("Q1 GDP (Advance)", 25)),
+        7 => Some(("Q2 GDP (Advance)", 25)),
+        10 => Some(("Q3 GDP (Advance)", 25)),
+        _ => None,
+    };
+    
+    if let Some((title, day)) = gdp_month {
+        if let Some(date) = chrono::NaiveDate::from_ymd_opt(year, month, day) {
+            events.push(EconomicEvent {
+                date: date.format("%Y-%m-%d").to_string(),
+                event_type: "gdp".to_string(),
+                title: title.to_string(),
+                description: Some("Gross Domestic Product growth rate".to_string()),
+                importance: "high".to_string(),
+            });
+        }
+    }
+    
+    // PPI (Producer Price Index) - Usually day after or same week as CPI
+    let ppi_day = cpi_day + 1;
+    if ppi_day <= 28 {
+        if let Some(date) = chrono::NaiveDate::from_ymd_opt(year, month, ppi_day) {
+            events.push(EconomicEvent {
+                date: date.format("%Y-%m-%d").to_string(),
+                event_type: "ppi".to_string(),
+                title: "PPI Report".to_string(),
+                description: Some("Producer Price Index - wholesale inflation".to_string()),
+                importance: "medium".to_string(),
+            });
+        }
+    }
+    
+    // Retail Sales - Usually mid-month
+    if let Some(date) = chrono::NaiveDate::from_ymd_opt(year, month, 16) {
+        events.push(EconomicEvent {
+            date: date.format("%Y-%m-%d").to_string(),
+            event_type: "retail_sales".to_string(),
+            title: "Retail Sales".to_string(),
+            description: Some("Monthly retail sales data".to_string()),
+            importance: "medium".to_string(),
+        });
+    }
+    
+    events
+}
+
+// ============================================================================
+// Finnhub API Integration
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubEarning {
+    pub date: String,
+    pub symbol: String,
+    pub eps_estimate: Option<f64>,
+    pub eps_actual: Option<f64>,
+    pub revenue_estimate: Option<f64>,
+    pub revenue_actual: Option<f64>,
+    pub hour: Option<String>, // "bmo" (before market open), "amc" (after market close)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubNews {
+    pub id: i64,
+    pub headline: String,
+    pub summary: String,
+    pub source: String,
+    pub url: String,
+    pub datetime: i64, // Unix timestamp
+    pub related: String, // Symbol
+    pub category: String,
+    pub sentiment: Option<f64>, // -1 to 1 sentiment score
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubBasicFinancials {
+    pub symbol: String,
+    pub pe_ratio: Option<f64>,
+    pub eps: Option<f64>,
+    pub market_cap: Option<f64>,
+    pub week_52_high: Option<f64>,
+    pub week_52_low: Option<f64>,
+    pub beta: Option<f64>,
+    pub dividend_yield: Option<f64>,
+    pub price_to_book: Option<f64>,
+    pub debt_to_equity: Option<f64>,
+    pub revenue_per_share: Option<f64>,
+    pub return_on_equity: Option<f64>,
+    // Additional metrics
+    pub gross_margin: Option<f64>,
+    pub operating_margin: Option<f64>,
+    pub profit_margin: Option<f64>,
+    pub current_ratio: Option<f64>,
+    pub quick_ratio: Option<f64>,
+    pub peg_ratio: Option<f64>,
+    pub price_to_sales: Option<f64>,
+    pub free_cash_flow_per_share: Option<f64>,
+    pub revenue_growth_3y: Option<f64>,
+    pub revenue_growth_5y: Option<f64>,
+    pub eps_growth_3y: Option<f64>,
+    pub eps_growth_5y: Option<f64>,
+    pub dividend_growth_5y: Option<f64>,
+    pub payout_ratio: Option<f64>,
+    pub book_value_per_share: Option<f64>,
+    pub tangible_book_value_per_share: Option<f64>,
+    pub enterprise_value: Option<f64>,
+    pub ev_to_ebitda: Option<f64>,
+    pub forward_pe: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubCompanyProfile {
+    pub symbol: String,
+    pub name: Option<String>,
+    pub country: Option<String>,
+    pub currency: Option<String>,
+    pub exchange: Option<String>,
+    pub industry: Option<String>,
+    pub sector: Option<String>,
+    pub ipo: Option<String>,
+    pub market_cap: Option<f64>,
+    pub shares_outstanding: Option<f64>,
+    pub logo: Option<String>,
+    pub phone: Option<String>,
+    pub weburl: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubEarningsSurprise {
+    pub symbol: String,
+    pub period: String,
+    pub actual: Option<f64>,
+    pub estimate: Option<f64>,
+    pub surprise: Option<f64>,
+    pub surprise_percent: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DividendInfo {
+    pub symbol: String,
+    pub ex_date: Option<String>,
+    pub payment_date: Option<String>,
+    pub record_date: Option<String>,
+    pub declaration_date: Option<String>,
+    pub amount: Option<f64>,
+    pub frequency: Option<String>,
+    pub dividend_type: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InsiderTransaction {
+    pub symbol: String,
+    pub name: Option<String>,
+    pub share: Option<i64>,
+    pub change: Option<i64>,
+    pub filing_date: Option<String>,
+    pub transaction_date: Option<String>,
+    pub transaction_code: Option<String>,
+    pub transaction_price: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SecFiling {
+    pub symbol: String,
+    pub access_number: Option<String>,
+    pub form: Option<String>,
+    pub filed_date: Option<String>,
+    pub accepted_date: Option<String>,
+    pub report_url: Option<String>,
+    pub filing_url: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IpoEvent {
+    pub symbol: Option<String>,
+    pub name: Option<String>,
+    pub date: Option<String>,
+    pub exchange: Option<String>,
+    pub price: Option<String>,
+    pub shares: Option<f64>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PricePerformance {
+    pub symbol: String,
+    pub current_price: Option<f64>,
+    pub change_1d: Option<f64>,
+    pub change_1d_percent: Option<f64>,
+    pub change_1w: Option<f64>,
+    pub change_1w_percent: Option<f64>,
+    pub change_1m: Option<f64>,
+    pub change_1m_percent: Option<f64>,
+    pub change_3m: Option<f64>,
+    pub change_3m_percent: Option<f64>,
+    pub change_ytd: Option<f64>,
+    pub change_ytd_percent: Option<f64>,
+    pub change_1y: Option<f64>,
+    pub change_1y_percent: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ShortInterest {
+    pub symbol: String,
+    pub short_interest: Option<i64>,
+    pub short_ratio: Option<f64>,
+    pub short_percent_of_float: Option<f64>,
+    pub shares_short_prior_month: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubPriceTarget {
+    pub symbol: String,
+    pub target_high: Option<f64>,
+    pub target_low: Option<f64>,
+    pub target_mean: Option<f64>,
+    pub target_median: Option<f64>,
+    pub last_updated: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubRecommendation {
+    pub symbol: String,
+    pub period: String,
+    pub strong_buy: i32,
+    pub buy: i32,
+    pub hold: i32,
+    pub sell: i32,
+    pub strong_sell: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinnhubEconomicEvent {
+    pub date: String,
+    pub country: String,
+    pub event: String,
+    pub impact: String,
+    pub actual: Option<f64>,
+    pub estimate: Option<f64>,
+    pub prev: Option<f64>,
+    pub unit: Option<String>,
+}
+
+/// Test Finnhub API connection
+#[tauri::command]
+pub async fn test_finnhub_connection(api_key: String) -> Result<bool, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/quote?symbol=AAPL&token={}",
+        api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if response.status().is_success() {
+        let data: serde_json::Value = response.json().await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        
+        // Check if we got valid data (not an error response)
+        if data.get("error").is_some() {
+            return Ok(false);
+        }
+        
+        // If we got a current price, the API key is valid
+        if data.get("c").is_some() {
+            return Ok(true);
+        }
+    }
+    
+    Ok(false)
+}
+
+/// Fetch earnings calendar from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_earnings(
+    api_key: String,
+    from_date: String,
+    to_date: String,
+    symbol: Option<String>,
+) -> Result<Vec<FinnhubEarning>, String> {
+    let mut url = format!(
+        "https://finnhub.io/api/v1/calendar/earnings?from={}&to={}&token={}",
+        from_date, to_date, api_key
+    );
+    
+    if let Some(sym) = &symbol {
+        url = format!("{}&symbol={}", url, sym.to_uppercase());
+    }
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let mut earnings = Vec::new();
+    
+    if let Some(earnings_calendar) = data.get("earningsCalendar").and_then(|e| e.as_array()) {
+        for item in earnings_calendar {
+            let earning = FinnhubEarning {
+                date: item.get("date").and_then(|d| d.as_str()).unwrap_or("").to_string(),
+                symbol: item.get("symbol").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                eps_estimate: item.get("epsEstimate").and_then(|e| e.as_f64()),
+                eps_actual: item.get("epsActual").and_then(|e| e.as_f64()),
+                revenue_estimate: item.get("revenueEstimate").and_then(|r| r.as_f64()),
+                revenue_actual: item.get("revenueActual").and_then(|r| r.as_f64()),
+                hour: item.get("hour").and_then(|h| h.as_str()).map(|s| s.to_string()),
+            };
+            
+            // Filter by symbol if provided
+            if symbol.is_none() || earning.symbol.eq_ignore_ascii_case(symbol.as_ref().unwrap()) {
+                earnings.push(earning);
+            }
+        }
+    }
+    
+    Ok(earnings)
+}
+
+/// Fetch company news from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_news(
+    api_key: String,
+    symbol: String,
+    from_date: String,
+    to_date: String,
+) -> Result<Vec<FinnhubNews>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/company-news?symbol={}&from={}&to={}&token={}",
+        symbol.to_uppercase(), from_date, to_date, api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let mut news = Vec::new();
+    
+    if let Some(news_array) = data.as_array() {
+        for item in news_array.iter().take(50) { // Limit to 50 news items
+            let news_item = FinnhubNews {
+                id: item.get("id").and_then(|i| i.as_i64()).unwrap_or(0),
+                headline: item.get("headline").and_then(|h| h.as_str()).unwrap_or("").to_string(),
+                summary: item.get("summary").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                source: item.get("source").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                url: item.get("url").and_then(|u| u.as_str()).unwrap_or("").to_string(),
+                datetime: item.get("datetime").and_then(|d| d.as_i64()).unwrap_or(0),
+                related: symbol.to_uppercase(),
+                category: item.get("category").and_then(|c| c.as_str()).unwrap_or("").to_string(),
+                sentiment: None, // Sentiment requires separate API call
+            };
+            news.push(news_item);
+        }
+    }
+    
+    Ok(news)
+}
+
+/// Fetch news for multiple symbols from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_news_batch(
+    api_key: String,
+    symbols: Vec<String>,
+    from_date: String,
+    to_date: String,
+) -> Result<Vec<FinnhubNews>, String> {
+    let mut all_news = Vec::new();
+    
+    for symbol in symbols {
+        match fetch_finnhub_news(api_key.clone(), symbol, from_date.clone(), to_date.clone()).await {
+            Ok(news) => all_news.extend(news),
+            Err(e) => eprintln!("Failed to fetch news for symbol: {}", e),
+        }
+    }
+    
+    // Sort by datetime descending (most recent first)
+    all_news.sort_by(|a, b| b.datetime.cmp(&a.datetime));
+    
+    // Deduplicate by id
+    all_news.dedup_by(|a, b| a.id == b.id);
+    
+    // Limit total news items
+    all_news.truncate(100);
+    
+    Ok(all_news)
+}
+
+/// Fetch basic financials from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_basic_financials(
+    api_key: String,
+    symbol: String,
+) -> Result<FinnhubBasicFinancials, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/metric?symbol={}&metric=all&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let metric = data.get("metric").unwrap_or(&serde_json::Value::Null);
+    
+    Ok(FinnhubBasicFinancials {
+        symbol: symbol.to_uppercase(),
+        pe_ratio: metric.get("peBasicExclExtraTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("peTTM").and_then(|v| v.as_f64())),
+        eps: metric.get("epsBasicExclExtraItemsTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("epsTTM").and_then(|v| v.as_f64())),
+        market_cap: metric.get("marketCapitalization").and_then(|v| v.as_f64()),
+        week_52_high: metric.get("52WeekHigh").and_then(|v| v.as_f64()),
+        week_52_low: metric.get("52WeekLow").and_then(|v| v.as_f64()),
+        beta: metric.get("beta").and_then(|v| v.as_f64()),
+        dividend_yield: metric.get("dividendYieldIndicatedAnnual").and_then(|v| v.as_f64()),
+        price_to_book: metric.get("pbQuarterly").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("pbAnnual").and_then(|v| v.as_f64())),
+        debt_to_equity: metric.get("totalDebt/totalEquityQuarterly").and_then(|v| v.as_f64()),
+        revenue_per_share: metric.get("revenuePerShareTTM").and_then(|v| v.as_f64()),
+        return_on_equity: metric.get("roeTTM").and_then(|v| v.as_f64()),
+        // Additional metrics
+        gross_margin: metric.get("grossMarginTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("grossMarginAnnual").and_then(|v| v.as_f64())),
+        operating_margin: metric.get("operatingMarginTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("operatingMarginAnnual").and_then(|v| v.as_f64())),
+        profit_margin: metric.get("netProfitMarginTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("netProfitMarginAnnual").and_then(|v| v.as_f64())),
+        current_ratio: metric.get("currentRatioQuarterly").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("currentRatioAnnual").and_then(|v| v.as_f64())),
+        quick_ratio: metric.get("quickRatioQuarterly").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("quickRatioAnnual").and_then(|v| v.as_f64())),
+        peg_ratio: metric.get("pegRatio").and_then(|v| v.as_f64()),
+        price_to_sales: metric.get("psTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("psAnnual").and_then(|v| v.as_f64())),
+        free_cash_flow_per_share: metric.get("freeCashFlowPerShareTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("freeCashFlowPerShareAnnual").and_then(|v| v.as_f64())),
+        revenue_growth_3y: metric.get("revenueGrowth3Y").and_then(|v| v.as_f64()),
+        revenue_growth_5y: metric.get("revenueGrowth5Y").and_then(|v| v.as_f64()),
+        eps_growth_3y: metric.get("epsGrowth3Y").and_then(|v| v.as_f64()),
+        eps_growth_5y: metric.get("epsGrowth5Y").and_then(|v| v.as_f64()),
+        dividend_growth_5y: metric.get("dividendGrowthRate5Y").and_then(|v| v.as_f64()),
+        payout_ratio: metric.get("payoutRatioTTM").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("payoutRatioAnnual").and_then(|v| v.as_f64())),
+        book_value_per_share: metric.get("bookValuePerShareQuarterly").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("bookValuePerShareAnnual").and_then(|v| v.as_f64())),
+        tangible_book_value_per_share: metric.get("tangibleBookValuePerShareQuarterly").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("tangibleBookValuePerShareAnnual").and_then(|v| v.as_f64())),
+        enterprise_value: metric.get("enterpriseValue").and_then(|v| v.as_f64()),
+        ev_to_ebitda: metric.get("evToEBITDA").and_then(|v| v.as_f64()),
+        forward_pe: metric.get("forwardPE").and_then(|v| v.as_f64())
+            .or_else(|| metric.get("peNTM").and_then(|v| v.as_f64())),
+    })
+}
+
+/// Fetch price target from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_price_target(
+    api_key: String,
+    symbol: String,
+) -> Result<FinnhubPriceTarget, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/price-target?symbol={}&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    Ok(FinnhubPriceTarget {
+        symbol: symbol.to_uppercase(),
+        target_high: data.get("targetHigh").and_then(|v| v.as_f64()),
+        target_low: data.get("targetLow").and_then(|v| v.as_f64()),
+        target_mean: data.get("targetMean").and_then(|v| v.as_f64()),
+        target_median: data.get("targetMedian").and_then(|v| v.as_f64()),
+        last_updated: data.get("lastUpdated").and_then(|v| v.as_str()).map(|s| s.to_string()),
+    })
+}
+
+/// Fetch analyst recommendations from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_recommendations(
+    api_key: String,
+    symbol: String,
+) -> Result<Vec<FinnhubRecommendation>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/recommendation?symbol={}&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let mut recommendations = Vec::new();
+    
+    if let Some(recs_array) = data.as_array() {
+        for item in recs_array.iter().take(12) { // Last 12 months of recommendations
+            let rec = FinnhubRecommendation {
+                symbol: symbol.to_uppercase(),
+                period: item.get("period").and_then(|p| p.as_str()).unwrap_or("").to_string(),
+                strong_buy: item.get("strongBuy").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                buy: item.get("buy").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                hold: item.get("hold").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                sell: item.get("sell").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                strong_sell: item.get("strongSell").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            };
+            recommendations.push(rec);
+        }
+    }
+    
+    Ok(recommendations)
+}
+
+/// Fetch economic calendar from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_economic_calendar(
+    api_key: String,
+    from_date: String,
+    to_date: String,
+) -> Result<Vec<FinnhubEconomicEvent>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/calendar/economic?from={}&to={}&token={}",
+        from_date, to_date, api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let mut events = Vec::new();
+    
+    if let Some(calendar) = data.get("economicCalendar").and_then(|c| c.as_array()) {
+        for item in calendar {
+            // Filter for US events primarily
+            let country = item.get("country").and_then(|c| c.as_str()).unwrap_or("");
+            if country != "US" && country != "United States" {
+                continue;
+            }
+            
+            let event = FinnhubEconomicEvent {
+                date: item.get("time").and_then(|t| t.as_str())
+                    .map(|t| t.split('T').next().unwrap_or(t).to_string())
+                    .unwrap_or_default(),
+                country: country.to_string(),
+                event: item.get("event").and_then(|e| e.as_str()).unwrap_or("").to_string(),
+                impact: item.get("impact").and_then(|i| i.as_str()).unwrap_or("medium").to_string(),
+                actual: item.get("actual").and_then(|a| a.as_f64()),
+                estimate: item.get("estimate").and_then(|e| e.as_f64()),
+                prev: item.get("prev").and_then(|p| p.as_f64()),
+                unit: item.get("unit").and_then(|u| u.as_str()).map(|s| s.to_string()),
+            };
+            events.push(event);
+        }
+    }
+    
+    Ok(events)
+}
+
+/// Fetch earnings for multiple symbols from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_earnings_batch(
+    api_key: String,
+    symbols: Vec<String>,
+    from_date: String,
+    to_date: String,
+) -> Result<Vec<FinnhubEarning>, String> {
+    // Fetch all earnings for the date range
+    let all_earnings = fetch_finnhub_earnings(api_key, from_date, to_date, None).await?;
+    
+    // Filter to only include requested symbols
+    let symbol_set: std::collections::HashSet<String> = symbols
+        .iter()
+        .map(|s| s.to_uppercase())
+        .collect();
+    
+    let filtered: Vec<FinnhubEarning> = all_earnings
+        .into_iter()
+        .filter(|e| symbol_set.contains(&e.symbol.to_uppercase()))
+        .collect();
+    
+    Ok(filtered)
+}
+
+/// Fetch company profile from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_company_profile(
+    api_key: String,
+    symbol: String,
+) -> Result<FinnhubCompanyProfile, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/profile2?symbol={}&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    Ok(FinnhubCompanyProfile {
+        symbol: symbol.to_uppercase(),
+        name: data.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        country: data.get("country").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        currency: data.get("currency").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        exchange: data.get("exchange").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        industry: data.get("finnhubIndustry").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        sector: data.get("gsector").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        ipo: data.get("ipo").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        market_cap: data.get("marketCapitalization").and_then(|v| v.as_f64()),
+        shares_outstanding: data.get("shareOutstanding").and_then(|v| v.as_f64()),
+        logo: data.get("logo").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        phone: data.get("phone").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        weburl: data.get("weburl").and_then(|v| v.as_str()).map(|s| s.to_string()),
+    })
+}
+
+/// Fetch company peers from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_peers(
+    api_key: String,
+    symbol: String,
+) -> Result<Vec<String>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/peers?symbol={}&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let peers: Vec<String> = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    // Filter out the original symbol and limit to first 10
+    let filtered: Vec<String> = peers
+        .into_iter()
+        .filter(|p| p.to_uppercase() != symbol.to_uppercase())
+        .take(10)
+        .collect();
+    
+    Ok(filtered)
+}
+
+/// Fetch earnings surprises from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_earnings_surprises(
+    api_key: String,
+    symbol: String,
+) -> Result<Vec<FinnhubEarningsSurprise>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/earnings?symbol={}&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let earnings = data.as_array()
+        .map(|arr| {
+            arr.iter()
+                .take(8) // Last 8 quarters
+                .map(|item| {
+                    FinnhubEarningsSurprise {
+                        symbol: symbol.to_uppercase(),
+                        period: item.get("period").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        actual: item.get("actual").and_then(|v| v.as_f64()),
+                        estimate: item.get("estimate").and_then(|v| v.as_f64()),
+                        surprise: item.get("surprise").and_then(|v| v.as_f64()),
+                        surprise_percent: item.get("surprisePercent").and_then(|v| v.as_f64()),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    
+    Ok(earnings)
+}
+
+/// Fetch dividend calendar/history - tries Finnhub first, then Yahoo Finance as fallback
+#[tauri::command]
+pub async fn fetch_finnhub_dividends(
+    api_key: String,
+    symbol: String,
+) -> Result<Vec<DividendInfo>, String> {
+    // Try Finnhub first
+    let finnhub_result = fetch_finnhub_dividends_internal(&api_key, &symbol).await;
+    
+    if let Ok(dividends) = finnhub_result {
+        if !dividends.is_empty() {
+            return Ok(dividends);
+        }
+    }
+    
+    // Fallback to Yahoo Finance
+    fetch_yahoo_dividends(&symbol).await
+}
+
+async fn fetch_finnhub_dividends_internal(
+    api_key: &str,
+    symbol: &str,
+) -> Result<Vec<DividendInfo>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/dividend?symbol={}&from=2020-01-01&to=2030-12-31&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let dividends = data.as_array()
+        .map(|arr| {
+            arr.iter()
+                .take(20)
+                .map(|item| {
+                    DividendInfo {
+                        symbol: symbol.to_uppercase(),
+                        ex_date: item.get("exDate").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        payment_date: item.get("payDate").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        record_date: item.get("recordDate").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        declaration_date: item.get("declarationDate").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        amount: item.get("amount").and_then(|v| v.as_f64()),
+                        frequency: item.get("freq").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        dividend_type: item.get("type").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    
+    Ok(dividends)
+}
+
+/// Fetch dividend history from Yahoo Finance
+async fn fetch_yahoo_dividends(symbol: &str) -> Result<Vec<DividendInfo>, String> {
+    // Yahoo Finance dividend endpoint
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let five_years_ago = now - (5 * 365 * 24 * 60 * 60);
+    
+    let url = format!(
+        "https://query1.finance.yahoo.com/v8/finance/chart/{}?period1={}&period2={}&interval=1mo&events=div",
+        symbol.to_uppercase(), five_years_ago, now
+    );
+    
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let mut dividends: Vec<DividendInfo> = Vec::new();
+    
+    // Parse dividend events from Yahoo Finance response
+    if let Some(events) = data
+        .get("chart")
+        .and_then(|c| c.get("result"))
+        .and_then(|r| r.get(0))
+        .and_then(|r| r.get("events"))
+        .and_then(|e| e.get("dividends"))
+    {
+        if let Some(div_map) = events.as_object() {
+            let mut div_entries: Vec<_> = div_map.iter().collect();
+            // Sort by date descending (most recent first)
+            div_entries.sort_by(|a, b| {
+                let ts_a = a.1.get("date").and_then(|d| d.as_i64()).unwrap_or(0);
+                let ts_b = b.1.get("date").and_then(|d| d.as_i64()).unwrap_or(0);
+                ts_b.cmp(&ts_a)
+            });
+            
+            for (_, div) in div_entries.iter().take(20) {
+                let timestamp = div.get("date").and_then(|d| d.as_i64()).unwrap_or(0);
+                let amount = div.get("amount").and_then(|a| a.as_f64());
+                
+                // Convert timestamp to date string
+                let date_str = if timestamp > 0 {
+                    let dt = chrono::DateTime::from_timestamp(timestamp, 0)
+                        .map(|d| d.format("%Y-%m-%d").to_string());
+                    dt
+                } else {
+                    None
+                };
+                
+                dividends.push(DividendInfo {
+                    symbol: symbol.to_uppercase(),
+                    ex_date: date_str,
+                    payment_date: None, // Yahoo doesn't provide this in chart data
+                    record_date: None,
+                    declaration_date: None,
+                    amount,
+                    frequency: None,
+                    dividend_type: Some("Cash".to_string()),
+                });
+            }
+        }
+    }
+    
+    Ok(dividends)
+}
+
+/// Fetch insider transactions from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_insider_transactions(
+    api_key: String,
+    symbol: String,
+) -> Result<Vec<InsiderTransaction>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/insider-transactions?symbol={}&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let transactions = data.get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .take(20)
+                .map(|item| {
+                    InsiderTransaction {
+                        symbol: symbol.to_uppercase(),
+                        name: item.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        share: item.get("share").and_then(|v| v.as_i64()),
+                        change: item.get("change").and_then(|v| v.as_i64()),
+                        filing_date: item.get("filingDate").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        transaction_date: item.get("transactionDate").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        transaction_code: item.get("transactionCode").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        transaction_price: item.get("transactionPrice").and_then(|v| v.as_f64()),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    
+    Ok(transactions)
+}
+
+/// Fetch SEC filings from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_sec_filings(
+    api_key: String,
+    symbol: String,
+) -> Result<Vec<SecFiling>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/stock/filings?symbol={}&token={}",
+        symbol.to_uppercase(), api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let filings = data.as_array()
+        .map(|arr| {
+            arr.iter()
+                .take(20)
+                .map(|item| {
+                    SecFiling {
+                        symbol: symbol.to_uppercase(),
+                        access_number: item.get("accessNumber").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        form: item.get("form").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        filed_date: item.get("filedDate").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        accepted_date: item.get("acceptedDate").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        report_url: item.get("reportUrl").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        filing_url: item.get("filingUrl").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    
+    Ok(filings)
+}
+
+/// Fetch IPO calendar from Finnhub
+#[tauri::command]
+pub async fn fetch_finnhub_ipo_calendar(
+    api_key: String,
+    from_date: String,
+    to_date: String,
+) -> Result<Vec<IpoEvent>, String> {
+    let url = format!(
+        "https://finnhub.io/api/v1/calendar/ipo?from={}&to={}&token={}",
+        from_date, to_date, api_key
+    );
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let ipos = data.get("ipoCalendar")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|item| {
+                    IpoEvent {
+                        symbol: item.get("symbol").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        name: item.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        date: item.get("date").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        exchange: item.get("exchange").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        price: item.get("price").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        shares: item.get("numberOfShares").and_then(|v| v.as_f64()),
+                        status: item.get("status").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    
+    Ok(ipos)
+}
+
+/// Fetch price performance from Yahoo Finance
+#[tauri::command]
+pub async fn fetch_price_performance(symbol: String) -> Result<PricePerformance, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let one_year_ago = now - (366 * 24 * 60 * 60);
+    
+    let url = format!(
+        "https://query1.finance.yahoo.com/v8/finance/chart/{}?period1={}&period2={}&interval=1d",
+        symbol.to_uppercase(), one_year_ago, now
+    );
+    
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let result = data.get("chart")
+        .and_then(|c| c.get("result"))
+        .and_then(|r| r.get(0))
+        .ok_or_else(|| "Invalid response format".to_string())?;
+    
+    let timestamps = result.get("timestamp")
+        .and_then(|t| t.as_array())
+        .ok_or_else(|| "No timestamp data".to_string())?;
+    
+    let closes = result.get("indicators")
+        .and_then(|i| i.get("quote"))
+        .and_then(|q| q.get(0))
+        .and_then(|q| q.get("close"))
+        .and_then(|c| c.as_array())
+        .ok_or_else(|| "No close data".to_string())?;
+    
+    if closes.is_empty() {
+        return Err("No price data available".to_string());
+    }
+    
+    // Get current price (last close)
+    let current_price = closes.iter().rev()
+        .find_map(|v| v.as_f64());
+    
+    let current = current_price.unwrap_or(0.0);
+    let now_ts = now as i64;
+    
+    // Helper to find price at a specific time ago
+    let find_price_at = |seconds_ago: i64| -> Option<f64> {
+        let target_ts = now_ts - seconds_ago;
+        for (i, ts) in timestamps.iter().enumerate() {
+            if let Some(t) = ts.as_i64() {
+                if t >= target_ts {
+                    return closes.get(i).and_then(|v| v.as_f64());
+                }
+            }
+        }
+        None
+    };
+    
+    // Calculate YTD (from Jan 1 of current year)
+    let current_year = chrono::Utc::now().year();
+    let jan1 = chrono::NaiveDate::from_ymd_opt(current_year, 1, 1)
+        .map(|d| d.and_hms_opt(0, 0, 0))
+        .flatten()
+        .map(|dt| dt.and_utc().timestamp());
+    
+    let ytd_price = jan1.and_then(|jan1_ts| {
+        for (i, ts) in timestamps.iter().enumerate() {
+            if let Some(t) = ts.as_i64() {
+                if t >= jan1_ts {
+                    return closes.get(i).and_then(|v| v.as_f64());
+                }
+            }
+        }
+        None
+    });
+    
+    let day_price = find_price_at(24 * 60 * 60);
+    let week_price = find_price_at(7 * 24 * 60 * 60);
+    let month_price = find_price_at(30 * 24 * 60 * 60);
+    let three_month_price = find_price_at(90 * 24 * 60 * 60);
+    let year_price = closes.first().and_then(|v| v.as_f64());
+    
+    let calc_change = |old: Option<f64>| -> (Option<f64>, Option<f64>) {
+        match old {
+            Some(o) if o > 0.0 => {
+                let change = current - o;
+                let percent = (change / o) * 100.0;
+                (Some(change), Some(percent))
+            }
+            _ => (None, None)
+        }
+    };
+    
+    let (change_1d, change_1d_percent) = calc_change(day_price);
+    let (change_1w, change_1w_percent) = calc_change(week_price);
+    let (change_1m, change_1m_percent) = calc_change(month_price);
+    let (change_3m, change_3m_percent) = calc_change(three_month_price);
+    let (change_ytd, change_ytd_percent) = calc_change(ytd_price);
+    let (change_1y, change_1y_percent) = calc_change(year_price);
+    
+    Ok(PricePerformance {
+        symbol: symbol.to_uppercase(),
+        current_price,
+        change_1d,
+        change_1d_percent,
+        change_1w,
+        change_1w_percent,
+        change_1m,
+        change_1m_percent,
+        change_3m,
+        change_3m_percent,
+        change_ytd,
+        change_ytd_percent,
+        change_1y,
+        change_1y_percent,
+    })
+}
+
+/// Fetch short interest data from Yahoo Finance
+#[tauri::command]
+pub async fn fetch_short_interest(symbol: String) -> Result<ShortInterest, String> {
+    // Use Yahoo Finance quoteSummary for short interest data
+    let url = format!(
+        "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=defaultKeyStatistics",
+        symbol.to_uppercase()
+    );
+    
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let stats = data.get("quoteSummary")
+        .and_then(|q| q.get("result"))
+        .and_then(|r| r.get(0))
+        .and_then(|r| r.get("defaultKeyStatistics"));
+    
+    let get_raw_value = |obj: Option<&serde_json::Value>, key: &str| -> Option<f64> {
+        obj.and_then(|o| o.get(key))
+            .and_then(|v| v.get("raw"))
+            .and_then(|r| r.as_f64())
+    };
+    
+    let get_raw_int = |obj: Option<&serde_json::Value>, key: &str| -> Option<i64> {
+        obj.and_then(|o| o.get(key))
+            .and_then(|v| v.get("raw"))
+            .and_then(|r| r.as_i64())
+    };
+    
+    Ok(ShortInterest {
+        symbol: symbol.to_uppercase(),
+        short_interest: get_raw_int(stats, "sharesShort"),
+        short_ratio: get_raw_value(stats, "shortRatio"),
+        short_percent_of_float: get_raw_value(stats, "shortPercentOfFloat"),
+        shares_short_prior_month: get_raw_int(stats, "sharesShortPriorMonth"),
+    })
+}
+
+/// Fetch upcoming earnings date
+#[tauri::command]
+pub async fn fetch_earnings_date(symbol: String) -> Result<Option<String>, String> {
+    let url = format!(
+        "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=calendarEvents",
+        symbol.to_uppercase()
+    );
+    
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let earnings_date = data.get("quoteSummary")
+        .and_then(|q| q.get("result"))
+        .and_then(|r| r.get(0))
+        .and_then(|r| r.get("calendarEvents"))
+        .and_then(|c| c.get("earnings"))
+        .and_then(|e| e.get("earningsDate"))
+        .and_then(|d| d.get(0))
+        .and_then(|d| d.get("fmt"))
+        .and_then(|f| f.as_str())
+        .map(|s| s.to_string());
+    
+    Ok(earnings_date)
+}
+
+/// Fetch SEC filing content (bypasses CORS)
+#[tauri::command]
+pub async fn fetch_sec_filing_content(url: String) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    // SEC.gov requires a User-Agent with contact info per their fair access policy
+    // https://www.sec.gov/os/webmaster-faq#developers
+    let response = client
+        .get(&url)
+        .header("User-Agent", "TradeButler/1.0 (Desktop Trading Journal App)")
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .header("Accept-Language", "en-US,en;q=0.5")
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("Failed to fetch filing: {} - URL: {}", response.status(), url));
+    }
+    
+    let content = response.text().await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+    
+    Ok(content)
 }

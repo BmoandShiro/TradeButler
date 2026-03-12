@@ -60,7 +60,6 @@ export function sanitizeHtml(html: string): string {
 }
 
 function escapeHtml(s: string): string {
-  const div = { innerText: s };
   if (typeof document !== "undefined" && document.createElement) {
     const el = document.createElement("div");
     el.textContent = s;

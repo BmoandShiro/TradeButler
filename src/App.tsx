@@ -13,6 +13,8 @@ import Documentation from "./pages/Documentation";
 import Evaluation from "./pages/Evaluation";
 import Tools from "./pages/Tools";
 import Settings from "./pages/Settings";
+import News from "./pages/News";
+import SecFilingViewer from "./pages/SecFilingViewer";
 
 function App() {
   return (
@@ -22,6 +24,7 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/trades" element={<PageErrorBoundary pageName="Trades"><Trades /></PageErrorBoundary>} />
           <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/news" element={<News />} />
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/journal" element={<Journal />} />
           <Route path="/resources" element={<Documentation />} />
@@ -31,6 +34,7 @@ function App() {
           <Route path="/tools" element={<Tools />} />
           <Route path="/average-down-calculator" element={<Navigate to="/tools" replace />} />
           <Route path="/dividend-calculator" element={<Navigate to="/tools?calc=dividend" replace />} />
+          <Route path="/sec-filing" element={<SecFilingViewer />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </Layout>
