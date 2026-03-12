@@ -4,8 +4,6 @@ import { invoke } from "@tauri-apps/api/tauri";
 import {
   Search,
   RefreshCw,
-  TrendingUp,
-  TrendingDown,
   AlertCircle,
   DollarSign,
   Target,
@@ -556,124 +554,81 @@ export default function BasicFinancials() {
               </h3>
               {latestRec ? (
                 <>
-                  <div style={{ textAlign: "center", marginBottom: "20px" }}>
-                    <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
-                      Consensus ({latestRec.period})
-                    </p>
+                  {/* Consensus Header */}
+                  <div style={{ 
+                    textAlign: "center", 
+                    marginBottom: "24px",
+                    padding: "16px",
+                    backgroundColor: "var(--bg-primary)",
+                    borderRadius: "8px",
+                  }}>
                     <p
                       style={{
-                        fontSize: "24px",
+                        fontSize: "32px",
                         fontWeight: "700",
                         color: getConsensusColor(getConsensus(latestRec)),
+                        marginBottom: "4px",
                       }}
                     >
                       {getConsensus(latestRec)}
                     </p>
-                    <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                      Based on {getTotalAnalysts(latestRec)} analysts
+                    <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                      {getTotalAnalysts(latestRec)} analysts · {latestRec.period}
                     </p>
                   </div>
-                  {/* Recommendation Bar */}
-                  <div style={{ marginBottom: "16px" }}>
-                    <div
-                      style={{
-                        display: "flex",
-                        height: "24px",
-                        borderRadius: "4px",
-                        overflow: "hidden",
-                      }}
-                    >
-                      {latestRec.strong_buy > 0 && (
-                        <div
-                          style={{
-                            flex: latestRec.strong_buy,
-                            backgroundColor: "#059669",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <span style={{ fontSize: "10px", color: "white", fontWeight: "600" }}>
-                            {latestRec.strong_buy}
+                  
+                  {/* Recommendation Breakdown */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                    {[
+                      { label: "Strong Buy", value: latestRec.strong_buy, color: "#059669" },
+                      { label: "Buy", value: latestRec.buy, color: "#10B981" },
+                      { label: "Hold", value: latestRec.hold, color: "#6B7280" },
+                      { label: "Sell", value: latestRec.sell, color: "#F87171" },
+                      { label: "Strong Sell", value: latestRec.strong_sell, color: "#EF4444" },
+                    ].map(({ label, value, color }) => {
+                      const total = getTotalAnalysts(latestRec);
+                      const percent = total > 0 ? (value / total) * 100 : 0;
+                      return (
+                        <div key={label} style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                          <span style={{ 
+                            width: "80px", 
+                            fontSize: "13px", 
+                            color: "var(--text-secondary)",
+                            flexShrink: 0,
+                          }}>
+                            {label}
+                          </span>
+                          <div style={{ 
+                            flex: 1, 
+                            height: "20px", 
+                            backgroundColor: "var(--bg-primary)",
+                            borderRadius: "4px",
+                            overflow: "hidden",
+                          }}>
+                            <div
+                              style={{
+                                width: `${percent}%`,
+                                height: "100%",
+                                backgroundColor: color,
+                                borderRadius: "4px",
+                                transition: "width 0.3s ease",
+                                minWidth: value > 0 ? "4px" : "0",
+                              }}
+                            />
+                          </div>
+                          <span style={{ 
+                            width: "32px", 
+                            fontSize: "14px", 
+                            fontWeight: "600",
+                            color: value > 0 ? color : "var(--text-secondary)",
+                            textAlign: "right",
+                            flexShrink: 0,
+                          }}>
+                            {value}
                           </span>
                         </div>
-                      )}
-                      {latestRec.buy > 0 && (
-                        <div
-                          style={{
-                            flex: latestRec.buy,
-                            backgroundColor: "#10B981",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <span style={{ fontSize: "10px", color: "white", fontWeight: "600" }}>
-                            {latestRec.buy}
-                          </span>
-                        </div>
-                      )}
-                      {latestRec.hold > 0 && (
-                        <div
-                          style={{
-                            flex: latestRec.hold,
-                            backgroundColor: "#6B7280",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <span style={{ fontSize: "10px", color: "white", fontWeight: "600" }}>
-                            {latestRec.hold}
-                          </span>
-                        </div>
-                      )}
-                      {latestRec.sell > 0 && (
-                        <div
-                          style={{
-                            flex: latestRec.sell,
-                            backgroundColor: "#F87171",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <span style={{ fontSize: "10px", color: "white", fontWeight: "600" }}>
-                            {latestRec.sell}
-                          </span>
-                        </div>
-                      )}
-                      {latestRec.strong_sell > 0 && (
-                        <div
-                          style={{
-                            flex: latestRec.strong_sell,
-                            backgroundColor: "#EF4444",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <span style={{ fontSize: "10px", color: "white", fontWeight: "600" }}>
-                            {latestRec.strong_sell}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        marginTop: "8px",
-                        fontSize: "11px",
-                        color: "var(--text-secondary)",
-                      }}
-                    >
-                      <span style={{ color: "#059669" }}>Strong Buy</span>
-                      <span style={{ color: "#10B981" }}>Buy</span>
-                      <span>Hold</span>
-                      <span style={{ color: "#F87171" }}>Sell</span>
-                      <span style={{ color: "#EF4444" }}>Strong Sell</span>
-                    </div>
+                      );
+                    })}
                   </div>
                 </>
               ) : (
