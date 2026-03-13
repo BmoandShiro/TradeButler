@@ -5212,7 +5212,7 @@ export default function Dashboard() {
                       ${formatWithCommas(totalPnL, { decimals: 2 })}
                     </p>
                     <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                      ${formatCompactNumber(strategy.total_volume, { prefix: "$" })} vol
+                      {formatCompactNumber(strategy.total_volume, { prefix: "$" })} vol
                     </p>
                   </div>
                 </div>
