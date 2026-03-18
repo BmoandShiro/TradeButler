@@ -2306,6 +2306,14 @@ export default function Strategies() {
     }
   }, [selectedStrategy, activeTab, dataMode, modeSwitchReloadKey]);
 
+  // When viewing a strategy (not editing/creating), keep indicator associations loaded
+  // so the UI can show them at the top of the details page.
+  useEffect(() => {
+    if (selectedStrategy == null) return;
+    if (isEditing || isCreating) return;
+    setStrategyIndicatorIds(loadStrategyIndicatorIds(dataMode, selectedStrategy));
+  }, [selectedStrategy, dataMode, isEditing, isCreating]);
+
   useEffect(() => {
     if ((activeTab === "survey" || activeTab === "surveys") && selectedStrategy != null && !isCreating) {
       if (dataMode === "sandbox") {
@@ -5498,6 +5506,60 @@ export default function Strategies() {
                       Strategy Details
                     </h3>
                   </div>
+                  {!(isEditing || isCreating) && selectedStrategyData && strategyIndicatorIds.length > 0 && (
+                    <div style={{ marginBottom: "16px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "10px", padding: "14px" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+                        <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                          Indicators for this strategy
+                        </div>
+                        <a href="#/indicators" style={{ color: "var(--accent)", fontSize: "13px", fontWeight: 650, textDecoration: "none" }}>
+                          Open Indicators page
+                        </a>
+                      </div>
+                      {(() => {
+                        const all = loadIndicators();
+                        const selected = all.filter((i) => strategyIndicatorIds.includes(i.id));
+                        if (selected.length === 0) return null;
+                        return (
+                          <div style={{ marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                            {selected.map((i) => (
+                              <span
+                                key={i.id}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  padding: "6px 10px",
+                                  borderRadius: "999px",
+                                  border: "1px solid var(--border-color)",
+                                  background: "var(--bg-tertiary)",
+                                  color: "var(--text-primary)",
+                                  cursor: "default",
+                                  fontSize: "12px",
+                                  fontWeight: 650,
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    fontSize: "11px",
+                                    fontWeight: 800,
+                                    padding: "2px 7px",
+                                    borderRadius: "999px",
+                                    background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
+                                    border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
+                                    color: i.accentColor ?? "#F59E0B",
+                                  }}
+                                >
+                                  {i.abbreviation}
+                                </span>
+                                <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
+                              </span>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
                   {(isEditing || isCreating) && (
                     <div style={{ marginBottom: "16px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "10px", padding: "14px" }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
@@ -5604,9 +5666,9 @@ export default function Strategies() {
                                           fontWeight: 800,
                                           padding: "3px 7px",
                                           borderRadius: "8px",
-                                          background: i.kind === "custom" ? hexToRgba(i.accentColor ?? "#F59E0B", 0.18) : "var(--bg-secondary)",
-                                          border: `1px solid ${i.kind === "custom" ? hexToRgba(i.accentColor ?? "#F59E0B", 0.55) : "var(--border-color)"}`,
-                                          color: i.kind === "custom" ? i.accentColor ?? "#F59E0B" : "var(--text-secondary)",
+                                          background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
+                                          border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
+                                          color: i.accentColor ?? "#F59E0B",
                                         }}
                                       >
                                         {i.abbreviation}
@@ -5678,9 +5740,9 @@ export default function Strategies() {
                                     fontWeight: 800,
                                     padding: "2px 7px",
                                     borderRadius: "999px",
-                                    background: i.kind === "custom" ? hexToRgba(i.accentColor ?? "#F59E0B", 0.18) : "var(--bg-secondary)",
-                                    border: `1px solid ${i.kind === "custom" ? hexToRgba(i.accentColor ?? "#F59E0B", 0.55) : "var(--border-color)"}`,
-                                    color: i.kind === "custom" ? i.accentColor ?? "#F59E0B" : "var(--text-secondary)",
+                                    background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
+                                    border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
+                                    color: i.accentColor ?? "#F59E0B",
                                   }}
                                 >
                                   {i.abbreviation}

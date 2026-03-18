@@ -49,6 +49,15 @@ import {
   deleteSandboxEmotionalState,
   loadSandboxState,
 } from "../utils/sandboxStore";
+
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!m) return `rgba(245,158,11,${alpha})`;
+  const r = parseInt(m[1], 16);
+  const g = parseInt(m[2], 16);
+  const b = parseInt(m[3], 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 import { sanitizeHtml, normalizeRichTextHtml } from "../utils/sanitizeHtml";
 import {
@@ -3072,7 +3081,26 @@ export default function Journal() {
 
     const tradeIndex = activeTradeIndex;
     const timeframeOptions = ["1m", "5m", "15m", "1H", "4H", "1D", "1W"];
-    const selectedTfs = indicatorTimeframesByPhase[phase] || [];
+    const globalSelectedTfs = indicatorTimeframesByPhase[phase] || [];
+
+    const isTimeframeCapturingIndicator = (indicatorId: string) => indicatorId.includes("_timeframe");
+
+    const getIndicatorSelectedTfs = (indicatorId: string) => {
+      const overrides = indicatorTimeframesByPhaseAndIndicator[phase]?.[indicatorId];
+      if (overrides && Array.isArray(overrides)) return overrides;
+      return globalSelectedTfs;
+    };
+
+    const toggleIndicatorTf = (indicatorId: string, tf: string) => {
+      setIndicatorTimeframesByPhaseAndIndicator((prev) => {
+        const phaseOverrides = prev[phase] ?? {};
+        const cur = phaseOverrides[indicatorId] ?? globalSelectedTfs;
+        const next = cur.includes(tf) ? cur.filter((x) => x !== tf) : [...cur, tf];
+        return { ...prev, [phase]: { ...phaseOverrides, [indicatorId]: next } };
+      });
+    };
+
+    const hasAnyIndicatorTfs = strategyIndicators.some((ind) => getIndicatorSelectedTfs(ind.id).length > 0);
 
     const toggleTf = (tf: string) => {
       setIndicatorTimeframesByPhase((prev) => {
@@ -3088,79 +3116,141 @@ export default function Journal() {
           <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             Indicators ({phase})
           </div>
-          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" }}>
-            {timeframeOptions.map((tf) => {
-              const active = selectedTfs.includes(tf);
-              return (
-                <button
-                  key={tf}
-                  type="button"
-                  onClick={() => toggleTf(tf)}
-                  style={{
-                    padding: "6px 10px",
-                    borderRadius: "999px",
-                    border: "1px solid var(--border-color)",
-                    background: active ? "var(--accent)" : "var(--bg-tertiary)",
-                    color: active ? "white" : "var(--text-primary)",
-                    cursor: "pointer",
-                    fontSize: "12px",
-                    fontWeight: 650,
-                  }}
-                >
-                  {tf}
-                </button>
-              );
-            })}
-          </div>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "8px" }}>
+                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {timeframeOptions.map((tf) => {
+                    const active = globalSelectedTfs.includes(tf);
+                    return (
+                      <button
+                        key={tf}
+                        type="button"
+                        onClick={() => toggleTf(tf)}
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: "999px",
+                          border: "1px solid var(--border-color)",
+                          background: active ? "var(--accent)" : "var(--bg-tertiary)",
+                          color: active ? "white" : "var(--text-primary)",
+                          cursor: "pointer",
+                          fontSize: "12px",
+                          fontWeight: 650,
+                        }}
+                      >
+                        {tf}
+                      </button>
+                    );
+                  })}
+                </div>
+                {phase === "entry" && (
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: "8px", cursor: "pointer", color: "var(--text-secondary)", fontSize: "12px", fontWeight: 650 }}>
+                    <input
+                      type="checkbox"
+                      checked={showIndicatorColors}
+                      onChange={(e) => setShowIndicatorColors(e.target.checked)}
+                      style={{ width: "16px", height: "16px" }}
+                    />
+                    Show indicator colors
+                  </label>
+                )}
+              </div>
         </div>
 
-        {selectedTfs.length === 0 ? (
+        {!hasAnyIndicatorTfs ? (
           <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
             Select one or more timeframes to enter indicator values (optional).
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {strategyIndicators.map((ind) => (
-              <div
-                key={ind.id}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: `minmax(220px, 1fr) repeat(${selectedTfs.length}, minmax(110px, 140px))`,
-                  gap: "10px",
-                  alignItems: "stretch",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px", borderRadius: "10px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)" }}>
-                  <span style={{ fontSize: "11px", fontWeight: 800, padding: "3px 7px", borderRadius: "8px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", color: "var(--text-secondary)" }}>
-                    {ind.abbreviation}
-                  </span>
-                  <span style={{ color: "var(--text-primary)", fontSize: "13px", fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={ind.name}>
+            {strategyIndicators.map((ind) => {
+              const indSelectedTfs = getIndicatorSelectedTfs(ind.id);
+              const isTfIndicator = isTimeframeCapturingIndicator(ind.id);
+              const colTfs = isTfIndicator ? globalSelectedTfs : indSelectedTfs;
+              return (
+                <div
+                  key={ind.id}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: `minmax(220px, 1fr) repeat(${colTfs.length}, minmax(110px, 140px))`,
+                    gap: "10px",
+                    alignItems: "stretch",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "8px",
+                      alignItems: "flex-start",
+                      padding: "10px 12px",
+                      borderRadius: "10px",
+                      background: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-color)",
+                    }}
+                  >
+                          <span
+                            style={{
+                              fontSize: "11px",
+                              fontWeight: 800,
+                              padding: "3px 7px",
+                              borderRadius: "8px",
+                              background: showIndicatorColors ? hexToRgba(ind.accentColor ?? "#F59E0B", 0.18) : "var(--bg-secondary)",
+                              border: `1px solid ${showIndicatorColors ? hexToRgba(ind.accentColor ?? "#F59E0B", 0.55) : "var(--border-color)"}`,
+                              color: showIndicatorColors ? ind.accentColor ?? "#F59E0B" : "var(--text-secondary)",
+                            }}
+                          >
+                            {ind.abbreviation}
+                          </span>
+                  <span
+                    style={{ color: "var(--text-primary)", fontSize: "13px", fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    title={ind.name}
+                  >
                     {ind.name}
                   </span>
-                </div>
-                {selectedTfs.map((tf) => (
-                  <div key={tf} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <div style={{ fontSize: "10px", color: "var(--text-secondary)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", paddingLeft: "2px" }}>
-                      {tf}
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="Value"
-                      value={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
-                      onChange={(e) => setJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.value)}
-                      style={{
-                        padding: "10px 12px",
-                        background: "var(--bg-tertiary)",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: "10px",
-                        color: "var(--text-primary)",
-                        outline: "none",
-                      }}
-                    />
                   </div>
-                ))}
-              </div>
-            ))}
+                  {colTfs.map((tf) =>
+                    isTfIndicator ? (
+                      <button
+                        key={tf}
+                        type="button"
+                        onClick={() => toggleIndicatorTf(ind.id, tf)}
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: "999px",
+                          border: "1px solid var(--border-color)",
+                          background: indSelectedTfs.includes(tf) ? "var(--accent)" : "var(--bg-tertiary)",
+                          color: indSelectedTfs.includes(tf) ? "white" : "var(--text-primary)",
+                          cursor: "pointer",
+                          fontSize: "12px",
+                          fontWeight: 650,
+                        }}
+                      >
+                        {tf}
+                      </button>
+                    ) : (
+                      <div key={tf} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                        <div style={{ fontSize: "10px", color: "var(--text-secondary)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", paddingLeft: "2px" }}>
+                          {tf}
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="Value"
+                          value={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                          onChange={(e) => setJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.value)}
+                          style={{
+                            padding: "10px 12px",
+                            background: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "10px",
+                            color: "var(--text-primary)",
+                            outline: "none",
+                          }}
+                        />
+                      </div>
+                    )
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -3374,10 +3464,36 @@ export default function Journal() {
   const [overviewDimBrushEnd, setOverviewDimBrushEnd] = useState(0);
 
   const [strategyIndicators, setStrategyIndicators] = useState<Indicator[]>([]);
+  const SHOW_INDICATOR_COLORS_KEY = "tradebutler_show_indicator_colors_v1";
+  const [showIndicatorColors, setShowIndicatorColors] = useState<boolean>(() => {
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(SHOW_INDICATOR_COLORS_KEY) : null;
+      if (raw === null) return true;
+      return raw === "1" || raw.toLowerCase() === "true";
+    } catch {
+      return true;
+    }
+  });
   const [indicatorTimeframesByPhase, setIndicatorTimeframesByPhase] = useState<Record<IndicatorPhase, string[]>>({
     entry: ["1D", "1H"],
     exit: ["1D", "1H"],
   });
+  // Timeframe-capturing indicators (concept inputs) can optionally override the global phase selection.
+  const [indicatorTimeframesByPhaseAndIndicator, setIndicatorTimeframesByPhaseAndIndicator] = useState<
+    Record<IndicatorPhase, Record<string, string[]>>
+  >({
+    entry: {},
+    exit: {},
+  });
+
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined") return;
+      window.localStorage.setItem(SHOW_INDICATOR_COLORS_KEY, showIndicatorColors ? "1" : "0");
+    } catch {
+      /* optional */
+    }
+  }, [showIndicatorColors]);
 
   const overviewEntriesFiltered = useMemo(() => {
     const { start, end } = getTimeframeDates(chartTimeframe, chartCustomStart || undefined, chartCustomEnd || undefined);
