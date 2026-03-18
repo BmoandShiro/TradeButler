@@ -3083,8 +3083,6 @@ export default function Journal() {
     const timeframeOptions = ["1m", "5m", "15m", "1H", "4H", "1D", "1W"];
     const globalSelectedTfs = indicatorTimeframesByPhase[phase] || [];
 
-    const isTimeframeCapturingIndicator = (indicatorId: string) => indicatorId.includes("_timeframe");
-
     const getIndicatorSelectedTfs = (indicatorId: string) => {
       const overrides = indicatorTimeframesByPhaseAndIndicator[phase]?.[indicatorId];
       if (overrides && Array.isArray(overrides)) return overrides;
@@ -3163,7 +3161,7 @@ export default function Journal() {
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {strategyIndicators.map((ind) => {
               const indSelectedTfs = getIndicatorSelectedTfs(ind.id);
-              const isTfIndicator = isTimeframeCapturingIndicator(ind.id);
+              const isTfIndicator = ind.capturesTimeframes === true || ind.id.includes("_timeframe");
               const colTfs = isTfIndicator ? globalSelectedTfs : indSelectedTfs;
               return (
                 <div

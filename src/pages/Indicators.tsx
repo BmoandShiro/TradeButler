@@ -65,6 +65,7 @@ export default function IndicatorsPage() {
   const [newCode, setNewCode] = useState("");
   const [newImage, setNewImage] = useState<string>("");
   const [newCategory, setNewCategory] = useState<Indicator["category"]>("Custom");
+  const [newCapturesTimeframes, setNewCapturesTimeframes] = useState<boolean>(false);
   const [newAccentColor, setNewAccentColor] = useState<string>("#F59E0B");
   const [newThemeMode, setNewThemeMode] = useState<"auto" | "manual">("auto");
   const [newThumbSource, setNewThumbSource] = useState<"upload" | "preset">("preset");
@@ -76,6 +77,7 @@ export default function IndicatorsPage() {
   const [editCode, setEditCode] = useState("");
   const [editImage, setEditImage] = useState<string>("");
   const [editCategory, setEditCategory] = useState<Indicator["category"]>("Custom");
+  const [editCapturesTimeframes, setEditCapturesTimeframes] = useState<boolean>(false);
   const [editAccentColor, setEditAccentColor] = useState<string>("#F59E0B");
   const [editThemeMode, setEditThemeMode] = useState<"auto" | "manual">("manual");
   const [editThumbSource, setEditThumbSource] = useState<"upload" | "preset">("preset");
@@ -136,6 +138,7 @@ export default function IndicatorsPage() {
     setNewCode("");
     setNewImage("");
     setNewCategory("Custom");
+    setNewCapturesTimeframes(false);
     setNewThemeMode("auto");
     setNewThumbSource("preset");
     const randomAccent = THEME_COLOR_PRESETS[Math.floor(Math.random() * THEME_COLOR_PRESETS.length)];
@@ -155,6 +158,7 @@ export default function IndicatorsPage() {
     setEditCode(ind.code ?? "");
     setEditImage(ind.exampleImage ?? "");
     setEditCategory(ind.category ?? "Custom");
+    setEditCapturesTimeframes(ind.capturesTimeframes === true || ind.id.includes("_timeframe"));
     const accent = ind.accentColor ?? "#F59E0B";
     setEditAccentColor(accent);
 
@@ -773,6 +777,15 @@ export default function IndicatorsPage() {
                     <option value="Pattern">Pattern</option>
                   </select>
                 </div>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: "10px", cursor: "pointer", color: "var(--text-secondary)", fontSize: "13px", fontWeight: 650 }}>
+                  <input
+                    type="checkbox"
+                    checked={editCapturesTimeframes}
+                    onChange={(e) => setEditCapturesTimeframes(e.target.checked)}
+                    style={{ width: "16px", height: "16px" }}
+                  />
+                  Captures timeframes
+                </label>
 
                 <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                   <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 650 }}>Description</label>
@@ -814,6 +827,7 @@ export default function IndicatorsPage() {
                         exampleImage: editImage,
                         accentColor: editAccentColor,
                         category: editCategory,
+                        capturesTimeframes: editCapturesTimeframes,
                       });
                       setShowEdit(false);
                       const updated = loadIndicators().find((i) => i.id === selected.id) ?? null;
@@ -903,6 +917,7 @@ export default function IndicatorsPage() {
                   code: newCode,
                   exampleImage: newImage || undefined,
                   category: newCategory,
+                  capturesTimeframes: newCapturesTimeframes,
                   accentColor: newAccentColor,
                 });
                 setShowAdd(false);
@@ -1035,6 +1050,15 @@ export default function IndicatorsPage() {
                   <option value="Pattern">Pattern</option>
                 </select>
               </div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "10px", cursor: "pointer", color: "var(--text-secondary)", fontSize: "13px", fontWeight: 650 }}>
+                <input
+                  type="checkbox"
+                  checked={newCapturesTimeframes}
+                  onChange={(e) => setNewCapturesTimeframes(e.target.checked)}
+                  style={{ width: "16px", height: "16px" }}
+                />
+                Captures timeframes
+              </label>
               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                 <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 650 }}>Custom image (optional)</label>
                 {newImage ? (

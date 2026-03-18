@@ -10,6 +10,11 @@ export interface Indicator {
   createdAt: number;
   accentColor?: string;
   exampleImage?: string; // data url
+  /**
+   * When true, the Journal renders this indicator's timeframe selection UI
+   * (instead of "Value" inputs).
+   */
+  capturesTimeframes?: boolean;
   category?: "Custom" | "Momentum" | "Trend" | "Volatility" | "Volume" | "Structure" | "Pattern";
 }
 
@@ -811,6 +816,7 @@ const BUILTIN_INDICATORS: Array<Omit<Indicator, "createdAt">> = [
     abbreviation: "OB-TF",
     category: "Structure",
     description: "Concept indicator: identifies order blocks on a chosen higher timeframe.",
+    capturesTimeframes: true,
     code: "// Order Block TF template (conceptual)\n// You may compute OB zones externally and feed them as data.\n",
   },
   {
@@ -827,6 +833,7 @@ const BUILTIN_INDICATORS: Array<Omit<Indicator, "createdAt">> = [
     abbreviation: "CHoCH/BOS",
     category: "Structure",
     description: "Concept indicator for market structure shifts (CHoCH) and break of structure (BOS) on a selected timeframe.",
+    capturesTimeframes: true,
     code: "// CHoCH/BOS template (conceptual)\n",
   },
   {
@@ -975,6 +982,7 @@ export function addIndicator(input: Omit<Indicator, "id" | "createdAt">): Indica
     abbreviation,
     description: input.description.trim(),
     code: input.code,
+    capturesTimeframes: input.capturesTimeframes === true,
     accentColor,
     exampleImage: providedImage ?? makeIndicatorExampleImageForId(indicatorId, abbreviation, accentColor),
     category: input.category ?? ("Custom" as const),
