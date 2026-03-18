@@ -11,16 +11,28 @@ export interface Indicator {
   accentColor?: string;
   exampleImage?: string; // data url
   /**
+   * For custom indicators only: additional qualitative signal flags the user can
+   * record in the Journal (besides a numeric "Value").
+   */
+  otherSignals?: string[];
+  /**
    * When true, the Journal renders this indicator's timeframe selection UI
    * (instead of "Value" inputs).
    */
   capturesTimeframes?: boolean;
   category?: "Custom" | "Momentum" | "Trend" | "Volatility" | "Volume" | "Structure" | "Pattern";
+  /**
+   * Signals-only metadata used by the Signals page to group pattern indicators.
+   * Built-in candidates: "TechnicalPattern", "Candlestick".
+   */
+  signalGroup?: "TechnicalPattern" | "Candlestick";
 }
 
 const INDICATORS_KEY = "tradebutler_indicators_v1";
 const STRATEGY_INDICATORS_KEY = "tradebutler_strategy_indicators_v1";
 const JOURNAL_INDICATOR_VALUES_KEY = "tradebutler_journal_indicator_values_v1";
+const JOURNAL_INDICATOR_DIVERGENCE_KEY = "tradebutler_journal_indicator_divergence_v1";
+const JOURNAL_INDICATOR_OTHER_SIGNALS_KEY = "tradebutler_journal_indicator_other_signals_v1";
 
 const BUILTIN_ACCENT_COLORS = ["#7C3AED", "#2563EB", "#0EA5E9", "#10B981", "#F59E0B", "#EF4444", "#EC4899", "#22C55E"];
 const CUSTOM_ACCENT_COLOR = "#F59E0B";
@@ -451,6 +463,685 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
       // (Concept) fallthrough: keep default glyph.
       break;
     }
+
+    // --- Pattern thumbnails (technical + candlestick) ---
+    case "sfp": {
+      // Swing Failure Pattern: spike + rejection back toward baseline.
+      const mid = mapY(0.50);
+      const top = mapY(0.22);
+      const left = x0 + innerW * 0.18;
+      const spike = x0 + innerW * 0.52;
+      const right = x0 + innerW * 0.86;
+      const reject = mapY(0.40);
+
+      glyph = `
+        <path d="M ${left.toFixed(2)} ${mid.toFixed(2)} L ${spike.toFixed(2)} ${top.toFixed(2)} L ${right.toFixed(
+        2
+      )} ${reject.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        <path d="M ${spike.toFixed(2)} ${reject.toFixed(2)} L ${(spike + innerW * 0.12).toFixed(2)} ${mid.toFixed(
+        2
+      )}"
+          stroke="rgba(255,255,255,0.70)" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <circle cx="${spike.toFixed(2)}" cy="${top.toFixed(2)}" r="4.8" fill="${accent}" opacity="0.85"/>
+        <rect x="${(spike - innerW * 0.12).toFixed(2)}" y="${(reject - 6).toFixed(2)}" width="${(innerW * 0.18).toFixed(
+        2
+      )}" height="12" rx="6" fill="${accent}" opacity="0.16" stroke="rgba(255,255,255,0.25)"/>
+      `;
+      break;
+    }
+    case "fvg": {
+      // Fair Value Gap: two candles framing an empty price region.
+      const leftC = x0 + innerW * 0.30;
+      const rightC = x0 + innerW * 0.70;
+      const gapX = x0 + innerW * 0.48;
+      const gapW = innerW * 0.18;
+
+      const gapTop = mapY(0.42);
+      const gapBottom = mapY(0.58);
+      const lower = mapY(0.20);
+      const upper = mapY(0.80);
+      const wickStroke = "rgba(255,255,255,0.26)";
+
+      glyph = `
+        <g opacity="0.95">
+          <path d="M ${(leftC).toFixed(2)} ${lower.toFixed(2)} L ${(leftC).toFixed(2)} ${upper.toFixed(2)}" stroke="${wickStroke}" stroke-width="2" stroke-linecap="round"/>
+          <rect x="${(leftC - innerW * 0.08).toFixed(2)}" y="${(gapBottom).toFixed(2)}" width="${(innerW * 0.16).toFixed(
+        2
+      )}" height="${(lower - gapBottom).toFixed(2)}" rx="6" fill="${accent}" opacity="0.28"/>
+
+          <path d="M ${(rightC).toFixed(2)} ${lower.toFixed(2)} L ${(rightC).toFixed(2)} ${upper.toFixed(2)}" stroke="${wickStroke}" stroke-width="2" stroke-linecap="round"/>
+          <rect x="${(rightC - innerW * 0.08).toFixed(2)}" y="${(gapTop).toFixed(2)}" width="${(innerW * 0.16).toFixed(
+        2
+      )}" height="${(gapBottom - gapTop).toFixed(2)}" rx="6" fill="${accent}" opacity="0.16"/>
+
+          <!-- The gap area -->
+          <rect x="${(gapX - gapW / 2).toFixed(2)}" y="${gapTop.toFixed(2)}" width="${gapW.toFixed(
+        2
+      )}" height="${(gapBottom - gapTop).toFixed(2)}" rx="10" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.22)"/>
+        </g>
+      `;
+      break;
+    }
+    case "divergence": {
+      // Divergence: two lines moving away from each other.
+      const left = x0 + innerW * 0.14;
+      const right = x0 + innerW * 0.90;
+      const y1a = mapY(0.72);
+      const y1b = mapY(0.44);
+      const y2a = mapY(0.40);
+      const y2b = mapY(0.66);
+
+      glyph = `
+        <path d="M ${left.toFixed(2)} ${y1a.toFixed(2)} L ${(left + innerW * 0.35).toFixed(2)} ${(y1a + y1b) / 2.0}
+                 L ${right.toFixed(2)} ${y1b.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        <path d="M ${left.toFixed(2)} ${y2a.toFixed(2)} L ${(left + innerW * 0.35).toFixed(2)} ${(y2a + y2b) / 2.0}
+                 L ${right.toFixed(2)} ${y2b.toFixed(2)}"
+          stroke="rgba(255,255,255,0.72)" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+        <path d="M ${left.toFixed(2)} ${mapY(0.50).toFixed(2)} L ${right.toFixed(2)} ${mapY(0.50).toFixed(
+        2
+      )}" stroke="rgba(255,255,255,0.16)" stroke-width="1" />
+        <circle cx="${right.toFixed(2)}" cy="${y1b.toFixed(2)}" r="4.2" fill="${accent}" opacity="0.90"/>
+        <circle cx="${right.toFixed(2)}" cy="${y2b.toFixed(2)}" r="4.2" fill="rgba(255,255,255,0.75)" opacity="0.65"/>
+      `;
+      break;
+    }
+
+    // --- Technical analysis patterns (triangles/wedges/flags/head & shoulders/etc.) ---
+    case "ascending_triangle": {
+      const leftX = x0 + innerW * 0.20;
+      const rightX = x0 + innerW * 0.86;
+      const topY = mapY(0.72); // flat resistance
+      const leftBottomY = mapY(0.52); // rising support from left to right apex
+      const rightBottomY = topY; // meet resistance at the right apex
+
+      glyph = `
+        <!-- Resistance (flat) -->
+        <path d="M ${leftX.toFixed(2)} ${topY.toFixed(2)} L ${rightX.toFixed(2)} ${topY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        <!-- Support (rising) -->
+        <path d="M ${leftX.toFixed(2)} ${leftBottomY.toFixed(2)} L ${rightX.toFixed(2)} ${rightBottomY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.72)" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+        <!-- Left side boundary -->
+        <path d="M ${leftX.toFixed(2)} ${topY.toFixed(2)} L ${leftX.toFixed(2)} ${leftBottomY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.18)" stroke-width="2.0" fill="none" stroke-linecap="round"/>
+      `;
+      break;
+    }
+    case "descending_triangle": {
+      const leftX = x0 + innerW * 0.20;
+      const rightX = x0 + innerW * 0.86;
+      const bottomY = mapY(0.38); // flat support
+      const leftTopY = mapY(0.62); // descending resistance to bottom-right apex
+      const rightTopY = bottomY;
+
+      glyph = `
+        <!-- Support (flat) -->
+        <path d="M ${leftX.toFixed(2)} ${bottomY.toFixed(2)} L ${rightX.toFixed(2)} ${bottomY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.70)" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+        <!-- Resistance (descending) -->
+        <path d="M ${leftX.toFixed(2)} ${leftTopY.toFixed(2)} L ${rightX.toFixed(2)} ${rightTopY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        <!-- Left side boundary -->
+        <path d="M ${leftX.toFixed(2)} ${leftTopY.toFixed(2)} L ${leftX.toFixed(2)} ${bottomY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.18)" stroke-width="2.0" fill="none" stroke-linecap="round"/>
+      `;
+      break;
+    }
+    case "bullish_symmetric_triangle": {
+      const leftX = x0 + innerW * 0.20;
+      const rightX = x0 + innerW * 0.86;
+      const apexY = mapY(0.30);
+      const baseY = mapY(0.62);
+      const midX = x0 + innerW / 2;
+
+      glyph = `
+        <!-- Base (flat) -->
+        <path d="M ${leftX.toFixed(2)} ${baseY.toFixed(2)} L ${rightX.toFixed(2)} ${baseY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.20)" stroke-width="2.0" fill="none" stroke-linecap="round" />
+        <!-- Sides converging to apex -->
+        <path d="M ${leftX.toFixed(2)} ${baseY.toFixed(2)} L ${midX.toFixed(2)} ${apexY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.8" fill="none" stroke-linecap="round" />
+        <path d="M ${rightX.toFixed(2)} ${baseY.toFixed(2)} L ${midX.toFixed(2)} ${apexY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.68)" stroke-width="2.4" fill="none" stroke-linecap="round" />
+      `;
+      break;
+    }
+    case "bearish_symmetric_triangle": {
+      const leftX = x0 + innerW * 0.20;
+      const rightX = x0 + innerW * 0.86;
+      const apexY = mapY(0.22); // bearish symmetric: apex down
+      const baseY = mapY(0.40); // base up/top
+      const midX = x0 + innerW / 2;
+
+      glyph = `
+        <!-- Base (flat) -->
+        <path d="M ${leftX.toFixed(2)} ${baseY.toFixed(2)} L ${rightX.toFixed(2)} ${baseY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.20)" stroke-width="2.0" fill="none" stroke-linecap="round" />
+        <!-- Sides converging downwards -->
+        <path d="M ${leftX.toFixed(2)} ${baseY.toFixed(2)} L ${midX.toFixed(2)} ${apexY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.8" fill="none" stroke-linecap="round" />
+        <path d="M ${rightX.toFixed(2)} ${baseY.toFixed(2)} L ${midX.toFixed(2)} ${apexY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.68)" stroke-width="2.4" fill="none" stroke-linecap="round" />
+      `;
+      break;
+    }
+    case "cup_and_handle": {
+      const leftX = x0 + innerW * 0.22;
+      const rightX = x0 + innerW * 0.78;
+      const rimY = mapY(0.46);
+      const bottomY = mapY(0.66);
+      const midX = x0 + innerW * 0.50;
+      const handleTopY = mapY(0.56);
+      const handleBottomY = mapY(0.68);
+      glyph = `
+        <path d="M ${leftX.toFixed(2)} ${rimY.toFixed(2)} Q ${midX.toFixed(2)} ${bottomY.toFixed(2)} ${rightX.toFixed(2)} ${rimY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        <rect x="${(midX - innerW * 0.06).toFixed(2)}" y="${handleTopY.toFixed(2)}" width="${(innerW * 0.12).toFixed(
+          2
+        )}" height="${(handleBottomY - handleTopY).toFixed(2)}" rx="6"
+          fill="${accent}" opacity="0.18" stroke="rgba(255,255,255,0.22)"/>
+        <path d="M ${(midX - innerW * 0.06).toFixed(2)} ${handleTopY.toFixed(2)} L ${(midX + innerW * 0.06).toFixed(2)} ${handleTopY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.30)" stroke-width="2" fill="none" stroke-linecap="round"/>
+      `;
+      break;
+    }
+    case "falling_wedge":
+    case "rising_wedge": {
+      const isRising = id === "rising_wedge";
+      const leftX = x0 + innerW * 0.22;
+      const rightX = x0 + innerW * 0.78;
+      const apexX = x0 + innerW * 0.50;
+      const leftY1 = isRising ? mapY(0.46) : mapY(0.62);
+      const rightY1 = isRising ? mapY(0.56) : mapY(0.48);
+      const leftY2 = isRising ? mapY(0.78) : mapY(0.40);
+      const rightY2 = isRising ? mapY(0.62) : mapY(0.30);
+      const accentLine = isRising ? "rgba(16,185,129,0.85)" : accent;
+      glyph = `
+        <path d="M ${leftX.toFixed(2)} ${leftY1.toFixed(2)} L ${apexX.toFixed(2)} ${(leftY2).toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        <path d="M ${rightX.toFixed(2)} ${rightY1.toFixed(2)} L ${apexX.toFixed(2)} ${(rightY2).toFixed(2)}"
+          stroke="rgba(255,255,255,0.70)" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+        <path d="M ${apexX.toFixed(2)} ${(leftY2).toFixed(2)} L ${apexX.toFixed(2)} ${mapY(0.55).toFixed(2)}"
+          stroke="${accentLine}" stroke-width="2.2" fill="none" stroke-linecap="round" opacity="0.55"/>
+      `;
+      break;
+    }
+    case "flag": {
+      const poleX = x0 + innerW * 0.30;
+      const poleTop = mapY(0.25);
+      const poleBottom = mapY(0.70);
+      const flagLeft = poleX;
+      const flagTop = mapY(0.48);
+      const flagBottom = mapY(0.60);
+      const flagRight = x0 + innerW * 0.78;
+      const flagTopR = mapY(0.44);
+      const flagBottomR = mapY(0.64);
+      glyph = `
+        <path d="M ${poleX.toFixed(2)} ${poleTop.toFixed(2)} L ${poleX.toFixed(2)} ${poleBottom.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.8" fill="none" stroke-linecap="round"/>
+        <path d="M ${flagLeft.toFixed(2)} ${flagTop.toFixed(2)} L ${flagRight.toFixed(2)} ${flagTopR.toFixed(
+          2
+        )} L ${flagRight.toFixed(2)} ${flagBottomR.toFixed(2)} L ${flagLeft.toFixed(2)} ${flagBottom.toFixed(2)} Z"
+          stroke="rgba(255,255,255,0.70)" stroke-width="2.2" fill="rgba(255,255,255,0.04)"/>
+      `;
+      break;
+    }
+    case "pennant": {
+      const poleX = x0 + innerW * 0.28;
+      const poleTop = mapY(0.24);
+      const poleBottom = mapY(0.70);
+      const leftX = x0 + innerW * 0.38;
+      const rightX = x0 + innerW * 0.78;
+      const topY = mapY(0.36);
+      const bottomY = mapY(0.58);
+      glyph = `
+        <path d="M ${poleX.toFixed(2)} ${poleTop.toFixed(2)} L ${poleX.toFixed(2)} ${poleBottom.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.8" fill="none" stroke-linecap="round"/>
+        <path d="M ${leftX.toFixed(2)} ${bottomY.toFixed(2)} L ${(x0 + innerW * 0.58).toFixed(2)} ${topY.toFixed(2)} L ${rightX.toFixed(2)} ${bottomY.toFixed(2)} Z"
+          stroke="rgba(255,255,255,0.72)" stroke-width="2.2" fill="rgba(255,255,255,0.03)" />
+      `;
+      break;
+    }
+    case "head_and_shoulders_top": {
+      const leftX = x0 + innerW * 0.22;
+      const midX = x0 + innerW * 0.50;
+      const rightX = x0 + innerW * 0.78;
+      const necklineY = mapY(0.60);
+      const shoulderY = mapY(0.44);
+      const headY = mapY(0.30);
+      glyph = `
+        <path d="M ${leftX.toFixed(2)} ${necklineY.toFixed(2)} L ${midX.toFixed(2)} ${necklineY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.22)" stroke-width="2.0" fill="none" stroke-linecap="round"/>
+        <path d="M ${leftX.toFixed(2)} ${necklineY.toFixed(2)} L ${(x0 + innerW * 0.33).toFixed(2)} ${shoulderY.toFixed(2)} L ${midX.toFixed(
+          2
+        )} ${headY.toFixed(2)} L ${(x0 + innerW * 0.67).toFixed(2)} ${shoulderY.toFixed(2)} L ${rightX.toFixed(2)} ${necklineY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+      `;
+      break;
+    }
+    case "inverted_head_and_shoulders": {
+      const leftX = x0 + innerW * 0.22;
+      const midX = x0 + innerW * 0.50;
+      const rightX = x0 + innerW * 0.78;
+      const necklineY = mapY(0.40);
+      const shoulderY = mapY(0.56);
+      const headY = mapY(0.70);
+      glyph = `
+        <path d="M ${leftX.toFixed(2)} ${necklineY.toFixed(2)} L ${rightX.toFixed(2)} ${necklineY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.22)" stroke-width="2.0" fill="none" stroke-linecap="round"/>
+        <path d="M ${leftX.toFixed(2)} ${necklineY.toFixed(2)} L ${(x0 + innerW * 0.33).toFixed(2)} ${shoulderY.toFixed(2)} L ${midX.toFixed(
+          2
+        )} ${headY.toFixed(2)} L ${(x0 + innerW * 0.67).toFixed(2)} ${shoulderY.toFixed(2)} L ${rightX.toFixed(2)} ${necklineY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+      `;
+      break;
+    }
+    case "double_top":
+    case "double_bottom": {
+      const isBottom = id === "double_bottom";
+      const leftX = x0 + innerW * 0.22;
+      const rightX = x0 + innerW * 0.78;
+      const peakOrTroughY = isBottom ? mapY(0.68) : mapY(0.32);
+      const centerY = isBottom ? mapY(0.52) : mapY(0.46);
+      glyph = `
+        <path d="M ${leftX.toFixed(2)} ${centerY.toFixed(2)} Q ${(x0 + innerW * 0.33).toFixed(2)} ${peakOrTroughY.toFixed(
+          2
+        )} ${(x0 + innerW * 0.50).toFixed(2)} ${centerY.toFixed(2)} Q ${(x0 + innerW * 0.67).toFixed(2)} ${peakOrTroughY.toFixed(
+          2
+        )} ${rightX.toFixed(2)} ${centerY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        <path d="M ${leftX.toFixed(2)} ${centerY.toFixed(2)} L ${rightX.toFixed(2)} ${centerY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.22)" stroke-width="2.0" fill="none" stroke-linecap="round"/>
+      `;
+      break;
+    }
+    case "broadening_triangle_wedge": {
+      const leftX = x0 + innerW * 0.22;
+      const rightX = x0 + innerW * 0.78;
+      const apexX = x0 + innerW * 0.50;
+      const topLeftY = mapY(0.38);
+      const topRightY = mapY(0.40);
+      const bottomLeftY = mapY(0.66);
+      const bottomRightY = mapY(0.62);
+      glyph = `
+        <path d="M ${leftX.toFixed(2)} ${topLeftY.toFixed(2)} L ${apexX.toFixed(2)} ${bottomLeftY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        <path d="M ${rightX.toFixed(2)} ${topRightY.toFixed(2)} L ${apexX.toFixed(2)} ${bottomRightY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.72)" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+        <path d="M ${(x0 + innerW * 0.35).toFixed(2)} ${mapY(0.52).toFixed(2)} L ${(
+        x0 +
+        innerW * 0.65
+      ).toFixed(2)} ${mapY(0.52).toFixed(2)}" stroke="rgba(255,255,255,0.18)" stroke-width="2" stroke-linecap="round"/>
+      `;
+      break;
+    }
+    case "descending_broadening_wedge": {
+      const leftX = x0 + innerW * 0.20;
+      const rightX = x0 + innerW * 0.80;
+      const topY = mapY(0.28);
+      const bottomLeftY = mapY(0.78);
+      const bottomRightY = mapY(0.70);
+      glyph = `
+        <path d="M ${leftX.toFixed(2)} ${topY.toFixed(2)} L ${rightX.toFixed(2)} ${bottomRightY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        <path d="M ${rightX.toFixed(2)} ${topY.toFixed(2)} L ${leftX.toFixed(2)} ${bottomLeftY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.72)" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+      `;
+      break;
+    }
+    case "right_angled_broadening_wedge": {
+      const cornerX = x0 + innerW * 0.50;
+      const cornerY = mapY(0.52);
+      glyph = `
+        <path d="M ${(cornerX - innerW * 0.18).toFixed(2)} ${mapY(0.66).toFixed(2)} L ${cornerX.toFixed(
+        2
+      )} ${cornerY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        <path d="M ${cornerX.toFixed(2)} ${cornerY.toFixed(2)} L ${(cornerX + innerW * 0.22).toFixed(2)} ${mapY(0.32).toFixed(
+        2
+      )}"
+          stroke="rgba(255,255,255,0.72)" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+        <path d="M ${cornerX.toFixed(2)} ${mapY(0.66).toFixed(2)} L ${cornerX.toFixed(2)} ${cornerY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.16)" stroke-width="2" fill="none" stroke-linecap="round"/>
+      `;
+      break;
+    }
+    case "three_drive_pattern": {
+      const leftX = x0 + innerW * 0.20;
+      const rightX = x0 + innerW * 0.84;
+      const aTop = mapY(0.38);
+      const bBottom = mapY(0.56);
+      const cTop = mapY(0.32);
+      const dBottom = mapY(0.60);
+      const eTop = mapY(0.44);
+      glyph = `
+        <path d="M ${leftX.toFixed(2)} ${bBottom.toFixed(2)}
+                 L ${(x0 + innerW * 0.30).toFixed(2)} ${aTop.toFixed(2)}
+                 L ${(x0 + innerW * 0.42).toFixed(2)} ${bBottom.toFixed(2)}
+                 L ${(x0 + innerW * 0.54).toFixed(2)} ${cTop.toFixed(2)}
+                 L ${(x0 + innerW * 0.66).toFixed(2)} ${dBottom.toFixed(2)}
+                 L ${(x0 + innerW * 0.78).toFixed(2)} ${eTop.toFixed(2)}
+                 L ${rightX.toFixed(2)} ${bBottom.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        <path d="M ${leftX.toFixed(2)} ${bBottom.toFixed(2)} L ${rightX.toFixed(2)} ${bBottom.toFixed(2)}"
+          stroke="rgba(255,255,255,0.18)" stroke-width="2" fill="none" stroke-linecap="round"/>
+      `;
+      break;
+    }
+    case "quad_theory": {
+      const centerX = x0 + innerW * 0.50;
+      const centerY = mapY(0.50);
+      const topY = mapY(0.28);
+      const bottomY = mapY(0.72);
+      const leftX = x0 + innerW * 0.22;
+      const rightX = x0 + innerW * 0.86;
+      glyph = `
+        <path d="M ${centerX.toFixed(2)} ${topY.toFixed(2)} L ${rightX.toFixed(2)} ${centerY.toFixed(2)} L ${centerX.toFixed(2)} ${bottomY.toFixed(
+        2
+      )} L ${leftX.toFixed(2)} ${centerY.toFixed(2)} Z"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        <path d="M ${leftX.toFixed(2)} ${centerY.toFixed(2)} L ${rightX.toFixed(2)} ${centerY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.18)" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <path d="M ${centerX.toFixed(2)} ${topY.toFixed(2)} L ${centerX.toFixed(2)} ${bottomY.toFixed(2)}"
+          stroke="rgba(255,255,255,0.18)" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <circle cx="${centerX.toFixed(2)}" cy="${centerY.toFixed(2)}" r="4.5" fill="${accent}" opacity="0.75"/>
+      `;
+      break;
+    }
+
+    case "triple_bottom": {
+      // Three V-troughs under a neckline.
+      const leftX = x0 + innerW * 0.18;
+      const mid1X = x0 + innerW * 0.38;
+      const mid2X = x0 + innerW * 0.58;
+      const rightX = x0 + innerW * 0.80;
+      const necklineY = mapY(0.42);
+      const troughY = mapY(0.70);
+      const shoulderY = mapY(0.52);
+
+      glyph = `
+        <path d="M ${leftX.toFixed(2)} ${necklineY.toFixed(2)}
+                 L ${(mid1X).toFixed(2)} ${shoulderY.toFixed(2)}
+                 L ${(mid1X).toFixed(2)} ${troughY.toFixed(2)}
+                 L ${(mid2X).toFixed(2)} ${troughY.toFixed(2)}
+                 L ${(mid2X).toFixed(2)} ${shoulderY.toFixed(2)}
+                 L ${rightX.toFixed(2)} ${necklineY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+
+        <path d="M ${leftX.toFixed(2)} ${necklineY.toFixed(2)} L ${rightX.toFixed(2)} ${necklineY.toFixed(
+          2
+        )}"
+          stroke="rgba(255,255,255,0.20)" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+        <path d="M ${(mid1X).toFixed(2)} ${shoulderY.toFixed(2)} L ${(mid1X).toFixed(2)} ${troughY.toFixed(
+          2
+        )}" stroke="rgba(255,255,255,0.26)" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <path d="M ${(mid2X).toFixed(2)} ${shoulderY.toFixed(2)} L ${(mid2X).toFixed(2)} ${troughY.toFixed(
+          2
+        )}" stroke="rgba(255,255,255,0.26)" stroke-width="2" fill="none" stroke-linecap="round"/>
+      `;
+      break;
+    }
+
+    case "rounding_bottom": {
+      // Rounding bottom: a broad U-shaped curve with a bounce up.
+      const leftX = x0 + innerW * 0.22;
+      const apexX = x0 + innerW * 0.50;
+      const rightX = x0 + innerW * 0.80;
+      const necklineY = mapY(0.42);
+      const bottomY = mapY(0.72);
+
+      glyph = `
+        <path d="M ${leftX.toFixed(2)} ${necklineY.toFixed(2)}
+                 C ${(leftX + innerW * 0.10).toFixed(2)} ${bottomY.toFixed(2)} ${(apexX - innerW * 0.10).toFixed(2)} ${bottomY.toFixed(
+        2
+      )} ${apexX.toFixed(2)} ${bottomY.toFixed(2)}
+                 C ${(apexX + innerW * 0.10).toFixed(2)} ${bottomY.toFixed(2)} ${(rightX - innerW * 0.10).toFixed(2)} ${bottomY.toFixed(
+        2
+      )} ${rightX.toFixed(2)} ${necklineY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.8" fill="none" stroke-linecap="round"/>
+
+        <path d="M ${leftX.toFixed(2)} ${necklineY.toFixed(2)} L ${rightX.toFixed(2)} ${necklineY.toFixed(
+          2
+        )}"
+          stroke="rgba(255,255,255,0.20)" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+        <path d="M ${apexX.toFixed(2)} ${bottomY.toFixed(2)} L ${apexX.toFixed(2)} ${bottomY.toFixed(
+        2
+      )}" stroke="rgba(255,255,255,0.22)" stroke-width="2" fill="none" stroke-linecap="round"/>
+      `;
+      break;
+    }
+
+    // Candlestick patterns
+    case "doji": {
+      const cx = x0 + innerW * 0.52;
+      const wickTop = mapY(0.82);
+      const wickBottom = mapY(0.18);
+      const bodyTop = mapY(0.54);
+      const bodyBottom = mapY(0.48);
+      glyph = `
+        <path d="M ${cx.toFixed(2)} ${wickTop.toFixed(2)} L ${cx.toFixed(2)} ${wickBottom.toFixed(2)}" stroke="rgba(255,255,255,0.30)" stroke-width="2.2" stroke-linecap="round"/>
+        <rect x="${(cx - innerW * 0.06).toFixed(2)}" y="${Math.min(bodyTop, bodyBottom).toFixed(2)}" width="${(
+        innerW * 0.12
+      ).toFixed(2)}" height="${Math.abs(bodyBottom - bodyTop).toFixed(2)}" rx="6" fill="${accent}" opacity="0.35" stroke="rgba(255,255,255,0.24)"/>
+      `;
+      break;
+    }
+    case "hammer": {
+      const cx = x0 + innerW * 0.52;
+      const wickTop = mapY(0.72);
+      const bodyTop = mapY(0.60);
+      const bodyBottom = mapY(0.42);
+      const wickBottom = mapY(0.14);
+      glyph = `
+        <path d="M ${cx.toFixed(2)} ${wickTop.toFixed(2)} L ${cx.toFixed(2)} ${wickBottom.toFixed(2)}" stroke="rgba(255,255,255,0.30)" stroke-width="2.2" stroke-linecap="round"/>
+        <rect x="${(cx - innerW * 0.06).toFixed(2)}" y="${Math.min(bodyTop, bodyBottom).toFixed(2)}" width="${(
+        innerW * 0.12
+      ).toFixed(2)}" height="${Math.abs(bodyBottom - bodyTop).toFixed(2)}" rx="6" fill="${accent}" opacity="0.70" stroke="rgba(255,255,255,0.22)"/>
+      `;
+      break;
+    }
+    case "hanging_man": {
+      const cx = x0 + innerW * 0.52;
+      const wickTop = mapY(0.62);
+      const bodyTop = mapY(0.48);
+      const bodyBottom = mapY(0.26);
+      const wickBottom = mapY(0.14);
+      glyph = `
+        <path d="M ${cx.toFixed(2)} ${wickTop.toFixed(2)} L ${cx.toFixed(2)} ${wickBottom.toFixed(2)}" stroke="rgba(255,255,255,0.30)" stroke-width="2.2" stroke-linecap="round"/>
+        <rect x="${(cx - innerW * 0.06).toFixed(2)}" y="${Math.min(bodyTop, bodyBottom).toFixed(2)}" width="${(
+        innerW * 0.12
+      ).toFixed(2)}" height="${Math.abs(bodyBottom - bodyTop).toFixed(2)}" rx="6" fill="${accent}" opacity="0.55" stroke="rgba(255,255,255,0.22)"/>
+      `;
+      break;
+    }
+    case "shooting_star": {
+      const cx = x0 + innerW * 0.52;
+      const wickTop = mapY(0.88);
+      const bodyTop = mapY(0.30);
+      const bodyBottom = mapY(0.12);
+      const wickBottom = mapY(0.08);
+      glyph = `
+        <path d="M ${cx.toFixed(2)} ${wickTop.toFixed(2)} L ${cx.toFixed(2)} ${wickBottom.toFixed(2)}" stroke="rgba(255,255,255,0.30)" stroke-width="2.2" stroke-linecap="round"/>
+        <rect x="${(cx - innerW * 0.06).toFixed(2)}" y="${Math.min(bodyTop, bodyBottom).toFixed(2)}" width="${(
+        innerW * 0.12
+      ).toFixed(2)}" height="${Math.abs(bodyBottom - bodyTop).toFixed(2)}" rx="6" fill="${accent}" opacity="0.55" stroke="rgba(255,255,255,0.22)"/>
+      `;
+      break;
+    }
+
+    case "bullish_engulfing": {
+      const leftC = x0 + innerW * 0.38;
+      const rightC = x0 + innerW * 0.62;
+      const bull = "rgba(16,185,129,0.78)";
+      const bear = "rgba(239,68,68,0.72)";
+      const wickStroke = "rgba(255,255,255,0.28)";
+
+      const body1Top = mapY(0.55);
+      const body1Bottom = mapY(0.40);
+      const body2Top = mapY(0.70);
+      const body2Bottom = mapY(0.28);
+
+      const wickTop1 = mapY(0.78);
+      const wickBot1 = mapY(0.22);
+      const wickTop2 = mapY(0.82);
+      const wickBot2 = mapY(0.18);
+
+      glyph = `
+        <path d="M ${leftC.toFixed(2)} ${wickTop1.toFixed(2)} L ${leftC.toFixed(2)} ${wickBot1.toFixed(2)}" stroke="${wickStroke}" stroke-width="2.2" stroke-linecap="round"/>
+        <rect x="${(leftC - innerW * 0.06).toFixed(2)}" y="${Math.min(body1Top, body1Bottom).toFixed(2)}" width="${(
+        innerW * 0.12
+      ).toFixed(2)}" height="${Math.abs(body1Bottom - body1Top).toFixed(2)}" rx="6" fill="${bear}" opacity="0.85" stroke="rgba(255,255,255,0.18)"/>
+
+        <path d="M ${rightC.toFixed(2)} ${wickTop2.toFixed(2)} L ${rightC.toFixed(2)} ${wickBot2.toFixed(2)}" stroke="${wickStroke}" stroke-width="2.2" stroke-linecap="round"/>
+        <rect x="${(rightC - innerW * 0.08).toFixed(2)}" y="${Math.min(body2Top, body2Bottom).toFixed(2)}" width="${(
+        innerW * 0.16
+      ).toFixed(2)}" height="${Math.abs(body2Bottom - body2Top).toFixed(2)}" rx="7" fill="${bull}" opacity="0.85" stroke="rgba(255,255,255,0.18)"/>
+      `;
+      break;
+    }
+    case "bearish_engulfing": {
+      const leftC = x0 + innerW * 0.38;
+      const rightC = x0 + innerW * 0.62;
+      const bull = "rgba(16,185,129,0.72)";
+      const bear = "rgba(239,68,68,0.78)";
+      const wickStroke = "rgba(255,255,255,0.28)";
+
+      const body1Top = mapY(0.55);
+      const body1Bottom = mapY(0.40);
+      const body2Top = mapY(0.70);
+      const body2Bottom = mapY(0.28);
+
+      const wickTop1 = mapY(0.78);
+      const wickBot1 = mapY(0.22);
+      const wickTop2 = mapY(0.82);
+      const wickBot2 = mapY(0.18);
+
+      glyph = `
+        <path d="M ${leftC.toFixed(2)} ${wickTop1.toFixed(2)} L ${leftC.toFixed(2)} ${wickBot1.toFixed(2)}" stroke="${wickStroke}" stroke-width="2.2" stroke-linecap="round"/>
+        <rect x="${(leftC - innerW * 0.06).toFixed(2)}" y="${Math.min(body1Top, body1Bottom).toFixed(2)}" width="${(
+        innerW * 0.12
+      ).toFixed(2)}" height="${Math.abs(body1Bottom - body1Top).toFixed(2)}" rx="6" fill="${bull}" opacity="0.85" stroke="rgba(255,255,255,0.18)"/>
+
+        <path d="M ${rightC.toFixed(2)} ${wickTop2.toFixed(2)} L ${rightC.toFixed(2)} ${wickBot2.toFixed(2)}" stroke="${wickStroke}" stroke-width="2.2" stroke-linecap="round"/>
+        <rect x="${(rightC - innerW * 0.08).toFixed(2)}" y="${Math.min(body2Top, body2Bottom).toFixed(2)}" width="${(
+        innerW * 0.16
+      ).toFixed(2)}" height="${Math.abs(body2Bottom - body2Top).toFixed(2)}" rx="7" fill="${bear}" opacity="0.85" stroke="rgba(255,255,255,0.18)"/>
+      `;
+      break;
+    }
+
+    case "morning_star": {
+      const leftC = x0 + innerW * 0.32;
+      const midC = x0 + innerW * 0.50;
+      const rightC = x0 + innerW * 0.68;
+      const bull = "rgba(16,185,129,0.78)";
+      const bear = "rgba(239,68,68,0.72)";
+      const wickStroke = "rgba(255,255,255,0.26)";
+
+      const c1Top = mapY(0.72);
+      const c1Bottom = mapY(0.48);
+      const c2Top = mapY(0.55);
+      const c2Bottom = mapY(0.48);
+      const c3Top = mapY(0.60);
+      const c3Bottom = mapY(0.26);
+
+      glyph = `
+        <path d="M ${leftC.toFixed(2)} ${mapY(0.84).toFixed(2)} L ${leftC.toFixed(2)} ${mapY(0.34).toFixed(2)}" stroke="${wickStroke}" stroke-width="2.2" stroke-linecap="round"/>
+        <rect x="${(leftC - innerW * 0.06).toFixed(2)}" y="${Math.min(c1Top, c1Bottom).toFixed(2)}" width="${(
+        innerW * 0.12
+      ).toFixed(2)}" height="${Math.abs(c1Bottom - c1Top).toFixed(2)}" rx="6" fill="${bear}" opacity="0.85"/>
+
+        <path d="M ${midC.toFixed(2)} ${mapY(0.70).toFixed(2)} L ${midC.toFixed(2)} ${mapY(0.44).toFixed(2)}" stroke="${wickStroke}" stroke-width="2.0" stroke-linecap="round"/>
+        <rect x="${(midC - innerW * 0.03).toFixed(2)}" y="${Math.min(c2Top, c2Bottom).toFixed(2)}" width="${(
+        innerW * 0.06
+      ).toFixed(2)}" height="${Math.abs(c2Bottom - c2Top).toFixed(2)}" rx="5" fill="${accent}" opacity="0.35"/>
+
+        <path d="M ${rightC.toFixed(2)} ${mapY(0.70).toFixed(2)} L ${rightC.toFixed(2)} ${mapY(0.18).toFixed(2)}" stroke="${wickStroke}" stroke-width="2.2" stroke-linecap="round"/>
+        <rect x="${(rightC - innerW * 0.06).toFixed(2)}" y="${Math.min(c3Top, c3Bottom).toFixed(2)}" width="${(
+        innerW * 0.12
+      ).toFixed(2)}" height="${Math.abs(c3Bottom - c3Top).toFixed(2)}" rx="6" fill="${bull}" opacity="0.90"/>
+      `;
+      break;
+    }
+
+    case "evening_star": {
+      const leftC = x0 + innerW * 0.32;
+      const midC = x0 + innerW * 0.50;
+      const rightC = x0 + innerW * 0.68;
+      const bull = "rgba(16,185,129,0.72)";
+      const bear = "rgba(239,68,68,0.80)";
+      const wickStroke = "rgba(255,255,255,0.26)";
+
+      const c1Top = mapY(0.66);
+      const c1Bottom = mapY(0.44);
+      const c2Top = mapY(0.52);
+      const c2Bottom = mapY(0.46);
+      const c3Top = mapY(0.44);
+      const c3Bottom = mapY(0.20);
+
+      glyph = `
+        <path d="M ${leftC.toFixed(2)} ${mapY(0.82).toFixed(2)} L ${leftC.toFixed(2)} ${mapY(0.36).toFixed(2)}" stroke="${wickStroke}" stroke-width="2.2" stroke-linecap="round"/>
+        <rect x="${(leftC - innerW * 0.06).toFixed(2)}" y="${Math.min(c1Top, c1Bottom).toFixed(2)}" width="${(
+        innerW * 0.12
+      ).toFixed(2)}" height="${Math.abs(c1Bottom - c1Top).toFixed(2)}" rx="6" fill="${bull}" opacity="0.85"/>
+
+        <path d="M ${midC.toFixed(2)} ${mapY(0.64).toFixed(2)} L ${midC.toFixed(2)} ${mapY(0.42).toFixed(2)}" stroke="${wickStroke}" stroke-width="2.0" stroke-linecap="round"/>
+        <rect x="${(midC - innerW * 0.03).toFixed(2)}" y="${Math.min(c2Top, c2Bottom).toFixed(2)}" width="${(
+        innerW * 0.06
+      ).toFixed(2)}" height="${Math.abs(c2Bottom - c2Top).toFixed(2)}" rx="5" fill="${accent}" opacity="0.35"/>
+
+        <path d="M ${rightC.toFixed(2)} ${mapY(0.60).toFixed(2)} L ${rightC.toFixed(2)} ${mapY(0.10).toFixed(2)}" stroke="${wickStroke}" stroke-width="2.2" stroke-linecap="round"/>
+        <rect x="${(rightC - innerW * 0.06).toFixed(2)}" y="${Math.min(c3Top, c3Bottom).toFixed(2)}" width="${(
+        innerW * 0.12
+      ).toFixed(2)}" height="${Math.abs(c3Bottom - c3Top).toFixed(2)}" rx="6" fill="${bear}" opacity="0.90"/>
+      `;
+      break;
+    }
+
+    case "bullish_marubozu": {
+      const cx = x0 + innerW * 0.52;
+      const left = cx - innerW * 0.18;
+      const right = cx + innerW * 0.18;
+      const bodyTop = mapY(0.78);
+      const bodyBottom = mapY(0.22);
+      glyph = `
+        <rect x="${left.toFixed(2)}" y="${Math.min(bodyTop, bodyBottom).toFixed(2)}" width="${(right - left).toFixed(
+        2
+      )}" height="${Math.abs(bodyBottom - bodyTop).toFixed(2)}" rx="10" fill="rgba(16,185,129,0.85)" stroke="rgba(255,255,255,0.20)"/>
+        <path d="M ${cx.toFixed(2)} ${mapY(0.82).toFixed(2)} L ${cx.toFixed(2)} ${mapY(0.76).toFixed(
+        2
+      )}" stroke="rgba(255,255,255,0.26)" stroke-width="2" stroke-linecap="round"/>
+        <path d="M ${cx.toFixed(2)} ${mapY(0.24).toFixed(2)} L ${cx.toFixed(2)} ${mapY(0.18).toFixed(
+        2
+      )}" stroke="rgba(255,255,255,0.26)" stroke-width="2" stroke-linecap="round"/>
+      `;
+      break;
+    }
+
+    case "bearish_marubozu": {
+      const cx = x0 + innerW * 0.52;
+      const left = cx - innerW * 0.18;
+      const right = cx + innerW * 0.18;
+      const bodyTop = mapY(0.78);
+      const bodyBottom = mapY(0.22);
+      glyph = `
+        <rect x="${left.toFixed(2)}" y="${Math.min(bodyTop, bodyBottom).toFixed(2)}" width="${(right - left).toFixed(
+        2
+      )}" height="${Math.abs(bodyBottom - bodyTop).toFixed(2)}" rx="10" fill="rgba(239,68,68,0.85)" stroke="rgba(255,255,255,0.20)"/>
+        <path d="M ${cx.toFixed(2)} ${mapY(0.82).toFixed(2)} L ${cx.toFixed(2)} ${mapY(0.76).toFixed(
+        2
+      )}" stroke="rgba(255,255,255,0.26)" stroke-width="2" stroke-linecap="round"/>
+        <path d="M ${cx.toFixed(2)} ${mapY(0.24).toFixed(2)} L ${cx.toFixed(2)} ${mapY(0.18).toFixed(
+        2
+      )}" stroke="rgba(255,255,255,0.26)" stroke-width="2" stroke-linecap="round"/>
+      `;
+      break;
+    }
+
     case "adx": {
       // ADX: two lines with a central baseline + a strength cue.
       const p1 = [
@@ -841,6 +1532,7 @@ const BUILTIN_INDICATORS: Array<Omit<Indicator, "createdAt">> = [
     name: "SFP (Swing Failure Pattern)",
     abbreviation: "SFP",
     category: "Pattern",
+    signalGroup: "TechnicalPattern",
     description: "Concept indicator that tags SFP liquidity grabs for reversal/continuation entries.",
     code: "// SFP template (conceptual)\n",
   },
@@ -849,6 +1541,7 @@ const BUILTIN_INDICATORS: Array<Omit<Indicator, "createdAt">> = [
     name: "FVG (Fair Value Gap)",
     abbreviation: "FVG",
     category: "Pattern",
+    signalGroup: "TechnicalPattern",
     description: "Concept indicator for fair value gaps (imbalances) based on candle ranges.",
     code: "// FVG template (conceptual)\n",
   },
@@ -856,9 +1549,280 @@ const BUILTIN_INDICATORS: Array<Omit<Indicator, "createdAt">> = [
     id: "divergence",
     name: "Divergence",
     abbreviation: "Div",
-    category: "Momentum",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
     description: "Concept indicator for bullish/bearish divergence across oscillators and price.",
     code: "// Divergence template (conceptual)\n",
+  },
+  {
+    id: "ascending_triangle",
+    name: "Ascending Triangle",
+    abbreviation: "AscTri",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Ascending triangle pattern: flat resistance with rising support.",
+    code: "// Ascending Triangle template (conceptual)\n",
+  },
+  {
+    id: "bearish_symmetric_triangle",
+    name: "Bearish Symmetric Triangle",
+    abbreviation: "BearSymTri",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Symmetric triangle with bearish bias (breakdown emphasis).",
+    code: "// Bearish Symmetric Triangle template (conceptual)\n",
+  },
+  {
+    id: "bullish_symmetric_triangle",
+    name: "Bullish Symmetric Triangle",
+    abbreviation: "BullSymTri",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Symmetric triangle with bullish bias (breakout emphasis).",
+    code: "// Bullish Symmetric Triangle template (conceptual)\n",
+  },
+  {
+    id: "cup_and_handle",
+    name: "Cup & Handle",
+    abbreviation: "CupH",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Cup and handle pattern: rounded base followed by a consolidation 'handle'.",
+    code: "// Cup & Handle template (conceptual)\n",
+  },
+  {
+    id: "descending_triangle",
+    name: "Descending Triangle",
+    abbreviation: "DescTri",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Descending triangle pattern: flat support with falling resistance.",
+    code: "// Descending Triangle template (conceptual)\n",
+  },
+  {
+    id: "falling_wedge",
+    name: "Falling Wedge",
+    abbreviation: "FallW",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Falling wedge pattern (converging lines sloping down).",
+    code: "// Falling Wedge template (conceptual)\n",
+  },
+  {
+    id: "rising_wedge",
+    name: "Rising Wedge",
+    abbreviation: "RiseW",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Rising wedge pattern (converging lines sloping up).",
+    code: "// Rising Wedge template (conceptual)\n",
+  },
+  {
+    id: "flag",
+    name: "Flag",
+    abbreviation: "Flag",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Bullish/bearish flag pattern (pole then consolidation).",
+    code: "// Flag template (conceptual)\n",
+  },
+  {
+    id: "pennant",
+    name: "Pennant",
+    abbreviation: "Penn",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Pennant pattern (pole then small converging triangle).",
+    code: "// Pennant template (conceptual)\n",
+  },
+  {
+    id: "head_and_shoulders_top",
+    name: "Head & Shoulders (Top)",
+    abbreviation: "H&S",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Head and shoulders top pattern (three peaks with a neckline).",
+    code: "// Head & Shoulders Top template (conceptual)\n",
+  },
+  {
+    id: "inverted_head_and_shoulders",
+    name: "Head & Shoulders (Bottom)",
+    abbreviation: "iH&S",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Inverted head and shoulders bottom pattern (three troughs with a neckline).",
+    code: "// Inverted Head & Shoulders template (conceptual)\n",
+  },
+  {
+    id: "double_top",
+    name: "Double Top",
+    abbreviation: "DT",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Double top pattern: two peaks with a retreat between them.",
+    code: "// Double Top template (conceptual)\n",
+  },
+  {
+    id: "double_bottom",
+    name: "Double Bottom",
+    abbreviation: "DB",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Double bottom pattern: two troughs with a bounce between them.",
+    code: "// Double Bottom template (conceptual)\n",
+  },
+  {
+    id: "broadening_triangle_wedge",
+    name: "Broadening Triangle / Wedge",
+    abbreviation: "BT-W",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Broadening triangle / wedge with diverging boundaries.",
+    code: "// Broadening Triangle/Wedge template (conceptual)\n",
+  },
+  {
+    id: "descending_broadening_wedge",
+    name: "Descending Broadening Wedge",
+    abbreviation: "DBW",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Descending broadening wedge (diverging lines with a downward bias).",
+    code: "// Descending Broadening Wedge template (conceptual)\n",
+  },
+  {
+    id: "right_angled_broadening_wedge",
+    name: "Right-Angled Broadening Wedge",
+    abbreviation: "RABW",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Right-angled broadening wedge (corner + diverging boundaries).",
+    code: "// Right-Angled Broadening Wedge template (conceptual)\n",
+  },
+  {
+    id: "three_drive_pattern",
+    name: "Three Drive Pattern",
+    abbreviation: "3Drive",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Three drive pattern (rhythmic push/pull waves).",
+    code: "// Three Drive Pattern template (conceptual)\n",
+  },
+  {
+    id: "quad_theory",
+    name: "Quad Theory",
+    abbreviation: "Quad",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Quad theory concept (multi-target / quadrant style projection).",
+    code: "// Quad Theory template (conceptual)\n",
+  },
+  {
+    id: "triple_bottom",
+    name: "Triple Bottom",
+    abbreviation: "3Bot",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Triple bottom pattern: three troughs near the same support level, with a neckline breakout.",
+    code: "// Triple Bottom template (conceptual)\n",
+  },
+  {
+    id: "rounding_bottom",
+    name: "Rounding Bottom",
+    abbreviation: "RndBot",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Rounding bottom pattern: a gradual U-shaped transition from bearish to bullish momentum.",
+    code: "// Rounding Bottom template (conceptual)\n",
+  },
+  {
+    id: "doji",
+    name: "Doji",
+    abbreviation: "Doji",
+    category: "Pattern",
+    signalGroup: "Candlestick",
+    description: "Doji candle pattern indicating market indecision (open/close near equal).",
+    code: "// Doji template (conceptual)\n",
+  },
+  {
+    id: "hammer",
+    name: "Hammer",
+    abbreviation: "Hammer",
+    category: "Pattern",
+    signalGroup: "Candlestick",
+    description: "Hammer candle pattern suggesting potential reversal after a downtrend (long lower wick).",
+    code: "// Hammer template (conceptual)\n",
+  },
+  {
+    id: "hanging_man",
+    name: "Hanging Man",
+    abbreviation: "HangMan",
+    category: "Pattern",
+    signalGroup: "Candlestick",
+    description: "Hanging man candle pattern indicating potential reversal after an uptrend (similar shape to hammer).",
+    code: "// Hanging Man template (conceptual)\n",
+  },
+  {
+    id: "shooting_star",
+    name: "Shooting Star",
+    abbreviation: "ShootingStar",
+    category: "Pattern",
+    signalGroup: "Candlestick",
+    description: "Shooting star candle pattern suggesting potential reversal after an uptrend (long upper wick).",
+    code: "// Shooting Star template (conceptual)\n",
+  },
+  {
+    id: "bullish_engulfing",
+    name: "Bullish Engulfing",
+    abbreviation: "BullEng",
+    category: "Pattern",
+    signalGroup: "Candlestick",
+    description: "Bullish engulfing candle pattern indicating buyers taking control (bearish body engulfed by bullish body).",
+    code: "// Bullish Engulfing template (conceptual)\n",
+  },
+  {
+    id: "bearish_engulfing",
+    name: "Bearish Engulfing",
+    abbreviation: "BearEng",
+    category: "Pattern",
+    signalGroup: "Candlestick",
+    description: "Bearish engulfing candle pattern indicating sellers taking control (bullish body engulfed by bearish body).",
+    code: "// Bearish Engulfing template (conceptual)\n",
+  },
+  {
+    id: "morning_star",
+    name: "Morning Star",
+    abbreviation: "MorningStar",
+    category: "Pattern",
+    signalGroup: "Candlestick",
+    description: "Morning star candle pattern suggesting trend reversal from bearish to bullish (three-candle structure).",
+    code: "// Morning Star template (conceptual)\n",
+  },
+  {
+    id: "evening_star",
+    name: "Evening Star",
+    abbreviation: "EveningStar",
+    category: "Pattern",
+    signalGroup: "Candlestick",
+    description: "Evening star candle pattern suggesting trend reversal from bullish to bearish (three-candle structure).",
+    code: "// Evening Star template (conceptual)\n",
+  },
+  {
+    id: "bullish_marubozu",
+    name: "Bullish Marubozu",
+    abbreviation: "BullM",
+    category: "Pattern",
+    signalGroup: "Candlestick",
+    description: "Bullish marubozu candle pattern showing strong buying pressure (little/no wick).",
+    code: "// Bullish Marubozu template (conceptual)\n",
+  },
+  {
+    id: "bearish_marubozu",
+    name: "Bearish Marubozu",
+    abbreviation: "BearM",
+    category: "Pattern",
+    signalGroup: "Candlestick",
+    description: "Bearish marubozu candle pattern showing strong selling pressure (little/no wick).",
+    code: "// Bearish Marubozu template (conceptual)\n",
   },
   {
     id: "supertrend",
@@ -921,6 +1885,16 @@ type JournalIndicatorValuesMap = Record<
   string,
   string
 >; // `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}` -> value
+
+type JournalIndicatorDivergenceMap = Record<
+  string,
+  boolean
+>; // `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}` -> divergence true
+
+type JournalIndicatorOtherSignalsMap = Record<
+  string,
+  Record<string, boolean>
+>; // `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}` -> signalLabel -> checked
 
 function safeParse<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
@@ -986,6 +1960,7 @@ export function addIndicator(input: Omit<Indicator, "id" | "createdAt">): Indica
     accentColor,
     exampleImage: providedImage ?? makeIndicatorExampleImageForId(indicatorId, abbreviation, accentColor),
     category: input.category ?? ("Custom" as const),
+    otherSignals: Array.isArray(input.otherSignals) ? input.otherSignals : [],
   };
   const all = loadIndicators();
   saveIndicators([indicator, ...all]);
@@ -1008,6 +1983,7 @@ export function updateIndicator(id: string, patch: Partial<Omit<Indicator, "id" 
           accentColor: patch.accentColor != null ? patch.accentColor : i.accentColor,
           kind: patch.kind != null ? patch.kind : i.kind,
           category: patch.category ?? i.category,
+          otherSignals: patch.otherSignals != null ? patch.otherSignals : i.otherSignals,
         }
       : i
   );
@@ -1099,6 +2075,106 @@ export function migrateJournalIndicatorDraftValues(mode: DataMode, fromEntryId: 
   }
   if (changed) {
     localStorage.setItem(JOURNAL_INDICATOR_VALUES_KEY, JSON.stringify(data));
+  }
+}
+
+export function loadJournalIndicatorDivergence(
+  mode: DataMode,
+  entryId: number,
+  tradeIndex: number,
+  phase: IndicatorPhase,
+  indicatorId: string,
+  timeframe: string
+): boolean {
+  const data = safeParse<JournalIndicatorDivergenceMap>(localStorage.getItem(JOURNAL_INDICATOR_DIVERGENCE_KEY), {});
+  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}`;
+  return !!data[key];
+}
+
+export function setJournalIndicatorDivergence(
+  mode: DataMode,
+  entryId: number,
+  tradeIndex: number,
+  phase: IndicatorPhase,
+  indicatorId: string,
+  timeframe: string,
+  divergence: boolean
+) {
+  const data = safeParse<JournalIndicatorDivergenceMap>(localStorage.getItem(JOURNAL_INDICATOR_DIVERGENCE_KEY), {});
+  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}`;
+  if (divergence) data[key] = true;
+  else delete data[key];
+  localStorage.setItem(JOURNAL_INDICATOR_DIVERGENCE_KEY, JSON.stringify(data));
+}
+
+export function migrateJournalIndicatorDraftDivergence(mode: DataMode, fromEntryId: number, toEntryId: number) {
+  const data = safeParse<JournalIndicatorDivergenceMap>(localStorage.getItem(JOURNAL_INDICATOR_DIVERGENCE_KEY), {});
+  const prefix = `${mode}:${fromEntryId}:`;
+  const newPrefix = `${mode}:${toEntryId}:`;
+  let changed = false;
+  for (const [key, value] of Object.entries(data)) {
+    if (key.startsWith(prefix)) {
+      delete data[key];
+      const rest = key.slice(prefix.length);
+      data[`${newPrefix}${rest}`] = value;
+      changed = true;
+    }
+  }
+  if (changed) {
+    localStorage.setItem(JOURNAL_INDICATOR_DIVERGENCE_KEY, JSON.stringify(data));
+  }
+}
+
+export function loadJournalIndicatorOtherSignals(
+  mode: DataMode,
+  entryId: number,
+  tradeIndex: number,
+  phase: IndicatorPhase,
+  indicatorId: string
+): Record<string, boolean> {
+  const data = safeParse<JournalIndicatorOtherSignalsMap>(localStorage.getItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY), {});
+  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}`;
+  return data[key] ?? {};
+}
+
+export function setJournalIndicatorOtherSignal(
+  mode: DataMode,
+  entryId: number,
+  tradeIndex: number,
+  phase: IndicatorPhase,
+  indicatorId: string,
+  signalLabel: string,
+  checked: boolean
+) {
+  const clean = signalLabel.trim();
+  if (!clean) return;
+  const data = safeParse<JournalIndicatorOtherSignalsMap>(localStorage.getItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY), {});
+  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}`;
+  const cur = data[key] ?? {};
+  cur[clean] = checked;
+  data[key] = cur;
+  localStorage.setItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY, JSON.stringify(data));
+}
+
+export function migrateJournalIndicatorDraftOtherSignals(
+  mode: DataMode,
+  fromEntryId: number,
+  toEntryId: number
+) {
+  const data = safeParse<JournalIndicatorOtherSignalsMap>(localStorage.getItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY), {});
+  const prefix = `${mode}:${fromEntryId}:`;
+  const newPrefix = `${mode}:${toEntryId}:`;
+  let changed = false;
+  for (const [key, value] of Object.entries(data)) {
+    if (key.startsWith(prefix)) {
+      delete data[key];
+      const rest = key.slice(prefix.length);
+      data[`${newPrefix}${rest}`] = value;
+      changed = true;
+    }
+  }
+  if (changed) {
+    localStorage.setItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY, JSON.stringify(data));
   }
 }
 

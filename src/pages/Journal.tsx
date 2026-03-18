@@ -66,6 +66,12 @@ import {
   loadJournalIndicatorValue,
   setJournalIndicatorValue,
   migrateJournalIndicatorDraftValues,
+  loadJournalIndicatorDivergence,
+  setJournalIndicatorDivergence,
+  migrateJournalIndicatorDraftDivergence,
+  loadJournalIndicatorOtherSignals,
+  setJournalIndicatorOtherSignal,
+  migrateJournalIndicatorDraftOtherSignals,
   type Indicator,
   type IndicatorPhase,
 } from "../utils/indicatorsStore";
@@ -140,7 +146,7 @@ interface JournalChecklistResponse {
   checklist_item_id: number;
   is_checked: boolean;
   journal_trade_ids?: string | null; // JSON array of trade IDs when associated with specific trades, null = whole entry
-  response_value?: number | null; // For survey items: 1-5 scale
+  response_value?: number | null; // For survey items: 1-10 scale
 }
 
 // All checklist and survey items are scoped per journal trade.
@@ -178,37 +184,37 @@ const INTENSITY_LABELS: Record<number, string> = {
   6: "Strong", 7: "Very strong", 8: "Intense", 9: "Severe", 10: "Extreme",
 };
 
-/** Same question groups as Emotions page — unified emotional state entry format. highIsGood: true = 5 is desirable, false = 1 is desirable. */
+/** Same question groups as Emotions page — unified emotional state entry format (1–10 scale). */
 const JOURNAL_SURVEY_QUESTIONS = {
   before: [
-    { key: "before_calm_clear", question: "How calm and mentally clear did you feel before considering this trade?", scale: "1 = Very anxious/confused, 5 = Very calm/clear", highIsGood: true },
-    { key: "before_urgency_pressure", question: "Did you feel any urgency or pressure to \"make something happen\" in the market?", scale: "1 = No urgency, 5 = Extreme pressure", highIsGood: false },
-    { key: "before_confidence_vs_validation", question: "Were you feeling confident in yourself, or seeking validation from a win?", scale: "1 = Confident in self, 5 = Seeking validation", highIsGood: false },
-    { key: "before_fomo", question: "Did fear of missing out (FOMO) influence your desire to enter?", scale: "1 = No FOMO, 5 = Strong FOMO", highIsGood: false },
-    { key: "before_recovering_loss", question: "Were you trying to recover from a previous loss emotionally?", scale: "1 = Not at all, 5 = Strongly trying to recover", highIsGood: false },
-    { key: "before_patient_detached", question: "Did you feel patient and detached, or restless and impulsive?", scale: "1 = Patient/detached, 5 = Restless/impulsive", highIsGood: false },
-    { key: "before_trust_process", question: "How strong was your trust in your process at that moment?", scale: "1 = No trust, 5 = Complete trust", highIsGood: true },
-    { key: "before_emotional_state", question: "Were you feeling bored, excited, anxious, or neutral before entry?", scale: "1 = Neutral/calm, 5 = Extremely emotional (any)", highIsGood: false },
+    { key: "before_calm_clear", question: "How calm and mentally clear did you feel before considering this trade?", scale: "1 = Very anxious/confused, 10 = Very calm/clear", highIsGood: true },
+    { key: "before_urgency_pressure", question: "Did you feel any urgency or pressure to \"make something happen\" in the market?", scale: "1 = No urgency, 10 = Extreme pressure", highIsGood: false },
+    { key: "before_confidence_vs_validation", question: "Were you feeling confident in yourself, or seeking validation from a win?", scale: "1 = Confident in self, 10 = Seeking validation", highIsGood: false },
+    { key: "before_fomo", question: "Did fear of missing out (FOMO) influence your desire to enter?", scale: "1 = No FOMO, 10 = Strong FOMO", highIsGood: false },
+    { key: "before_recovering_loss", question: "Were you trying to recover from a previous loss emotionally?", scale: "1 = Not at all, 10 = Strongly trying to recover", highIsGood: false },
+    { key: "before_patient_detached", question: "Did you feel patient and detached, or restless and impulsive?", scale: "1 = Patient/detached, 10 = Restless/impulsive", highIsGood: false },
+    { key: "before_trust_process", question: "How strong was your trust in your process at that moment?", scale: "1 = No trust, 10 = Complete trust", highIsGood: true },
+    { key: "before_emotional_state", question: "Were you feeling bored, excited, anxious, or neutral before entry?", scale: "1 = Neutral/calm, 10 = Extremely emotional (any)", highIsGood: false },
   ],
   during: [
-    { key: "during_stable", question: "How stable were your emotions once the trade was live?", scale: "1 = Very stable, 5 = Very unstable", highIsGood: false },
-    { key: "during_tension_stress", question: "Did you feel tension, nervousness, or physical stress while price moved?", scale: "1 = No tension, 5 = Extreme tension/stress", highIsGood: false },
-    { key: "during_tempted_interfere", question: "Were you tempted to interfere with the trade out of fear or hope?", scale: "1 = No temptation, 5 = Strong temptation", highIsGood: false },
-    { key: "during_need_control", question: "Did you feel a need to \"control\" the outcome instead of letting it play out?", scale: "1 = Let it play, 5 = Strong need to control", highIsGood: false },
-    { key: "during_fear_loss", question: "How strong was your fear of loss while in the position?", scale: "1 = No fear, 5 = Extreme fear", highIsGood: false },
-    { key: "during_excitement_greed", question: "How strong was your excitement or greed as price moved in your favor?", scale: "1 = Calm, 5 = Extreme excitement/greed", highIsGood: false },
-    { key: "during_mentally_present", question: "Did you feel mentally present, or distracted and reactive?", scale: "1 = Very present, 5 = Very distracted/reactive", highIsGood: false },
+    { key: "during_stable", question: "How stable were your emotions once the trade was live?", scale: "1 = Very stable, 10 = Very unstable", highIsGood: false },
+    { key: "during_tension_stress", question: "Did you feel tension, nervousness, or physical stress while price moved?", scale: "1 = No tension, 10 = Extreme tension/stress", highIsGood: false },
+    { key: "during_tempted_interfere", question: "Were you tempted to interfere with the trade out of fear or hope?", scale: "1 = No temptation, 10 = Strong temptation", highIsGood: false },
+    { key: "during_need_control", question: "Did you feel a need to \"control\" the outcome instead of letting it play out?", scale: "1 = Let it play, 10 = Strong need to control", highIsGood: false },
+    { key: "during_fear_loss", question: "How strong was your fear of loss while in the position?", scale: "1 = No fear, 10 = Extreme fear", highIsGood: false },
+    { key: "during_excitement_greed", question: "How strong was your excitement or greed as price moved in your favor?", scale: "1 = Calm, 10 = Extreme excitement/greed", highIsGood: false },
+    { key: "during_mentally_present", question: "Did you feel mentally present, or distracted and reactive?", scale: "1 = Very present, 10 = Very distracted/reactive", highIsGood: false },
   ],
   after: [
-    { key: "after_accept_outcome", question: "How well did you accept the outcome emotionally, regardless of win or loss?", scale: "1 = Full acceptance, 5 = Poor acceptance", highIsGood: false },
-    { key: "after_emotional_reaction", question: "Did you feel relief, frustration, disappointment, or satisfaction?", scale: "1 = Neutral/balanced, 5 = Strong emotional reaction", highIsGood: false },
-    { key: "after_confidence_affected", question: "Did the result affect your confidence in yourself?", scale: "1 = No effect, 5 = Strong effect (positive or negative)", highIsGood: false },
-    { key: "after_tempted_another_trade", question: "Did you feel tempted to immediately take another trade to change your emotional state?", scale: "1 = No temptation, 5 = Strong temptation", highIsGood: false },
-    { key: "after_proud_discipline", question: "Did you feel proud of your discipline, or focused only on the money outcome?", scale: "1 = Proud of discipline, 5 = Only focused on money", highIsGood: false },
+    { key: "after_accept_outcome", question: "How well did you accept the outcome emotionally, regardless of win or loss?", scale: "1 = Full acceptance, 10 = Poor acceptance", highIsGood: false },
+    { key: "after_emotional_reaction", question: "Did you feel relief, frustration, disappointment, or satisfaction?", scale: "1 = Neutral/balanced, 10 = Strong emotional reaction", highIsGood: false },
+    { key: "after_confidence_affected", question: "Did the result affect your confidence in yourself?", scale: "1 = No effect, 10 = Strong effect (positive or negative)", highIsGood: false },
+    { key: "after_tempted_another_trade", question: "Did you feel tempted to immediately take another trade to change your emotional state?", scale: "1 = No temptation, 10 = Strong temptation", highIsGood: false },
+    { key: "after_proud_discipline", question: "Did you feel proud of your discipline, or focused only on the money outcome?", scale: "1 = Proud of discipline, 10 = Only focused on money", highIsGood: false },
   ],
 };
 
-/** Emotion survey linked to an emotional state (before/during/after 1–5 responses). */
+/** Emotion survey linked to an emotional state (before/during/after 1–10 responses). */
 interface JournalEmotionSurvey {
   id: number;
   emotional_state_id: number;
@@ -563,7 +569,7 @@ export default function Journal() {
   // Checklist state (per trade, but checklists come from strategy)
   const [strategyChecklists, setStrategyChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [checklistResponses, setChecklistResponses] = useState<Map<number, Map<number, boolean>>>(new Map()); // trade_index -> checklist_item_id -> is_checked
-  const [surveyScores, setSurveyScores] = useState<Map<number, Map<number, number>>>(new Map()); // trade_index -> checklist_item_id -> 1-5 (for survey type items)
+  const [surveyScores, setSurveyScores] = useState<Map<number, Map<number, number>>>(new Map()); // trade_index -> checklist_item_id -> 1-10 (for survey type items)
   // Entry-level (Analysis & Mantra): associated with whole journal by default, optionally with specific trades
   const [entryLevelChecklistResponses, setEntryLevelChecklistResponses] = useState<Map<number, boolean>>(new Map()); // item_id -> is_checked
   const [checklistTradeAssociations, setChecklistTradeAssociations] = useState<Map<number, number[] | null>>(new Map()); // item_id -> null (whole entry) or [trade_id, ...]
@@ -1969,10 +1975,10 @@ export default function Journal() {
           strategyId: entryFormData.strategy_id,
           linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null,
         });
-      // Migrate any draft indicator values for this new entry
+      // Migrate any draft indicator data (from temporary entry id 0)
       migrateJournalIndicatorDraftValues(dataMode, 0, entryId);
-        // Migrate any draft indicator values (entry/exit) from temporary entry id 0 to the new entry id
-        migrateJournalIndicatorDraftValues(dataMode, 0, entryId);
+      migrateJournalIndicatorDraftDivergence(dataMode, 0, entryId);
+      migrateJournalIndicatorDraftOtherSignals(dataMode, 0, entryId);
         // Link to emotional state entries (chosen while creating) — scope applied after trades below
         // After first auto-save, switch from creating to editing
         setIsCreating(false);
@@ -2460,32 +2466,32 @@ export default function Journal() {
             }
           }
           const sr = pending.surveyResponses ?? {};
-          const shouldSaveSurvey = firstStateId != null && Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 3) !== 3);
+          const shouldSaveSurvey = firstStateId != null && Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 6) !== 6);
           if (shouldSaveSurvey && firstStateId != null) {
             try {
               await invoke("add_emotion_survey", {
                 emotional_state_id: firstStateId,
                 timestamp: now,
-                before_calm_clear: sr.before_calm_clear ?? 3,
-                before_urgency_pressure: sr.before_urgency_pressure ?? 3,
-                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 3,
-                before_fomo: sr.before_fomo ?? 3,
-                before_recovering_loss: sr.before_recovering_loss ?? 3,
-                before_patient_detached: sr.before_patient_detached ?? 3,
-                before_trust_process: sr.before_trust_process ?? 3,
-                before_emotional_state: sr.before_emotional_state ?? 3,
-                during_stable: sr.during_stable ?? 3,
-                during_tension_stress: sr.during_tension_stress ?? 3,
-                during_tempted_interfere: sr.during_tempted_interfere ?? 3,
-                during_need_control: sr.during_need_control ?? 3,
-                during_fear_loss: sr.during_fear_loss ?? 3,
-                during_excitement_greed: sr.during_excitement_greed ?? 3,
-                during_mentally_present: sr.during_mentally_present ?? 3,
-                after_accept_outcome: sr.after_accept_outcome ?? 3,
-                after_emotional_reaction: sr.after_emotional_reaction ?? 3,
-                after_confidence_affected: sr.after_confidence_affected ?? 3,
-                after_tempted_another_trade: sr.after_tempted_another_trade ?? 3,
-                after_proud_discipline: sr.after_proud_discipline ?? 3,
+                before_calm_clear: sr.before_calm_clear ?? 6,
+                before_urgency_pressure: sr.before_urgency_pressure ?? 6,
+                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6,
+                before_fomo: sr.before_fomo ?? 6,
+                before_recovering_loss: sr.before_recovering_loss ?? 6,
+                before_patient_detached: sr.before_patient_detached ?? 6,
+                before_trust_process: sr.before_trust_process ?? 6,
+                before_emotional_state: sr.before_emotional_state ?? 6,
+                during_stable: sr.during_stable ?? 6,
+                during_tension_stress: sr.during_tension_stress ?? 6,
+                during_tempted_interfere: sr.during_tempted_interfere ?? 6,
+                during_need_control: sr.during_need_control ?? 6,
+                during_fear_loss: sr.during_fear_loss ?? 6,
+                during_excitement_greed: sr.during_excitement_greed ?? 6,
+                during_mentally_present: sr.during_mentally_present ?? 6,
+                after_accept_outcome: sr.after_accept_outcome ?? 6,
+                after_emotional_reaction: sr.after_emotional_reaction ?? 6,
+                after_confidence_affected: sr.after_confidence_affected ?? 6,
+                after_tempted_another_trade: sr.after_tempted_another_trade ?? 6,
+                after_proud_discipline: sr.after_proud_discipline ?? 6,
               });
             } catch (e) {
               console.error(e);
@@ -3108,6 +3114,8 @@ export default function Journal() {
       });
     };
 
+    const canEditIndicators = isCreating || isEditing;
+
     return (
       <div style={{ marginTop: "14px", padding: "12px", borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-secondary)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
@@ -3162,7 +3170,16 @@ export default function Journal() {
             {strategyIndicators.map((ind) => {
               const indSelectedTfs = getIndicatorSelectedTfs(ind.id);
               const isTfIndicator = ind.capturesTimeframes === true || ind.id.includes("_timeframe");
+              const isMomentum = (ind.category ?? "").toLowerCase() === "momentum";
               const colTfs = isTfIndicator ? globalSelectedTfs : indSelectedTfs;
+              const otherSignals = ind.kind === "custom" ? loadJournalIndicatorOtherSignals(dataMode, entryId, tradeIndex, phase, ind.id) : {};
+              // Prefer labels defined on the Indicator; fall back to any previously-stored draft labels for older sessions.
+              const otherSignalLabels =
+                ind.kind === "custom"
+                  ? (ind.otherSignals ?? []).length > 0
+                    ? ind.otherSignals ?? []
+                    : Object.keys(otherSignals)
+                  : [];
               return (
                 <div
                   key={ind.id}
@@ -3207,23 +3224,61 @@ export default function Journal() {
                   </div>
                   {colTfs.map((tf) =>
                     isTfIndicator ? (
-                      <button
-                        key={tf}
-                        type="button"
-                        onClick={() => toggleIndicatorTf(ind.id, tf)}
-                        style={{
-                          padding: "6px 10px",
-                          borderRadius: "999px",
-                          border: "1px solid var(--border-color)",
-                          background: indSelectedTfs.includes(tf) ? "var(--accent)" : "var(--bg-tertiary)",
-                          color: indSelectedTfs.includes(tf) ? "white" : "var(--text-primary)",
-                          cursor: "pointer",
-                          fontSize: "12px",
-                          fontWeight: 650,
-                        }}
-                      >
-                        {tf}
-                      </button>
+                      <div key={tf} style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "stretch" }}>
+                        <button
+                          type="button"
+                          onClick={() => toggleIndicatorTf(ind.id, tf)}
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: "999px",
+                            border: "1px solid var(--border-color)",
+                            background: indSelectedTfs.includes(tf) ? "var(--accent)" : "var(--bg-tertiary)",
+                            color: indSelectedTfs.includes(tf) ? "white" : "var(--text-primary)",
+                            cursor: "pointer",
+                            fontSize: "12px",
+                            fontWeight: 650,
+                            width: "100%",
+                          }}
+                        >
+                          {tf}
+                        </button>
+                        {isMomentum && (
+                          <label
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              gap: "6px",
+                              cursor: canEditIndicators ? "pointer" : "default",
+                              color: "var(--text-secondary)",
+                              fontSize: "11px",
+                              fontWeight: 650,
+                              userSelect: "none",
+                              width: "100%",
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={loadJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                              disabled={!canEditIndicators}
+                              onChange={(e) => {
+                                const next = e.target.checked;
+                                if (next && !indSelectedTfs.includes(tf)) {
+                                  setIndicatorTimeframesByPhaseAndIndicator((prev) => {
+                                    const phaseOverrides = prev[phase] ?? {};
+                                    const cur = phaseOverrides[ind.id] ?? globalSelectedTfs;
+                                    const nextTfs = cur.includes(tf) ? cur : [...cur, tf];
+                                    return { ...prev, [phase]: { ...phaseOverrides, [ind.id]: nextTfs } };
+                                  });
+                                }
+                                setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, next);
+                              }}
+                              style={{ width: "16px", height: "16px" }}
+                            />
+                            Divergence
+                          </label>
+                        )}
+                      </div>
                     ) : (
                       <div key={tf} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                         <div style={{ fontSize: "10px", color: "var(--text-secondary)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", paddingLeft: "2px" }}>
@@ -3243,8 +3298,84 @@ export default function Journal() {
                             outline: "none",
                           }}
                         />
+                        {isMomentum && (
+                          <label
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              gap: "8px",
+                              cursor: canEditIndicators ? "pointer" : "default",
+                              color: "var(--text-secondary)",
+                              fontSize: "11px",
+                              fontWeight: 650,
+                              userSelect: "none",
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={loadJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                              disabled={!canEditIndicators}
+                              onChange={(e) => setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.checked)}
+                              style={{ width: "16px", height: "16px" }}
+                            />
+                            Divergence
+                          </label>
+                        )}
                       </div>
                     )
+                  )}
+                  {ind.kind === "custom" && (
+                    <div
+                      style={{
+                        gridColumn: "1 / -1",
+                        marginTop: "2px",
+                        padding: "10px 12px",
+                        borderRadius: "10px",
+                        border: "1px solid var(--border-color)",
+                        background: "var(--bg-tertiary)",
+                      }}
+                    >
+                      <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                        Other signals
+                      </div>
+
+                      {otherSignalLabels.length === 0 ? (
+                        <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                          No other signals added yet. Add them on the Indicators page.
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", marginTop: "10px" }}>
+                          {otherSignalLabels.map((label) => {
+                            const checked = !!otherSignals[label];
+                            return (
+                              <label
+                                key={label}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  color: "var(--text-primary)",
+                                  fontSize: "12px",
+                                  fontWeight: 650,
+                                  userSelect: "none",
+                                  cursor: canEditIndicators ? "pointer" : "default",
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  disabled={!canEditIndicators}
+                                  onChange={(e) => setJournalIndicatorOtherSignal(dataMode, entryId, tradeIndex, phase, ind.id, label, e.target.checked)}
+                                  style={{ width: "16px", height: "16px" }}
+                                />
+                                {label}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               );
@@ -3483,6 +3614,8 @@ export default function Journal() {
     entry: {},
     exit: {},
   });
+
+  // Custom-indicator "Other signals" labels are managed on the Indicators page.
 
   useEffect(() => {
     try {
@@ -3950,7 +4083,7 @@ export default function Journal() {
                                         <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                                           {JOURNAL_SURVEY_QUESTIONS[phase].map((q) => {
                                             const score = (survey as unknown as Record<string, number>)[q.key];
-                                            const scoreNum = typeof score === "number" && score >= 1 && score <= 5 ? score : null;
+                                            const scoreNum = typeof score === "number" && score >= 1 && score <= 10 ? score : null;
                                             const pillColor = scoreNum != null ? getSurveyScoreColor(scoreNum) : "var(--text-secondary)";
                                             const pillBg = scoreNum != null ? getSurveyScoreBgRgba(scoreNum) : "var(--bg-tertiary)";
                                             return (
@@ -4579,7 +4712,7 @@ export default function Journal() {
                                           <div key={child.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginLeft: "16px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                                             <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{child.item_text}</label>
                                             <div style={{ display: "flex", gap: "4px" }}>
-                                              {[1, 2, 3, 4, 5].map((n) => (
+                                              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
                                                 <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(child.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(child.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
                                               ))}
                                             </div>
@@ -4595,7 +4728,7 @@ export default function Journal() {
                                     <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                                       <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{item.item_text}</label>
                                       <div style={{ display: "flex", gap: "4px" }}>
-                                        {[1, 2, 3, 4, 5].map((n) => (
+                                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
                                           <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(item.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(item.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
                                         ))}
                                       </div>
@@ -4976,9 +5109,9 @@ export default function Journal() {
                                     <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>{q.scale}</p>
                                     <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                                       <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>1</span>
-                                      <input type="range" min={1} max={5} value={newEmotionalStateSurveyResponses[q.key] ?? 3} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
-                                      <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>5</span>
-                                      <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 3}</span>
+                                      <input type="range" min={1} max={10} value={newEmotionalStateSurveyResponses[q.key] ?? 6} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
+                                      <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>10</span>
+                                      <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 6}</span>
                                     </div>
                                   </div>
                                 ))}
@@ -4997,9 +5130,9 @@ export default function Journal() {
                                 <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>{q.scale}</p>
                                 <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                                   <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>1</span>
-                                  <input type="range" min={1} max={5} value={newEmotionalStateSurveyResponses[q.key] ?? 3} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
-                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>5</span>
-                                  <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 3}</span>
+                                  <input type="range" min={1} max={10} value={newEmotionalStateSurveyResponses[q.key] ?? 6} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
+                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>10</span>
+                                  <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 6}</span>
                                 </div>
                               </div>
                             ))}
@@ -5014,9 +5147,9 @@ export default function Journal() {
                                 <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>{q.scale}</p>
                                 <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                                   <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>1</span>
-                                  <input type="range" min={1} max={5} value={newEmotionalStateSurveyResponses[q.key] ?? 3} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
-                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>5</span>
-                                  <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 3}</span>
+                                  <input type="range" min={1} max={10} value={newEmotionalStateSurveyResponses[q.key] ?? 6} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
+                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>10</span>
+                                  <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 6}</span>
                                 </div>
                               </div>
                             ))}
@@ -5062,10 +5195,10 @@ export default function Journal() {
                                       }
                                     }
                                     const sr = newEmotionalStateSurveyResponses;
-                                    const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 3) !== 3);
+                                    const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 6) !== 6);
                                     if (shouldSaveSurvey && firstStateId != null) {
                                       try {
-                                        await invoke("add_emotion_survey", { emotional_state_id: firstStateId, timestamp: now, before_calm_clear: sr.before_calm_clear ?? 3, before_urgency_pressure: sr.before_urgency_pressure ?? 3, before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 3, before_fomo: sr.before_fomo ?? 3, before_recovering_loss: sr.before_recovering_loss ?? 3, before_patient_detached: sr.before_patient_detached ?? 3, before_trust_process: sr.before_trust_process ?? 3, before_emotional_state: sr.before_emotional_state ?? 3, during_stable: sr.during_stable ?? 3, during_tension_stress: sr.during_tension_stress ?? 3, during_tempted_interfere: sr.during_tempted_interfere ?? 3, during_need_control: sr.during_need_control ?? 3, during_fear_loss: sr.during_fear_loss ?? 3, during_excitement_greed: sr.during_excitement_greed ?? 3, during_mentally_present: sr.during_mentally_present ?? 3, after_accept_outcome: sr.after_accept_outcome ?? 3, after_emotional_reaction: sr.after_emotional_reaction ?? 3, after_confidence_affected: sr.after_confidence_affected ?? 3, after_tempted_another_trade: sr.after_tempted_another_trade ?? 3, after_proud_discipline: sr.after_proud_discipline ?? 3 });
+                                        await invoke("add_emotion_survey", { emotional_state_id: firstStateId, timestamp: now, before_calm_clear: sr.before_calm_clear ?? 6, before_urgency_pressure: sr.before_urgency_pressure ?? 6, before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6, before_fomo: sr.before_fomo ?? 6, before_recovering_loss: sr.before_recovering_loss ?? 6, before_patient_detached: sr.before_patient_detached ?? 6, before_trust_process: sr.before_trust_process ?? 6, before_emotional_state: sr.before_emotional_state ?? 6, during_stable: sr.during_stable ?? 6, during_tension_stress: sr.during_tension_stress ?? 6, during_tempted_interfere: sr.during_tempted_interfere ?? 6, during_need_control: sr.during_need_control ?? 6, during_fear_loss: sr.during_fear_loss ?? 6, during_excitement_greed: sr.during_excitement_greed ?? 6, during_mentally_present: sr.during_mentally_present ?? 6, after_accept_outcome: sr.after_accept_outcome ?? 6, after_emotional_reaction: sr.after_emotional_reaction ?? 6, after_confidence_affected: sr.after_confidence_affected ?? 6, after_tempted_another_trade: sr.after_tempted_another_trade ?? 6, after_proud_discipline: sr.after_proud_discipline ?? 6 });
                                       } catch (err) { console.error("Failed to save emotion survey:", err); }
                                     }
                                     const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
@@ -5884,32 +6017,32 @@ export default function Journal() {
                                             }
                                           }
                                           const sr = newEmotionalStateSurveyResponses;
-                                          const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 3) !== 3);
+                                          const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 6) !== 6);
                                           if (shouldSaveSurvey && firstStateId != null) {
                                             try {
                                               await invoke("add_emotion_survey", {
                                                 emotional_state_id: firstStateId,
                                                 timestamp: now,
-                                                before_calm_clear: sr.before_calm_clear ?? 3,
-                                                before_urgency_pressure: sr.before_urgency_pressure ?? 3,
-                                                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 3,
-                                                before_fomo: sr.before_fomo ?? 3,
-                                                before_recovering_loss: sr.before_recovering_loss ?? 3,
-                                                before_patient_detached: sr.before_patient_detached ?? 3,
-                                                before_trust_process: sr.before_trust_process ?? 3,
-                                                before_emotional_state: sr.before_emotional_state ?? 3,
-                                                during_stable: sr.during_stable ?? 3,
-                                                during_tension_stress: sr.during_tension_stress ?? 3,
-                                                during_tempted_interfere: sr.during_tempted_interfere ?? 3,
-                                                during_need_control: sr.during_need_control ?? 3,
-                                                during_fear_loss: sr.during_fear_loss ?? 3,
-                                                during_excitement_greed: sr.during_excitement_greed ?? 3,
-                                                during_mentally_present: sr.during_mentally_present ?? 3,
-                                                after_accept_outcome: sr.after_accept_outcome ?? 3,
-                                                after_emotional_reaction: sr.after_emotional_reaction ?? 3,
-                                                after_confidence_affected: sr.after_confidence_affected ?? 3,
-                                                after_tempted_another_trade: sr.after_tempted_another_trade ?? 3,
-                                                after_proud_discipline: sr.after_proud_discipline ?? 3,
+                                                before_calm_clear: sr.before_calm_clear ?? 6,
+                                                before_urgency_pressure: sr.before_urgency_pressure ?? 6,
+                                                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6,
+                                                before_fomo: sr.before_fomo ?? 6,
+                                                before_recovering_loss: sr.before_recovering_loss ?? 6,
+                                                before_patient_detached: sr.before_patient_detached ?? 6,
+                                                before_trust_process: sr.before_trust_process ?? 6,
+                                                before_emotional_state: sr.before_emotional_state ?? 6,
+                                                during_stable: sr.during_stable ?? 6,
+                                                during_tension_stress: sr.during_tension_stress ?? 6,
+                                                during_tempted_interfere: sr.during_tempted_interfere ?? 6,
+                                                during_need_control: sr.during_need_control ?? 6,
+                                                during_fear_loss: sr.during_fear_loss ?? 6,
+                                                during_excitement_greed: sr.during_excitement_greed ?? 6,
+                                                during_mentally_present: sr.during_mentally_present ?? 6,
+                                                after_accept_outcome: sr.after_accept_outcome ?? 6,
+                                                after_emotional_reaction: sr.after_emotional_reaction ?? 6,
+                                                after_confidence_affected: sr.after_confidence_affected ?? 6,
+                                                after_tempted_another_trade: sr.after_tempted_another_trade ?? 6,
+                                                after_proud_discipline: sr.after_proud_discipline ?? 6,
                                               });
                                             } catch (err) {
                                               console.error("Failed to save emotion survey:", err);
@@ -6066,13 +6199,13 @@ export default function Journal() {
                                             <input
                                               type="range"
                                               min={1}
-                                              max={5}
-                                              value={newEmotionalStateSurveyResponses[q.key] ?? 3}
+                                              max={10}
+                                              value={newEmotionalStateSurveyResponses[q.key] ?? 6}
                                               onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))}
                                               style={{ flex: 1, minWidth: "80px", accentColor: "var(--accent)" }}
                                             />
-                                            <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "16px" }}>5</span>
-                                            <span style={{ minWidth: "28px", textAlign: "center", fontSize: "13px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 3}</span>
+                                            <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "16px" }}>10</span>
+                                            <span style={{ minWidth: "28px", textAlign: "center", fontSize: "13px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 6}</span>
                                           </div>
                                         </div>
                                       ))}
@@ -6370,7 +6503,7 @@ export default function Journal() {
                                                 {child.item_text}
                                               </label>
                                               <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                                                {[1, 2, 3, 4, 5].map((n) => (
+                                                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
                                                   <button
                                                     key={n}
                                                     type="button"
@@ -6434,7 +6567,7 @@ export default function Journal() {
                                           {item.item_text}
                                         </label>
                                         <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                                          {[1, 2, 3, 4, 5].map((n) => (
+                                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
                                             <button
                                               key={n}
                                               type="button"

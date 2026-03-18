@@ -3904,6 +3904,7 @@ dependencies = [
  "csv",
  "dirs",
  "evalexpr",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",

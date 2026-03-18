@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Code2, Plus, Search, Star, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { addIndicator, getPrebuiltIndicatorThumbnails, loadIndicators, loadStrategyIndicatorIds, updateIndicator, type Indicator } from "../utils/indicatorsStore";
@@ -9,6 +9,9 @@ interface StrategyRef {
   id: number;
   name: string;
 }
+
+type SignalsView = "all" | "signals" | "technical" | "candles";
+type GalleryView = "signals" | "technical" | "candles";
 
 const THEME_COLOR_PRESET_DEFS: Array<{ hex: string; label: string }> = [
   { hex: "#7C3AED", label: "Purple" },
@@ -32,7 +35,116 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-export default function IndicatorsPage() {
+function makeGalleryHeroImage(view: GalleryView): string {
+  // Simple SVG-only hero thumbnails so each gallery page has its own distinct image.
+  const w = 720;
+  const h = 220;
+  const accent =
+    view === "technical" ? "#2563EB" : view === "candles" ? "#7C3AED" : "#F59E0B";
+  const accent2 =
+    view === "technical" ? "#10B981" : view === "candles" ? "#EF4444" : "#22C55E";
+
+  const background = `
+    <defs>
+      <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="${accent}" stop-opacity="0.85"/>
+        <stop offset="1" stop-color="${accent2}" stop-opacity="0.35"/>
+      </linearGradient>
+      <radialGradient id="glow" cx="30%" cy="30%" r="70%">
+        <stop offset="0" stop-color="${accent}" stop-opacity="0.55"/>
+        <stop offset="1" stop-color="${accent}" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <rect x="0" y="0" width="${w}" height="${h}" rx="18" fill="url(#bg)"/>
+    <rect x="0" y="0" width="${w}" height="${h}" rx="18" fill="url(#glow)"/>
+    <g opacity="0.35">
+      <path d="M 30 150 L 160 100 L 260 120 L 360 70 L 470 105 L 610 60" stroke="rgba(255,255,255,0.55)" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <path d="M 30 180 L 150 140 L 260 160 L 360 120 L 480 155 L 610 110" stroke="rgba(255,255,255,0.25)" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </g>
+  `;
+
+  const technicalGlyph = `
+    <g>
+      <path d="M 70 150 L 160 105 L 260 135 L 360 85 L 470 120 L 640 70"
+        stroke="${accent2}" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.9"/>
+      <g opacity="0.9">
+        ${[0.18, 0.36, 0.54, 0.72, 0.88]
+          .map((t, idx) => {
+            const x = 70 + t * (640 - 70);
+            const y = 150 - (idx + 1) * 14;
+            return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="6" fill="${accent}" opacity="0.55"/>`;
+          })
+          .join("")}
+      </g>
+      <rect x="530" y="48" width="150" height="34" rx="12" fill="rgba(0,0,0,0.22)" stroke="rgba(255,255,255,0.22)"/>
+      <text x="545" y="71" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="15" fill="rgba(255,255,255,0.92)" font-weight="700">
+        Technical Analysis
+      </text>
+    </g>
+  `;
+
+  const candlesGlyph = `
+    <g>
+      <rect x="60" y="60" width="600" height="120" rx="16" fill="rgba(0,0,0,0.18)" stroke="rgba(255,255,255,0.22)"/>
+      <g transform="translate(100, 80)">
+        ${[
+          { x: 0, w: 40, o: 92, c: 48, up: false },
+          { x: 55, w: 34, o: 70, c: 98, up: true },
+          { x: 100, w: 44, o: 100, c: 62, up: false },
+          { x: 152, w: 36, o: 58, c: 92, up: true },
+          { x: 198, w: 42, o: 88, c: 54, up: false },
+          { x: 252, w: 34, o: 62, c: 98, up: true },
+          { x: 300, w: 46, o: 96, c: 58, up: false },
+        ]
+          .map((bar) => {
+            const bodyColor = bar.up ? accent2 : accent;
+            return `
+              <path d="M ${bar.x + bar.w / 2} ${bar.o} L ${bar.x + bar.w / 2} ${bar.c}" stroke="rgba(255,255,255,0.30)" stroke-width="3" stroke-linecap="round"/>
+              <rect x="${bar.x}" y="${Math.min(bar.o, bar.c)}" width="${bar.w}" height="${Math.abs(bar.c - bar.o)}" rx="8" fill="${bodyColor}" opacity="0.75" stroke="rgba(255,255,255,0.25)"/>
+            `;
+          })
+          .join("")}
+      </g>
+      <rect x="60" y="24" width="220" height="34" rx="12" fill="rgba(0,0,0,0.22)" stroke="rgba(255,255,255,0.22)"/>
+      <text x="78" y="47" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="15" fill="rgba(255,255,255,0.92)" font-weight="700">
+        Candles
+      </text>
+    </g>
+  `;
+
+  const signalsGlyph = `
+    <g>
+      <g opacity="0.95">
+        ${[
+          { x: 70, y: 70, w: 170, label: "Signals" },
+          { x: 260, y: 100, w: 140, label: "Ideas" },
+          { x: 420, y: 70, w: 150, label: "Code" },
+        ]
+          .map((b, idx) => {
+            const stroke = idx === 0 ? accent2 : accent;
+            return `
+              <rect x="${b.x}" y="${b.y}" width="${b.w}" height="62" rx="14"
+                fill="rgba(0,0,0,0.18)" stroke="rgba(255,255,255,0.20)" />
+              <rect x="${b.x + 10}" y="${b.y + 10}" width="14" height="14" rx="4"
+                fill="${stroke}" opacity="0.9"/>
+              <text x="${b.x + 32}" y="${b.y + 41}" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial"
+                font-size="16" fill="rgba(255,255,255,0.92)" font-weight="800">
+                ${b.label}
+              </text>
+            `;
+          })
+          .join("")}
+      </g>
+    </g>
+  `;
+
+  const glyph = view === "technical" ? technicalGlyph : view === "candles" ? candlesGlyph : signalsGlyph;
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${background}${glyph}</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+export default function IndicatorsPage({ view = "signals" }: { view?: SignalsView }) {
   const FAVORITES_KEY = "tradebutler_favorite_indicators_v1";
 
   const [query, setQuery] = useState("");
@@ -78,6 +190,8 @@ export default function IndicatorsPage() {
   const [editImage, setEditImage] = useState<string>("");
   const [editCategory, setEditCategory] = useState<Indicator["category"]>("Custom");
   const [editCapturesTimeframes, setEditCapturesTimeframes] = useState<boolean>(false);
+  const [editOtherSignals, setEditOtherSignals] = useState<string[]>([]);
+  const [editOtherSignalDraft, setEditOtherSignalDraft] = useState<string>("");
   const [editAccentColor, setEditAccentColor] = useState<string>("#F59E0B");
   const [editThemeMode, setEditThemeMode] = useState<"auto" | "manual">("manual");
   const [editThumbSource, setEditThumbSource] = useState<"upload" | "preset">("preset");
@@ -126,10 +240,82 @@ export default function IndicatorsPage() {
     });
   }, [indicators, query, categoryFilter, strategyIndicatorIdSet, favoriteOnly, favoriteIds]);
 
+  const technicalPatterns = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let base = indicators.filter((i) => i.category === "Pattern" && i.signalGroup === "TechnicalPattern");
+
+    if (q) {
+      base = base.filter((i) => {
+        const hay = `${i.name} ${i.abbreviation} ${i.description}`.toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    if (strategyIndicatorIdSet) {
+      base = base.filter((i) => strategyIndicatorIdSet.has(i.id));
+    }
+
+    if (favoriteOnly) {
+      base = base.filter((i) => favoriteIds.has(i.id));
+    }
+
+    return [...base].sort((a, b) => {
+      const ak = a.kind === "custom" ? 0 : 1;
+      const bk = b.kind === "custom" ? 0 : 1;
+      if (ak !== bk) return ak - bk;
+      return (a.name || "").localeCompare(b.name || "");
+    });
+  }, [indicators, query, strategyIndicatorIdSet, favoriteOnly, favoriteIds]);
+
+  const candlestickPatterns = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let base = indicators.filter((i) => i.category === "Pattern" && i.signalGroup === "Candlestick");
+
+    if (q) {
+      base = base.filter((i) => {
+        const hay = `${i.name} ${i.abbreviation} ${i.description}`.toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    if (strategyIndicatorIdSet) {
+      base = base.filter((i) => strategyIndicatorIdSet.has(i.id));
+    }
+
+    if (favoriteOnly) {
+      base = base.filter((i) => favoriteIds.has(i.id));
+    }
+
+    return [...base].sort((a, b) => {
+      const ak = a.kind === "custom" ? 0 : 1;
+      const bk = b.kind === "custom" ? 0 : 1;
+      if (ak !== bk) return ak - bk;
+      return (a.name || "").localeCompare(b.name || "");
+    });
+  }, [indicators, query, strategyIndicatorIdSet, favoriteOnly, favoriteIds]);
+
   const prebuiltThumbnails = useMemo(() => {
     if (!showEdit) return [];
     return getPrebuiltIndicatorThumbnails(editAbbr.trim() || selected?.abbreviation || "IND", editAccentColor);
   }, [showEdit, editAbbr, selected?.abbreviation, editAccentColor]);
+
+  const heroSignalsImage = useMemo(() => makeGalleryHeroImage("signals"), []);
+  const heroTechnicalImage = useMemo(() => makeGalleryHeroImage("technical"), []);
+  const heroCandlesImage = useMemo(() => makeGalleryHeroImage("candles"), []);
+
+  const signalsSectionRef = useRef<HTMLDivElement | null>(null);
+  const technicalSectionRef = useRef<HTMLDivElement | null>(null);
+  const candlesSectionRef = useRef<HTMLDivElement | null>(null);
+
+  const filteredSignals = useMemo(() => {
+    if (view !== "all") return filtered;
+    // Keep candlestick patterns out of the main indicators library.
+    return filtered.filter((i) => i.signalGroup !== "Candlestick");
+  }, [filtered, view]);
+
+  function scrollToRef(ref: { current: HTMLDivElement | null }) {
+    ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   function resetAddModal() {
     setNewName("");
@@ -159,6 +345,8 @@ export default function IndicatorsPage() {
     setEditImage(ind.exampleImage ?? "");
     setEditCategory(ind.category ?? "Custom");
     setEditCapturesTimeframes(ind.capturesTimeframes === true || ind.id.includes("_timeframe"));
+    setEditOtherSignals(Array.isArray(ind.otherSignals) ? ind.otherSignals : []);
+    setEditOtherSignalDraft("");
     const accent = ind.accentColor ?? "#F59E0B";
     setEditAccentColor(accent);
 
@@ -249,37 +437,254 @@ export default function IndicatorsPage() {
     });
   }
 
+  const renderIndicatorGrid = (list: Indicator[], emptyMessage: string) => (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: "14px", overflow: "auto", paddingBottom: "16px" }}>
+      {list.map((i) => (
+        <button
+          key={i.id}
+          onClick={() => {
+            setSelected(i);
+            setShowEdit(false);
+          }}
+          style={{
+            textAlign: "left",
+            background: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "12px",
+            padding: "14px",
+            cursor: "pointer",
+            display: "flex",
+            flexDirection: "column",
+            gap: "10px",
+          }}
+        >
+          {i.exampleImage && (
+            <img
+              src={i.exampleImage}
+              alt={i.name}
+              style={{
+                width: "100%",
+                height: "110px",
+                objectFit: "cover",
+                borderRadius: "10px",
+                border: "1px solid var(--border-color)",
+              }}
+            />
+          )}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+            <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={i.name}>
+              {i.name}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+              <span
+                role="button"
+                tabIndex={0}
+                title={favoriteIds.has(i.id) ? "Unfavorite" : "Favorite"}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  toggleFavorite(i.id);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    toggleFavorite(i.id);
+                  }
+                }}
+                style={{ display: "inline-flex", cursor: "pointer" }}
+              >
+                <Star size={16} fill={favoriteIds.has(i.id) ? "#FBBF24" : "transparent"} color={favoriteIds.has(i.id) ? "#FBBF24" : "var(--text-secondary)"} />
+              </span>
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 800,
+                  padding: "3px 7px",
+                  borderRadius: "8px",
+                  background: i.kind === "custom" ? hexToRgba(i.accentColor ?? "#F59E0B", 0.18) : "var(--bg-tertiary)",
+                  border: `1px solid ${i.kind === "custom" ? hexToRgba(i.accentColor ?? "#F59E0B", 0.55) : "var(--border-color)"}`,
+                  color: i.kind === "custom" ? i.accentColor ?? "#F59E0B" : "var(--text-secondary)",
+                }}
+              >
+                {i.abbreviation}
+              </span>
+            </div>
+          </div>
+          {i.kind === "custom" && (
+            <div style={{ fontSize: "11px", fontWeight: 800, color: i.accentColor ?? "#F59E0B", marginTop: "-6px" }}>
+              Custom indicator
+            </div>
+          )}
+          <div style={{ color: "var(--text-secondary)", fontSize: "13px", lineHeight: 1.5, maxHeight: "3em", overflow: "hidden" }}>
+            {i.description || "—"}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "var(--text-secondary)", fontSize: "12px" }}>
+            <Code2 size={14} />
+            View code
+          </div>
+        </button>
+      ))}
+      {list.length === 0 && (
+        <div style={{ color: "var(--text-secondary)", padding: "18px", border: "1px dashed var(--border-color)", borderRadius: "12px" }}>
+          {emptyMessage}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, padding: "20px 24px", background: "var(--bg-primary)" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "16px" }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: "28px", fontWeight: 700, letterSpacing: "-0.02em" }}>Indicators</h1>
+          <h1 style={{ margin: 0, fontSize: "28px", fontWeight: 700, letterSpacing: "-0.02em" }}>
+            {view === "technical" ? "Technical Analysis" : view === "candles" ? "Candles" : "Signals"}
+          </h1>
           <div style={{ marginTop: "6px", color: "var(--text-secondary)", fontSize: "14px" }}>
-            Build a personal library of indicator snippets and notes. Click a card to view full description and code.
+            {view === "technical"
+              ? "Browse technical analysis pattern signals. Click a card to view full description and code."
+              : view === "candles"
+              ? "Browse candlestick pattern signals. Click a card to view full description and code."
+              : "Build a personal library of trading signals. Click a card to view full description and code."}
           </div>
         </div>
-        <button
-          onClick={() => {
-            resetAddModal();
-            setShowAdd(true);
-          }}
+        {(view === "signals" || view === "all") && (
+          <button
+            onClick={() => {
+              resetAddModal();
+              setShowAdd(true);
+            }}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "8px",
+              background: "var(--accent)",
+              border: "none",
+              borderRadius: "10px",
+              padding: "10px 14px",
+              color: "var(--bg-primary)",
+              cursor: "pointer",
+              fontWeight: 650,
+            }}
+          >
+            <Plus size={18} />
+            Add indicator
+          </button>
+        )}
+      </div>
+
+      {view === "all" ? (
+        <div style={{ marginBottom: "16px", display: "flex", flexDirection: "row", gap: "12px", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={() => scrollToRef(signalsSectionRef)}
+            style={{
+              flex: "1 1 340px",
+              border: "1px solid var(--border-color)",
+              borderRadius: "14px",
+              background: "var(--bg-secondary)",
+              padding: "12px 14px",
+              display: "flex",
+              alignItems: "center",
+              gap: "14px",
+              cursor: "pointer",
+              textAlign: "left",
+              color: "inherit",
+            }}
+          >
+            <img
+              src={heroSignalsImage}
+              alt="Signals gallery thumbnail"
+              style={{ width: 160, height: 68, objectFit: "cover", borderRadius: "10px", border: "1px solid var(--border-color)" }}
+            />
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ fontSize: "14px", fontWeight: 850, color: "var(--text-primary)" }}>Signals library</div>
+              <div style={{ fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.4 }}>Filter by strategy, search, and favorites.</div>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => scrollToRef(technicalSectionRef)}
+            style={{
+              flex: "1 1 340px",
+              border: "1px solid var(--border-color)",
+              borderRadius: "14px",
+              background: "var(--bg-secondary)",
+              padding: "12px 14px",
+              display: "flex",
+              alignItems: "center",
+              gap: "14px",
+              cursor: "pointer",
+              textAlign: "left",
+              color: "inherit",
+            }}
+          >
+            <img
+              src={heroTechnicalImage}
+              alt="Technical analysis gallery thumbnail"
+              style={{ width: 160, height: 68, objectFit: "cover", borderRadius: "10px", border: "1px solid var(--border-color)" }}
+            />
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ fontSize: "14px", fontWeight: 850, color: "var(--text-primary)" }}>Technical Analysis patterns</div>
+              <div style={{ fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.4 }}>Only indicators tagged as Technical Pattern.</div>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => scrollToRef(candlesSectionRef)}
+            style={{
+              flex: "1 1 340px",
+              border: "1px solid var(--border-color)",
+              borderRadius: "14px",
+              background: "var(--bg-secondary)",
+              padding: "12px 14px",
+              display: "flex",
+              alignItems: "center",
+              gap: "14px",
+              cursor: "pointer",
+              textAlign: "left",
+              color: "inherit",
+            }}
+          >
+            <img
+              src={heroCandlesImage}
+              alt="Candlestick gallery thumbnail"
+              style={{ width: 160, height: 68, objectFit: "cover", borderRadius: "10px", border: "1px solid var(--border-color)" }}
+            />
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ fontSize: "14px", fontWeight: 850, color: "var(--text-primary)" }}>Candlestick patterns</div>
+              <div style={{ fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.4 }}>Only indicators tagged as Candlestick Pattern.</div>
+            </div>
+          </button>
+        </div>
+      ) : (
+        <div
           style={{
-            display: "inline-flex",
+            marginBottom: "16px",
+            border: "1px solid var(--border-color)",
+            borderRadius: "14px",
+            background: "var(--bg-secondary)",
+            padding: "12px 14px",
+            display: "flex",
             alignItems: "center",
-            gap: "8px",
-            background: "var(--accent)",
-            border: "none",
-            borderRadius: "10px",
-            padding: "10px 14px",
-            color: "var(--bg-primary)",
-            cursor: "pointer",
-            fontWeight: 650,
+            gap: "14px",
           }}
         >
-          <Plus size={18} />
-          Add indicator
-        </button>
-      </div>
+          <img
+            src={view === "technical" ? heroTechnicalImage : view === "candles" ? heroCandlesImage : heroSignalsImage}
+            alt={view === "technical" ? "Technical analysis gallery thumbnail" : view === "candles" ? "Candles gallery thumbnail" : "Signals gallery thumbnail"}
+            style={{ width: 160, height: 68, objectFit: "cover", borderRadius: "10px", border: "1px solid var(--border-color)" }}
+          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ fontSize: "14px", fontWeight: 850, color: "var(--text-primary)" }}>
+              {view === "technical" ? "Technical Analysis patterns" : view === "candles" ? "Candlestick patterns" : "Signals library"}
+            </div>
+            <div style={{ fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.4 }}>Filter by strategy, search, and favorites.</div>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px" }}>
         <div style={{ position: "relative", flex: 1, maxWidth: "520px" }}>
@@ -287,7 +692,13 @@ export default function IndicatorsPage() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search indicators..."
+            placeholder={
+              view === "technical"
+                ? "Search technical patterns..."
+                : view === "candles"
+                ? "Search candlestick patterns..."
+                : "Search indicators..."
+            }
             style={{
               width: "100%",
               padding: "10px 12px 10px 40px",
@@ -299,28 +710,30 @@ export default function IndicatorsPage() {
             }}
           />
         </div>
-        <select
-          value={categoryFilter}
-          onChange={(e) => setCategoryFilter(e.target.value)}
-          style={{
-            padding: "10px 12px",
-            background: "var(--bg-secondary)",
-            border: "1px solid var(--border-color)",
-            borderRadius: "10px",
-            color: "var(--text-primary)",
-            outline: "none",
-          }}
-          aria-label="Filter indicators"
-        >
-          <option value="all">All</option>
-          <option value="custom">Custom</option>
-          <option value="Momentum">Momentum</option>
-          <option value="Trend">Trend</option>
-          <option value="Volatility">Volatility</option>
-          <option value="Volume">Volume</option>
-          <option value="Structure">Structure</option>
-          <option value="Pattern">Pattern</option>
-        </select>
+        {(view === "signals" || view === "all") && (
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            style={{
+              padding: "10px 12px",
+              background: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "10px",
+              color: "var(--text-primary)",
+              outline: "none",
+            }}
+            aria-label="Filter indicators"
+          >
+            <option value="all">All</option>
+            <option value="custom">Custom</option>
+            <option value="Momentum">Momentum</option>
+            <option value="Trend">Trend</option>
+            <option value="Volatility">Volatility</option>
+            <option value="Volume">Volume</option>
+            <option value="Structure">Structure</option>
+            <option value="Pattern">Pattern</option>
+          </select>
+        )}
         <label style={{ display: "inline-flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
           <input type="checkbox" checked={favoriteOnly} onChange={(e) => setFavoriteOnly(e.target.checked)} />
           Favorites
@@ -349,104 +762,58 @@ export default function IndicatorsPage() {
           ))}
         </select>
         <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
-          {filtered.length} shown
+          {view === "all"
+            ? `Signals ${filteredSignals.length}, Technical ${technicalPatterns.length}, Candles ${candlestickPatterns.length}`
+            : view === "technical"
+            ? `${technicalPatterns.length} shown`
+            : view === "candles"
+            ? `${candlestickPatterns.length} shown`
+            : `${filtered.length} shown`}
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: "14px", overflow: "auto", paddingBottom: "16px" }}>
-        {filtered.map((i) => (
-          <button
-            key={i.id}
-            onClick={() => {
-              setSelected(i);
-              setShowEdit(false);
-            }}
-            style={{
-              textAlign: "left",
-              background: "var(--bg-secondary)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "12px",
-              padding: "14px",
-              cursor: "pointer",
-              display: "flex",
-              flexDirection: "column",
-              gap: "10px",
-            }}
-          >
-            {i.exampleImage && (
-              <img
-                src={i.exampleImage}
-                alt={i.name}
-                style={{
-                  width: "100%",
-                  height: "110px",
-                  objectFit: "cover",
-                  borderRadius: "10px",
-                  border: "1px solid var(--border-color)",
-                }}
-              />
-            )}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
-              <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={i.name}>
-                {i.name}
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
-                <span
-                  role="button"
-                  tabIndex={0}
-                  title={favoriteIds.has(i.id) ? "Unfavorite" : "Favorite"}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    toggleFavorite(i.id);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      toggleFavorite(i.id);
-                    }
-                  }}
-                  style={{ display: "inline-flex", cursor: "pointer" }}
-                >
-                  <Star size={16} fill={favoriteIds.has(i.id) ? "#FBBF24" : "transparent"} color={favoriteIds.has(i.id) ? "#FBBF24" : "var(--text-secondary)"} />
-                </span>
-                <span
-                  style={{
-                    fontSize: "11px",
-                    fontWeight: 800,
-                    padding: "3px 7px",
-                    borderRadius: "8px",
-                    background:
-                      i.kind === "custom" ? hexToRgba(i.accentColor ?? "#F59E0B", 0.18) : "var(--bg-tertiary)",
-                    border: `1px solid ${i.kind === "custom" ? hexToRgba(i.accentColor ?? "#F59E0B", 0.55) : "var(--border-color)"}`,
-                    color: i.kind === "custom" ? i.accentColor ?? "#F59E0B" : "var(--text-secondary)",
-                  }}
-                >
-                  {i.abbreviation}
-                </span>
+      {view === "all" ? (
+        <>
+          <div ref={signalsSectionRef}>{renderIndicatorGrid(filteredSignals, "No indicators yet. Click “Add indicator”.")}</div>
+
+          <div ref={technicalSectionRef} style={{ marginTop: "18px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+              <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Technical Analysis Patterns
               </div>
             </div>
-            {i.kind === "custom" && (
-              <div style={{ fontSize: "11px", fontWeight: 800, color: i.accentColor ?? "#F59E0B", marginTop: "-6px" }}>
-                Custom indicator
-              </div>
-            )}
-            <div style={{ color: "var(--text-secondary)", fontSize: "13px", lineHeight: 1.5, maxHeight: "3em", overflow: "hidden" }}>
-              {i.description || "—"}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "var(--text-secondary)", fontSize: "12px" }}>
-              <Code2 size={14} />
-              View code
-            </div>
-          </button>
-        ))}
-        {filtered.length === 0 && (
-          <div style={{ color: "var(--text-secondary)", padding: "18px", border: "1px dashed var(--border-color)", borderRadius: "12px" }}>
-            No indicators yet. Click “Add indicator”.
+            {renderIndicatorGrid(technicalPatterns, "No technical analysis pattern indicators found.")}
           </div>
-        )}
-      </div>
+
+          <div ref={candlesSectionRef} style={{ marginTop: "18px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+              <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Candlestick Patterns
+              </div>
+            </div>
+            {renderIndicatorGrid(candlestickPatterns, "No candlestick pattern indicators found.")}
+          </div>
+        </>
+      ) : view === "signals" ? (
+        renderIndicatorGrid(filtered, "No indicators yet. Click “Add indicator”.")
+      ) : view === "technical" ? (
+        renderIndicatorGrid(technicalPatterns, "No technical analysis pattern indicators found.")
+      ) : (
+        renderIndicatorGrid(candlestickPatterns, "No candlestick pattern indicators found.")
+      )}
+
+      {(view === "signals" || view === "all") && (
+        <div style={{ marginTop: "18px", border: "1px dashed var(--border-color)", borderRadius: "12px", padding: "16px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+            <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              Other Signal Groups
+            </div>
+          </div>
+          <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
+            Add more pattern/learning galleries here (example: Volatility regimes, trend setups, etc.).
+          </div>
+        </div>
+      )}
 
       {/* View modal */}
       {selected && (
@@ -513,6 +880,21 @@ export default function IndicatorsPage() {
                     }}
                   >
                     Custom
+                  </span>
+                )}
+                {selected.category && selected.category !== "Custom" && (
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: 800,
+                      padding: "3px 7px",
+                      borderRadius: "8px",
+                      background: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-color)",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    {selected.category}
                   </span>
                 )}
               </div>
@@ -787,6 +1169,95 @@ export default function IndicatorsPage() {
                   Captures timeframes
                 </label>
 
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "4px" }}>
+                  <div style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 650 }}>Other signals</div>
+                  <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                    <input
+                      value={editOtherSignalDraft}
+                      onChange={(e) => setEditOtherSignalDraft(e.target.value)}
+                      placeholder="Add signal label"
+                      disabled={selected?.kind !== "custom"}
+                      style={{
+                        padding: "10px 12px",
+                        background: "var(--bg-secondary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "10px",
+                        color: "var(--text-primary)",
+                        outline: "none",
+                        minWidth: "220px",
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={selected?.kind !== "custom" || !editOtherSignalDraft.trim()}
+                      onClick={() => {
+                        const clean = editOtherSignalDraft.trim();
+                        if (!clean) return;
+                        const lower = clean.toLowerCase();
+                        setEditOtherSignals((prev) => {
+                          if (prev.some((x) => x.toLowerCase() === lower)) return prev;
+                          return [...prev, clean];
+                        });
+                        setEditOtherSignalDraft("");
+                      }}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: "10px",
+                        border: "1px solid var(--border-color)",
+                        background: "var(--bg-secondary)",
+                        color: "var(--text-primary)",
+                        cursor: "pointer",
+                        fontWeight: 750,
+                        fontSize: "12px",
+                      }}
+                    >
+                      Add
+                    </button>
+                  </div>
+                  {editOtherSignals.length === 0 ? (
+                    <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>No other signals added yet.</div>
+                  ) : (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
+                      {editOtherSignals.map((sig) => (
+                        <span
+                          key={sig}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            padding: "6px 10px",
+                            borderRadius: "999px",
+                            border: "1px solid var(--border-color)",
+                            background: "var(--bg-tertiary)",
+                            color: "var(--text-primary)",
+                            fontSize: "12px",
+                            fontWeight: 750,
+                          }}
+                        >
+                          {sig}
+                          <button
+                            type="button"
+                            disabled={selected?.kind !== "custom"}
+                            onClick={() => setEditOtherSignals((prev) => prev.filter((x) => x !== sig))}
+                            style={{
+                              border: "none",
+                              background: "transparent",
+                              color: "var(--text-secondary)",
+                              cursor: "pointer",
+                              display: "inline-flex",
+                              padding: 0,
+                            }}
+                            aria-label={`Remove signal ${sig}`}
+                            title="Remove"
+                          >
+                            <X size={14} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                   <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 650 }}>Description</label>
                   <textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} rows={4} style={{ padding: "10px 12px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "10px", color: "var(--text-primary)", outline: "none", resize: "vertical" }} />
@@ -828,6 +1299,7 @@ export default function IndicatorsPage() {
                         accentColor: editAccentColor,
                         category: editCategory,
                         capturesTimeframes: editCapturesTimeframes,
+                        otherSignals: editOtherSignals,
                       });
                       setShowEdit(false);
                       const updated = loadIndicators().find((i) => i.id === selected.id) ?? null;

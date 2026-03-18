@@ -1,6 +1,6 @@
 /**
  * Demo (sandbox) emotion survey data.
- * Each survey is linked to an emotional state; responses use 1–5 scale (3 = neutral).
+ * Each survey is linked to an emotional state; responses use 1–10 scale (5.5 = neutral).
  * Values are varied so Psychological Metrics show realistic, non-flat scores.
  */
 
@@ -30,27 +30,27 @@ export interface DemoEmotionSurvey {
   after_proud_discipline: number;
 }
 
-/** Clamp to 1–5 (survey scale). */
+/** Clamp to 1–10 (survey scale). */
 function s(v: number): number {
-  return Math.max(1, Math.min(5, Math.round(v)));
+  return Math.max(1, Math.min(10, Math.round(v)));
 }
 
 /**
- * Deterministic but varied 1–5 value. seed and key identify the question;
- * bias shifts average. Uses wider spread so metrics show clear reds and greens (1–2 and 4–5).
+ * Deterministic but varied 1–10 value. seed and key identify the question;
+ * bias shifts average. Uses wider spread so metrics show clear reds and greens (1–2 and 9–10).
  */
 function varied(seed: number, key: string, bias: number = 0): number {
   const k = key.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
   const t = (seed * 31 + k * 17) % 100;
   const u = t / 100;
-  const spread = 2.2;
-  const base = 2.5 + (u - 0.5) * spread + bias;
+  const spread = 4.5;
+  const base = 5.5 + (u - 0.5) * spread + bias;
   return s(base);
 }
 
 /**
  * Build demo surveys for a subset of emotional states so Psychological Metrics
- * are populated with realistic variation (not all 2.5/5).
+ * are populated with realistic variation (not all 5.5).
  */
 export function getDemoEmotionSurveys(
   emotionalStates: { id: number; timestamp: string }[]

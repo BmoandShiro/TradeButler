@@ -5512,8 +5512,8 @@ export default function Strategies() {
                         <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                           Indicators for this strategy
                         </div>
-                        <a href="#/indicators" style={{ color: "var(--accent)", fontSize: "13px", fontWeight: 650, textDecoration: "none" }}>
-                          Open Indicators page
+                        <a href="#/signals" style={{ color: "var(--accent)", fontSize: "13px", fontWeight: 650, textDecoration: "none" }}>
+                          Open Signals page
                         </a>
                       </div>
                       {(() => {
@@ -5566,8 +5566,8 @@ export default function Strategies() {
                         <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                           Indicators for this strategy
                         </div>
-                        <a href="#/indicators" style={{ color: "var(--accent)", fontSize: "13px", fontWeight: 650, textDecoration: "none" }}>
-                          Open Indicators page
+                        <a href="#/signals" style={{ color: "var(--accent)", fontSize: "13px", fontWeight: 650, textDecoration: "none" }}>
+                          Open Signals page
                         </a>
                       </div>
                       <div style={{ position: "relative" }}>
@@ -6617,7 +6617,7 @@ export default function Strategies() {
                                   const expr = (p as { formula_expression?: string | null }).formula_expression?.trim();
                                   if (expr) return expr;
                                   const ft = (p as { formula_type?: string }).formula_type;
-                                  return ft === "invert" ? "6 − avg" : ft === "min" ? "min" : ft === "max" ? "max" : "avg";
+                                  return ft === "invert" ? "11 − avg" : ft === "min" ? "min" : ft === "max" ? "max" : "avg";
                                 })()}
                               </span>
                               {canEditMetrics && (
@@ -6789,7 +6789,7 @@ export default function Strategies() {
                                   {m.formula_type.startsWith("preset:")
                                     ? "Preset formula"
                                     : m.formula_type === "invert"
-                                      ? "6 − avg (lower raw = better)"
+                                      ? "11 − avg (lower raw = better)"
                                       : m.formula_type === "min"
                                         ? "min (higher = better)"
                                         : m.formula_type === "max"
@@ -7029,7 +7029,7 @@ export default function Strategies() {
                               >
                                 {(isCreating ? tempCalculationPresets : calculationPresets).map((p, idx) => {
                                   const preset = p as { name: string; formula_type?: string; formula_expression?: string | null };
-                                  const formulaLabel = (preset.formula_expression && preset.formula_expression.trim()) ? preset.formula_expression.trim() : (preset.formula_type === "invert" ? "6 − avg" : preset.formula_type === "min" ? "min" : preset.formula_type === "max" ? "max" : "avg");
+                                  const formulaLabel = (preset.formula_expression && preset.formula_expression.trim()) ? preset.formula_expression.trim() : (preset.formula_type === "invert" ? "11 − avg" : preset.formula_type === "min" ? "min" : preset.formula_type === "max" ? "max" : "avg");
                                   return (
                                     <option key={isCreating ? `temp-${idx}` : (p as unknown as { id: number }).id} value={isCreating ? `preset:${idx}` : `preset:${(p as unknown as { id: number }).id}`}>
                                       Preset: {preset.name} ({formulaLabel})
@@ -7038,7 +7038,7 @@ export default function Strategies() {
                                 })}
                                 {(isCreating ? tempCalculationPresets : calculationPresets).length > 0 && <option disabled>— Inline —</option>}
                                 <option value="avg">Average (higher = better)</option>
-                                <option value="invert">Inverted (6 − avg; lower raw = better)</option>
+                                <option value="invert">Inverted (11 − avg; lower raw = better)</option>
                                 <option value="min">Min of items (higher = better)</option>
                                 <option value="max">Max of items (higher = better)</option>
                               </select>
@@ -7323,7 +7323,7 @@ export default function Strategies() {
                               type="text"
                               value={presetForm.formula_expression}
                               onChange={(e) => setPresetForm((f) => ({ ...f, formula_expression: e.target.value }))}
-                              placeholder="e.g. (v1 + v2) / 2 or 6 - (v1 + v2 + v3) / 3"
+                              placeholder="e.g. (v1 + v2) / 2 or 11 - (v1 + v2 + v3) / 3"
                               style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontFamily: "monospace" }}
                             />
                             <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "6px 0 0 0" }}>
@@ -7415,7 +7415,7 @@ export default function Strategies() {
                             Surveys
                           </h2>
                           <p style={{ fontSize: "14px", color: "var(--text-secondary)", margin: 0, maxWidth: "560px" }}>
-                            Add survey questions (1–5 scale) under each survey. Post-Trade Survey is used in Journal when logging trades. Survey items can be tied to survey metrics in the Metrics tab.
+                            Add survey questions (1–10 scale) under each survey. Post-Trade Survey is used in Journal when logging trades. Survey items can be tied to survey metrics in the Metrics tab.
                           </p>
                         </div>
                         {canEditMetrics && (

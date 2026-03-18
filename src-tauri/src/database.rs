@@ -38,29 +38,29 @@ pub struct EmotionSurvey {
     pub id: Option<i64>,
     pub emotional_state_id: i64,
     pub timestamp: String,
-    // Before the Trade (1-8)
-    pub before_calm_clear: i32, // 1-5
-    pub before_urgency_pressure: i32, // 1-5
-    pub before_confidence_vs_validation: i32, // 1-5
-    pub before_fomo: i32, // 1-5
-    pub before_recovering_loss: i32, // 1-5
-    pub before_patient_detached: i32, // 1-5
-    pub before_trust_process: i32, // 1-5
-    pub before_emotional_state: i32, // 1-5 (bored, excited, anxious, neutral)
+    // Before the Trade (survey questions)
+    pub before_calm_clear: i32, // 1-10
+    pub before_urgency_pressure: i32, // 1-10
+    pub before_confidence_vs_validation: i32, // 1-10
+    pub before_fomo: i32, // 1-10
+    pub before_recovering_loss: i32, // 1-10
+    pub before_patient_detached: i32, // 1-10
+    pub before_trust_process: i32, // 1-10
+    pub before_emotional_state: i32, // 1-10 (bored, excited, anxious, neutral)
     // During the Trade (9-15)
-    pub during_stable: i32, // 1-5
-    pub during_tension_stress: i32, // 1-5
-    pub during_tempted_interfere: i32, // 1-5
-    pub during_need_control: i32, // 1-5
-    pub during_fear_loss: i32, // 1-5
-    pub during_excitement_greed: i32, // 1-5
-    pub during_mentally_present: i32, // 1-5
+    pub during_stable: i32, // 1-10
+    pub during_tension_stress: i32, // 1-10
+    pub during_tempted_interfere: i32, // 1-10
+    pub during_need_control: i32, // 1-10
+    pub during_fear_loss: i32, // 1-10
+    pub during_excitement_greed: i32, // 1-10
+    pub during_mentally_present: i32, // 1-10
     // After the Trade (16-20)
-    pub after_accept_outcome: i32, // 1-5
-    pub after_emotional_reaction: i32, // 1-5
-    pub after_confidence_affected: i32, // 1-5
-    pub after_tempted_another_trade: i32, // 1-5
-    pub after_proud_discipline: i32, // 1-5
+    pub after_accept_outcome: i32, // 1-10
+    pub after_emotional_reaction: i32, // 1-10
+    pub after_confidence_affected: i32, // 1-10
+    pub after_tempted_another_trade: i32, // 1-10
+    pub after_proud_discipline: i32, // 1-10
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -413,7 +413,7 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         conn.execute("ALTER TABLE journal_checklist_responses ADD COLUMN journal_trade_ids TEXT", [])?;
     }
 
-    // Migration: response_value for survey items (1-5 scale); null = legacy Yes/No (is_checked)
+    // Migration: response_value for survey items (1-10 scale); null = legacy Yes/No (is_checked)
     let has_response_value: bool = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('journal_checklist_responses') WHERE name='response_value'",
         [],

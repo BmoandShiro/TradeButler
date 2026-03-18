@@ -5,8 +5,10 @@ use std::path::PathBuf;
 use chrono::{Timelike, Datelike, Utc};
 use std::fs;
 use std::process::Command;
+use std::time::Duration;
 use evalexpr::{eval_float_with_context, HashMapContext, Value, ContextWithMutableVariables, DefaultNumericTypes};
 use reqwest::cookie::CookieStore;
+use regex::Regex;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CsvTrade {
@@ -3169,7 +3171,7 @@ pub struct JournalChecklistResponse {
     pub is_checked: bool,
     /// JSON array of journal_trade IDs when associated with specific trades, e.g. "[1,2,3]". Null/empty = entry-level (whole journal).
     pub journal_trade_ids: Option<String>,
-    /// For survey items: 1-5 scale value. Null = use is_checked for Yes/No.
+    /// For survey items: 1-10 scale value. Null = use is_checked for Yes/No.
     pub response_value: Option<i32>,
 }
 
@@ -4566,6 +4568,131 @@ pub async fn fetch_stock_quote(symbol: String) -> Result<StockQuote, String> {
     })
 }
 
+#[derive(Debug, Serialize)]
+pub struct MarketMetricResult {
+    pub value: String,
+    pub updated_at: String,
+    pub source: String,
+}
+
+fn normalize_number_string(raw: &str) -> String {
+    // Keep commas/periods, drop any other cruft.
+    raw.chars()
+        .filter(|c| c.is_ascii_digit() || *c == ',' || *c == '.')
+        .collect::<String>()
+}
+
+#[tauri::command]
+pub async fn fetch_crypto_total_market_cap() -> Result<MarketMetricResult, String> {
+    let source = "fiatmarketcap.com";
+    let url = "https://fiatmarketcap.com/";
+    let updated_at = Utc::now().to_rfc3339();
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client
+        .get(url)
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .send()
+        .await
+        .map_err(|e| format!("Network error fetching total market cap: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Failed to fetch total market cap: {}", response.status()));
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read total market cap HTML: {}", e))?;
+
+    // Primary heuristics:
+    // - Many pages include a "Total Market Cap" label near the numeric value.
+    // - Some include "Total Fiat Market Cap".
+    let patterns = vec![
+        Regex::new(r"Total Market Cap[^0-9]*([0-9][0-9,\\.]*)(?:\\s*BTC)?").map_err(|e| e.to_string())?,
+        Regex::new(r"Total Fiat Market Cap[^0-9]*([0-9][0-9,\\.]*)(?:\\s*BTC)?").map_err(|e| e.to_string())?,
+        Regex::new(r"Total\\s*Market\\s*Cap[^0-9]*([0-9][0-9,\\.]*)(?:\\s*BTC)?").map_err(|e| e.to_string())?,
+    ];
+
+    for re in patterns {
+        if let Some(cap) = re.captures(&body) {
+            if let Some(m) = cap.get(1) {
+                let value = normalize_number_string(m.as_str());
+                if !value.is_empty() {
+                    return Ok(MarketMetricResult {
+                        value,
+                        updated_at,
+                        source: source.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    Err("Unable to parse Total Market Cap from fiatmarketcap.com HTML".to_string())
+}
+
+#[tauri::command]
+pub async fn fetch_crypto_altcoin_season_index() -> Result<MarketMetricResult, String> {
+    let source = "blockchaincenter.net/altcoin-season-index/";
+    let url = "https://www.blockchaincenter.net/altcoin-season-index/";
+    let updated_at = Utc::now().to_rfc3339();
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client
+        .get(url)
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .send()
+        .await
+        .map_err(|e| format!("Network error fetching altcoin season index: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Failed to fetch altcoin season index: {}", response.status()));
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read altcoin season index HTML: {}", e))?;
+
+    // From page content we typically see:
+    // "It is not Altcoin Season! 53 Bitcoin Season"
+    // We capture the number next to that phrase.
+    let re = Regex::new(r"It is (?:not )?Altcoin Season!\\s*([0-9]{1,3})\\s*Bitcoin Season").map_err(|e| e.to_string())?;
+    if let Some(cap) = re.captures(&body) {
+        if let Some(m) = cap.get(1) {
+            return Ok(MarketMetricResult {
+                value: normalize_number_string(m.as_str()),
+                updated_at,
+                source: source.to_string(),
+            });
+        }
+    }
+
+    let re2 = Regex::new(r"Altcoin Season Index[\\s\\S]*?It is (?:not )?Altcoin Season!\\s*([0-9]{1,3})").map_err(|e| e.to_string())?;
+    if let Some(cap) = re2.captures(&body) {
+        if let Some(m) = cap.get(1) {
+            return Ok(MarketMetricResult {
+                value: normalize_number_string(m.as_str()),
+                updated_at,
+                source: source.to_string(),
+            });
+        }
+    }
+
+    Err("Unable to parse Altcoin Season Index from blockchaincenter HTML".to_string())
+}
+
 // Helper function to load notes for paired trades
 fn load_pair_notes(conn: &Connection, paired_trades: &mut Vec<PairedTrade>) -> Result<(), String> {
     use std::collections::HashMap;
@@ -4926,7 +5053,7 @@ fn compute_custom_metric_value(conn: &rusqlite::Connection, item_ids: &[i64], fo
     let result = match effective_type.as_str() {
         "invert" => {
             let avg = values_f.iter().sum::<f64>() / values_f.len() as f64;
-            6.0 - avg
+            11.0 - avg
         }
         "min" => values_f.iter().cloned().fold(f64::INFINITY, f64::min),
         "max" => values_f.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
@@ -5236,18 +5363,24 @@ pub fn delete_strategy_checklist_item(id: i64) -> Result<(), String> {
     Ok(())
 }
 
-/// Removes duplicate checklist rows (same strategy_id, checklist_type, item_text, item_order).
-/// Keeps the row with the smallest id in each group. Returns the number of rows deleted.
+/// Removes duplicate checklist rows.
+///
+/// Edits can sometimes create a new row instead of updating the existing one. When that happens,
+/// we want to keep the *newest* row for a given slot in the checklist.
+///
+/// We scope the "slot" by (strategy_id, checklist_type, parent_id, item_order) so regrouping and
+/// item_text edits don't leave stale duplicates behind.
+/// Returns the number of rows deleted.
 #[tauri::command]
 pub fn remove_duplicate_checklist_items() -> Result<i64, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
 
-    // Delete all rows whose id is not the minimum id for its (strategy_id, checklist_type, item_text, item_order) group.
+    // Delete all rows whose id is not the maximum id for its (strategy_id, checklist_type, parent_id, item_order) group.
     let deleted = conn.execute(
         "DELETE FROM strategy_checklists WHERE id NOT IN (
-            SELECT MIN(id) FROM strategy_checklists
-            GROUP BY strategy_id, checklist_type, item_text, item_order
+            SELECT MAX(id) FROM strategy_checklists
+            GROUP BY strategy_id, checklist_type, parent_id, item_order
         )",
         [],
     ).map_err(|e| e.to_string())?;

@@ -64,6 +64,8 @@ fn main() {
             commands::get_distribution_concentration,
             commands::get_tilt_metric,
             commands::fetch_stock_quote,
+            commands::fetch_crypto_total_market_cap,
+            commands::fetch_crypto_altcoin_season_index,
             commands::get_strategy_checklist,
             commands::get_strategy_checklist_section_descriptions,
             commands::get_custom_survey_metrics,
