@@ -49,6 +49,7 @@ function OverviewChartAxisTick(props: { x?: number; y?: number; payload?: { valu
   );
 }
 import RichTextEditor from "../components/RichTextEditor";
+import { loadIndicators, loadStrategyIndicatorIds, saveStrategyIndicatorIds } from "../utils/indicatorsStore";
 import { ColorPicker } from "../components/ColorPicker";
 import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
@@ -1064,8 +1065,8 @@ function ChecklistSection({
   
   // Organize items: groups (items with no parent_id that have children) and regular items
   const itemIdsSet = new Set(sortedItems.map(item => item.id));
-  const groups = sortedItems.filter(item => !item.parent_id && sortedItems.some(child => child.parent_id === item.id));
-  const regularItems = sortedItems.filter(item => !item.parent_id && !sortedItems.some(child => child.parent_id === item.id));
+  const groups = sortedItems.filter(item => item.parent_id == null && sortedItems.some(child => child.parent_id === item.id));
+  const regularItems = sortedItems.filter(item => item.parent_id == null && !sortedItems.some(child => child.parent_id === item.id));
   const groupedItems = sortedItems.filter(item => item.parent_id !== null && itemIdsSet.has(item.parent_id));
   
   // Organize by parent
@@ -1788,6 +1789,10 @@ export default function Strategies() {
   const [tempSurveyMetrics, setTempSurveyMetrics] = useState<Array<{
     name: string; description: string | null; formula_type: string; item_ids: number[]; display_order: number; color_scale: string | null;
   }>>([]);
+
+  const [strategyIndicatorIds, setStrategyIndicatorIds] = useState<string[]>([]);
+  const [indicatorSearch, setIndicatorSearch] = useState("");
+  const [indicatorDropdownOpen, setIndicatorDropdownOpen] = useState(false);
   const [presetModal, setPresetModal] = useState<null | "add" | number>(null);
   const [presetForm, setPresetForm] = useState<{ name: string; formula_expression: string }>({ name: "", formula_expression: "" });
   /** When true, preset modal was opened from Add/Edit metric; after saving new preset we select it in the metric form. */
@@ -2924,7 +2929,7 @@ export default function Strategies() {
       
       // Calculate order: if adding to a group, order within that group; otherwise top-level order
       let itemOrder = maxOrder + 1;
-      if (parentId) {
+      if (parentId != null) {
         const groupChildren = items.filter(i => i.parent_id === parentId);
         if (groupChildren.length > 0) {
           itemOrder = Math.max(...groupChildren.map(i => i.item_order)) + 1;
@@ -2986,7 +2991,7 @@ export default function Strategies() {
       
       // Calculate order: if adding to a group, order within that group; otherwise top-level order
       let itemOrder = maxOrder + 1;
-      if (parentId) {
+      if (parentId != null) {
         const groupChildren = items.filter(i => i.parent_id === parentId);
         if (groupChildren.length > 0) {
           itemOrder = Math.max(...groupChildren.map(i => i.item_order)) + 1;
@@ -3032,7 +3037,7 @@ export default function Strategies() {
       
       // Calculate order: if adding to a group, order within that group; otherwise top-level order
       let itemOrder = maxOrder + 1;
-      if (parentId) {
+      if (parentId != null) {
         const groupChildren = items.filter(i => i.parent_id === parentId);
         if (groupChildren.length > 0) {
           itemOrder = Math.max(...groupChildren.map(i => i.item_order)) + 1;
@@ -4036,6 +4041,11 @@ export default function Strategies() {
         author: editingFormData.author?.trim() || null,
       });
 
+      // Persist indicator associations for the newly created strategy (per mode)
+      if (strategyIndicatorIds.length > 0) {
+        saveStrategyIndicatorIds(dataMode, newStrategyId, strategyIndicatorIds);
+      }
+
       // Assign pending trades to the strategy
       const hadPendingTrades = pendingTradeIds.length > 0;
       if (pendingTradeIds.length > 0) {
@@ -4050,7 +4060,7 @@ export default function Strategies() {
         
         // First pass: Save all items without parents (groups and regular items)
         for (const [type, items] of tempChecklists.entries()) {
-          const itemsWithoutParents = items.filter(item => !item.parent_id);
+          const itemsWithoutParents = items.filter(item => item.parent_id == null);
           for (const item of itemsWithoutParents) {
             const newId = await invoke<number>("save_strategy_checklist_item", {
               id: null,
@@ -4237,6 +4247,8 @@ export default function Strategies() {
     setTempChecklists(new Map());
     setTempCalculationPresets([]);
     setTempSurveyMetrics([]);
+    setStrategyIndicatorIds([]);
+    setIndicatorSearch("");
   };
 
   const handleEditClick = () => {
@@ -4280,6 +4292,11 @@ export default function Strategies() {
         // Initialize history with original state
         setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategyData.id, [originalCopy])));
       }
+
+      // Load indicator associations (per mode)
+      setStrategyIndicatorIds(loadStrategyIndicatorIds(dataMode, selectedStrategyData.id));
+      setIndicatorDropdownOpen(false);
+      setIndicatorSearch("");
     }
   };
 
@@ -4316,8 +4333,8 @@ export default function Strategies() {
     
     // First pass: Save all parent items (groups) first
     for (const [type, items] of editingChecklist.entries()) {
-      // Filter to only parent items (groups)
-      const parentItems = items.filter(item => !item.parent_id);
+      // Filter to only parent items (top-level)
+      const parentItems = items.filter(item => item.parent_id == null);
       
       // Save parent items first
       for (const item of parentItems) {
@@ -4352,7 +4369,7 @@ export default function Strategies() {
     
     // Second pass: Save all child items with updated parent IDs
     for (const [type, items] of editingChecklist.entries()) {
-      const childItems = items.filter(item => item.parent_id !== null);
+      const childItems = items.filter(item => item.parent_id != null);
       
       for (const item of childItems) {
         const originalItem = allOriginalItems.get(item.id);
@@ -4775,7 +4792,7 @@ export default function Strategies() {
         const idMap = new Map<number, number>(); // Maps original ID to new database ID
         
         // First pass: Save all items without parents (groups and regular items)
-        const itemsWithoutParents = allItems.filter(item => !item.parent_id);
+        const itemsWithoutParents = allItems.filter(item => item.parent_id == null);
         for (const item of itemsWithoutParents) {
           const newId = await invoke<number>("save_strategy_checklist_item", {
             id: null,
@@ -5466,6 +5483,187 @@ export default function Strategies() {
                       Strategy Details
                     </h3>
                   </div>
+                  {(isEditing || isCreating) && (
+                    <div style={{ marginBottom: "16px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "10px", padding: "14px" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+                        <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                          Indicators for this strategy
+                        </div>
+                        <a href="#/indicators" style={{ color: "var(--accent)", fontSize: "13px", fontWeight: 650, textDecoration: "none" }}>
+                          Open Indicators page
+                        </a>
+                      </div>
+                      <div style={{ position: "relative" }}>
+                        <button
+                          type="button"
+                          onClick={() => setIndicatorDropdownOpen((o) => !o)}
+                          style={{
+                            width: "100%",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: "10px",
+                            padding: "10px 12px",
+                            background: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "10px",
+                            color: "var(--text-primary)",
+                            cursor: "pointer",
+                            fontSize: "13px",
+                            fontWeight: 650,
+                          }}
+                        >
+                          <span style={{ color: "var(--text-secondary)", fontWeight: 600 }}>
+                            {strategyIndicatorIds.length > 0 ? `${strategyIndicatorIds.length} selected` : "Select indicators..."}
+                          </span>
+                          <span style={{ opacity: 0.8 }}>▾</span>
+                        </button>
+
+                        {indicatorDropdownOpen && (
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: "100%",
+                              left: 0,
+                              right: 0,
+                              marginTop: "8px",
+                              background: "var(--bg-primary)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "12px",
+                              boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
+                              zIndex: 50,
+                              padding: "12px",
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              value={indicatorSearch}
+                              onChange={(e) => setIndicatorSearch(e.target.value)}
+                              placeholder="Search indicators..."
+                              style={{
+                                width: "100%",
+                                padding: "10px 12px",
+                                background: "var(--bg-secondary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "10px",
+                                color: "var(--text-primary)",
+                                outline: "none",
+                                marginBottom: "10px",
+                              }}
+                              autoFocus
+                            />
+                            <div style={{ maxHeight: "220px", overflow: "auto", display: "flex", flexDirection: "column", gap: "8px" }}>
+                              {(() => {
+                                const all = loadIndicators();
+                                const q = indicatorSearch.trim().toLowerCase();
+                                const shown = q ? all.filter((i) => `${i.name} ${i.abbreviation}`.toLowerCase().includes(q)) : all;
+                                if (shown.length === 0) {
+                                  return <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>No indicators found.</div>;
+                                }
+                                const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+                                return shown.map((i) => {
+                                  const checked = strategyIndicatorIds.includes(i.id);
+                                  return (
+                                    <label key={i.id} style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={(e) => {
+                                          const next = e.target.checked
+                                            ? [...strategyIndicatorIds, i.id]
+                                            : strategyIndicatorIds.filter((id) => id !== i.id);
+                                          setStrategyIndicatorIds(next);
+                                          if (!isCreating && strategyId > 0) {
+                                            saveStrategyIndicatorIds(dataMode, strategyId, next);
+                                          }
+                                        }}
+                                        style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                                      />
+                                      <span style={{ color: "var(--text-primary)", fontSize: "13px", fontWeight: 650 }}>
+                                        {i.name}
+                                      </span>
+                                      <span style={{ marginLeft: "auto", color: "var(--text-secondary)", fontSize: "11px", fontWeight: 800, padding: "3px 7px", borderRadius: "8px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)" }}>
+                                        {i.abbreviation}
+                                      </span>
+                                    </label>
+                                  );
+                                });
+                              })()}
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "10px" }}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIndicatorSearch("");
+                                  setIndicatorDropdownOpen(false);
+                                }}
+                                style={{
+                                  border: "1px solid var(--border-color)",
+                                  background: "var(--bg-secondary)",
+                                  color: "var(--text-primary)",
+                                  borderRadius: "10px",
+                                  padding: "8px 12px",
+                                  cursor: "pointer",
+                                  fontWeight: 650,
+                                  fontSize: "13px",
+                                }}
+                              >
+                                Done
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {(() => {
+                        const all = loadIndicators();
+                        const selected = all.filter((i) => strategyIndicatorIds.includes(i.id));
+                        if (selected.length === 0) return null;
+                        const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+                        return (
+                          <div style={{ marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                            {selected.map((i) => (
+                              <button
+                                type="button"
+                                key={i.id}
+                                onClick={() => {
+                                  const next = strategyIndicatorIds.filter((id) => id !== i.id);
+                                  setStrategyIndicatorIds(next);
+                                  if (!isCreating && strategyId > 0) saveStrategyIndicatorIds(dataMode, strategyId, next);
+                                }}
+                                title="Remove"
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  padding: "6px 10px",
+                                  borderRadius: "999px",
+                                  border: "1px solid var(--border-color)",
+                                  background: "var(--bg-tertiary)",
+                                  color: "var(--text-primary)",
+                                  cursor: "pointer",
+                                  fontSize: "12px",
+                                  fontWeight: 650,
+                                }}
+                              >
+                                <span style={{ fontSize: "11px", fontWeight: 800, padding: "2px 7px", borderRadius: "999px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", color: "var(--text-secondary)" }}>
+                                  {i.abbreviation}
+                                </span>
+                                <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
+                                <span style={{ color: "var(--text-secondary)", fontWeight: 900 }}>×</span>
+                              </button>
+                            ))}
+                          </div>
+                        );
+                      })()}
+
+                      {isCreating && (
+                        <div style={{ marginTop: "10px", color: "var(--text-secondary)", fontSize: "12px" }}>
+                          Indicator associations will be saved after the strategy is created.
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div style={{ 
                     flex: 1, 
                     display: "flex", 
@@ -6046,7 +6244,46 @@ export default function Strategies() {
                           onClick={async () => {
                             try {
                               const deleted = await invoke<number>("remove_duplicate_checklist_items");
-                              if (selectedStrategy) await loadChecklists(selectedStrategy);
+                              if (selectedStrategy) {
+                                await loadChecklists(selectedStrategy);
+                                // If we are currently editing this strategy, refresh editing/original checklist state
+                                if (isEditing) {
+                                  const currentChecklist =
+                                    checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
+                                  // Deep copy as original
+                                  const originalCopy = new Map<string, ChecklistItem[]>();
+                                  for (const [type, items] of currentChecklist.entries()) {
+                                    originalCopy.set(
+                                      type,
+                                      items.map((item) => ({ ...item }))
+                                    );
+                                  }
+                                  setOriginalChecklists((prev) => {
+                                    const next = new Map(prev);
+                                    next.set(selectedStrategy, originalCopy);
+                                    return next;
+                                  });
+                                  // Working copy for editing
+                                  const editingCopy = new Map<string, ChecklistItem[]>();
+                                  for (const [type, items] of currentChecklist.entries()) {
+                                    editingCopy.set(
+                                      type,
+                                      items.map((item) => ({ ...item }))
+                                    );
+                                  }
+                                  setEditingChecklists((prev) => {
+                                    const next = new Map(prev);
+                                    next.set(selectedStrategy, editingCopy);
+                                    return next;
+                                  });
+                                  // Reset checklist edit history for this strategy
+                                  setChecklistEditHistory((prev) => {
+                                    const next = new Map(prev);
+                                    next.set(selectedStrategy, [originalCopy]);
+                                    return next;
+                                  });
+                                }
+                              }
                               if (deleted > 0) {
                                 alert(`Removed ${deleted} duplicate checklist item(s).`);
                               } else {

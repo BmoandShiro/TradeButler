@@ -16,7 +16,8 @@ import {
   Lock,
   Unlock,
   Plus,
-  Newspaper
+  Newspaper,
+  Activity
 } from "lucide-react";
 import { format } from "date-fns";
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
@@ -100,7 +101,7 @@ export default function Layout({ children }: LayoutProps) {
   // Initialize: Load saved scroll positions from localStorage
   useEffect(() => {
     // Load all saved scroll positions on mount
-    const paths = ["/", "/trades", "/calendar", "/news", "/strategies", "/journal", "/resources", "/emotions", "/analytics", "/evaluation", "/tools", "/settings"];
+    const paths = ["/", "/trades", "/calendar", "/news", "/indicators", "/strategies", "/journal", "/resources", "/emotions", "/analytics", "/evaluation", "/tools", "/settings"];
     paths.forEach(path => {
       const saved = localStorage.getItem(`scroll_${path}`);
       if (saved) {
@@ -624,14 +625,18 @@ export default function Layout({ children }: LayoutProps) {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger if user is typing in an input/textarea
+      // Don't trigger if user is typing in an input/textarea or contenteditable (e.g. Journal Implementation)
       const target = e.target as HTMLElement;
-      if (
+      const activeEl = document.activeElement as HTMLElement | null;
+      const isEditable =
         target.tagName === "INPUT" ||
         target.tagName === "TEXTAREA" ||
         target.isContentEditable ||
-        isAppLocked
-      ) {
+        activeEl?.tagName === "INPUT" ||
+        activeEl?.tagName === "TEXTAREA" ||
+        activeEl?.isContentEditable ||
+        activeEl?.closest?.("[contenteditable=\"true\"]");
+      if (isEditable || isAppLocked) {
         return;
       }
 
@@ -708,6 +713,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: "/trades", icon: TrendingUp, label: "Trades" },
     { path: "/calendar", icon: Calendar, label: "Calendar" },
     { path: "/news", icon: Newspaper, label: "News" },
+    { path: "/indicators", icon: Activity, label: "Indicators" },
     { path: "/strategies", icon: Target, label: "Strategies" },
     { path: "/journal", icon: FileText, label: "Journal" },
     { path: "/resources", icon: BookOpen, label: "Resources" },

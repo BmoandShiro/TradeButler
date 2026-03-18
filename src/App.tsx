@@ -15,6 +15,7 @@ import Tools from "./pages/Tools";
 import Settings from "./pages/Settings";
 import News from "./pages/News";
 import SecFilingViewer from "./pages/SecFilingViewer";
+import Indicators from "./pages/Indicators";
 
 function App() {
   return (
@@ -25,6 +26,7 @@ function App() {
           <Route path="/trades" element={<PageErrorBoundary pageName="Trades"><Trades /></PageErrorBoundary>} />
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/news" element={<News />} />
+          <Route path="/indicators" element={<Indicators />} />
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/journal" element={<Journal />} />
           <Route path="/resources" element={<Documentation />} />

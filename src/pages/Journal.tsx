@@ -51,6 +51,15 @@ import {
 } from "../utils/sandboxStore";
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 import { sanitizeHtml, normalizeRichTextHtml } from "../utils/sanitizeHtml";
+import {
+  loadIndicators,
+  loadStrategyIndicatorIds,
+  loadJournalIndicatorValue,
+  setJournalIndicatorValue,
+  migrateJournalIndicatorDraftValues,
+  type Indicator,
+  type IndicatorPhase,
+} from "../utils/indicatorsStore";
 
 interface JournalEntry {
   id: number;
@@ -971,6 +980,16 @@ export default function Journal() {
       setChecklistResponses(new Map());
     }
   }, [entryFormData.strategy_id]);
+
+  useEffect(() => {
+    if (!entryFormData.strategy_id) {
+      setStrategyIndicators([]);
+      return;
+    }
+    const ids = loadStrategyIndicatorIds(dataMode, entryFormData.strategy_id);
+    const all = loadIndicators();
+    setStrategyIndicators(all.filter((i) => ids.includes(i.id)));
+  }, [dataMode, entryFormData.strategy_id]);
 
   useEffect(() => {
     if (selectedEntry && !isCreating && !isEditing) {
@@ -1927,7 +1946,7 @@ export default function Journal() {
       }
 
       if (isCreating) {
-        entryId = await invoke<number>("create_journal_entry", {
+      entryId = await invoke<number>("create_journal_entry", {
           date: entryFormData.date,
           title: entryFormData.title,
           strategyId: entryFormData.strategy_id,
@@ -1941,6 +1960,10 @@ export default function Journal() {
           strategyId: entryFormData.strategy_id,
           linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null,
         });
+      // Migrate any draft indicator values for this new entry
+      migrateJournalIndicatorDraftValues(dataMode, 0, entryId);
+        // Migrate any draft indicator values (entry/exit) from temporary entry id 0 to the new entry id
+        migrateJournalIndicatorDraftValues(dataMode, 0, entryId);
         // Link to emotional state entries (chosen while creating) — scope applied after trades below
         // After first auto-save, switch from creating to editing
         setIsCreating(false);
@@ -3040,6 +3063,110 @@ export default function Journal() {
     );
   };
 
+  const renderIndicatorInputs = (phase: IndicatorPhase) => {
+    const draftEntryId = 0;
+    const entryId = selectedEntry?.id ?? draftEntryId;
+    if (!isCreating && !selectedEntry?.id) return null;
+    if (!entryFormData.strategy_id) return null;
+    if (strategyIndicators.length === 0) return null;
+
+    const tradeIndex = activeTradeIndex;
+    const timeframeOptions = ["1m", "5m", "15m", "1H", "4H", "1D", "1W"];
+    const selectedTfs = indicatorTimeframesByPhase[phase] || [];
+
+    const toggleTf = (tf: string) => {
+      setIndicatorTimeframesByPhase((prev) => {
+        const cur = prev[phase] || [];
+        const next = cur.includes(tf) ? cur.filter((x) => x !== tf) : [...cur, tf];
+        return { ...prev, [phase]: next };
+      });
+    };
+
+    return (
+      <div style={{ marginTop: "14px", padding: "12px", borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-secondary)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            Indicators ({phase})
+          </div>
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {timeframeOptions.map((tf) => {
+              const active = selectedTfs.includes(tf);
+              return (
+                <button
+                  key={tf}
+                  type="button"
+                  onClick={() => toggleTf(tf)}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: "999px",
+                    border: "1px solid var(--border-color)",
+                    background: active ? "var(--accent)" : "var(--bg-tertiary)",
+                    color: active ? "white" : "var(--text-primary)",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    fontWeight: 650,
+                  }}
+                >
+                  {tf}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {selectedTfs.length === 0 ? (
+          <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
+            Select one or more timeframes to enter indicator values (optional).
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {strategyIndicators.map((ind) => (
+              <div
+                key={ind.id}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: `minmax(220px, 1fr) repeat(${selectedTfs.length}, minmax(110px, 140px))`,
+                  gap: "10px",
+                  alignItems: "stretch",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px", borderRadius: "10px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)" }}>
+                  <span style={{ fontSize: "11px", fontWeight: 800, padding: "3px 7px", borderRadius: "8px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", color: "var(--text-secondary)" }}>
+                    {ind.abbreviation}
+                  </span>
+                  <span style={{ color: "var(--text-primary)", fontSize: "13px", fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={ind.name}>
+                    {ind.name}
+                  </span>
+                </div>
+                {selectedTfs.map((tf) => (
+                  <div key={tf} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    <div style={{ fontSize: "10px", color: "var(--text-secondary)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", paddingLeft: "2px" }}>
+                      {tf}
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Value"
+                      value={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                      onChange={(e) => setJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.value)}
+                      style={{
+                        padding: "10px 12px",
+                        background: "var(--bg-tertiary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "10px",
+                        color: "var(--text-primary)",
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const journalTradesByEntry = useMemo(() => {
     const map = new Map<number, JournalTrade[]>();
     allJournalTrades.forEach((t) => {
@@ -3164,13 +3291,16 @@ export default function Journal() {
       !!outcome ||
       !!text.trim();
 
+    // Use same order as scrolling left panel (sorted by date) so list and overview match
+    const sourceOrder = sortedJournalEntries;
+
     if (!hasFilters) {
-      return entries;
+      return sourceOrder;
     }
 
     const q = text.trim().toLowerCase();
 
-    return entries.filter((entry) => {
+    return sourceOrder.filter((entry) => {
       const trades = journalTradesByEntry.get(entry.id) || [];
 
       if (symbol) {
@@ -3230,7 +3360,7 @@ export default function Journal() {
 
       return true;
     });
-  }, [entries, journalTradesByEntry, journalFilters]);
+  }, [sortedJournalEntries, journalTradesByEntry, journalFilters]);
 
   const [overviewChartTab, setOverviewChartTab] = useState<
     "entries_over_time" | "symbol" | "position" | "timeframe" | "entry_type" | "exit_type" | "outcome"
@@ -3242,6 +3372,12 @@ export default function Journal() {
   const [overviewEntriesBrushEnd, setOverviewEntriesBrushEnd] = useState(0);
   const [overviewDimBrushStart, setOverviewDimBrushStart] = useState(0);
   const [overviewDimBrushEnd, setOverviewDimBrushEnd] = useState(0);
+
+  const [strategyIndicators, setStrategyIndicators] = useState<Indicator[]>([]);
+  const [indicatorTimeframesByPhase, setIndicatorTimeframesByPhase] = useState<Record<IndicatorPhase, string[]>>({
+    entry: ["1D", "1H"],
+    exit: ["1D", "1H"],
+  });
 
   const overviewEntriesFiltered = useMemo(() => {
     const { start, end } = getTimeframeDates(chartTimeframe, chartCustomStart || undefined, chartCustomEnd || undefined);
@@ -4299,7 +4435,9 @@ export default function Journal() {
                         {sectionId === "analysis_checklist" && renderChecklistForType("daily_analysis")}
                         {sectionId === "mantra_checklist" && renderChecklistForType("daily_mantra")}
                         {sectionId === "entry_checklist" && renderChecklistForType("entry")}
+                        {sectionId === "entry_checklist" && renderIndicatorInputs("entry")}
                         {sectionId === "take_profit_checklist" && renderChecklistForType("take_profit")}
+                        {sectionId === "take_profit_checklist" && renderIndicatorInputs("exit")}
                         {sectionId.startsWith("custom:") && (!entryFormData.strategy_id || !currentChecklists) && (
                           <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load custom checklists and surveys.</p>
                         )}
