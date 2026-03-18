@@ -31,6 +31,15 @@ function wrapLabelLines(value: string, maxChars: number): string[] {
   if (line) lines.push(line);
   return lines;
 }
+
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!m) return `rgba(245,158,11,${alpha})`;
+  const r = parseInt(m[1], 16);
+  const g = parseInt(m[2], 16);
+  const b = parseInt(m[3], 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 /** Custom X-axis tick that wraps strategy names onto multiple lines. Uses fullName when present to avoid truncated labels. */
 function OverviewChartAxisTick(props: { x?: number; y?: number; payload?: { value?: string; name?: string; fullName?: string }; fontSize?: number }) {
   const { x = 0, y = 0, payload } = props;
@@ -1072,7 +1081,7 @@ function ChecklistSection({
   // Organize by parent
   const itemsByParent = new Map<number, ChecklistItem[]>();
   groupedItems.forEach(item => {
-    if (item.parent_id) {
+    if (item.parent_id != null) {
       const parentId = item.parent_id;
       if (!itemsByParent.has(parentId)) {
         itemsByParent.set(parentId, []);
@@ -4078,10 +4087,10 @@ export default function Strategies() {
         
         // Second pass: Save items with parents (children of groups)
         for (const [type, items] of tempChecklists.entries()) {
-          const itemsWithParents = items.filter(item => item.parent_id);
+          const itemsWithParents = items.filter(item => item.parent_id != null);
           for (const item of itemsWithParents) {
             const newParentId = idMap.get(item.parent_id!);
-            if (newParentId) {
+            if (newParentId != null) {
               const newId = await invoke<number>("save_strategy_checklist_item", {
                 id: null,
                 strategyId: newStrategyId,
@@ -4488,6 +4497,12 @@ export default function Strategies() {
       // Save checklist changes if any
       if (selectedStrategyData.id && editingChecklists.has(selectedStrategyData.id)) {
         await handleSaveChecklists(selectedStrategyData.id);
+        // Safety: ensure checklist DB rows don't accumulate duplicates after complex edits.
+        try {
+          await invoke<number>("remove_duplicate_checklist_items");
+        } catch {
+          // ignore
+        }
         
         // Update custom checklist types based on what's in editingChecklists
         const editingChecklist = editingChecklists.get(selectedStrategyData.id)!;
@@ -4808,10 +4823,10 @@ export default function Strategies() {
         }
         
         // Second pass: Save items with parents (children of groups)
-        const itemsWithParents = allItems.filter(item => item.parent_id);
+        const itemsWithParents = allItems.filter(item => item.parent_id != null);
         for (const item of itemsWithParents) {
           const newParentId = idMap.get(item.parent_id!);
-          if (newParentId) {
+          if (newParentId != null) {
             await invoke<number>("save_strategy_checklist_item", {
               id: null,
               strategyId: newStrategyId,
@@ -5582,7 +5597,18 @@ export default function Strategies() {
                                       <span style={{ color: "var(--text-primary)", fontSize: "13px", fontWeight: 650 }}>
                                         {i.name}
                                       </span>
-                                      <span style={{ marginLeft: "auto", color: "var(--text-secondary)", fontSize: "11px", fontWeight: 800, padding: "3px 7px", borderRadius: "8px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)" }}>
+                                      <span
+                                        style={{
+                                          marginLeft: "auto",
+                                          fontSize: "11px",
+                                          fontWeight: 800,
+                                          padding: "3px 7px",
+                                          borderRadius: "8px",
+                                          background: i.kind === "custom" ? hexToRgba(i.accentColor ?? "#F59E0B", 0.18) : "var(--bg-secondary)",
+                                          border: `1px solid ${i.kind === "custom" ? hexToRgba(i.accentColor ?? "#F59E0B", 0.55) : "var(--border-color)"}`,
+                                          color: i.kind === "custom" ? i.accentColor ?? "#F59E0B" : "var(--text-secondary)",
+                                        }}
+                                      >
                                         {i.abbreviation}
                                       </span>
                                     </label>
@@ -5646,7 +5672,17 @@ export default function Strategies() {
                                   fontWeight: 650,
                                 }}
                               >
-                                <span style={{ fontSize: "11px", fontWeight: 800, padding: "2px 7px", borderRadius: "999px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", color: "var(--text-secondary)" }}>
+                                <span
+                                  style={{
+                                    fontSize: "11px",
+                                    fontWeight: 800,
+                                    padding: "2px 7px",
+                                    borderRadius: "999px",
+                                    background: i.kind === "custom" ? hexToRgba(i.accentColor ?? "#F59E0B", 0.18) : "var(--bg-secondary)",
+                                    border: `1px solid ${i.kind === "custom" ? hexToRgba(i.accentColor ?? "#F59E0B", 0.55) : "var(--border-color)"}`,
+                                    color: i.kind === "custom" ? i.accentColor ?? "#F59E0B" : "var(--text-secondary)",
+                                  }}
+                                >
                                   {i.abbreviation}
                                 </span>
                                 <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
