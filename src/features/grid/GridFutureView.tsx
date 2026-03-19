@@ -138,11 +138,7 @@ export function GridFutureView({
           value={settings.sellTargetPercent}
           onChange={(v) => onSettingsChange({ sellTargetPercent: v })}
         />
-        <LabeledInput
-          label="Market"
-          value={settings.marketPrice ?? 0}
-          onChange={(v) => onSettingsChange({ marketPrice: v })}
-        />
+        <ReadOnlyField label="Current price" value={fmtNum(settings.marketPrice ?? 0, 4)} />
       </div>
 
       <div
@@ -537,6 +533,37 @@ function LabeledSelect({
           </option>
         ))}
       </select>
+    </label>
+  );
+}
+
+function ReadOnlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <label
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
+        fontSize: "11px",
+        color: "var(--text-secondary)",
+      }}
+    >
+      {label}
+      <div
+        style={{
+          border: "1px solid var(--border-color)",
+          borderRadius: "6px",
+          backgroundColor: "var(--bg-tertiary)",
+          color: "var(--text-primary)",
+          padding: "4px 6px",
+          fontSize: "12px",
+          minHeight: "28px",
+          display: "flex",
+          alignItems: "center",
+        }}
+      >
+        {value}
+      </div>
     </label>
   );
 }

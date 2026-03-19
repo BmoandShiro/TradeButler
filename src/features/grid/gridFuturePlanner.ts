@@ -50,7 +50,7 @@ export function withGridFutureSettingsDefaults(
     freeShareExitMode: "scale_out_by_grid",
     anchorPrice: anchor,
     marketPrice:
-      partial.marketPrice ?? context?.marketPrice ?? DEFAULT_GRID_FUTURE_SETTINGS.marketPrice,
+      context?.marketPrice ?? partial.marketPrice ?? DEFAULT_GRID_FUTURE_SETTINGS.marketPrice,
   };
 }
 
