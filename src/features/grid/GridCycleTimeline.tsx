@@ -79,7 +79,17 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
                 <td style={{ padding: "4px 8px", color: "var(--text-secondary)" }}>
                   {new Date(r.fill.timestamp).toLocaleString()}
                 </td>
-                <td style={{ padding: "4px 8px", textAlign: "center", fontWeight: 700 }}>
+                <td
+                  style={{
+                    padding: "4px 8px",
+                    textAlign: "center",
+                    fontWeight: 700,
+                    color:
+                      r.fill.side === "BUY"
+                        ? "var(--success-color, #16a34a)"
+                        : "var(--danger-color, #dc2626)",
+                  }}
+                >
                   {r.fill.side === "BUY" ? "BUY" : "SELL"}
                 </td>
                 <td style={{ padding: "4px 8px", textAlign: "right" }}>
@@ -88,7 +98,17 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
                 <td style={{ padding: "4px 8px", textAlign: "right" }}>
                   {r.fill.price.toFixed(2)}
                 </td>
-                <td style={{ padding: "4px 8px", textAlign: "right" }}>
+                <td
+                  style={{
+                    padding: "4px 8px",
+                    textAlign: "right",
+                    color:
+                      r.openQty > EPS
+                        ? "var(--accent)"
+                        : "var(--text-secondary)",
+                    fontWeight: r.openQty > EPS ? 600 : 400,
+                  }}
+                >
                   {r.openQty > EPS ? r.openQty.toFixed(4) : "—"}
                 </td>
                 <td style={{ padding: "4px 8px", textAlign: "right" }}>
