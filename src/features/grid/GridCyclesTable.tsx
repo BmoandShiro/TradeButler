@@ -1,4 +1,3 @@
-import React from "react";
 import { GridCycle } from "./gridTypes";
 
 interface GridCyclesTableProps {
@@ -15,7 +14,7 @@ export function GridCyclesTable({
   if (!cycles.length) {
     return (
       <div style={{ padding: "12px", color: "var(--text-secondary)" }}>
-        No completed grid cycles yet.
+        No grid cycles yet.
       </div>
     );
   }
@@ -38,7 +37,7 @@ export function GridCyclesTable({
       >
         <thead>
           <tr>
-            <th style={{ textAlign: "left", padding: "6px 8px" }}>Entry</th>
+            <th style={{ textAlign: "left", padding: "6px 8px" }}>Cycle</th>
             <th style={{ textAlign: "left", padding: "6px 8px" }}>Exit</th>
             <th style={{ textAlign: "right", padding: "6px 8px" }}>Qty</th>
             <th style={{ textAlign: "right", padding: "6px 8px" }}>Gross PnL</th>
@@ -68,10 +67,17 @@ export function GridCyclesTable({
                 }}
               >
                 <td style={{ padding: "4px 8px" }}>
-                  {cycle.entryPrice.toFixed(2)} {cycle.entrySide}
+                  <div style={{ fontWeight: 700, color: "var(--text-primary)" }}>
+                    {cycle.cycleName}
+                  </div>
+                  <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                    {cycle.entryPrice.toFixed(2)} {cycle.entrySide}
+                  </div>
                 </td>
                 <td style={{ padding: "4px 8px" }}>
-                  {cycle.exitPrice.toFixed(2)}
+                  {cycle.status === "completed" && cycle.exitPrice != null
+                    ? cycle.exitPrice.toFixed(2)
+                    : "—"}
                 </td>
                 <td style={{ textAlign: "right", padding: "4px 8px" }}>
                   {cycle.quantity.toFixed(4)}
@@ -89,7 +95,9 @@ export function GridCyclesTable({
                   {new Date(cycle.openTime).toLocaleString()}
                 </td>
                 <td style={{ padding: "4px 8px" }}>
-                  {new Date(cycle.closeTime).toLocaleString()}
+                  {cycle.status === "completed" && cycle.closeTime
+                    ? new Date(cycle.closeTime).toLocaleString()
+                    : "Open"}
                 </td>
               </tr>
             );

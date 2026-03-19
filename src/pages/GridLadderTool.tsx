@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { loadSandboxState } from "../utils/sandboxStore";
@@ -8,7 +8,7 @@ import { GridSummaryCards } from "../features/grid/GridSummaryCards";
 import {
   deriveGridLevels,
   aggregateFillsByLevel,
-  pairGridCycles,
+  computeGridPositionCycles,
   computeExposure,
   computePnLSummary,
 } from "../features/grid/gridCalculations";
@@ -59,7 +59,7 @@ export default function GridLadderTool() {
   const [instrumentFilter, setInstrumentFilter] = useState<"shares" | "options" | "all">("shares");
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [trades, setTrades] = useState<BasicTrade[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [_isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -123,37 +123,45 @@ export default function GridLadderTool() {
     [filteredTradesForInstrument],
   );
 
-  const currentPrice: number | null = useMemo(() => {
-    if (!fills.length) return null;
-    return fills[fills.length - 1].price;
-  }, [fills]);
-
-  const levels = useMemo(
-    () => deriveGridLevels(undefined, fills),
-    [fills],
-  );
-
-  const aggregates = useMemo(
-    () => aggregateFillsByLevel(levels, fills),
-    [levels, fills],
-  );
-
   const cycles: GridCycle[] = useMemo(
-    () => pairGridCycles(symbol, fills),
+    () => computeGridPositionCycles(symbol, fills),
     [symbol, fills],
   );
 
-  const exposure = useMemo(
-    () => computeExposure(symbol, aggregates, currentPrice),
-    [symbol, aggregates, currentPrice],
+  const selectedCycle = cycles.find((c) => c.id === selectedCycleId);
+  const fillsForLadder = selectedCycle?.fills ?? fills;
+
+  const levelsForLadder = useMemo(
+    () => deriveGridLevels(undefined, fillsForLadder),
+    [fillsForLadder],
   );
+
+  const aggregatesForLadder = useMemo(
+    () => aggregateFillsByLevel(levelsForLadder, fillsForLadder),
+    [levelsForLadder, fillsForLadder],
+  );
+
+  const currentPriceForLadder: number | null = useMemo(() => {
+    if (!fillsForLadder.length) return null;
+    return fillsForLadder[fillsForLadder.length - 1].price;
+  }, [fillsForLadder]);
+
+  const exposure = useMemo(
+    () => computeExposure(symbol, aggregatesForLadder, currentPriceForLadder),
+    [symbol, aggregatesForLadder, currentPriceForLadder],
+  );
+
+  const pnlCyclesForLadder = selectedCycle ? [selectedCycle] : cycles;
 
   const pnl = useMemo(
-    () => computePnLSummary(symbol, cycles, exposure),
-    [symbol, cycles, exposure],
+    () => computePnLSummary(symbol, pnlCyclesForLadder, exposure),
+    [symbol, pnlCyclesForLadder, exposure],
   );
 
-  const selectedCycle = cycles.find((c) => c.id === selectedCycleId);
+  useEffect(() => {
+    // If the selected cycle changes, the previous level selection may not exist anymore.
+    setSelectedLevelId(undefined);
+  }, [selectedCycleId]);
 
   return (
     <div
@@ -263,8 +271,8 @@ export default function GridLadderTool() {
         )}
         <div style={{ flex: 1, minHeight: 0 }}>
           <GridLadder
-            aggregates={aggregates}
-            currentPrice={currentPrice}
+            aggregates={aggregatesForLadder}
+            currentPrice={currentPriceForLadder}
             exposure={exposure}
             selectedLevelId={selectedLevelId}
             onSelectLevel={setSelectedLevelId}
@@ -282,7 +290,7 @@ export default function GridLadderTool() {
         <GridSummaryCards
           pnl={pnl}
           exposure={exposure}
-          currentPrice={currentPrice}
+            currentPrice={currentPriceForLadder}
         />
         <div
           style={{
@@ -292,7 +300,7 @@ export default function GridLadderTool() {
             marginTop: "4px",
           }}
         >
-          Completed cycles
+          Position cycles
         </div>
         <div style={{ flex: 1, minHeight: 0 }}>
           <GridCyclesTable
@@ -309,8 +317,7 @@ export default function GridLadderTool() {
               color: "var(--text-secondary)",
             }}
           >
-            Selected cycle from {selectedCycle.entryPrice.toFixed(2)} to{" "}
-            {selectedCycle.exitPrice.toFixed(2)} with PnL{" "}
+            Selected cycle: {selectedCycle.cycleName}. Realized PnL{" "}
             {selectedCycle.grossPnl.toFixed(2)}.
           </div>
         )}

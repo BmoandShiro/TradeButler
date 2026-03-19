@@ -1,4 +1,3 @@
-import React from "react";
 import { GridExposureSummary, GridLevelAggregate } from "./gridTypes";
 
 interface GridLadderProps {
@@ -12,7 +11,6 @@ interface GridLadderProps {
 export function GridLadder({
   aggregates,
   currentPrice,
-  exposure,
   selectedLevelId,
   onSelectLevel,
 }: GridLadderProps) {
@@ -69,7 +67,7 @@ export function GridLadder({
               <th style={{ textAlign: "center", padding: "6px 8px" }}>Buys</th>
               <th style={{ textAlign: "center", padding: "6px 8px" }}>Sells</th>
               <th style={{ textAlign: "right", padding: "6px 8px" }}>Open</th>
-              <th style={{ textAlign: "right", padding: "6px 8px" }}>Avg Entry</th>
+              <th style={{ textAlign: "right", padding: "6px 8px" }}>Avg Cost</th>
               <th style={{ textAlign: "center", padding: "6px 8px" }}>Status</th>
               <th style={{ textAlign: "left", padding: "6px 8px" }}>Exposure</th>
             </tr>
@@ -123,7 +121,7 @@ export function GridLadder({
                       color: "var(--success-color, #16a34a)",
                     }}
                   >
-                    {agg.buyCount || "—"}
+                    {agg.totalBuyQty > 0 ? agg.totalBuyQty.toFixed(4) : "—"}
                   </td>
                   <td
                     style={{
@@ -132,13 +130,18 @@ export function GridLadder({
                       color: "var(--warning-color, #f97316)",
                     }}
                   >
-                    {agg.sellCount || "—"}
+                    {agg.totalSellQty > 0 ? agg.totalSellQty.toFixed(4) : "—"}
                   </td>
                   <td style={{ textAlign: "right", padding: "4px 8px" }}>
-                    {agg.netOpenQty ? agg.netOpenQty.toFixed(4) : "—"}
+                    {Math.abs(agg.netOpenQty) > 0.000000001
+                      ? Math.abs(agg.netOpenQty).toFixed(4)
+                      : "—"}
                   </td>
                   <td style={{ textAlign: "right", padding: "4px 8px" }}>
-                    {agg.netOpenQty > 0 ? agg.level.price.toFixed(2) : "—"}
+                    {Math.abs(agg.netOpenQty) > 0.000000001 &&
+                    agg.avgOpenEntry != null
+                      ? agg.avgOpenEntry.toFixed(2)
+                      : "—"}
                   </td>
                   <td style={{ textAlign: "center", padding: "4px 8px" }}>
                     <span
@@ -158,9 +161,9 @@ export function GridLadder({
                       }}
                     >
                       {agg.rowStatus === "no-activity" && "No activity"}
-                      {agg.rowStatus === "open-long" && "Open long"}
+                      {agg.rowStatus === "open-long" && "Open position"}
                       {agg.rowStatus === "partially-closed" && "Partially closed"}
-                      {agg.rowStatus === "completed" && "Completed"}
+                      {agg.rowStatus === "completed" && "Closed position"}
                       {agg.rowStatus === "imbalanced" && "Imbalanced"}
                     </span>
                   </td>

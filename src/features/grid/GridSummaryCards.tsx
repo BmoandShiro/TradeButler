@@ -1,4 +1,3 @@
-import React from "react";
 import { GridExposureSummary, GridPnLSummary } from "./gridTypes";
 
 interface GridSummaryCardsProps {
@@ -43,7 +42,7 @@ export function GridSummaryCards({
         value={exposure.totalOpenQty}
       />
       <SummaryCard
-        label="Avg open entry"
+        label="Avg open cost"
         value={exposure.weightedAvgOpenEntry ?? null}
       />
       <SummaryCard

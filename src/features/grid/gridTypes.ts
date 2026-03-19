@@ -15,7 +15,7 @@ export interface GridFill {
   price: number;
   quantity: number;
   timestamp: string;
-  status?: "FILLED" | "PARTIAL" | "CANCELLED";
+  status?: "FILLED" | "PARTIAL" | "CANCELLED" | "OPEN";
   kind?: "FILL" | "ORDER";
 }
 
@@ -45,14 +45,23 @@ export interface GridCycle {
   symbol: string;
   entrySide: GridSide;
   entryPrice: number;
-  exitPrice: number;
+  exitPrice: number | null;
+  // Qty represents the max absolute open inventory reached in the cycle.
   quantity: number;
+  // Realized pnl earned via FIFO pairing of closes that occurred inside the cycle.
   grossPnl: number;
   openTime: string;
-  closeTime: string;
-  durationMs: number;
+  closeTime: string | null;
+  durationMs: number | null;
   entryLevelId?: string;
   exitLevelId?: string;
+
+  status: "completed" | "open";
+  cycleName: string;
+
+  // All fills that belong to this cycle, including the fills that bring net qty to 0
+  // (or the remaining open position if status === "open").
+  fills: GridFill[];
 }
 
 export interface GridExposureSummary {
