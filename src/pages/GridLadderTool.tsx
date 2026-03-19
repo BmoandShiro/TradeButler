@@ -6,6 +6,7 @@ import { GridLadder } from "../features/grid/GridLadder";
 import { GridCyclesTable } from "../features/grid/GridCyclesTable";
 import { GridSummaryCards } from "../features/grid/GridSummaryCards";
 import { GridCycleTimeline } from "../features/grid/GridCycleTimeline";
+import { GridFutureView } from "../features/grid/GridFutureView";
 import { TradeChart } from "../components/TradeChart";
 import {
   deriveGridLevels,
@@ -15,6 +16,12 @@ import {
   computePnLSummary,
 } from "../features/grid/gridCalculations";
 import { GridCycle, GridFill } from "../features/grid/gridTypes";
+import { GridFutureSettings } from "../features/grid/gridTypes";
+import {
+  buildGridFutureState,
+  DEFAULT_GRID_FUTURE_SETTINGS,
+  withGridFutureSettingsDefaults,
+} from "../features/grid/gridFuturePlanner";
 
 type BasicTrade = {
   id: number | string;
@@ -32,8 +39,10 @@ const GRID_TOOL_STATE_KEY = "tradebutler_grid_ladder_tool_state_v1";
 interface GridToolPersistedState {
   symbol?: string;
   instrumentFilter?: "shares" | "options" | "all";
-  gridAreaMode?: "grid" | "timeline";
+  gridAreaMode?: "grid" | "timeline" | "future";
   selectedCycleId?: string;
+  leftPaneWidthPct?: number;
+  futureSettings?: Partial<GridFutureSettings>;
 }
 
 function loadGridToolState(): GridToolPersistedState {
@@ -81,8 +90,10 @@ export default function GridLadderTool() {
   const [selectedCycleId, setSelectedCycleId] = useState<string | undefined>(
     initialState.selectedCycleId || undefined,
   );
-  const [gridAreaMode, setGridAreaMode] = useState<"grid" | "timeline">(
-    initialState.gridAreaMode === "timeline" ? "timeline" : "grid",
+  const [gridAreaMode, setGridAreaMode] = useState<"grid" | "timeline" | "future">(
+    initialState.gridAreaMode === "timeline" || initialState.gridAreaMode === "future"
+      ? initialState.gridAreaMode
+      : "grid",
   );
   const [instrumentFilter, setInstrumentFilter] = useState<"shares" | "options" | "all">(
     initialState.instrumentFilter === "options" || initialState.instrumentFilter === "all"
@@ -94,9 +105,16 @@ export default function GridLadderTool() {
   const [_isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedCycleForChartId, setSelectedCycleForChartId] = useState<string | null>(null);
-  const [leftPaneWidthPct, setLeftPaneWidthPct] = useState<number>(62);
+  const [leftPaneWidthPct, setLeftPaneWidthPct] = useState<number>(
+    initialState.leftPaneWidthPct && Number.isFinite(initialState.leftPaneWidthPct)
+      ? Math.max(35, Math.min(75, initialState.leftPaneWidthPct))
+      : 62,
+  );
   const [isResizingPanes, setIsResizingPanes] = useState(false);
   const layoutRef = useRef<HTMLDivElement | null>(null);
+  const [futureSettings, setFutureSettings] = useState<GridFutureSettings>(() =>
+    withGridFutureSettingsDefaults(initialState.futureSettings ?? {}),
+  );
 
   const handleSelectCycle = (cycleId: string) => {
     setSelectedCycleId((prev) => (prev === cycleId ? undefined : cycleId));
@@ -187,6 +205,14 @@ export default function GridLadderTool() {
     return fillsForLadder[fillsForLadder.length - 1].price;
   }, [fillsForLadder]);
 
+  const futureState = useMemo(() => {
+    const hydrated = withGridFutureSettingsDefaults(futureSettings, {
+      selectedCycle,
+      marketPrice: currentPriceForLadder,
+    });
+    return buildGridFutureState(hydrated, selectedCycle);
+  }, [futureSettings, selectedCycle, currentPriceForLadder]);
+
   const exposure = useMemo(
     () => computeExposure(symbol, aggregatesForLadder, currentPriceForLadder),
     [symbol, aggregatesForLadder, currentPriceForLadder],
@@ -216,6 +242,10 @@ export default function GridLadderTool() {
     }));
   }, [selectedCycleForChart]);
 
+  const handleFutureSettingsChange = (next: Partial<GridFutureSettings>) => {
+    setFutureSettings((prev) => ({ ...prev, ...next }));
+  };
+
   useEffect(() => {
     // If the selected cycle changes, the previous level selection may not exist anymore.
     setSelectedLevelId(undefined);
@@ -241,9 +271,18 @@ export default function GridLadderTool() {
       instrumentFilter,
       gridAreaMode,
       selectedCycleId,
+      leftPaneWidthPct,
+      futureSettings,
     };
     localStorage.setItem(GRID_TOOL_STATE_KEY, JSON.stringify(stateToPersist));
-  }, [symbol, instrumentFilter, gridAreaMode, selectedCycleId]);
+  }, [
+    symbol,
+    instrumentFilter,
+    gridAreaMode,
+    selectedCycleId,
+    leftPaneWidthPct,
+    futureSettings,
+  ]);
 
   useEffect(() => {
     if (!isResizingPanes) return;
@@ -419,12 +458,34 @@ export default function GridLadderTool() {
             >
               Grid
             </button>
+            <button
+              type="button"
+              onClick={() => setGridAreaMode("future")}
+              style={{
+                border: "1px solid var(--border-color)",
+                backgroundColor: gridAreaMode === "future" ? "var(--accent)" : "transparent",
+                color: gridAreaMode === "future" ? "#fff" : "var(--text-secondary)",
+                borderRadius: "999px",
+                padding: "4px 10px",
+                fontSize: "11px",
+                cursor: "pointer",
+              }}
+            >
+              Future
+            </button>
           </div>
         </div>
 
         <div style={{ flex: 1, minHeight: 0 }}>
           {gridAreaMode === "timeline" ? (
             <GridCycleTimeline cycle={selectedCycle} />
+          ) : gridAreaMode === "future" ? (
+            <GridFutureView
+              selectedCycle={selectedCycle}
+              settings={futureSettings}
+              state={futureState}
+              onSettingsChange={handleFutureSettingsChange}
+            />
           ) : (
             <GridLadder
               aggregates={aggregatesForLadder}
