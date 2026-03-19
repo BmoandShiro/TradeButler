@@ -47,6 +47,7 @@ export function withGridFutureSettingsDefaults(
   return {
     ...DEFAULT_GRID_FUTURE_SETTINGS,
     ...partial,
+    freeShareExitMode: "scale_out_by_grid",
     anchorPrice: anchor,
     marketPrice:
       partial.marketPrice ?? context?.marketPrice ?? DEFAULT_GRID_FUTURE_SETTINGS.marketPrice,
@@ -170,7 +171,10 @@ export function buildGridFutureState(
   settingsInput: GridFutureSettings,
   selectedCycle: GridCycle | undefined,
 ): GridFutureState {
-  const settings = settingsInput;
+  const settings: GridFutureSettings = {
+    ...settingsInput,
+    freeShareExitMode: "scale_out_by_grid",
+  };
   const fills = (selectedCycle?.fills ?? [])
     .filter((f) => f.kind !== "ORDER" && f.status !== "CANCELLED")
     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());

@@ -60,7 +60,7 @@ export function GridFutureView({
     <div
       style={{
         display: "grid",
-        gridTemplateRows: "auto auto auto minmax(0, 1fr)",
+        gridTemplateRows: "auto auto auto auto minmax(0, 1fr)",
         gap: "8px",
         height: "100%",
       }}
@@ -106,6 +106,85 @@ export function GridFutureView({
           value={settings.marketPrice ?? 0}
           onChange={(v) => onSettingsChange({ marketPrice: v })}
         />
+      </div>
+
+      <div
+        style={{
+          border: "1px solid var(--border-color)",
+          borderRadius: "8px",
+          padding: "8px",
+          display: "grid",
+          gridTemplateColumns: "1.4fr repeat(6, minmax(0, 1fr))",
+          gap: "8px",
+          backgroundColor: "var(--bg-primary)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+            gap: "4px",
+            minWidth: 0,
+          }}
+        >
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-primary)" }}>
+            Free-share settings
+          </div>
+          <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+            Configure free-share exits separately from core grid settings.
+          </div>
+        </div>
+
+        <LabeledSelect
+          label="Exit mode"
+          value={"scale_out_by_grid"}
+          onChange={() => {}}
+          options={[
+            { value: "scale_out_by_grid", label: "Scale out ladder" },
+          ]}
+          disabled
+        />
+
+        <LabeledSelect
+          label="Reference cost"
+          value={settings.freeShareReferenceCostMode}
+          onChange={(v) =>
+            onSettingsChange({
+              freeShareReferenceCostMode:
+                v as GridFutureSettings["freeShareReferenceCostMode"],
+            })
+          }
+          options={[
+            { value: "active_grid_average_cost", label: "Active grid avg" },
+            { value: "blended_accounting_average_cost", label: "Blended accounting avg" },
+            { value: "blended_strategy_average_cost", label: "Blended strategy avg" },
+            { value: "manual_reference_price", label: "Manual reference" },
+          ]}
+        />
+
+        <LabeledInput
+          label="Start % above avg"
+          value={settings.freeShareStartPercentAboveAvgCost}
+          onChange={(v) =>
+            onSettingsChange({ freeShareStartPercentAboveAvgCost: v })
+          }
+        />
+
+        <LabeledInput
+          label="Scale-out % step"
+          value={settings.freeShareScaleOutPercent}
+          onChange={(v) => onSettingsChange({ freeShareScaleOutPercent: v })}
+        />
+
+        <LabeledInput
+          label="Scale-out levels"
+          value={settings.freeShareScaleOutLevels}
+          onChange={(v) =>
+            onSettingsChange({ freeShareScaleOutLevels: Math.max(1, Math.floor(v)) })
+          }
+        />
+
       </div>
 
       <div
@@ -335,6 +414,53 @@ function LabeledInput({
           fontSize: "12px",
         }}
       />
+    </label>
+  );
+}
+
+function LabeledSelect({
+  label,
+  value,
+  onChange,
+  options,
+  disabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  options: Array<{ value: string; label: string }>;
+  disabled?: boolean;
+}) {
+  return (
+    <label
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
+        fontSize: "11px",
+        color: "var(--text-secondary)",
+      }}
+    >
+      {label}
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        style={{
+          border: "1px solid var(--border-color)",
+          borderRadius: "6px",
+          backgroundColor: disabled ? "var(--bg-tertiary)" : "var(--bg-secondary)",
+          color: disabled ? "var(--text-secondary)" : "var(--text-primary)",
+          padding: "4px 6px",
+          fontSize: "12px",
+        }}
+      >
+        {options.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
     </label>
   );
 }
