@@ -37,6 +37,7 @@ const STRATEGY_RULES_ENABLED_KEY = "tradebutler_strategy_rules_enabled_v1";
 const JOURNAL_INDICATOR_VALUES_KEY = "tradebutler_journal_indicator_values_v1";
 const JOURNAL_INDICATOR_DIVERGENCE_KEY = "tradebutler_journal_indicator_divergence_v1";
 const JOURNAL_INDICATOR_OTHER_SIGNALS_KEY = "tradebutler_journal_indicator_other_signals_v1";
+const JOURNAL_TRADE_PATTERN_INDICATOR_IDS_KEY = "tradebutler_journal_trade_pattern_indicator_ids_v1";
 
 const BUILTIN_ACCENT_COLORS = ["#7C3AED", "#2563EB", "#0EA5E9", "#10B981", "#F59E0B", "#EF4444", "#EC4899", "#22C55E"];
 const CUSTOM_ACCENT_COLOR = "#F59E0B";
@@ -2379,6 +2380,59 @@ export function migrateJournalIndicatorDraftOtherSignals(
   }
   if (changed) {
     localStorage.setItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY, JSON.stringify(data));
+  }
+}
+
+export function loadJournalTradePatternIndicatorIds(
+  mode: DataMode,
+  entryId: number,
+  tradeIndex: number,
+  phase: IndicatorPhase
+): string[] {
+  const data = safeParse<Record<string, string[]>>(localStorage.getItem(JOURNAL_TRADE_PATTERN_INDICATOR_IDS_KEY), {});
+  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:pattern_indicator_ids`;
+  const arr = data[key];
+  if (!Array.isArray(arr)) return [];
+  return arr.map((x) => String(x)).filter(Boolean);
+}
+
+export function setJournalTradePatternIndicatorIds(
+  mode: DataMode,
+  entryId: number,
+  tradeIndex: number,
+  phase: IndicatorPhase,
+  indicatorIds: string[]
+) {
+  const cleaned = indicatorIds.map((x) => x.trim()).filter(Boolean);
+  const data = safeParse<Record<string, string[]>>(localStorage.getItem(JOURNAL_TRADE_PATTERN_INDICATOR_IDS_KEY), {});
+  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:pattern_indicator_ids`;
+  if (cleaned.length === 0) {
+    delete data[key];
+  } else {
+    data[key] = Array.from(new Set(cleaned));
+  }
+  localStorage.setItem(JOURNAL_TRADE_PATTERN_INDICATOR_IDS_KEY, JSON.stringify(data));
+}
+
+export function migrateJournalIndicatorDraftTradePatterns(
+  mode: DataMode,
+  fromEntryId: number,
+  toEntryId: number
+) {
+  const data = safeParse<Record<string, string[]>>(localStorage.getItem(JOURNAL_TRADE_PATTERN_INDICATOR_IDS_KEY), {});
+  const prefix = `${mode}:${fromEntryId}:`;
+  const newPrefix = `${mode}:${toEntryId}:`;
+  let changed = false;
+  for (const [key, value] of Object.entries(data)) {
+    if (key.startsWith(prefix)) {
+      delete data[key];
+      const rest = key.slice(prefix.length);
+      data[`${newPrefix}${rest}`] = value;
+      changed = true;
+    }
+  }
+  if (changed) {
+    localStorage.setItem(JOURNAL_TRADE_PATTERN_INDICATOR_IDS_KEY, JSON.stringify(data));
   }
 }
 
