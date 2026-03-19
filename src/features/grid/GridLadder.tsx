@@ -6,6 +6,7 @@ interface GridLadderProps {
   exposure: GridExposureSummary;
   selectedLevelId?: string;
   onSelectLevel?: (levelId: string) => void;
+  showPositionMetrics?: boolean;
 }
 
 export function GridLadder({
@@ -13,6 +14,7 @@ export function GridLadder({
   currentPrice,
   selectedLevelId,
   onSelectLevel,
+  showPositionMetrics = true,
 }: GridLadderProps) {
   if (!aggregates.length) {
     return (
@@ -66,9 +68,13 @@ export function GridLadder({
               <th style={{ textAlign: "right", padding: "6px 8px" }}>Price</th>
               <th style={{ textAlign: "center", padding: "6px 8px" }}>Buys</th>
               <th style={{ textAlign: "center", padding: "6px 8px" }}>Sells</th>
-              <th style={{ textAlign: "right", padding: "6px 8px" }}>Open</th>
-              <th style={{ textAlign: "right", padding: "6px 8px" }}>Avg Cost</th>
-              <th style={{ textAlign: "center", padding: "6px 8px" }}>Status</th>
+              {showPositionMetrics && (
+                <>
+                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Open</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px" }}>Avg Cost</th>
+                  <th style={{ textAlign: "center", padding: "6px 8px" }}>Status</th>
+                </>
+              )}
               <th style={{ textAlign: "left", padding: "6px 8px" }}>Exposure</th>
             </tr>
           </thead>
@@ -87,12 +93,17 @@ export function GridLadder({
                 ? "color-mix(in srgb, var(--accent) 6%, var(--bg-primary))"
                 : "transparent";
 
-              const borderLeftColor =
-                agg.rowStatus === "open-long" || agg.rowStatus === "partially-closed"
+              const EPS = 1e-9;
+              const hasOpen = Math.abs(agg.netOpenQty) > EPS;
+              const borderLeftColor = showPositionMetrics
+                ? agg.rowStatus === "open-long" || agg.rowStatus === "partially-closed"
                   ? "var(--accent)"
                   : agg.rowStatus === "completed"
                   ? "var(--border-color)"
-                  : "transparent";
+                  : "transparent"
+                : hasOpen
+                ? "var(--accent)"
+                : "transparent";
 
               const exposureWidth = `${Math.round(
                 (agg.exposureScore || 0) * 100,
@@ -132,41 +143,45 @@ export function GridLadder({
                   >
                     {agg.totalSellQty > 0 ? agg.totalSellQty.toFixed(4) : "—"}
                   </td>
-                  <td style={{ textAlign: "right", padding: "4px 8px" }}>
-                    {Math.abs(agg.netOpenQty) > 0.000000001
-                      ? Math.abs(agg.netOpenQty).toFixed(4)
-                      : "—"}
-                  </td>
-                  <td style={{ textAlign: "right", padding: "4px 8px" }}>
-                    {Math.abs(agg.netOpenQty) > 0.000000001 &&
-                    agg.avgOpenEntry != null
-                      ? agg.avgOpenEntry.toFixed(2)
-                      : "—"}
-                  </td>
-                  <td style={{ textAlign: "center", padding: "4px 8px" }}>
-                    <span
-                      style={{
-                        display: "inline-block",
-                        padding: "2px 6px",
-                        borderRadius: "999px",
-                        fontSize: "10px",
-                        backgroundColor:
-                          agg.rowStatus === "open-long"
-                            ? "color-mix(in srgb, var(--accent) 18%, transparent)"
-                            : agg.rowStatus === "partially-closed"
-                            ? "color-mix(in srgb, var(--accent) 12%, transparent)"
-                            : agg.rowStatus === "completed"
-                            ? "var(--bg-secondary)"
-                            : "transparent",
-                      }}
-                    >
-                      {agg.rowStatus === "no-activity" && "No activity"}
-                      {agg.rowStatus === "open-long" && "Open position"}
-                      {agg.rowStatus === "partially-closed" && "Partially closed"}
-                      {agg.rowStatus === "completed" && "Closed position"}
-                      {agg.rowStatus === "imbalanced" && "Imbalanced"}
-                    </span>
-                  </td>
+                  {showPositionMetrics && (
+                    <>
+                      <td style={{ textAlign: "right", padding: "4px 8px" }}>
+                        {Math.abs(agg.netOpenQty) > 0.000000001
+                          ? Math.abs(agg.netOpenQty).toFixed(4)
+                          : "—"}
+                      </td>
+                      <td style={{ textAlign: "right", padding: "4px 8px" }}>
+                        {Math.abs(agg.netOpenQty) > 0.000000001 &&
+                        agg.avgOpenEntry != null
+                          ? agg.avgOpenEntry.toFixed(2)
+                          : "—"}
+                      </td>
+                      <td style={{ textAlign: "center", padding: "4px 8px" }}>
+                        <span
+                          style={{
+                            display: "inline-block",
+                            padding: "2px 6px",
+                            borderRadius: "999px",
+                            fontSize: "10px",
+                            backgroundColor:
+                              agg.rowStatus === "open-long"
+                                ? "color-mix(in srgb, var(--accent) 18%, transparent)"
+                                : agg.rowStatus === "partially-closed"
+                                ? "color-mix(in srgb, var(--accent) 12%, transparent)"
+                                : agg.rowStatus === "completed"
+                                ? "var(--bg-secondary)"
+                                : "transparent",
+                          }}
+                        >
+                          {agg.rowStatus === "no-activity" && "No activity"}
+                          {agg.rowStatus === "open-long" && "Open position"}
+                          {agg.rowStatus === "partially-closed" && "Partially closed"}
+                          {agg.rowStatus === "completed" && "Closed position"}
+                          {agg.rowStatus === "imbalanced" && "Imbalanced"}
+                        </span>
+                      </td>
+                    </>
+                  )}
                   <td style={{ padding: "4px 8px" }}>
                     <div
                       style={{

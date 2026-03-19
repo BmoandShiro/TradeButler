@@ -5,6 +5,7 @@ import { loadSandboxState } from "../utils/sandboxStore";
 import { GridLadder } from "../features/grid/GridLadder";
 import { GridCyclesTable } from "../features/grid/GridCyclesTable";
 import { GridSummaryCards } from "../features/grid/GridSummaryCards";
+import { GridCycleTimeline } from "../features/grid/GridCycleTimeline";
 import {
   deriveGridLevels,
   aggregateFillsByLevel,
@@ -56,6 +57,7 @@ export default function GridLadderTool() {
   const [symbol, setSymbol] = useState<string>("AAPL");
   const [selectedLevelId, setSelectedLevelId] = useState<string | undefined>();
   const [selectedCycleId, setSelectedCycleId] = useState<string | undefined>();
+  const [gridAreaMode, setGridAreaMode] = useState<"grid" | "timeline">("grid");
   const [instrumentFilter, setInstrumentFilter] = useState<"shares" | "options" | "all">("shares");
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [trades, setTrades] = useState<BasicTrade[]>([]);
@@ -269,14 +271,64 @@ export default function GridLadderTool() {
             {loadError}
           </div>
         )}
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            alignItems: "center",
+            padding: "2px 0",
+          }}
+        >
+          <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)" }}>
+            View
+          </div>
+          <div style={{ display: "flex", gap: "4px" }}>
+            <button
+              type="button"
+              onClick={() => setGridAreaMode("timeline")}
+              style={{
+                border: "1px solid var(--border-color)",
+                backgroundColor: gridAreaMode === "timeline" ? "var(--accent)" : "transparent",
+                color: gridAreaMode === "timeline" ? "#fff" : "var(--text-secondary)",
+                borderRadius: "999px",
+                padding: "4px 10px",
+                fontSize: "11px",
+                cursor: "pointer",
+              }}
+            >
+              Timeline
+            </button>
+            <button
+              type="button"
+              onClick={() => setGridAreaMode("grid")}
+              style={{
+                border: "1px solid var(--border-color)",
+                backgroundColor: gridAreaMode === "grid" ? "var(--accent)" : "transparent",
+                color: gridAreaMode === "grid" ? "#fff" : "var(--text-secondary)",
+                borderRadius: "999px",
+                padding: "4px 10px",
+                fontSize: "11px",
+                cursor: "pointer",
+              }}
+            >
+              Grid
+            </button>
+          </div>
+        </div>
+
         <div style={{ flex: 1, minHeight: 0 }}>
-          <GridLadder
-            aggregates={aggregatesForLadder}
-            currentPrice={currentPriceForLadder}
-            exposure={exposure}
-            selectedLevelId={selectedLevelId}
-            onSelectLevel={setSelectedLevelId}
-          />
+          {gridAreaMode === "timeline" ? (
+            <GridCycleTimeline cycle={selectedCycle ?? cycles[0]} />
+          ) : (
+            <GridLadder
+              aggregates={aggregatesForLadder}
+              currentPrice={currentPriceForLadder}
+              exposure={exposure}
+              selectedLevelId={selectedLevelId}
+              onSelectLevel={setSelectedLevelId}
+              showPositionMetrics={false}
+            />
+          )}
         </div>
       </div>
       <div
