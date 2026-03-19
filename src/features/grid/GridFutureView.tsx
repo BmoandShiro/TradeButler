@@ -30,6 +30,31 @@ function slotSideLabel(slot: GridFutureSlot): "BUY" | "SELL" {
   return "BUY";
 }
 
+function projectedPrincipalRecovered(slot: GridFutureSlot): number {
+  const actual = slot.principalRecovered ?? 0;
+  if (actual > 0) return actual;
+  if (slot.status === "waiting_sell" || slot.status === "partially_filled_sell") {
+    const qty =
+      slot.plannedSellQuantity ?? slot.filledBuyQuantity ?? slot.plannedBuyQuantity ?? 0;
+    const px = slot.plannedSellPrice ?? slot.targetSellPrice ?? 0;
+    return px > 0 && qty > 0 ? px * qty : 0;
+  }
+  return 0;
+}
+
+function projectedFreeShares(slot: GridFutureSlot): number {
+  const actual = slot.freeShareQuantityCreated ?? 0;
+  if (actual > 0) return actual;
+  if (slot.status === "waiting_sell" || slot.status === "partially_filled_sell") {
+    const buyQty = slot.filledBuyQuantity ?? slot.plannedBuyQuantity ?? 0;
+    const sellQty =
+      slot.plannedSellQuantity ?? slot.filledSellQuantity ?? slot.filledBuyQuantity ?? 0;
+    const rem = buyQty - sellQty;
+    return rem > 0 ? rem : 0;
+  }
+  return 0;
+}
+
 export function GridFutureView({
   selectedCycle,
   settings,
@@ -346,8 +371,8 @@ export function GridFutureView({
                       ? fmtNum(slot.plannedBuyPrice, 4)
                       : "—"}
                   </td>
-                  <td style={tdStyle}>{fmtNum(slot.principalRecovered)}</td>
-                  <td style={tdStyle}>{fmtNum(slot.freeShareQuantityCreated, 6)}</td>
+                  <td style={tdStyle}>{fmtNum(projectedPrincipalRecovered(slot))}</td>
+                  <td style={tdStyle}>{fmtNum(projectedFreeShares(slot), 6)}</td>
                   <td style={tdStyle}>{slot.status}</td>
                 </tr>
               ))}
