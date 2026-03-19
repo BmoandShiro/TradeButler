@@ -460,6 +460,10 @@ export default function Journal() {
   const [activeTab, setActiveTab] = useState<TabType>("trade");
   // After a successful manual save, suppress background autosaves that could re-enter edit mode
   const [justSaved, setJustSaved] = useState(false);
+  const justSavedRef = useRef(justSaved);
+  useEffect(() => {
+    justSavedRef.current = justSaved;
+  }, [justSaved]);
   const [journalSectionOrder, setJournalSectionOrder] = useState<string[]>(() => {
     const parseOrder = (raw: string | null): string[] | null => {
       if (!raw) return null;
@@ -748,6 +752,7 @@ export default function Journal() {
   const journalScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const leftPanelScrollRef = useRef<HTMLDivElement>(null);
+  const isManualSaveInProgressRef = useRef(false);
 
   // Save work-in-progress to localStorage
   const saveWorkInProgress = () => {
@@ -1877,9 +1882,12 @@ export default function Journal() {
   };
 
   // Auto-save function (silent, doesn't require title)
-  const autoSave = async () => {
+  const autoSave = async (opts?: { isManualSave?: boolean }) => {
+    if (isManualSaveInProgressRef.current && !opts?.isManualSave) {
+      return;
+    }
     // Only auto-save if we have a title, are creating/editing, and haven't just manually saved
-    if (!entryFormData.title.trim() || (!isCreating && !isEditing) || justSaved) {
+    if (!entryFormData.title.trim() || (!isCreating && !isEditing) || (justSavedRef.current && !opts?.isManualSave)) {
       return;
     }
 
@@ -1896,6 +1904,8 @@ export default function Journal() {
             linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null,
           });
           updateSandboxJournalEntry(entryId, { linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null });
+          // If the user manually clicked Save, don't re-enter edit mode due to a queued auto-save.
+          if ((isManualSaveInProgressRef.current || justSavedRef.current) && !opts?.isManualSave) return;
           setIsCreating(false);
           setIsEditing(true);
           const savedEntry = getSandboxJournalEntry(entryId) as unknown as JournalEntry;
@@ -1981,6 +1991,8 @@ export default function Journal() {
       migrateJournalIndicatorDraftOtherSignals(dataMode, 0, entryId);
         // Link to emotional state entries (chosen while creating) — scope applied after trades below
         // After first auto-save, switch from creating to editing
+        // If the user manually clicked Save, don't re-enter edit mode due to a queued auto-save.
+        if ((isManualSaveInProgressRef.current || justSavedRef.current) && !opts?.isManualSave) return;
         setIsCreating(false);
         setIsEditing(true);
         const savedEntry = await invoke<JournalEntry>("get_journal_entry", { id: entryId });
@@ -2234,18 +2246,30 @@ export default function Journal() {
   }, [entryFormData.title, entryFormData.date, entryFormData.strategy_id, tradesFormData.length]);
 
   const handleSave = async () => {
-    if (!entryFormData.title.trim()) {
-      setShowTitleRequiredModal(true);
-      return;
-    }
-    // Prevent saving a bloated trade list (e.g. from stale work-in-progress)
-    const MAX_TRADES_PER_ENTRY = 100;
-    if (tradesFormData.length > MAX_TRADES_PER_ENTRY) {
-      alert(`This entry has ${tradesFormData.length} trades (max ${MAX_TRADES_PER_ENTRY}). Reload the entry from the list to fix, or remove extra trades before saving.`);
-      return;
-    }
+    isManualSaveInProgressRef.current = true;
+    // Prevent any background auto-save from re-entering edit mode while we're saving.
+    setJustSaved(true);
+    const wasCreatingAtStart = isCreating;
 
     try {
+      if (!entryFormData.title.trim()) {
+        setShowTitleRequiredModal(true);
+        return;
+      }
+      // Prevent saving a bloated trade list (e.g. from stale work-in-progress)
+      const MAX_TRADES_PER_ENTRY = 100;
+      if (tradesFormData.length > MAX_TRADES_PER_ENTRY) {
+        alert(`This entry has ${tradesFormData.length} trades (max ${MAX_TRADES_PER_ENTRY}). Reload the entry from the list to fix, or remove extra trades before saving.`);
+        return;
+      }
+
+      // In real/paper mode, close the editor immediately for existing entries.
+      // (Closing later can feel broken if the server work for checklist/emotional states is slow.)
+      if (dataMode !== "sandbox" && selectedEntry && !wasCreatingAtStart) {
+        setIsCreating(false);
+        setIsEditing(false);
+      }
+
       if (dataMode === "sandbox") {
         // Keep sandbox save path lightweight but align UX with real-mode save:
         // - autosave to sandbox store
@@ -2258,28 +2282,32 @@ export default function Journal() {
           }
         }
 
-        await autoSave();
+        // Manual save delegates to autoSave() in sandbox mode.
+        // We keep the "justSaved" suppression on so background autosaves can't re-open the editor.
+        await autoSave({ isManualSave: true });
 
         if (selectedEntry) {
           await loadTrades(selectedEntry.id);
           await loadLinkedPairs(selectedEntry.id);
         }
 
-        await loadEntries();
-
+        // Close the edit UI as soon as core sandbox persistence finishes.
+        // (loadEntries() can take longer; we don't want that to keep the editor open)
         setIsCreating(false);
         setIsEditing(false);
         setShowAddEmotionalStateForm(false);
         setPendingEmotionalStates([]);
         setJustSaved(true);
         clearWorkInProgress();
+        // Don't block UI closing on list refresh; reload in background.
+        loadEntries().catch((e) => console.error("Failed to reload entries after save:", e));
         return;
       }
 
       let entryId: number;
       let toAdd: number[] = [];
 
-      if (isCreating) {
+      if (wasCreatingAtStart) {
         entryId = await invoke<number>("create_journal_entry", {
           date: entryFormData.date,
           title: entryFormData.title,
@@ -2406,6 +2434,16 @@ export default function Journal() {
         }
       }
 
+      // Exit edit UI immediately after core journal/trade + checklist persistence.
+      // Emotional-state and other follow-up saves can take longer, and the user
+      // expects the journal edit panel to close right away (like demo mode).
+      setIsCreating(false);
+      setIsEditing(false);
+      setEditHistory([]);
+      setOriginalEntryData(null);
+      setJustSaved(true);
+      clearWorkInProgress();
+
       // Persist emotional states: pending list + any form-in-progress (one state per trade or one for entire entry)
       const toPersist: Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string; surveyResponses?: Record<string, number> }> = [...pendingEmotionalStates];
       const hasFormContent = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 || (newEmotionalStateForm.notes || "").trim() !== "";
@@ -2517,17 +2555,17 @@ export default function Journal() {
       // Reload the saved entry
       const savedEntry = await invoke<JournalEntry>("get_journal_entry", { id: entryId });
       setSelectedEntry(savedEntry);
-      await loadTrades(entryId);
-      await loadLinkedPairs(entryId);
-      setIsCreating(false);
-      setIsEditing(false);
-      setEditHistory([]);
-      setOriginalEntryData(null);
-      setJustSaved(true);
-      clearWorkInProgress();
+      try {
+        await loadTrades(entryId);
+        await loadLinkedPairs(entryId);
+      } catch (refreshErr) {
+        console.error("Post-save refresh failed:", refreshErr);
+      }
     } catch (error) {
       console.error("Error saving entry:", error);
-      alert("Failed to save entry: " + error);
+      alert("Failed to save entry: " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      isManualSaveInProgressRef.current = false;
     }
   };
 
@@ -3089,22 +3127,29 @@ export default function Journal() {
     const timeframeOptions = ["1m", "5m", "15m", "1H", "4H", "1D", "1W"];
     const globalSelectedTfs = indicatorTimeframesByPhase[phase] || [];
 
-    const getIndicatorSelectedTfs = (indicatorId: string) => {
+    const getIndicatorSelectedTfs = (indicatorId: string, isTfIndicator: boolean) => {
       const overrides = indicatorTimeframesByPhaseAndIndicator[phase]?.[indicatorId];
       if (overrides && Array.isArray(overrides)) return overrides;
-      return globalSelectedTfs;
+      // Important: do not auto-select indicator-specific timeframe buttons for timeframe-capturing indicators.
+      // Non-timeframe indicators should still default to globalSelectedTfs so their Value inputs show by default.
+      return isTfIndicator ? [] : globalSelectedTfs;
     };
 
     const toggleIndicatorTf = (indicatorId: string, tf: string) => {
       setIndicatorTimeframesByPhaseAndIndicator((prev) => {
         const phaseOverrides = prev[phase] ?? {};
-        const cur = phaseOverrides[indicatorId] ?? globalSelectedTfs;
+        // Start from empty so clicking a timeframe button selects only that timeframe.
+        const cur = phaseOverrides[indicatorId] ?? [];
         const next = cur.includes(tf) ? cur.filter((x) => x !== tf) : [...cur, tf];
         return { ...prev, [phase]: { ...phaseOverrides, [indicatorId]: next } };
       });
     };
 
-    const hasAnyIndicatorTfs = strategyIndicators.some((ind) => getIndicatorSelectedTfs(ind.id).length > 0);
+    const hasAnyIndicatorTfs = strategyIndicators.some((ind) => {
+      const isTfIndicator = ind.capturesTimeframes === true || ind.id.includes("_timeframe");
+      if (isTfIndicator) return globalSelectedTfs.length > 0;
+      return getIndicatorSelectedTfs(ind.id, false).length > 0;
+    });
 
     const toggleTf = (tf: string) => {
       setIndicatorTimeframesByPhase((prev) => {
@@ -3168,8 +3213,8 @@ export default function Journal() {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {strategyIndicators.map((ind) => {
-              const indSelectedTfs = getIndicatorSelectedTfs(ind.id);
               const isTfIndicator = ind.capturesTimeframes === true || ind.id.includes("_timeframe");
+              const indSelectedTfs = getIndicatorSelectedTfs(ind.id, isTfIndicator);
               const isMomentum = (ind.category ?? "").toLowerCase() === "momentum";
               const colTfs = isTfIndicator ? globalSelectedTfs : indSelectedTfs;
               const otherSignals = ind.kind === "custom" ? loadJournalIndicatorOtherSignals(dataMode, entryId, tradeIndex, phase, ind.id) : {};
@@ -3224,7 +3269,7 @@ export default function Journal() {
                   </div>
                   {colTfs.map((tf) =>
                     isTfIndicator ? (
-                      <div key={tf} style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "stretch" }}>
+                      <div key={`${entryId}:${tradeIndex}:${phase}:${ind.id}:${tf}`} style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "stretch" }}>
                         <button
                           type="button"
                           onClick={() => toggleIndicatorTf(ind.id, tf)}
@@ -3266,7 +3311,9 @@ export default function Journal() {
                                 if (next && !indSelectedTfs.includes(tf)) {
                                   setIndicatorTimeframesByPhaseAndIndicator((prev) => {
                                     const phaseOverrides = prev[phase] ?? {};
-                                    const cur = phaseOverrides[ind.id] ?? globalSelectedTfs;
+                                    // Start from empty: we only want to select the clicked timeframe,
+                                    // not auto-select all global timeframes.
+                                    const cur = phaseOverrides[ind.id] ?? [];
                                     const nextTfs = cur.includes(tf) ? cur : [...cur, tf];
                                     return { ...prev, [phase]: { ...phaseOverrides, [ind.id]: nextTfs } };
                                   });
@@ -3280,15 +3327,16 @@ export default function Journal() {
                         )}
                       </div>
                     ) : (
-                      <div key={tf} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <div key={`${entryId}:${tradeIndex}:${phase}:${ind.id}:${tf}`} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                         <div style={{ fontSize: "10px", color: "var(--text-secondary)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", paddingLeft: "2px" }}>
                           {tf}
                         </div>
                         <input
                           type="text"
                           placeholder="Value"
-                          value={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                          defaultValue={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
                           onChange={(e) => setJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.value)}
+                          spellCheck={false}
                           style={{
                             padding: "10px 12px",
                             background: "var(--bg-tertiary)",
@@ -3604,8 +3652,9 @@ export default function Journal() {
     }
   });
   const [indicatorTimeframesByPhase, setIndicatorTimeframesByPhase] = useState<Record<IndicatorPhase, string[]>>({
-    entry: ["1D", "1H"],
-    exit: ["1D", "1H"],
+    // Default indicator timeframes (top-of-section buttons).
+    entry: ["15m", "1H", "4H"],
+    exit: ["15m", "1H", "4H"],
   });
   // Timeframe-capturing indicators (concept inputs) can optionally override the global phase selection.
   const [indicatorTimeframesByPhaseAndIndicator, setIndicatorTimeframesByPhaseAndIndicator] = useState<
