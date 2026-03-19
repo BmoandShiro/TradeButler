@@ -1,7 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { computePlannedSellQuantity } from "./gridFuturePlanner";
 import {
+  GridBuyLot,
   GridCycle,
   GridFutureSettings,
+  GridFutureSellMode,
   GridFutureState,
   GridFutureSlot,
 } from "./gridTypes";
@@ -19,30 +22,6 @@ function fmtNum(n: number, d = 2): string {
   return s.replace(/\.?0+$/, "");
 }
 
-function slotSideLabel(slot: GridFutureSlot): "BUY" | "SELL" {
-  if (
-    slot.status === "waiting_sell" ||
-    slot.status === "partially_filled_sell" ||
-    slot.status === "completed" ||
-    slot.status === "principal_recovered_holding_free_shares"
-  ) {
-    return "SELL";
-  }
-  return "BUY";
-}
-
-function projectedPrincipalRecovered(slot: GridFutureSlot): number {
-  const actual = slot.principalRecovered ?? 0;
-  if (actual > 0) return actual;
-  if (slot.status === "waiting_sell" || slot.status === "partially_filled_sell") {
-    const qty =
-      slot.plannedSellQuantity ?? slot.filledBuyQuantity ?? slot.plannedBuyQuantity ?? 0;
-    const px = slot.plannedSellPrice ?? slot.targetSellPrice ?? 0;
-    return px > 0 && qty > 0 ? px * qty : 0;
-  }
-  return 0;
-}
-
 function projectedFreeShares(slot: GridFutureSlot): number {
   const actual = slot.freeShareQuantityCreated ?? 0;
   if (actual > 0) return actual;
@@ -55,6 +34,60 @@ function projectedFreeShares(slot: GridFutureSlot): number {
   }
   return 0;
 }
+
+function roundFuturePrice(price: number, tick: number): number {
+  if (tick <= 0) return price;
+  return Math.round(price / tick) * tick;
+}
+
+function targetSellForBuyLot(buyPrice: number, settings: GridFutureSettings): number {
+  const sellStep = settings.sellTargetPercent / 100;
+  return roundFuturePrice(buyPrice * (1 + sellStep), settings.priceTickSize);
+}
+
+function projectedSellQtyForBuyLot(
+  lot: GridBuyLot,
+  targetSell: number,
+  settings: GridFutureSettings,
+  capitalPerLevel: number,
+  principalRecovered: number,
+): number {
+  const qty = lot.remainingQuantity;
+  if (qty <= 0 || targetSell <= 0) return 0;
+  const remBasis = lot.buyPrice * qty;
+  return computePlannedSellQuantity(
+    qty,
+    remBasis,
+    targetSell,
+    settings,
+    capitalPerLevel,
+    principalRecovered,
+  );
+}
+
+function projectedFreeSharesForSellLot(
+  lot: GridBuyLot,
+  targetSell: number,
+  settings: GridFutureSettings,
+  capitalPerLevel: number,
+  principalRecovered: number,
+): number {
+  const qty = lot.remainingQuantity;
+  if (qty <= 0 || targetSell <= 0) return 0;
+  if (settings.shareSaleMode === "sell_full_quantity") return 0;
+  const sellQty = projectedSellQtyForBuyLot(
+    lot,
+    targetSell,
+    settings,
+    capitalPerLevel,
+    principalRecovered,
+  );
+  return Math.max(0, qty - sellQty);
+}
+
+type FutureLadderRow =
+  | { kind: "buySlot"; slot: GridFutureSlot; orderPrice: number }
+  | { kind: "sellFromLot"; lot: GridBuyLot; targetSell: number; orderPrice: number };
 
 const FUTURE_VIEW_LAYOUT_KEY = "tradebutler_grid_future_view_layout";
 
@@ -150,32 +183,43 @@ export function GridFutureView({
     });
     return bySlot;
   }, [openFragments]);
-  const ladderRows = slots
-    .filter((slot) => {
-      const isUnfilledBuyRow =
-        slot.status === "waiting_buy" || slot.status === "partially_filled_buy";
-      const isActionableSellRow =
-        slot.status === "waiting_sell" || slot.status === "partially_filled_sell";
 
-      if (isActionableSellRow) return true;
-      if (showUnfilledBuys && isUnfilledBuyRow) return true;
-      return false;
-    })
-    .map((slot) => {
-      const side = slotSideLabel(slot);
-      const orderPrice =
-        side === "SELL"
-          ? (slot.plannedSellPrice ?? slot.filledSellPrice ?? slot.plannedBuyPrice)
-          : slot.plannedBuyPrice;
-      return { slot, side, orderPrice };
-    })
-    .sort((a, b) => b.orderPrice - a.orderPrice);
+  const capitalPerLevel = capital?.capitalPerLevel ?? 0;
 
-  const toggleSlotExpanded = (slotId: string) => {
+  const ladderRows = useMemo((): FutureLadderRow[] => {
+    const EPS = 1e-12;
+    const buyRows: FutureLadderRow[] = slots
+      .filter((slot) => {
+        const isUnfilledBuyRow =
+          slot.status === "waiting_buy" || slot.status === "partially_filled_buy";
+        return showUnfilledBuys && isUnfilledBuyRow;
+      })
+      .map((slot) => ({
+        kind: "buySlot" as const,
+        slot,
+        orderPrice: slot.plannedBuyPrice,
+      }));
+
+    const sellRows: FutureLadderRow[] = buyLots
+      .filter((lot) => lot.remainingQuantity > EPS)
+      .map((lot) => {
+        const targetSell = targetSellForBuyLot(lot.buyPrice, settings);
+        return {
+          kind: "sellFromLot" as const,
+          lot,
+          targetSell,
+          orderPrice: targetSell,
+        };
+      });
+
+    return [...sellRows, ...buyRows].sort((a, b) => b.orderPrice - a.orderPrice);
+  }, [slots, buyLots, showUnfilledBuys, settings, capitalPerLevel]);
+
+  const toggleSlotExpanded = (rowKey: string) => {
     setExpandedSlotIds((prev) => {
       const next = new Set(prev);
-      if (next.has(slotId)) next.delete(slotId);
-      else next.add(slotId);
+      if (next.has(rowKey)) next.delete(rowKey);
+      else next.add(rowKey);
       return next;
     });
   };
@@ -195,16 +239,58 @@ export function GridFutureView({
           borderRadius: "8px",
           padding: "8px",
           display: "grid",
-          gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
+          gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
           gap: "8px",
           backgroundColor: "var(--bg-primary)",
         }}
       >
-        <LabeledInput
-          label="Anchor"
-          value={settings.anchorPrice}
-          onChange={(v) => onSettingsChange({ anchorPrice: v })}
-        />
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "4px",
+            fontSize: "11px",
+            color: "var(--text-secondary)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <span>Anchor</span>
+            <button
+              type="button"
+              onClick={() => {
+                const px = settings.marketPrice;
+                if (px != null && Number.isFinite(px) && px > 0) {
+                  onSettingsChange({ anchorPrice: px });
+                }
+              }}
+              title="Fill with current price"
+              style={{
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                padding: "2px 6px",
+                fontSize: "10px",
+                cursor: "pointer",
+                backgroundColor: "var(--bg-secondary)",
+                color: "var(--accent)",
+              }}
+            >
+              Fill
+            </button>
+          </div>
+          <input
+            type="number"
+            value={Number.isFinite(settings.anchorPrice) ? settings.anchorPrice : 0}
+            onChange={(e) => onSettingsChange({ anchorPrice: Number(e.target.value || 0) })}
+            style={{
+              border: "1px solid var(--border-color)",
+              borderRadius: "6px",
+              backgroundColor: "var(--bg-secondary)",
+              color: "var(--text-primary)",
+              padding: "4px 6px",
+              fontSize: "12px",
+            }}
+          />
+        </div>
         <LabeledInput
           label="Capital"
           value={settings.capitalAllocated}
@@ -224,6 +310,17 @@ export function GridFutureView({
           label="Sell target %"
           value={settings.sellTargetPercent}
           onChange={(v) => onSettingsChange({ sellTargetPercent: v })}
+          title="Limit sell price = buy × (1 + %). With “Match buy $”, sell size uses the same notional as the buy."
+        />
+        <LabeledSelect
+          label="Sell size"
+          value={settings.shareSaleMode}
+          onChange={(v) => onSettingsChange({ shareSaleMode: v as GridFutureSellMode })}
+          options={[
+            { value: "sell_matched_buy_notional", label: "Match buy $" },
+            { value: "sell_full_quantity", label: "Full qty" },
+            { value: "sell_original_notional", label: "Cap / level" },
+          ]}
         />
         <ReadOnlyField label="Current price" value={fmtNum(settings.marketPrice ?? 0, 4)} />
       </div>
@@ -316,7 +413,11 @@ export function GridFutureView({
       >
         <MetricCard label="Capital / level" value={fmtNum(capital?.capitalPerLevel)} />
         <MetricCard label="Committed" value={fmtNum(capital?.capitalCommittedToOpenBuys)} />
-        <MetricCard label="Recovered" value={fmtNum(capital?.capitalRecovered)} />
+        <MetricCard
+          label="Total recovered ($)"
+          value={fmtNum(capital?.capitalRecovered)}
+          title="Cumulative sell proceeds counted toward principal recovery across the Future plan"
+        />
         <MetricCard label="Available" value={fmtNum(capital?.availableCapitalForNewSlots)} />
         <MetricCard label="Affordable slots" value={String(capital?.affordableOpenSlotCount ?? 0)} />
         <MetricCard label="Bottom grid px" value={fmtNum(grid?.bottomGridPrice, 4)} />
@@ -370,7 +471,7 @@ export function GridFutureView({
             }}
           >
             <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
-              Showing future actionable rows only
+              Sells = target per open buy lot; buys = unfilled ladder (if enabled)
             </div>
             <label
               style={{
@@ -406,181 +507,305 @@ export function GridFutureView({
                 <th style={thStyle}>Notional</th>
                 <th style={thStyle}>Target Sell</th>
                 <th style={thStyle}>Source Buy</th>
-                <th style={thStyle}>Principal Recovered</th>
                 <th style={thStyle}>Free Shares</th>
                 <th style={thStyle}>Status</th>
                 <th style={thStyle}>Details</th>
               </tr>
             </thead>
             <tbody>
-              {ladderRows.map(({ slot, side, orderPrice }) => {
+              {ladderRows.map((row) => {
+                if (row.kind === "sellFromLot") {
+                  const { lot, targetSell, orderPrice } = row;
+                  const rowKey = `lot-${lot.lotId}`;
+                  const slotId = lot.slotId ?? "";
+                  const slotForLot = slots.find((s) => s.slotId === slotId);
+                  const principalRecovered = slotForLot?.principalRecovered ?? 0;
+                  const plannedSellQty = projectedSellQtyForBuyLot(
+                    lot,
+                    targetSell,
+                    settings,
+                    capitalPerLevel,
+                    principalRecovered,
+                  );
+                  const plannedSellNotional = targetSell * plannedSellQty;
+                  return (
+                    <Fragment key={rowKey}>
+                      <tr>
+                        <td style={tdStyle}>{fmtNum(orderPrice, 4)}</td>
+                        <td
+                          style={{
+                            ...tdStyle,
+                            color: "var(--danger-color, #dc2626)",
+                            fontWeight: 700,
+                          }}
+                        >
+                          SELL
+                        </td>
+                        <td style={tdStyle}>
+                          <div
+                            style={{
+                              width: "60px",
+                              height: "8px",
+                              borderRadius: "4px",
+                              backgroundColor: "var(--bg-secondary)",
+                              overflow: "hidden",
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: `${Math.min(100, Math.max(0, lot.progressPercent))}%`,
+                                height: "100%",
+                                backgroundColor: "var(--accent)",
+                              }}
+                            />
+                          </div>
+                        </td>
+                        <td style={tdStyle}>{fmtNum(plannedSellQty, 6)}</td>
+                        <td style={tdStyle}>{fmtNum(plannedSellNotional)}</td>
+                        <td style={tdStyle}>{fmtNum(targetSell, 4)}</td>
+                        <td style={tdStyle}>{fmtNum(lot.buyPrice, 4)}</td>
+                        <td style={tdStyle}>
+                          {fmtNum(
+                            projectedFreeSharesForSellLot(
+                              lot,
+                              targetSell,
+                              settings,
+                              capitalPerLevel,
+                              principalRecovered,
+                            ),
+                            6,
+                          )}
+                        </td>
+                        <td style={tdStyle}>{lot.status}</td>
+                        <td style={tdStyle}>
+                          <button
+                            type="button"
+                            onClick={() => toggleSlotExpanded(rowKey)}
+                            style={{
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "6px",
+                              backgroundColor: "transparent",
+                              color: "var(--accent)",
+                              fontSize: "11px",
+                              padding: "2px 6px",
+                              cursor: "pointer",
+                            }}
+                          >
+                            {expandedSlotIds.has(rowKey) ? "Hide" : "View"}
+                          </button>
+                        </td>
+                      </tr>
+                      {expandedSlotIds.has(rowKey) && (
+                        <tr key={`${rowKey}-details`}>
+                          <td
+                            colSpan={10}
+                            style={{
+                              padding: "8px",
+                              borderBottom: "1px solid var(--border-color)",
+                              backgroundColor: "color-mix(in srgb, var(--bg-secondary) 60%, transparent)",
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                                gap: "10px",
+                              }}
+                            >
+                              <div>
+                                <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                  Open buy lot
+                                </div>
+                                <div style={{ fontSize: "11px", color: "var(--text-primary)" }}>
+                                  {fmtNum(lot.consumedQuantity, 6)} / {fmtNum(lot.totalQuantity, 6)} filled @ {fmtNum(lot.buyPrice, 4)}
+                                </div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                  Match events (dynamic)
+                                </div>
+                                {slotId && (matchEventsBySlot.get(slotId) ?? []).length === 0 ? (
+                                  <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>No close matches yet.</div>
+                                ) : slotId ? (
+                                  (matchEventsBySlot.get(slotId) ?? []).map((m) => (
+                                    <div key={m.matchId} style={{ fontSize: "11px", color: "var(--text-primary)", marginBottom: "4px" }}>
+                                      qty {fmtNum(m.matchedQty, 6)}: {fmtNum(m.openPrice, 4)} -&gt; {fmtNum(m.closePrice, 4)} ({new Date(m.closeTime).toLocaleString()})
+                                    </div>
+                                  ))
+                                ) : (
+                                  <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>—</div>
+                                )}
+                              </div>
+                              <div>
+                                <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                  Fragment
+                                </div>
+                                {(openFragmentsBySlot.get(slotId) ?? []).filter((f) => f.fragmentId === lot.lotId).length === 0 ? (
+                                  <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>—</div>
+                                ) : (
+                                  (openFragmentsBySlot.get(slotId) ?? [])
+                                    .filter((f) => f.fragmentId === lot.lotId)
+                                    .map((f) => (
+                                      <div key={f.fragmentId} style={{ fontSize: "11px", color: "var(--text-primary)", marginBottom: "4px" }}>
+                                        {fmtNum(f.quantityRemaining, 6)} @ {fmtNum(f.sourcePrice, 4)} (basis {fmtNum(f.accountingBasisRemaining)})
+                                      </div>
+                                    ))
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                }
+
+                const { slot, orderPrice } = row;
                 const slotBuyLots = buyLots.filter((b) => b.slotId === slot.slotId);
                 const avgProgress =
                   slotBuyLots.length > 0
                     ? slotBuyLots.reduce((s, b) => s + b.progressPercent, 0) / slotBuyLots.length
-                    : side === "SELL"
-                    ? 100
                     : 0;
                 return (
-                <Fragment key={slot.slotId}>
-                  <tr>
-                    <td style={tdStyle}>{fmtNum(orderPrice, 4)}</td>
-                    <td
-                      style={{
-                        ...tdStyle,
-                        color:
-                          side === "BUY"
-                            ? "var(--success-color, #16a34a)"
-                            : "var(--danger-color, #dc2626)",
-                        fontWeight: 700,
-                      }}
-                    >
-                      {side}
-                    </td>
-                    <td style={tdStyle}>
-                      <div
-                        style={{
-                          width: "60px",
-                          height: "8px",
-                          borderRadius: "4px",
-                          backgroundColor: "var(--bg-secondary)",
-                          overflow: "hidden",
-                        }}
-                      >
-                        <div
-                          style={{
-                            width: `${Math.min(100, Math.max(0, avgProgress))}%`,
-                            height: "100%",
-                            backgroundColor: "var(--accent)",
-                          }}
-                        />
-                      </div>
-                    </td>
-                    <td style={tdStyle}>
-                      {fmtNum(
-                        side === "SELL"
-                          ? (slot.plannedSellQuantity ??
-                              slot.filledBuyQuantity ??
-                              slot.plannedBuyQuantity)
-                          : slot.plannedBuyQuantity,
-                        6,
-                      )}
-                    </td>
-                    <td style={tdStyle}>
-                      {fmtNum(
-                        side === "SELL"
-                          ? (slot.plannedSellPrice ?? orderPrice) *
-                              (slot.plannedSellQuantity ??
-                                slot.filledBuyQuantity ??
-                                slot.plannedBuyQuantity)
-                          : slot.plannedBuyNotional,
-                      )}
-                    </td>
-                    <td style={tdStyle}>
-                      {slot.targetSellPrice != null ? fmtNum(slot.targetSellPrice, 4) : "—"}
-                    </td>
-                    <td style={tdStyle}>
-                      {slot.sourceBuyAveragePrice != null
-                        ? `${fmtNum(slot.sourceBuyAveragePrice, 4)}${
-                            (slot.sourceBuyFillCount ?? 0) > 1
-                              ? ` (${slot.sourceBuyFillCount} fills)`
-                              : ""
-                          }`
-                        : slot.filledBuyPrice != null
-                        ? fmtNum(slot.filledBuyPrice, 4)
-                        : slot.plannedBuyPrice > 0
-                        ? fmtNum(slot.plannedBuyPrice, 4)
-                        : "—"}
-                    </td>
-                    <td style={tdStyle}>{fmtNum(projectedPrincipalRecovered(slot))}</td>
-                    <td style={tdStyle}>{fmtNum(projectedFreeShares(slot), 6)}</td>
-                    <td style={tdStyle}>{slot.status}</td>
-                    <td style={tdStyle}>
-                      <button
-                        type="button"
-                        onClick={() => toggleSlotExpanded(slot.slotId)}
-                        style={{
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "6px",
-                          backgroundColor: "transparent",
-                          color: "var(--accent)",
-                          fontSize: "11px",
-                          padding: "2px 6px",
-                          cursor: "pointer",
-                        }}
-                      >
-                        {expandedSlotIds.has(slot.slotId) ? "Hide" : "View"}
-                      </button>
-                    </td>
-                  </tr>
-                  {expandedSlotIds.has(slot.slotId) && (
-                    <tr key={`${slot.slotId}-details`}>
+                  <Fragment key={slot.slotId}>
+                    <tr>
+                      <td style={tdStyle}>{fmtNum(orderPrice, 4)}</td>
                       <td
-                        colSpan={11}
                         style={{
-                          padding: "8px",
-                          borderBottom: "1px solid var(--border-color)",
-                          backgroundColor: "color-mix(in srgb, var(--bg-secondary) 60%, transparent)",
+                          ...tdStyle,
+                          color: "var(--success-color, #16a34a)",
+                          fontWeight: 700,
                         }}
                       >
+                        BUY
+                      </td>
+                      <td style={tdStyle}>
                         <div
                           style={{
-                            display: "grid",
-                            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                            gap: "10px",
+                            width: "60px",
+                            height: "8px",
+                            borderRadius: "4px",
+                            backgroundColor: "var(--bg-secondary)",
+                            overflow: "hidden",
                           }}
                         >
-                          <div>
-                            <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", marginBottom: "6px" }}>
-                              Buy lots (progress)
-                            </div>
-                            {(buyLots.filter((b) => b.slotId === slot.slotId).length === 0) ? (
-                              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>No buy lots.</div>
-                            ) : (
-                              buyLots.filter((b) => b.slotId === slot.slotId).map((b) => (
-                                <div key={b.lotId} style={{ fontSize: "11px", marginBottom: "4px" }}>
-                                  {fmtNum(b.buyPrice, 4)}: {fmtNum(b.consumedQuantity, 6)}/{fmtNum(b.totalQuantity, 6)} ({fmtNum(b.progressPercent, 1)}%)
-                                  <div style={{ width: "80px", height: "4px", borderRadius: "2px", backgroundColor: "var(--bg-secondary)", overflow: "hidden", marginTop: "2px" }}>
-                                    <div style={{ width: `${b.progressPercent}%`, height: "100%", backgroundColor: "var(--accent)" }} />
-                                  </div>
-                                </div>
-                              ))
-                            )}
-                          </div>
-                          <div>
-                            <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", marginBottom: "6px" }}>
-                              Match events (dynamic)
-                            </div>
-                            {(matchEventsBySlot.get(slot.slotId) ?? []).length === 0 ? (
-                              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>No close matches yet.</div>
-                            ) : (
-                              (matchEventsBySlot.get(slot.slotId) ?? []).map((m) => (
-                                <div key={m.matchId} style={{ fontSize: "11px", color: "var(--text-primary)", marginBottom: "4px" }}>
-                                  qty {fmtNum(m.matchedQty, 6)}: {fmtNum(m.openPrice, 4)} -&gt; {fmtNum(m.closePrice, 4)} ({new Date(m.closeTime).toLocaleString()})
-                                </div>
-                              ))
-                            )}
-                          </div>
-                          <div>
-                            <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", marginBottom: "6px" }}>
-                              Remaining open fragments
-                            </div>
-                            {(openFragmentsBySlot.get(slot.slotId) ?? []).length === 0 ? (
-                              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>No remaining open fragments.</div>
-                            ) : (
-                              (openFragmentsBySlot.get(slot.slotId) ?? []).map((f) => (
-                                <div key={f.fragmentId} style={{ fontSize: "11px", color: "var(--text-primary)", marginBottom: "4px" }}>
-                                  {fmtNum(f.quantityRemaining, 6)} @ {fmtNum(f.sourcePrice, 4)} (basis {fmtNum(f.accountingBasisRemaining)})
-                                </div>
-                              ))
-                            )}
-                          </div>
+                          <div
+                            style={{
+                              width: `${Math.min(100, Math.max(0, avgProgress))}%`,
+                              height: "100%",
+                              backgroundColor: "var(--accent)",
+                            }}
+                          />
                         </div>
                       </td>
+                      <td style={tdStyle}>{fmtNum(slot.plannedBuyQuantity, 6)}</td>
+                      <td style={tdStyle}>{fmtNum(slot.plannedBuyNotional)}</td>
+                      <td style={tdStyle}>
+                        {slot.targetSellPrice != null ? fmtNum(slot.targetSellPrice, 4) : "—"}
+                      </td>
+                      <td style={tdStyle}>
+                        {slot.sourceBuyAveragePrice != null
+                          ? `${fmtNum(slot.sourceBuyAveragePrice, 4)}${
+                              (slot.sourceBuyFillCount ?? 0) > 1
+                                ? ` (${slot.sourceBuyFillCount} fills)`
+                                : ""
+                            }`
+                          : slot.filledBuyPrice != null
+                          ? fmtNum(slot.filledBuyPrice, 4)
+                          : slot.plannedBuyPrice > 0
+                          ? fmtNum(slot.plannedBuyPrice, 4)
+                          : "—"}
+                      </td>
+                      <td style={tdStyle}>{fmtNum(projectedFreeShares(slot), 6)}</td>
+                      <td style={tdStyle}>{slot.status}</td>
+                      <td style={tdStyle}>
+                        <button
+                          type="button"
+                          onClick={() => toggleSlotExpanded(slot.slotId)}
+                          style={{
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "6px",
+                            backgroundColor: "transparent",
+                            color: "var(--accent)",
+                            fontSize: "11px",
+                            padding: "2px 6px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {expandedSlotIds.has(slot.slotId) ? "Hide" : "View"}
+                        </button>
+                      </td>
                     </tr>
-                  )}
-                </Fragment>
-              );
+                    {expandedSlotIds.has(slot.slotId) && (
+                      <tr key={`${slot.slotId}-details`}>
+                        <td
+                          colSpan={10}
+                          style={{
+                            padding: "8px",
+                            borderBottom: "1px solid var(--border-color)",
+                            backgroundColor: "color-mix(in srgb, var(--bg-secondary) 60%, transparent)",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                              gap: "10px",
+                            }}
+                          >
+                            <div>
+                              <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                Buy lots (progress)
+                              </div>
+                              {buyLots.filter((b) => b.slotId === slot.slotId).length === 0 ? (
+                                <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>No buy lots.</div>
+                              ) : (
+                                buyLots
+                                  .filter((b) => b.slotId === slot.slotId)
+                                  .map((b) => (
+                                    <div key={b.lotId} style={{ fontSize: "11px", marginBottom: "4px" }}>
+                                      {fmtNum(b.buyPrice, 4)}: {fmtNum(b.consumedQuantity, 6)}/{fmtNum(b.totalQuantity, 6)} ({fmtNum(b.progressPercent, 1)}%)
+                                      <div style={{ width: "80px", height: "4px", borderRadius: "2px", backgroundColor: "var(--bg-secondary)", overflow: "hidden", marginTop: "2px" }}>
+                                        <div style={{ width: `${b.progressPercent}%`, height: "100%", backgroundColor: "var(--accent)" }} />
+                                      </div>
+                                    </div>
+                                  ))
+                              )}
+                            </div>
+                            <div>
+                              <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                Match events (dynamic)
+                              </div>
+                              {(matchEventsBySlot.get(slot.slotId) ?? []).length === 0 ? (
+                                <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>No close matches yet.</div>
+                              ) : (
+                                (matchEventsBySlot.get(slot.slotId) ?? []).map((m) => (
+                                  <div key={m.matchId} style={{ fontSize: "11px", color: "var(--text-primary)", marginBottom: "4px" }}>
+                                    qty {fmtNum(m.matchedQty, 6)}: {fmtNum(m.openPrice, 4)} -&gt; {fmtNum(m.closePrice, 4)} ({new Date(m.closeTime).toLocaleString()})
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                            <div>
+                              <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                Remaining open fragments
+                              </div>
+                              {(openFragmentsBySlot.get(slot.slotId) ?? []).length === 0 ? (
+                                <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>No remaining open fragments.</div>
+                              ) : (
+                                (openFragmentsBySlot.get(slot.slotId) ?? []).map((f) => (
+                                  <div key={f.fragmentId} style={{ fontSize: "11px", color: "var(--text-primary)", marginBottom: "4px" }}>
+                                    {fmtNum(f.quantityRemaining, 6)} @ {fmtNum(f.sourcePrice, 4)} (basis {fmtNum(f.accountingBasisRemaining)})
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
               })}
             </tbody>
           </table>
@@ -650,7 +875,7 @@ export function GridFutureView({
               </button>
             </div>
             <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "8px" }}>
-              Remaining exposure (notional) not yet offset by sells.
+              Notional matched by sells so far vs full lot (same as progress bar).
             </div>
             {(() => {
               const unchecked = buyLots
@@ -675,7 +900,10 @@ export function GridFutureView({
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
                     <span>{fmtNum(lot.buyPrice, 4)}</span>
                     <span>
-                      ${fmtNum(lot.remainingQuantity * lot.buyPrice, 2)} / ${fmtNum(lot.totalQuantity * lot.buyPrice, 2)}
+                      {`$${fmtNum(lot.consumedQuantity * lot.buyPrice, 2)} / $${fmtNum(
+                        lot.totalQuantity * lot.buyPrice,
+                        2,
+                      )}`}
                     </span>
                   </div>
                   <div
@@ -779,9 +1007,18 @@ const tdStyle: CSSProperties = {
   borderBottom: "1px solid var(--border-color)",
 };
 
-function MetricCard({ label, value }: { label: string; value: string }) {
+function MetricCard({
+  label,
+  value,
+  title,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+}) {
   return (
     <div
+      title={title}
       style={{
         border: "1px solid var(--border-color)",
         borderRadius: "8px",
@@ -799,13 +1036,16 @@ function LabeledInput({
   label,
   value,
   onChange,
+  title,
 }: {
   label: string;
   value: number;
   onChange: (next: number) => void;
+  title?: string;
 }) {
   return (
     <label
+      title={title}
       style={{
         display: "flex",
         flexDirection: "column",

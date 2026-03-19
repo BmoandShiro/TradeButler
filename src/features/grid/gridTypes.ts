@@ -91,7 +91,10 @@ export interface GridPnLSummary {
 
 export type GridFutureSellMode =
   | "sell_full_quantity"
-  | "sell_original_notional";
+  /** Recover up to capital-per-level in sell proceeds; leftover shares can become free shares. */
+  | "sell_original_notional"
+  /** Sell limit at buy × (1 + sell target %). Sell qty = remaining buy notional ÷ limit price (same $ as buy). */
+  | "sell_matched_buy_notional";
 
 export type GridFreeShareExitMode =
   | "disabled"

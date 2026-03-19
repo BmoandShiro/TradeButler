@@ -19,7 +19,7 @@ export const DEFAULT_GRID_FUTURE_SETTINGS: GridFutureSettings = {
   gridLevels: 20,
   buyStepPercent: 1,
   sellTargetPercent: 1,
-  shareSaleMode: "sell_original_notional",
+  shareSaleMode: "sell_matched_buy_notional",
   reserveCapitalForUnfilledOrders: false,
   freeShareExitMode: "scale_out_by_grid",
   freeShareReferenceCostMode: "active_grid_average_cost",
@@ -38,6 +38,17 @@ export const DEFAULT_GRID_FUTURE_SETTINGS: GridFutureSettings = {
   marketPrice: null,
 };
 
+function coerceShareSaleMode(value: unknown): GridFutureSettings["shareSaleMode"] {
+  if (
+    value === "sell_full_quantity" ||
+    value === "sell_original_notional" ||
+    value === "sell_matched_buy_notional"
+  ) {
+    return value;
+  }
+  return DEFAULT_GRID_FUTURE_SETTINGS.shareSaleMode;
+}
+
 export function withGridFutureSettingsDefaults(
   partial: Partial<GridFutureSettings>,
   context?: { selectedCycle?: GridCycle; marketPrice?: number | null },
@@ -50,6 +61,7 @@ export function withGridFutureSettingsDefaults(
   return {
     ...DEFAULT_GRID_FUTURE_SETTINGS,
     ...partial,
+    shareSaleMode: coerceShareSaleMode(partial.shareSaleMode),
     freeShareExitMode: "scale_out_by_grid",
     anchorPrice: anchor,
     marketPrice:
@@ -77,12 +89,40 @@ function safeDiv(n: number, d: number): number {
   return Math.abs(d) > EPS ? n / d : 0;
 }
 
+/** Planned sell size at `sellPx` for remaining inventory (tick-rounded qty). */
+export function computePlannedSellQuantity(
+  remainingQty: number,
+  remainingAccountingBasis: number,
+  sellPx: number,
+  settings: GridFutureSettings,
+  capitalPerLevel: number,
+  principalRecovered: number,
+): number {
+  if (sellPx <= EPS || remainingQty <= EPS) return 0;
+  if (settings.shareSaleMode === "sell_full_quantity") {
+    return remainingQty;
+  }
+  if (settings.shareSaleMode === "sell_matched_buy_notional") {
+    const qtyFromNotional = roundQty(
+      safeDiv(remainingAccountingBasis, sellPx),
+      settings.quantityPrecision,
+      settings.roundShareQuantityDown,
+    );
+    return Math.min(remainingQty, qtyFromNotional);
+  }
+  return Math.min(
+    remainingQty,
+    safeDiv(Math.max(0, capitalPerLevel - principalRecovered), sellPx),
+  );
+}
+
 export function generateCompoundBuyLevels(settings: GridFutureSettings): Array<{
   level: number;
   buyPrice: number;
   buyQuantity: number;
   buyNotional: number;
   projectedSellPrice: number;
+  projectedSellQuantity: number;
 }> {
   const buyStep = settings.buyStepPercent / 100;
   const sellStep = settings.sellTargetPercent / 100;
@@ -93,6 +133,7 @@ export function generateCompoundBuyLevels(settings: GridFutureSettings): Array<{
     buyQuantity: number;
     buyNotional: number;
     projectedSellPrice: number;
+    projectedSellQuantity: number;
   }> = [];
 
   for (let i = 1; i <= Math.max(0, settings.gridLevels); i += 1) {
@@ -102,12 +143,21 @@ export function generateCompoundBuyLevels(settings: GridFutureSettings): Array<{
     const buyQuantity = roundQty(qtyRaw, settings.quantityPrecision, settings.roundShareQuantityDown);
     const buyNotional = buyPrice * buyQuantity;
     const projectedSellPrice = roundPrice(buyPrice * (1 + sellStep), settings.priceTickSize);
+    const projectedSellQuantity = computePlannedSellQuantity(
+      buyQuantity,
+      buyNotional,
+      projectedSellPrice,
+      settings,
+      capitalPerLevel,
+      0,
+    );
     levels.push({
       level: i,
       buyPrice,
       buyQuantity,
       buyNotional,
       projectedSellPrice,
+      projectedSellQuantity,
     });
   }
 
@@ -220,16 +270,14 @@ export function buildGridFutureState(
         existing.remainingLotAccountingBasis,
         existing.remainingLotQuantity,
       );
-      existing.plannedSellQuantity =
-        settings.shareSaleMode === "sell_full_quantity"
-          ? existing.remainingLotQuantity
-          : Math.min(
-              existing.remainingLotQuantity,
-              safeDiv(
-                Math.max(0, capitalPerLevel - existing.principalRecovered),
-                existing.plannedSellPrice ?? targetSellPrice,
-              ),
-            );
+      existing.plannedSellQuantity = computePlannedSellQuantity(
+        existing.remainingLotQuantity,
+        existing.remainingLotAccountingBasis,
+        existing.plannedSellPrice ?? targetSellPrice,
+        settings,
+        capitalPerLevel,
+        existing.principalRecovered,
+      );
 
       const fragmentId = `frag-${fill.id}-${existing.slotId}-${existing.sourceBuyFillCount}`;
       openLots.push({
@@ -246,10 +294,14 @@ export function buildGridFutureState(
       return existing;
     }
 
-    const plannedSellQuantity =
-      settings.shareSaleMode === "sell_full_quantity"
-        ? fill.quantity
-        : Math.min(fill.quantity, safeDiv(capitalPerLevel, targetSellPrice));
+    const plannedSellQuantity = computePlannedSellQuantity(
+      fill.quantity,
+      fill.price * fill.quantity,
+      targetSellPrice,
+      settings,
+      capitalPerLevel,
+      0,
+    );
 
     const slot: GridFutureSlot = {
       slotId,
@@ -356,9 +408,16 @@ export function buildGridFutureState(
         slot.remainingLotAccountingBasis - matchedOpenBasis,
       );
 
-      if (settings.shareSaleMode === "sell_original_notional") {
+      if (
+        settings.shareSaleMode === "sell_original_notional" ||
+        settings.shareSaleMode === "sell_matched_buy_notional"
+      ) {
+        const principalCap =
+          settings.shareSaleMode === "sell_matched_buy_notional"
+            ? slot.plannedBuyNotional ?? 0
+            : capitalPerLevel;
         const recovered = Math.min(
-          capitalPerLevel - slot.principalRecovered,
+          Math.max(0, principalCap - slot.principalRecovered),
           closeNotional,
         );
         slot.principalRecovered += Math.max(0, recovered);
@@ -366,7 +425,7 @@ export function buildGridFutureState(
 
         // Free-share creation when principal has been recovered and shares remain.
         if (
-          slot.principalRecovered >= capitalPerLevel - EPS &&
+          slot.principalRecovered >= principalCap - EPS &&
           slot.remainingLotQuantity > EPS
         ) {
           const lotId = `free-${slot.slotId}-${freeShareLots.length + 1}`;
@@ -440,10 +499,14 @@ export function buildGridFutureState(
 
       const sellPx = slot.plannedSellPrice ?? slot.targetSellPrice ?? 0;
       if (sellPx > 0) {
-        slot.plannedSellQuantity =
-          settings.shareSaleMode === "sell_full_quantity"
-            ? remQty
-            : Math.min(remQty, safeDiv(Math.max(0, capitalPerLevel - slot.principalRecovered), sellPx));
+        slot.plannedSellQuantity = computePlannedSellQuantity(
+          remQty,
+          remBasis,
+          sellPx,
+          settings,
+          capitalPerLevel,
+          slot.principalRecovered,
+        );
       }
     } else {
       slot.sourceBuyAveragePrice = slot.sourceBuyAveragePrice ?? slot.filledBuyPrice ?? null;
@@ -484,12 +547,19 @@ export function buildGridFutureState(
       : settings.marketPrice && settings.marketPrice > 0
       ? settings.marketPrice
       : settings.anchorPrice;
-  let lowestPrice =
+  // Where to step new planned buys down from: cycle context unless user set an anchor (then anchor drives layout).
+  // Replay slots from fills keep their own buy/sell prices; this only affects auto-created waiting_buy rows.
+  let ladderStartForNewBuys =
     waitingBuyPrices.length > 0
       ? Math.min(...waitingBuyPrices)
       : cycleContextFloor;
 
+  if (settings.anchorPrice > EPS) {
+    ladderStartForNewBuys = settings.anchorPrice;
+  }
+
   if (settings.autoCreateNewBottomBuys && affordableOpenSlotCount > 0) {
+    let lowestPrice = ladderStartForNewBuys;
     for (let i = 0; i < affordableOpenSlotCount; i += 1) {
       const newBuyPrice = roundPrice(lowestPrice * (1 - buyStep), settings.priceTickSize);
       const qty = roundQty(
@@ -498,6 +568,15 @@ export function buildGridFutureState(
         settings.roundShareQuantityDown,
       );
       const notional = newBuyPrice * qty;
+      const plannedSellPx = roundPrice(newBuyPrice * (1 + sellStep), settings.priceTickSize);
+      const plannedSellQty = computePlannedSellQuantity(
+        qty,
+        notional,
+        plannedSellPx,
+        settings,
+        capitalPerLevel,
+        0,
+      );
       const slot: GridFutureSlot = {
         slotId: `future-buy-${i + 1}`,
         ladderSequence: ladderSequence + i,
@@ -512,8 +591,8 @@ export function buildGridFutureState(
         filledBuyNotional: null,
         buyFees: 0,
         sellMode: settings.shareSaleMode,
-        plannedSellPrice: roundPrice(newBuyPrice * (1 + sellStep), settings.priceTickSize),
-        plannedSellQuantity: null,
+        plannedSellPrice: plannedSellPx,
+        plannedSellQuantity: plannedSellQty,
         sellOrderId: null,
         sellPlacedTime: null,
         sellFilledTime: null,
@@ -528,7 +607,7 @@ export function buildGridFutureState(
         linkedFreeShareLotIds: [],
         status: "waiting_buy",
         targetBuyPrice: null,
-        targetSellPrice: roundPrice(newBuyPrice * (1 + sellStep), settings.priceTickSize),
+        targetSellPrice: plannedSellPx,
       };
       slots.push(slot);
       lowestPrice = newBuyPrice;
