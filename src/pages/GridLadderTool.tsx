@@ -64,6 +64,10 @@ export default function GridLadderTool() {
   const [_isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  const handleSelectCycle = (cycleId: string) => {
+    setSelectedCycleId((prev) => (prev === cycleId ? undefined : cycleId));
+  };
+
   useEffect(() => {
     const unsubscribe = subscribeToDataMode((mode) => {
       setDataMode(mode);
@@ -318,7 +322,7 @@ export default function GridLadderTool() {
 
         <div style={{ flex: 1, minHeight: 0 }}>
           {gridAreaMode === "timeline" ? (
-            <GridCycleTimeline cycle={selectedCycle ?? cycles[0]} />
+            <GridCycleTimeline cycle={selectedCycle} />
           ) : (
             <GridLadder
               aggregates={aggregatesForLadder}
@@ -358,7 +362,7 @@ export default function GridLadderTool() {
           <GridCyclesTable
             cycles={cycles}
             selectedCycleId={selectedCycleId}
-            onSelectCycle={setSelectedCycleId}
+            onSelectCycle={handleSelectCycle}
           />
         </div>
         {selectedCycle && (

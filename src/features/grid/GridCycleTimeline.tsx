@@ -18,7 +18,7 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
   const firstFill = cycle.fills.find((f) => f.kind !== "ORDER") ?? cycle.fills[0];
   const isLong = firstFill?.side === "BUY";
 
-  const EPS = 1e-9;
+  const EPS = 0;
   const lots: Lot[] = [];
 
   const rows = cycle.fills.map((fill) => {

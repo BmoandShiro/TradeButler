@@ -248,7 +248,8 @@ function computeRealizedPnlFromCycleFills(fills: GridFill[]): number {
   if (!first) return 0;
 
   const isLong = first.side === "BUY";
-  const EPS = 1e-9;
+  // Larger tolerance helps with fractional quantities drifting off of zero.
+  const EPS = 1e-6;
 
   if (isLong) {
     // FIFO match BUY lots against SELL fills.
@@ -300,8 +301,6 @@ function computeRealizedPnlFromCycleFills(fills: GridFill[]): number {
 }
 
 export function computeGridPositionCycles(symbol: string, fills: GridFill[]): GridCycle[] {
-  const EPS = 1e-9;
-
   const activeFillsSorted = [...fills]
     .filter((f) => f.kind !== "ORDER" && f.status !== "CANCELLED")
     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
@@ -407,15 +406,15 @@ export function computeGridPositionCycles(symbol: string, fills: GridFill[]): Gr
     let remaining = fill.quantity;
     let partNo = 0;
 
-    while (remaining > EPS) {
+    while (remaining > 0) {
       if (!current) {
         startWorkingCycle(fill);
       }
 
       // If this fill moves the position toward flat, it may close the cycle.
       const isClosing =
-        (signedNetQty > EPS && fill.side === "SELL") ||
-        (signedNetQty < -EPS && fill.side === "BUY");
+        (signedNetQty > 0 && fill.side === "SELL") ||
+        (signedNetQty < 0 && fill.side === "BUY");
 
       if (!isClosing) {
         const qtyPart = remaining;
@@ -446,7 +445,7 @@ export function computeGridPositionCycles(symbol: string, fills: GridFill[]): Gr
       remaining -= qtyPart;
       partNo += 1;
 
-      if (Math.abs(signedNetQty) <= EPS) {
+      if (signedNetQty === 0) {
         closeWorkingCycle(fillPart);
       }
     }
