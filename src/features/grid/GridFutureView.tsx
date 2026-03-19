@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   GridCycle,
   GridFutureSettings,
@@ -56,6 +56,22 @@ function projectedFreeShares(slot: GridFutureSlot): number {
   return 0;
 }
 
+const FUTURE_VIEW_LAYOUT_KEY = "tradebutler_grid_future_view_layout";
+
+function loadFutureViewLayout() {
+  try {
+    const raw = localStorage.getItem(FUTURE_VIEW_LAYOUT_KEY);
+    if (!raw) return { tableWidthPct: 75, uncheckedHeightPct: 50 };
+    const parsed = JSON.parse(raw) as { tableWidthPct?: number; uncheckedHeightPct?: number };
+    return {
+      tableWidthPct: Math.max(30, Math.min(90, parsed.tableWidthPct ?? 75)),
+      uncheckedHeightPct: Math.max(20, Math.min(80, parsed.uncheckedHeightPct ?? 50)),
+    };
+  } catch {
+    return { tableWidthPct: 75, uncheckedHeightPct: 50 };
+  }
+}
+
 export function GridFutureView({
   selectedCycle,
   settings,
@@ -64,6 +80,41 @@ export function GridFutureView({
 }: GridFutureViewProps) {
   const [showUnfilledBuys, setShowUnfilledBuys] = useState(false);
   const [expandedSlotIds, setExpandedSlotIds] = useState<Set<string>>(new Set());
+  const [layout, setLayout] = useState(loadFutureViewLayout);
+  const [resizing, setResizing] = useState<"horizontal" | "vertical" | null>(null);
+  const layoutRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    localStorage.setItem(FUTURE_VIEW_LAYOUT_KEY, JSON.stringify(layout));
+  }, [layout]);
+
+  useEffect(() => {
+    if (!resizing) return;
+    document.body.style.userSelect = "none";
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!layoutRef.current) return;
+      const rect = layoutRef.current.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      if (resizing === "vertical") {
+        const rawPct = ((e.clientX - rect.left) / rect.width) * 100;
+        setLayout((prev) => ({ ...prev, tableWidthPct: Math.max(30, Math.min(90, rawPct)) }));
+      } else {
+        const rawPct = ((e.clientY - rect.top) / rect.height) * 100;
+        setLayout((prev) => ({ ...prev, uncheckedHeightPct: Math.max(20, Math.min(80, rawPct)) }));
+      }
+    };
+    const handleMouseUp = () => {
+      setResizing(null);
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [resizing]);
 
   if (!selectedCycle) {
     return (
@@ -73,27 +124,32 @@ export function GridFutureView({
     );
   }
 
-  const { capital, grid, position, freeShareTargets } = state.summary;
+  const buyLots = state.buyLots ?? [];
+  const summary = state.summary ?? {};
+  const { capital, grid, position, freeShareTargets } = summary;
+  const slots = state.slots ?? [];
+  const matchEvents = state.matchEvents ?? [];
+  const openFragments = state.openFragments ?? [];
   const matchEventsBySlot = useMemo(() => {
-    const bySlot = new Map<string, typeof state.matchEvents>();
-    state.matchEvents.forEach((m) => {
+    const bySlot = new Map<string, typeof matchEvents>();
+    matchEvents.forEach((m) => {
       const arr = bySlot.get(m.slotId) ?? [];
       arr.push(m);
       bySlot.set(m.slotId, arr);
     });
     return bySlot;
-  }, [state.matchEvents]);
+  }, [matchEvents]);
 
   const openFragmentsBySlot = useMemo(() => {
-    const bySlot = new Map<string, typeof state.openFragments>();
-    state.openFragments.forEach((f) => {
+    const bySlot = new Map<string, typeof openFragments>();
+    openFragments.forEach((f) => {
       const arr = bySlot.get(f.slotId) ?? [];
       arr.push(f);
       bySlot.set(f.slotId, arr);
     });
     return bySlot;
-  }, [state.openFragments]);
-  const ladderRows = state.slots
+  }, [openFragments]);
+  const ladderRows = slots
     .filter((slot) => {
       const isUnfilledBuyRow =
         slot.status === "waiting_buy" || slot.status === "partially_filled_buy";
@@ -257,12 +313,12 @@ export function GridFutureView({
           gap: "8px",
         }}
       >
-        <MetricCard label="Capital / level" value={fmtNum(capital.capitalPerLevel)} />
-        <MetricCard label="Committed" value={fmtNum(capital.capitalCommittedToOpenBuys)} />
-        <MetricCard label="Recovered" value={fmtNum(capital.capitalRecovered)} />
-        <MetricCard label="Available" value={fmtNum(capital.availableCapitalForNewSlots)} />
-        <MetricCard label="Affordable slots" value={String(capital.affordableOpenSlotCount)} />
-        <MetricCard label="Bottom grid px" value={fmtNum(grid.bottomGridPrice, 4)} />
+        <MetricCard label="Capital / level" value={fmtNum(capital?.capitalPerLevel)} />
+        <MetricCard label="Committed" value={fmtNum(capital?.capitalCommittedToOpenBuys)} />
+        <MetricCard label="Recovered" value={fmtNum(capital?.capitalRecovered)} />
+        <MetricCard label="Available" value={fmtNum(capital?.availableCapitalForNewSlots)} />
+        <MetricCard label="Affordable slots" value={String(capital?.affordableOpenSlotCount ?? 0)} />
+        <MetricCard label="Bottom grid px" value={fmtNum(grid?.bottomGridPrice, 4)} />
       </div>
 
       <div
@@ -272,20 +328,21 @@ export function GridFutureView({
           gap: "8px",
         }}
       >
-        <MetricCard label="Active qty" value={fmtNum(position.activeGridQuantity, 6)} />
-        <MetricCard label="Free-share qty" value={fmtNum(position.freeSharesTotalQuantity, 6)} />
-        <MetricCard label="Avg cost" value={fmtNum(position.activeGridAverageCost, 4)} />
-        <MetricCard label="Realized P/L" value={fmtNum(position.realizedPL)} />
-        <MetricCard label="Unrealized (acct)" value={fmtNum(position.unrealizedPLAccounting)} />
-        <MetricCard label="Unrealized (strategy)" value={fmtNum(position.unrealizedPLStrategy)} />
+        <MetricCard label="Active qty" value={fmtNum(position?.activeGridQuantity, 6)} />
+        <MetricCard label="Free-share qty" value={fmtNum(position?.freeSharesTotalQuantity, 6)} />
+        <MetricCard label="Avg cost" value={fmtNum(position?.activeGridAverageCost, 4)} />
+        <MetricCard label="Realized P/L" value={fmtNum(position?.realizedPL)} />
+        <MetricCard label="Unrealized (acct)" value={fmtNum(position?.unrealizedPLAccounting)} />
+        <MetricCard label="Unrealized (strategy)" value={fmtNum(position?.unrealizedPLStrategy)} />
       </div>
 
       <div
+        ref={layoutRef}
         style={{
           minHeight: 0,
           display: "grid",
-          gridTemplateColumns: "minmax(0, 3fr) minmax(0, 1.2fr)",
-          gap: "8px",
+          gridTemplateColumns: `${layout.tableWidthPct}% 6px minmax(0, 1fr)`,
+          gap: 0,
         }}
       >
         <div
@@ -294,6 +351,7 @@ export function GridFutureView({
             borderRadius: "8px",
             overflow: "auto",
             backgroundColor: "var(--bg-primary)",
+            minWidth: 0,
           }}
         >
           <div
@@ -355,7 +413,7 @@ export function GridFutureView({
             </thead>
             <tbody>
               {ladderRows.map(({ slot, side, orderPrice }) => {
-                const slotBuyLots = state.buyLots.filter((b) => b.slotId === slot.slotId);
+                const slotBuyLots = buyLots.filter((b) => b.slotId === slot.slotId);
                 const avgProgress =
                   slotBuyLots.length > 0
                     ? slotBuyLots.reduce((s, b) => s + b.progressPercent, 0) / slotBuyLots.length
@@ -363,8 +421,8 @@ export function GridFutureView({
                     ? 100
                     : 0;
                 return (
-                <>
-                  <tr key={slot.slotId}>
+                <Fragment key={slot.slotId}>
+                  <tr>
                     <td style={tdStyle}>{fmtNum(orderPrice, 4)}</td>
                     <td
                       style={{
@@ -475,10 +533,10 @@ export function GridFutureView({
                             <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", marginBottom: "6px" }}>
                               Buy lots (progress)
                             </div>
-                            {(state.buyLots.filter((b) => b.slotId === slot.slotId).length === 0) ? (
+                            {(buyLots.filter((b) => b.slotId === slot.slotId).length === 0) ? (
                               <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>No buy lots.</div>
                             ) : (
-                              state.buyLots.filter((b) => b.slotId === slot.slotId).map((b) => (
+                              buyLots.filter((b) => b.slotId === slot.slotId).map((b) => (
                                 <div key={b.lotId} style={{ fontSize: "11px", marginBottom: "4px" }}>
                                   {fmtNum(b.buyPrice, 4)}: {fmtNum(b.consumedQuantity, 6)}/{fmtNum(b.totalQuantity, 6)} ({fmtNum(b.progressPercent, 1)}%)
                                   <div style={{ width: "80px", height: "4px", borderRadius: "2px", backgroundColor: "var(--bg-secondary)", overflow: "hidden", marginTop: "2px" }}>
@@ -520,7 +578,7 @@ export function GridFutureView({
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               );
               })}
             </tbody>
@@ -528,11 +586,28 @@ export function GridFutureView({
         </div>
 
         <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize table and side panel"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            setResizing("vertical");
+          }}
           style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: "8px",
-            overflow: "auto",
+            cursor: "col-resize",
+            backgroundColor: resizing === "vertical" ? "color-mix(in srgb, var(--accent) 40%, transparent)" : "var(--border-color)",
+            borderRadius: "4px",
+            margin: "0 2px",
+            minWidth: "6px",
+          }}
+        />
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateRows: `${layout.uncheckedHeightPct}fr 6px ${100 - layout.uncheckedHeightPct}fr`,
+            minHeight: 0,
+            gap: 0,
           }}
         >
           <div
@@ -542,6 +617,7 @@ export function GridFutureView({
               padding: "8px",
               backgroundColor: "var(--bg-primary)",
               overflow: "auto",
+              minHeight: 0,
             }}
           >
             <div
@@ -558,7 +634,7 @@ export function GridFutureView({
               Remaining exposure (notional) not yet offset by sells.
             </div>
             {(() => {
-              const unchecked = state.buyLots.filter((b) => b.remainingQuantity > 1e-12);
+              const unchecked = buyLots.filter((b) => b.remainingQuantity > 1e-12);
               if (unchecked.length === 0) {
                 return (
                   <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
@@ -601,6 +677,24 @@ export function GridFutureView({
               ));
             })()}
           </div>
+
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize unchecked buys and scale-out ladder"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              setResizing("horizontal");
+            }}
+            style={{
+              cursor: "row-resize",
+              backgroundColor: resizing === "horizontal" ? "color-mix(in srgb, var(--accent) 40%, transparent)" : "var(--border-color)",
+              borderRadius: "4px",
+              margin: "2px 0",
+              minHeight: "6px",
+            }}
+          />
+
           <div
             style={{
               border: "1px solid var(--border-color)",
@@ -608,6 +702,7 @@ export function GridFutureView({
               padding: "8px",
               backgroundColor: "var(--bg-primary)",
               overflow: "auto",
+              minHeight: 0,
             }}
           >
             <div
@@ -620,12 +715,12 @@ export function GridFutureView({
             >
               Scale-out ladder targets
             </div>
-            {freeShareTargets.length === 0 ? (
+            {(freeShareTargets ?? []).length === 0 ? (
               <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
                 No auto scale-out targets.
               </div>
             ) : (
-              freeShareTargets.map((t) => (
+              (freeShareTargets ?? []).map((t) => (
                 <div
                   key={t.level}
                   style={{

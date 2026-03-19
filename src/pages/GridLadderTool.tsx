@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { loadSandboxState } from "../utils/sandboxStore";
@@ -19,7 +19,6 @@ import { GridCycle, GridFill } from "../features/grid/gridTypes";
 import { GridFutureSettings } from "../features/grid/gridTypes";
 import {
   buildGridFutureState,
-  DEFAULT_GRID_FUTURE_SETTINGS,
   withGridFutureSettingsDefaults,
 } from "../features/grid/gridFuturePlanner";
 
@@ -35,6 +34,45 @@ type BasicTrade = {
 };
 
 const GRID_TOOL_STATE_KEY = "tradebutler_grid_ladder_tool_state_v1";
+
+class FutureViewErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  state = { hasError: false, error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error("Future view error:", error);
+  }
+
+  render() {
+    if (this.state.hasError && this.state.error) {
+      return (
+        <div
+          style={{
+            padding: "16px",
+            color: "var(--text-secondary)",
+            backgroundColor: "var(--bg-primary)",
+            borderRadius: "8px",
+            border: "1px solid var(--border-color)",
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: "8px", color: "var(--text-primary)" }}>
+            Future view error
+          </div>
+          <pre style={{ fontSize: "11px", overflow: "auto", whiteSpace: "pre-wrap" }}>
+            {this.state.error.message}
+          </pre>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 interface GridToolPersistedState {
   symbol?: string;
@@ -530,12 +568,14 @@ export default function GridLadderTool() {
           {gridAreaMode === "timeline" ? (
             <GridCycleTimeline cycle={selectedCycle} />
           ) : gridAreaMode === "future" ? (
-            <GridFutureView
-              selectedCycle={selectedCycle}
-              settings={futureSettings}
-              state={futureState}
-              onSettingsChange={handleFutureSettingsChange}
-            />
+            <FutureViewErrorBoundary>
+              <GridFutureView
+                selectedCycle={selectedCycle}
+                settings={futureSettings}
+                state={futureState}
+                onSettingsChange={handleFutureSettingsChange}
+              />
+            </FutureViewErrorBoundary>
           ) : (
             <GridLadder
               aggregates={aggregatesForLadder}
