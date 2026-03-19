@@ -89,6 +89,16 @@ type FutureLadderRow =
   | { kind: "buySlot"; slot: GridFutureSlot; orderPrice: number }
   | { kind: "sellFromLot"; lot: GridBuyLot; targetSell: number; orderPrice: number };
 
+/** Sell proceeds ≥ lot buy notional within this tolerance → “full” (hide Unchecked Buys row). */
+const SELL_NOTIONAL_COMPLETE_TOL = 0.02;
+
+function buyLotNeedsUncheckedPanel(lot: GridBuyLot): boolean {
+  if (lot.remainingQuantity <= 1e-12) return false;
+  const cap = lot.totalQuantity * lot.buyPrice;
+  const proceeds = lot.sellProceedsNotional ?? 0;
+  return proceeds + SELL_NOTIONAL_COMPLETE_TOL < cap;
+}
+
 const FUTURE_VIEW_LAYOUT_KEY = "tradebutler_grid_future_view_layout";
 
 function loadFutureViewLayout() {
@@ -112,8 +122,11 @@ export function GridFutureView({
   onSettingsChange,
 }: GridFutureViewProps) {
   const [showUnfilledBuys, setShowUnfilledBuys] = useState(false);
+  /** Hide SELL rows for lots already covered by sell $ (tiny “dust” shares); aligns with Unchecked Buys. */
+  const [hideProceedsCompleteSellRows, setHideProceedsCompleteSellRows] = useState(true);
   const [expandedSlotIds, setExpandedSlotIds] = useState<Set<string>>(new Set());
   const [uncheckedPriceSortDesc, setUncheckedPriceSortDesc] = useState(true);
+  const [selectedUncheckedBuyLotId, setSelectedUncheckedBuyLotId] = useState<string | null>(null);
   const [layout, setLayout] = useState(loadFutureViewLayout);
   const [resizing, setResizing] = useState<"horizontal" | "vertical" | null>(null);
   const layoutRef = useRef<HTMLDivElement>(null);
@@ -174,6 +187,37 @@ export function GridFutureView({
     return bySlot;
   }, [matchEvents]);
 
+  /** Buy lot `lotId` is the open fragment id in match events. */
+  const matchEventsByOpenFragment = useMemo(() => {
+    const byFrag = new Map<string, typeof matchEvents>();
+    matchEvents.forEach((m) => {
+      const arr = byFrag.get(m.openFragmentId) ?? [];
+      arr.push(m);
+      byFrag.set(m.openFragmentId, arr);
+    });
+    byFrag.forEach((arr) =>
+      arr.sort((a, b) => new Date(a.closeTime).getTime() - new Date(b.closeTime).getTime()),
+    );
+    return byFrag;
+  }, [matchEvents]);
+
+  const uncheckedBuyLotsPanel = useMemo(
+    () =>
+      buyLots
+        .filter(buyLotNeedsUncheckedPanel)
+        .sort((a, b) =>
+          uncheckedPriceSortDesc ? b.buyPrice - a.buyPrice : a.buyPrice - b.buyPrice,
+        ),
+    [buyLots, uncheckedPriceSortDesc],
+  );
+
+  useEffect(() => {
+    setSelectedUncheckedBuyLotId((id) => {
+      if (id == null) return null;
+      return uncheckedBuyLotsPanel.some((b) => b.lotId === id) ? id : null;
+    });
+  }, [uncheckedBuyLotsPanel]);
+
   const openFragmentsBySlot = useMemo(() => {
     const bySlot = new Map<string, typeof openFragments>();
     openFragments.forEach((f) => {
@@ -201,7 +245,11 @@ export function GridFutureView({
       }));
 
     const sellRows: FutureLadderRow[] = buyLots
-      .filter((lot) => lot.remainingQuantity > EPS)
+      .filter((lot) => {
+        if (lot.remainingQuantity <= EPS) return false;
+        if (hideProceedsCompleteSellRows && !buyLotNeedsUncheckedPanel(lot)) return false;
+        return true;
+      })
       .map((lot) => {
         const targetSell = targetSellForBuyLot(lot.buyPrice, settings);
         return {
@@ -213,7 +261,7 @@ export function GridFutureView({
       });
 
     return [...sellRows, ...buyRows].sort((a, b) => b.orderPrice - a.orderPrice);
-  }, [slots, buyLots, showUnfilledBuys, settings, capitalPerLevel]);
+  }, [slots, buyLots, showUnfilledBuys, hideProceedsCompleteSellRows, settings, capitalPerLevel]);
 
   const toggleSlotExpanded = (rowKey: string) => {
     setExpandedSlotIds((prev) => {
@@ -470,26 +518,39 @@ export function GridFutureView({
               backgroundColor: "var(--bg-primary)",
             }}
           >
-            <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
-              Sells = target per open buy lot; buys = unfilled ladder (if enabled)
+            <div style={{ fontSize: "11px", color: "var(--text-secondary)", maxWidth: "52%" }}>
+              Sells = one row per open <strong>buy fragment</strong> (can be many). Unchecked Buys only lists
+              fragments where sell proceeds haven’t covered the lot $ yet — others can be tiny “dust” after
+              matched-notional sells. Use the checkbox to show those dust rows.
             </div>
-            <label
+            <div
               style={{
                 display: "flex",
-                alignItems: "center",
+                flexDirection: "column",
+                alignItems: "flex-end",
                 gap: "6px",
                 fontSize: "11px",
                 color: "var(--text-secondary)",
                 userSelect: "none",
               }}
             >
-              <input
-                type="checkbox"
-                checked={showUnfilledBuys}
-                onChange={(e) => setShowUnfilledBuys(e.target.checked)}
-              />
-              Show unfilled buy target sells
-            </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <input
+                  type="checkbox"
+                  checked={hideProceedsCompleteSellRows}
+                  onChange={(e) => setHideProceedsCompleteSellRows(e.target.checked)}
+                />
+                Hide $-complete dust sells
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <input
+                  type="checkbox"
+                  checked={showUnfilledBuys}
+                  onChange={(e) => setShowUnfilledBuys(e.target.checked)}
+                />
+                Show unfilled buy target sells
+              </label>
+            </div>
           </div>
           <table
             style={{
@@ -875,56 +936,162 @@ export function GridFutureView({
               </button>
             </div>
             <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "8px" }}>
-              Notional matched by sells so far vs full lot (same as progress bar).
+              Sell proceeds (Σ qty×sell price) vs full lot buy notional. Rows drop off when proceeds cover
+              the lot (e.g. $20/$20). Click a buy price for each fill.
             </div>
-            {(() => {
-              const unchecked = buyLots
-                .filter((b) => b.remainingQuantity > 1e-12)
-                .sort((a, b) => (uncheckedPriceSortDesc ? b.buyPrice - a.buyPrice : a.buyPrice - b.buyPrice));
-              if (unchecked.length === 0) {
+            {uncheckedBuyLotsPanel.length === 0 ? (
+              <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                No buy lots needing unchecked tracking (all covered by sells or flat).
+              </div>
+            ) : (
+              uncheckedBuyLotsPanel.map((lot) => {
+                const fillsThisLot = matchEventsByOpenFragment.get(lot.lotId) ?? [];
+                const isOpen = selectedUncheckedBuyLotId === lot.lotId;
+                const totalBuyNotional = lot.totalQuantity * lot.buyPrice;
+                const filledSellNotional = lot.sellProceedsNotional ?? 0;
+                const filledDisplayUsd =
+                  filledSellNotional > 1e-8 || fillsThisLot.length > 0
+                    ? filledSellNotional
+                    : lot.consumedQuantity * lot.buyPrice;
+                const progressPct =
+                  filledSellNotional > 1e-8 || fillsThisLot.length > 0
+                    ? (lot.progressPercentSellNotional ?? 0)
+                    : lot.progressPercent;
                 return (
-                  <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                    No remaining buy lots.
-                  </div>
-                );
-              }
-              return unchecked.map((lot) => (
-                <div
-                  key={lot.lotId}
-                  style={{
-                    padding: "6px 0",
-                    borderBottom: "1px solid var(--border-color)",
-                    fontSize: "12px",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                    <span>{fmtNum(lot.buyPrice, 4)}</span>
-                    <span>
-                      {`$${fmtNum(lot.consumedQuantity * lot.buyPrice, 2)} / $${fmtNum(
-                        lot.totalQuantity * lot.buyPrice,
-                        2,
-                      )}`}
-                    </span>
-                  </div>
                   <div
+                    key={lot.lotId}
                     style={{
-                      height: "6px",
-                      borderRadius: "3px",
-                      backgroundColor: "var(--bg-secondary)",
-                      overflow: "hidden",
+                      padding: "6px 0",
+                      borderBottom: "1px solid var(--border-color)",
+                      fontSize: "12px",
                     }}
                   >
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                      <button
+                        type="button"
+                        title="Show sell fills that matched this buy lot"
+                        onClick={() =>
+                          setSelectedUncheckedBuyLotId((id) => (id === lot.lotId ? null : lot.lotId))
+                        }
+                        style={{
+                          border: "none",
+                          background: "none",
+                          padding: 0,
+                          cursor: "pointer",
+                          font: "inherit",
+                          color: isOpen ? "var(--accent)" : "var(--text-primary)",
+                          textDecoration: isOpen ? "underline" : undefined,
+                          textAlign: "left",
+                        }}
+                      >
+                        {fmtNum(lot.buyPrice, 4)}
+                      </button>
+                      <span>
+                        {`$${fmtNum(filledDisplayUsd, 2)} / $${fmtNum(totalBuyNotional, 2)}`}
+                      </span>
+                    </div>
                     <div
                       style={{
-                        width: `${Math.min(100, lot.progressPercent)}%`,
-                        height: "100%",
-                        backgroundColor: "var(--accent)",
+                        height: "6px",
+                        borderRadius: "3px",
+                        backgroundColor: "var(--bg-secondary)",
+                        overflow: "hidden",
                       }}
-                    />
+                    >
+                      <div
+                        style={{
+                          width: `${Math.min(100, progressPct)}%`,
+                          height: "100%",
+                          backgroundColor: "var(--accent)",
+                        }}
+                      />
+                    </div>
+                    {isOpen && (
+                      <div
+                        style={{
+                          marginTop: "8px",
+                          padding: "8px",
+                          borderRadius: "6px",
+                          backgroundColor: "color-mix(in srgb, var(--bg-secondary) 85%, transparent)",
+                          border: "1px solid var(--border-color)",
+                          fontSize: "11px",
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontWeight: 700,
+                            marginBottom: "4px",
+                            color: "var(--text-secondary)",
+                          }}
+                        >
+                          Sells vs this buy (qty @ sell price)
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "10px",
+                            color: "var(--text-secondary)",
+                            marginBottom: "8px",
+                            lineHeight: 1.35,
+                          }}
+                        >
+                          Qty here is the slice paired with <strong>this</strong> buy lot (FIFO). The timeline
+                          “Qty” column is the <strong>whole</strong> SELL fill — larger if that sell closed
+                          multiple buys. “Open Qty” there is your total position after the row, not the sell
+                          size.
+                        </div>
+                        {fillsThisLot.length === 0 ? (
+                          <div style={{ color: "var(--text-secondary)" }}>
+                            No sell matches linked to this fragment yet.
+                          </div>
+                        ) : (
+                          <ul
+                            style={{
+                              margin: 0,
+                              paddingLeft: "18px",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "4px",
+                            }}
+                          >
+                            {fillsThisLot.map((m) => {
+                              const closeFill = (selectedCycle?.fills ?? []).find(
+                                (f) =>
+                                  f.id === m.closeFillId &&
+                                  f.kind !== "ORDER" &&
+                                  f.status !== "CANCELLED",
+                              );
+                              const fillQty = closeFill?.quantity;
+                              const splitAcrossBuys =
+                                fillQty != null &&
+                                Number.isFinite(fillQty) &&
+                                Math.abs(fillQty - m.matchedQty) > 1e-8;
+                              return (
+                                <li key={m.matchId} style={{ listStyleType: "disc" }}>
+                                  <span style={{ fontWeight: 600 }}>{fmtNum(m.matchedQty, 6)}</span> @ sell{" "}
+                                  <span style={{ fontWeight: 600 }}>{fmtNum(m.closePrice, 4)}</span>
+                                  <span style={{ color: "var(--text-secondary)", marginLeft: "6px" }}>
+                                    ({new Date(m.closeTime).toLocaleString()})
+                                  </span>
+                                  {splitAcrossBuys && (
+                                    <div style={{ color: "var(--text-secondary)", marginTop: "2px" }}>
+                                      Full SELL fill in timeline:{" "}
+                                      <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                                        {fmtNum(fillQty, 6)}
+                                      </span>
+                                    </div>
+                                  )}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ));
-            })()}
+                );
+              })
+            )}
           </div>
 
           <div

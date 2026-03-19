@@ -1,12 +1,15 @@
 import { useMemo, useState } from "react";
+import { sortBuyLotsForSellCloseLong, sortSellLotsForBuyCloseShort } from "./gridCloseMatchSort";
 import { GridCycle } from "./gridTypes";
 
 interface GridCycleTimelineProps {
   cycle: GridCycle | undefined;
 }
 
-type Lot = { price: number; remainingQty: number };
+type Lot = { price: number; remainingQty: number; initialQty: number };
 const EPS = 1e-12;
+/** Match Future planner when cycle has no tick in UI (typical US equity). */
+const TIMELINE_DEFAULT_TICK = 0.01;
 
 function fmt(n: number, maxDecimals: number): string {
   const s = n.toFixed(maxDecimals);
@@ -41,17 +44,32 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
       isLong ? fill.side === "SELL" : fill.side === "BUY";
 
     if (shouldOpen) {
-      lots.push({ price: fill.price, remainingQty: fill.quantity });
+      lots.push({
+        price: fill.price,
+        remainingQty: fill.quantity,
+        initialQty: fill.quantity,
+      });
     } else if (shouldClose) {
-      // Dynamic matching: eligible = remainingQty > 0, price eligible for close
-      // Long: buyPrice <= sellPrice, sort buyPrice desc. Short: sellPrice >= buyPrice, sort sellPrice asc.
-      const eligible = isLong
-        ? lots.filter((l) => l.remainingQty > EPS && l.price <= fill.price).sort((a, b) => b.price - a.price)
-        : lots.filter((l) => l.remainingQty > EPS && l.price >= fill.price).sort((a, b) => a.price - b.price);
-
+      // Same close ordering as gridFuturePlanner: re-rank each slice; same tick prefers one
+      // fragment that can absorb the full remaining close (avoids odd split quantities).
       let remainingToClose = fill.quantity;
-      for (const lot of eligible) {
-        if (remainingToClose <= EPS) break;
+      while (remainingToClose > EPS) {
+        const candidates = isLong
+          ? lots.filter((l) => l.remainingQty > EPS && l.price <= fill.price)
+          : lots.filter((l) => l.remainingQty > EPS && l.price >= fill.price);
+        if (candidates.length === 0) break;
+
+        const wrapped = candidates.map((l) => ({
+          openPrice: l.price,
+          openQty: l.remainingQty,
+          totalQuantity: l.initialQty,
+          lot: l,
+        }));
+        const sorted = isLong
+          ? sortBuyLotsForSellCloseLong(wrapped, remainingToClose, TIMELINE_DEFAULT_TICK)
+          : sortSellLotsForBuyCloseShort(wrapped, remainingToClose, TIMELINE_DEFAULT_TICK);
+
+        const lot = sorted[0].lot;
         const matchedQty = Math.min(lot.remainingQty, remainingToClose);
         lot.remainingQty -= matchedQty;
         remainingToClose -= matchedQty;
@@ -171,7 +189,7 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
                   {r.fill.side === "BUY" ? "BUY" : "SELL"}
                 </td>
                 <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                  {fmt(r.fill.quantity, 4)}
+                  {fmt(r.fill.quantity, 6)}
                 </td>
                 <td style={{ padding: "4px 8px", textAlign: "right" }}>
                   {fmt(r.fill.price, 2)}
@@ -190,7 +208,7 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
                     fontWeight: r.openQty > EPS ? 600 : 400,
                   }}
                 >
-                  {r.openQty > EPS ? fmt(r.openQty, 4) : "—"}
+                  {r.openQty > EPS ? fmt(r.openQty, 6) : "—"}
                 </td>
                 <td style={{ padding: "4px 8px", textAlign: "right" }}>
                   {r.avgCost != null ? `$${fmt(r.avgCost, 2)}` : "—"}

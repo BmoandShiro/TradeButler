@@ -10,6 +10,7 @@ import {
   GridFutureState,
   GridSide,
 } from "./gridTypes";
+import { sortBuyLotsForSellCloseLong } from "./gridCloseMatchSort";
 
 const EPS = 1e-12;
 
@@ -363,19 +364,22 @@ export function buildGridFutureState(
       continue;
     }
 
-    // Dynamic matching: eligible lots = remainingQty > 0, buyPrice <= sellPrice
-    // Sort by buyPrice descending (closest buy below sell price first)
+    // Dynamic matching: eligible lots = remainingQty > 0, buyPrice <= sellPrice.
+    // Re-sort each slice so at the same price tick we prefer one fragment that can take
+    // the *full* remaining sell (cleaner match qty vs splitting across micro-slivers).
     let remainingCloseQty = fill.quantity;
-    const eligible = openLots
-      .filter((l) => l.openQty > EPS && l.openPrice <= fill.price)
-      .sort((a, b) => b.openPrice - a.openPrice);
+    while (remainingCloseQty > EPS) {
+      const eligible = sortBuyLotsForSellCloseLong(
+        openLots.filter((l) => l.openQty > EPS && l.openPrice <= fill.price),
+        remainingCloseQty,
+        settings.priceTickSize,
+      );
+      if (eligible.length === 0) break;
 
-    for (const lot of eligible) {
-      if (remainingCloseQty <= EPS) break;
-
+      const lot = eligible[0];
       const matched = Math.min(lot.openQty, remainingCloseQty);
       const slot = slots.find((s) => s.slotId === lot.slotId);
-      if (!slot) continue;
+      if (!slot) break;
 
       const matchedOpenBasis = safeDiv(lot.accountingBasis * matched, lot.openQty);
       const closeNotional = fill.price * matched;
@@ -465,6 +469,13 @@ export function buildGridFutureState(
     }
   }
 
+  // Sell proceeds per open buy fragment (same basis as UI “qty × sell price”).
+  const sellProceedsByFragment = new Map<string, number>();
+  for (const m of matchEvents) {
+    const prev = sellProceedsByFragment.get(m.openFragmentId) ?? 0;
+    sellProceedsByFragment.set(m.openFragmentId, prev + m.matchedQty * m.closePrice);
+  }
+
   // Build buy lots for UI (progress tracking, Free Share Targets)
   const buyLots: GridBuyLot[] = openLots
     .filter((l) => l.side === "BUY")
@@ -472,6 +483,12 @@ export function buildGridFutureState(
       const consumed = lot.totalQuantity - lot.openQty;
       const status: GridBuyLot["status"] =
         lot.openQty <= EPS ? "completed" : consumed <= EPS ? "open" : "partial";
+      const totalBuyNotional = lot.openPrice * lot.totalQuantity;
+      const sellProceedsNotional = sellProceedsByFragment.get(lot.fragmentId) ?? 0;
+      const progressPercentSellNotional =
+        totalBuyNotional > EPS
+          ? Math.min(100, safeDiv(sellProceedsNotional, totalBuyNotional) * 100)
+          : 0;
       return {
         lotId: lot.fragmentId,
         buyPrice: lot.openPrice,
@@ -480,6 +497,8 @@ export function buildGridFutureState(
         consumedQuantity: consumed,
         status,
         progressPercent: safeDiv(consumed, lot.totalQuantity) * 100,
+        sellProceedsNotional,
+        progressPercentSellNotional,
         sourceFillId: lot.sourceFillId,
         sourceTime: lot.openTime,
         slotId: lot.slotId,

@@ -187,7 +187,15 @@ export interface GridBuyLot {
   remainingQuantity: number;
   consumedQuantity: number;
   status: GridBuyLotStatus;
+  /** Share-based: consumed qty / total qty × 100. */
   progressPercent: number;
+  /**
+   * Σ (matched qty × sell price) for closes against this buy fragment.
+   * Aligns dollars with broker “proceeds” vs buy-notional from qty×buy alone.
+   */
+  sellProceedsNotional: number;
+  /** min(100, sellProceedsNotional / (totalQuantity×buyPrice) × 100). */
+  progressPercentSellNotional: number;
   sourceFillId?: string | number;
   sourceTime?: string;
   slotId?: string;
