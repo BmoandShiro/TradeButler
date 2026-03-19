@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import {
   GridCycle,
   GridFutureSettings,
@@ -36,6 +36,8 @@ export function GridFutureView({
   state,
   onSettingsChange,
 }: GridFutureViewProps) {
+  const [showUnfilledBuys, setShowUnfilledBuys] = useState(false);
+
   if (!selectedCycle) {
     return (
       <div style={{ padding: "16px", color: "var(--text-secondary)" }}>
@@ -46,6 +48,16 @@ export function GridFutureView({
 
   const { capital, grid, position, freeShareTargets } = state.summary;
   const ladderRows = state.slots
+    .filter((slot) => {
+      const isUnfilledBuyRow =
+        slot.status === "waiting_buy" || slot.status === "partially_filled_buy";
+      const isActionableSellRow =
+        slot.status === "waiting_sell" || slot.status === "partially_filled_sell";
+
+      if (isActionableSellRow) return true;
+      if (showUnfilledBuys && isUnfilledBuyRow) return true;
+      return false;
+    })
     .map((slot) => {
       const side = slotSideLabel(slot);
       const orderPrice =
@@ -233,6 +245,41 @@ export function GridFutureView({
             backgroundColor: "var(--bg-primary)",
           }}
         >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "8px",
+              padding: "6px 8px",
+              borderBottom: "1px solid var(--border-color)",
+              position: "sticky",
+              top: 0,
+              zIndex: 2,
+              backgroundColor: "var(--bg-primary)",
+            }}
+          >
+            <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+              Showing future actionable rows only
+            </div>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                fontSize: "11px",
+                color: "var(--text-secondary)",
+                userSelect: "none",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={showUnfilledBuys}
+                onChange={(e) => setShowUnfilledBuys(e.target.checked)}
+              />
+              Show unfilled buy target sells
+            </label>
+          </div>
           <table
             style={{
               width: "100%",
@@ -240,14 +287,14 @@ export function GridFutureView({
               fontSize: "12px",
             }}
           >
-            <thead style={{ position: "sticky", top: 0, backgroundColor: "var(--bg-primary)" }}>
+            <thead style={{ position: "sticky", top: 31, backgroundColor: "var(--bg-primary)" }}>
               <tr>
                 <th style={thStyle}>Price</th>
                 <th style={thStyle}>Side</th>
                 <th style={thStyle}>Qty</th>
                 <th style={thStyle}>Notional</th>
                 <th style={thStyle}>Target Sell</th>
-                <th style={thStyle}>Target Buy</th>
+                <th style={thStyle}>Source Buy</th>
                 <th style={thStyle}>Principal Recovered</th>
                 <th style={thStyle}>Free Shares</th>
                 <th style={thStyle}>Status</th>
@@ -293,7 +340,11 @@ export function GridFutureView({
                     {slot.targetSellPrice != null ? fmtNum(slot.targetSellPrice, 4) : "—"}
                   </td>
                   <td style={tdStyle}>
-                    {slot.targetBuyPrice != null ? fmtNum(slot.targetBuyPrice, 4) : "—"}
+                    {slot.filledBuyPrice != null
+                      ? fmtNum(slot.filledBuyPrice, 4)
+                      : slot.plannedBuyPrice > 0
+                      ? fmtNum(slot.plannedBuyPrice, 4)
+                      : "—"}
                   </td>
                   <td style={tdStyle}>{fmtNum(slot.principalRecovered)}</td>
                   <td style={tdStyle}>{fmtNum(slot.freeShareQuantityCreated, 6)}</td>
