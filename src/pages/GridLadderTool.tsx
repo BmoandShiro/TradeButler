@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { loadSandboxState } from "../utils/sandboxStore";
@@ -94,6 +94,9 @@ export default function GridLadderTool() {
   const [_isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedCycleForChartId, setSelectedCycleForChartId] = useState<string | null>(null);
+  const [leftPaneWidthPct, setLeftPaneWidthPct] = useState<number>(62);
+  const [isResizingPanes, setIsResizingPanes] = useState(false);
+  const layoutRef = useRef<HTMLDivElement | null>(null);
 
   const handleSelectCycle = (cycleId: string) => {
     setSelectedCycleId((prev) => (prev === cycleId ? undefined : cycleId));
@@ -242,12 +245,38 @@ export default function GridLadderTool() {
     localStorage.setItem(GRID_TOOL_STATE_KEY, JSON.stringify(stateToPersist));
   }, [symbol, instrumentFilter, gridAreaMode, selectedCycleId]);
 
+  useEffect(() => {
+    if (!isResizingPanes) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!layoutRef.current) return;
+      const rect = layoutRef.current.getBoundingClientRect();
+      if (rect.width <= 0) return;
+
+      const rawPct = ((event.clientX - rect.left) / rect.width) * 100;
+      const clamped = Math.max(35, Math.min(75, rawPct));
+      setLeftPaneWidthPct(clamped);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingPanes(false);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizingPanes]);
+
   return (
     <div
+      ref={layoutRef}
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(0, 2.2fr) minmax(0, 1.4fr)",
-        gap: "12px",
+        gridTemplateColumns: `${leftPaneWidthPct}% 8px minmax(0, 1fr)`,
+        gap: "6px",
         padding: "12px 24px 16px",
         height: "100%",
         boxSizing: "border-box",
@@ -408,6 +437,24 @@ export default function GridLadderTool() {
           )}
         </div>
       </div>
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize panels"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          setIsResizingPanes(true);
+        }}
+        style={{
+          cursor: "col-resize",
+          borderRadius: "6px",
+          backgroundColor: isResizingPanes
+            ? "color-mix(in srgb, var(--accent) 25%, var(--bg-secondary))"
+            : "var(--bg-secondary)",
+          border: "1px solid var(--border-color)",
+          userSelect: "none",
+        }}
+      />
       <div
         style={{
           display: "flex",
