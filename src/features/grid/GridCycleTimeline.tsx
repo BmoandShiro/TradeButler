@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { GridCycle } from "./gridTypes";
 
 interface GridCycleTimelineProps {
@@ -5,8 +6,13 @@ interface GridCycleTimelineProps {
 }
 
 type Lot = { price: number; remainingQty: number };
+type TimelineSortKey = "time" | "side" | "qty" | "price" | "openQty" | "avgCost" | "status";
+type SortDirection = "asc" | "desc";
 
 export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
+  const [sortKey, setSortKey] = useState<TimelineSortKey>("time");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+
   if (!cycle || cycle.fills.length === 0) {
     return (
       <div style={{ padding: "16px", color: "var(--text-secondary)" }}>
@@ -55,6 +61,60 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
     };
   });
 
+  const sortedRows = useMemo(() => {
+    const dir = sortDirection === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      let av: number | string = 0;
+      let bv: number | string = 0;
+      switch (sortKey) {
+        case "time":
+          av = new Date(a.fill.timestamp).getTime();
+          bv = new Date(b.fill.timestamp).getTime();
+          break;
+        case "side":
+          av = a.fill.side;
+          bv = b.fill.side;
+          break;
+        case "qty":
+          av = a.fill.quantity;
+          bv = b.fill.quantity;
+          break;
+        case "price":
+          av = a.fill.price;
+          bv = b.fill.price;
+          break;
+        case "openQty":
+          av = a.openQty;
+          bv = b.openQty;
+          break;
+        case "avgCost":
+          av = a.avgCost ?? -1;
+          bv = b.avgCost ?? -1;
+          break;
+        case "status":
+          av = a.status;
+          bv = b.status;
+          break;
+      }
+      if (typeof av === "string" && typeof bv === "string") {
+        return av.localeCompare(bv) * dir;
+      }
+      return ((av as number) - (bv as number)) * dir;
+    });
+  }, [rows, sortDirection, sortKey]);
+
+  const toggleSort = (nextKey: TimelineSortKey) => {
+    if (sortKey === nextKey) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(nextKey);
+    setSortDirection(nextKey === "time" ? "desc" : "asc");
+  };
+
+  const sortMarker = (key: TimelineSortKey) =>
+    sortKey === key ? (sortDirection === "asc" ? " ▲" : " ▼") : "";
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "8px", height: "100%" }}>
       <div style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: 600 }}>
@@ -64,17 +124,17 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
           <thead style={{ position: "sticky", top: 0, backgroundColor: "var(--bg-primary)", zIndex: 1 }}>
             <tr>
-              <th style={{ textAlign: "left", padding: "6px 8px" }}>Time</th>
-              <th style={{ textAlign: "center", padding: "6px 8px" }}>Side</th>
-              <th style={{ textAlign: "right", padding: "6px 8px" }}>Qty</th>
-              <th style={{ textAlign: "right", padding: "6px 8px" }}>Price</th>
-              <th style={{ textAlign: "right", padding: "6px 8px" }}>Open Qty</th>
-              <th style={{ textAlign: "right", padding: "6px 8px" }}>Avg Cost</th>
-              <th style={{ textAlign: "center", padding: "6px 8px" }}>Status</th>
+              <th onClick={() => toggleSort("time")} style={{ textAlign: "left", padding: "6px 8px", cursor: "pointer" }}>Time{sortMarker("time")}</th>
+              <th onClick={() => toggleSort("side")} style={{ textAlign: "center", padding: "6px 8px", cursor: "pointer" }}>Side{sortMarker("side")}</th>
+              <th onClick={() => toggleSort("qty")} style={{ textAlign: "right", padding: "6px 8px", cursor: "pointer" }}>Qty{sortMarker("qty")}</th>
+              <th onClick={() => toggleSort("price")} style={{ textAlign: "right", padding: "6px 8px", cursor: "pointer" }}>Price{sortMarker("price")}</th>
+              <th onClick={() => toggleSort("openQty")} style={{ textAlign: "right", padding: "6px 8px", cursor: "pointer" }}>Open Qty{sortMarker("openQty")}</th>
+              <th onClick={() => toggleSort("avgCost")} style={{ textAlign: "right", padding: "6px 8px", cursor: "pointer" }}>Avg Cost{sortMarker("avgCost")}</th>
+              <th onClick={() => toggleSort("status")} style={{ textAlign: "center", padding: "6px 8px", cursor: "pointer" }}>Status{sortMarker("status")}</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, idx) => (
+            {sortedRows.map((r, idx) => (
               <tr key={`${r.fill.id}-${idx}`} style={{ backgroundColor: r.status === "Closed position" ? "transparent" : "transparent" }}>
                 <td style={{ padding: "4px 8px", color: "var(--text-secondary)" }}>
                   {new Date(r.fill.timestamp).toLocaleString()}
