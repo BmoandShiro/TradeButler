@@ -68,6 +68,7 @@ export function GridLadder({
               <th style={{ textAlign: "right", padding: "6px 8px" }}>Price</th>
               <th style={{ textAlign: "center", padding: "6px 8px" }}>Buys</th>
               <th style={{ textAlign: "center", padding: "6px 8px" }}>Sells</th>
+              <th style={{ textAlign: "right", padding: "6px 8px" }}>Notional</th>
               {showPositionMetrics && (
                 <>
                   <th style={{ textAlign: "right", padding: "6px 8px" }}>Open</th>
@@ -142,6 +143,16 @@ export function GridLadder({
                     }}
                   >
                     {agg.totalSellQty > 0 ? agg.totalSellQty.toFixed(4) : "—"}
+                  </td>
+                  <td style={{ textAlign: "right", padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)" }}>
+                    {agg.totalBuyQty > 0 || agg.totalSellQty > 0
+                      ? [
+                          agg.totalBuyQty > 0 ? `$${(agg.level.price * agg.totalBuyQty).toFixed(2)}` : null,
+                          agg.totalSellQty > 0 ? `$${(agg.level.price * agg.totalSellQty).toFixed(2)}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" / ")
+                      : "—"}
                   </td>
                   {showPositionMetrics && (
                     <>

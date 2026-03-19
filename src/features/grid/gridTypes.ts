@@ -169,6 +169,46 @@ export interface GridFutureSlot {
   targetBuyPrice: number | null;
   targetSellPrice: number | null;
   sourceCycleFillId?: string | number;
+  sourceBuyAveragePrice?: number | null;
+  sourceBuyFillCount?: number;
+}
+
+export type GridBuyLotStatus = "open" | "partial" | "completed";
+
+export interface GridBuyLot {
+  lotId: string;
+  buyPrice: number;
+  totalQuantity: number;
+  remainingQuantity: number;
+  consumedQuantity: number;
+  status: GridBuyLotStatus;
+  progressPercent: number;
+  sourceFillId?: string | number;
+  sourceTime?: string;
+  slotId?: string;
+}
+
+export interface GridFutureLotFragment {
+  fragmentId: string;
+  slotId: string;
+  side: GridSide;
+  sourceFillId: string | number;
+  sourcePrice: number;
+  sourceTime: string;
+  quantityRemaining: number;
+  accountingBasisRemaining: number;
+}
+
+export interface GridFutureMatchEvent {
+  matchId: string;
+  slotId: string;
+  openFragmentId: string;
+  closeFillId: string | number;
+  matchedQty: number;
+  openPrice: number;
+  closePrice: number;
+  openTime: string;
+  closeTime: string;
 }
 
 export type GridFutureFreeShareLotStatus =
@@ -238,6 +278,9 @@ export interface GridFutureSummary {
 
 export interface GridFutureState {
   slots: GridFutureSlot[];
+  buyLots: GridBuyLot[];
+  openFragments: GridFutureLotFragment[];
+  matchEvents: GridFutureMatchEvent[];
   freeShareLots: GridFutureFreeShareLot[];
   summary: GridFutureSummary;
 }

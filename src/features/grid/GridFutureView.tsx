@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import {
   GridCycle,
   GridFutureSettings,
@@ -62,6 +62,7 @@ export function GridFutureView({
   onSettingsChange,
 }: GridFutureViewProps) {
   const [showUnfilledBuys, setShowUnfilledBuys] = useState(false);
+  const [expandedSlotIds, setExpandedSlotIds] = useState<Set<string>>(new Set());
 
   if (!selectedCycle) {
     return (
@@ -72,6 +73,25 @@ export function GridFutureView({
   }
 
   const { capital, grid, position, freeShareTargets } = state.summary;
+  const matchEventsBySlot = useMemo(() => {
+    const bySlot = new Map<string, typeof state.matchEvents>();
+    state.matchEvents.forEach((m) => {
+      const arr = bySlot.get(m.slotId) ?? [];
+      arr.push(m);
+      bySlot.set(m.slotId, arr);
+    });
+    return bySlot;
+  }, [state.matchEvents]);
+
+  const openFragmentsBySlot = useMemo(() => {
+    const bySlot = new Map<string, typeof state.openFragments>();
+    state.openFragments.forEach((f) => {
+      const arr = bySlot.get(f.slotId) ?? [];
+      arr.push(f);
+      bySlot.set(f.slotId, arr);
+    });
+    return bySlot;
+  }, [state.openFragments]);
   const ladderRows = state.slots
     .filter((slot) => {
       const isUnfilledBuyRow =
@@ -92,6 +112,15 @@ export function GridFutureView({
       return { slot, side, orderPrice };
     })
     .sort((a, b) => b.orderPrice - a.orderPrice);
+
+  const toggleSlotExpanded = (slotId: string) => {
+    setExpandedSlotIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(slotId)) next.delete(slotId);
+      else next.add(slotId);
+      return next;
+    });
+  };
 
   return (
     <div
@@ -312,6 +341,7 @@ export function GridFutureView({
               <tr>
                 <th style={thStyle}>Price</th>
                 <th style={thStyle}>Side</th>
+                <th style={thStyle}>Progress</th>
                 <th style={thStyle}>Qty</th>
                 <th style={thStyle}>Notional</th>
                 <th style={thStyle}>Target Sell</th>
@@ -319,105 +349,300 @@ export function GridFutureView({
                 <th style={thStyle}>Principal Recovered</th>
                 <th style={thStyle}>Free Shares</th>
                 <th style={thStyle}>Status</th>
+                <th style={thStyle}>Details</th>
               </tr>
             </thead>
             <tbody>
-              {ladderRows.map(({ slot, side, orderPrice }) => (
-                <tr key={slot.slotId}>
-                  <td style={tdStyle}>{fmtNum(orderPrice, 4)}</td>
-                  <td
-                    style={{
-                      ...tdStyle,
-                      color:
-                        side === "BUY"
-                          ? "var(--success-color, #16a34a)"
-                          : "var(--danger-color, #dc2626)",
-                      fontWeight: 700,
-                    }}
-                  >
-                    {side}
-                  </td>
-                  <td style={tdStyle}>
-                    {fmtNum(
-                      side === "SELL"
-                        ? (slot.plannedSellQuantity ??
-                            slot.filledBuyQuantity ??
-                            slot.plannedBuyQuantity)
-                        : slot.plannedBuyQuantity,
-                      6,
-                    )}
-                  </td>
-                  <td style={tdStyle}>
-                    {fmtNum(
-                      side === "SELL"
-                        ? (slot.plannedSellPrice ?? orderPrice) *
-                            (slot.plannedSellQuantity ??
+              {ladderRows.map(({ slot, side, orderPrice }) => {
+                const slotBuyLots = state.buyLots.filter((b) => b.slotId === slot.slotId);
+                const avgProgress =
+                  slotBuyLots.length > 0
+                    ? slotBuyLots.reduce((s, b) => s + b.progressPercent, 0) / slotBuyLots.length
+                    : side === "SELL"
+                    ? 100
+                    : 0;
+                return (
+                <>
+                  <tr key={slot.slotId}>
+                    <td style={tdStyle}>{fmtNum(orderPrice, 4)}</td>
+                    <td
+                      style={{
+                        ...tdStyle,
+                        color:
+                          side === "BUY"
+                            ? "var(--success-color, #16a34a)"
+                            : "var(--danger-color, #dc2626)",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {side}
+                    </td>
+                    <td style={tdStyle}>
+                      <div
+                        style={{
+                          width: "60px",
+                          height: "8px",
+                          borderRadius: "4px",
+                          backgroundColor: "var(--bg-secondary)",
+                          overflow: "hidden",
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: `${Math.min(100, Math.max(0, avgProgress))}%`,
+                            height: "100%",
+                            backgroundColor: "var(--accent)",
+                          }}
+                        />
+                      </div>
+                    </td>
+                    <td style={tdStyle}>
+                      {fmtNum(
+                        side === "SELL"
+                          ? (slot.plannedSellQuantity ??
                               slot.filledBuyQuantity ??
                               slot.plannedBuyQuantity)
-                        : slot.plannedBuyNotional,
-                    )}
-                  </td>
-                  <td style={tdStyle}>
-                    {slot.targetSellPrice != null ? fmtNum(slot.targetSellPrice, 4) : "—"}
-                  </td>
-                  <td style={tdStyle}>
-                    {slot.filledBuyPrice != null
-                      ? fmtNum(slot.filledBuyPrice, 4)
-                      : slot.plannedBuyPrice > 0
-                      ? fmtNum(slot.plannedBuyPrice, 4)
-                      : "—"}
-                  </td>
-                  <td style={tdStyle}>{fmtNum(projectedPrincipalRecovered(slot))}</td>
-                  <td style={tdStyle}>{fmtNum(projectedFreeShares(slot), 6)}</td>
-                  <td style={tdStyle}>{slot.status}</td>
-                </tr>
-              ))}
+                          : slot.plannedBuyQuantity,
+                        6,
+                      )}
+                    </td>
+                    <td style={tdStyle}>
+                      {fmtNum(
+                        side === "SELL"
+                          ? (slot.plannedSellPrice ?? orderPrice) *
+                              (slot.plannedSellQuantity ??
+                                slot.filledBuyQuantity ??
+                                slot.plannedBuyQuantity)
+                          : slot.plannedBuyNotional,
+                      )}
+                    </td>
+                    <td style={tdStyle}>
+                      {slot.targetSellPrice != null ? fmtNum(slot.targetSellPrice, 4) : "—"}
+                    </td>
+                    <td style={tdStyle}>
+                      {slot.sourceBuyAveragePrice != null
+                        ? `${fmtNum(slot.sourceBuyAveragePrice, 4)}${
+                            (slot.sourceBuyFillCount ?? 0) > 1
+                              ? ` (${slot.sourceBuyFillCount} fills)`
+                              : ""
+                          }`
+                        : slot.filledBuyPrice != null
+                        ? fmtNum(slot.filledBuyPrice, 4)
+                        : slot.plannedBuyPrice > 0
+                        ? fmtNum(slot.plannedBuyPrice, 4)
+                        : "—"}
+                    </td>
+                    <td style={tdStyle}>{fmtNum(projectedPrincipalRecovered(slot))}</td>
+                    <td style={tdStyle}>{fmtNum(projectedFreeShares(slot), 6)}</td>
+                    <td style={tdStyle}>{slot.status}</td>
+                    <td style={tdStyle}>
+                      <button
+                        type="button"
+                        onClick={() => toggleSlotExpanded(slot.slotId)}
+                        style={{
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "6px",
+                          backgroundColor: "transparent",
+                          color: "var(--accent)",
+                          fontSize: "11px",
+                          padding: "2px 6px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {expandedSlotIds.has(slot.slotId) ? "Hide" : "View"}
+                      </button>
+                    </td>
+                  </tr>
+                  {expandedSlotIds.has(slot.slotId) && (
+                    <tr key={`${slot.slotId}-details`}>
+                      <td
+                        colSpan={11}
+                        style={{
+                          padding: "8px",
+                          borderBottom: "1px solid var(--border-color)",
+                          backgroundColor: "color-mix(in srgb, var(--bg-secondary) 60%, transparent)",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                            gap: "10px",
+                          }}
+                        >
+                          <div>
+                            <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", marginBottom: "6px" }}>
+                              Buy lots (progress)
+                            </div>
+                            {(state.buyLots.filter((b) => b.slotId === slot.slotId).length === 0) ? (
+                              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>No buy lots.</div>
+                            ) : (
+                              state.buyLots.filter((b) => b.slotId === slot.slotId).map((b) => (
+                                <div key={b.lotId} style={{ fontSize: "11px", marginBottom: "4px" }}>
+                                  {fmtNum(b.buyPrice, 4)}: {fmtNum(b.consumedQuantity, 6)}/{fmtNum(b.totalQuantity, 6)} ({fmtNum(b.progressPercent, 1)}%)
+                                  <div style={{ width: "80px", height: "4px", borderRadius: "2px", backgroundColor: "var(--bg-secondary)", overflow: "hidden", marginTop: "2px" }}>
+                                    <div style={{ width: `${b.progressPercent}%`, height: "100%", backgroundColor: "var(--accent)" }} />
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                          <div>
+                            <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", marginBottom: "6px" }}>
+                              Match events (dynamic)
+                            </div>
+                            {(matchEventsBySlot.get(slot.slotId) ?? []).length === 0 ? (
+                              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>No close matches yet.</div>
+                            ) : (
+                              (matchEventsBySlot.get(slot.slotId) ?? []).map((m) => (
+                                <div key={m.matchId} style={{ fontSize: "11px", color: "var(--text-primary)", marginBottom: "4px" }}>
+                                  qty {fmtNum(m.matchedQty, 6)}: {fmtNum(m.openPrice, 4)} -&gt; {fmtNum(m.closePrice, 4)} ({new Date(m.closeTime).toLocaleString()})
+                                </div>
+                              ))
+                            )}
+                          </div>
+                          <div>
+                            <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", marginBottom: "6px" }}>
+                              Remaining open fragments
+                            </div>
+                            {(openFragmentsBySlot.get(slot.slotId) ?? []).length === 0 ? (
+                              <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>No remaining open fragments.</div>
+                            ) : (
+                              (openFragmentsBySlot.get(slot.slotId) ?? []).map((f) => (
+                                <div key={f.fragmentId} style={{ fontSize: "11px", color: "var(--text-primary)", marginBottom: "4px" }}>
+                                  {fmtNum(f.quantityRemaining, 6)} @ {fmtNum(f.sourcePrice, 4)} (basis {fmtNum(f.accountingBasisRemaining)})
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </>
+              );
+              })}
             </tbody>
           </table>
         </div>
 
         <div
           style={{
-            border: "1px solid var(--border-color)",
-            borderRadius: "8px",
-            padding: "8px",
-            backgroundColor: "var(--bg-primary)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px",
             overflow: "auto",
           }}
         >
           <div
             style={{
-              fontSize: "12px",
-              fontWeight: 700,
-              color: "var(--text-secondary)",
-              marginBottom: "8px",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              padding: "8px",
+              backgroundColor: "var(--bg-primary)",
+              overflow: "auto",
             }}
           >
-            Free-share targets
-          </div>
-          {freeShareTargets.length === 0 ? (
-            <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-              No auto free-share targets.
+            <div
+              style={{
+                fontSize: "12px",
+                fontWeight: 700,
+                color: "var(--text-secondary)",
+                marginBottom: "8px",
+              }}
+            >
+              Unchecked Buys (Free Share Targets)
             </div>
-          ) : (
-            freeShareTargets.map((t) => (
-              <div
-                key={t.level}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "48px 1fr 1fr",
-                  gap: "8px",
-                  fontSize: "12px",
-                  padding: "6px 0",
-                  borderBottom: "1px solid var(--border-color)",
-                }}
-              >
-                <div>L{t.level}</div>
-                <div>{fmtNum(t.price, 4)}</div>
-                <div>{fmtNum(t.quantity, 6)}</div>
+            <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "8px" }}>
+              Remaining exposure (notional) not yet offset by sells.
+            </div>
+            {(() => {
+              const unchecked = state.buyLots.filter((b) => b.remainingQuantity > 1e-12);
+              if (unchecked.length === 0) {
+                return (
+                  <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                    No remaining buy lots.
+                  </div>
+                );
+              }
+              return unchecked.map((lot) => (
+                <div
+                  key={lot.lotId}
+                  style={{
+                    padding: "6px 0",
+                    borderBottom: "1px solid var(--border-color)",
+                    fontSize: "12px",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                    <span>{fmtNum(lot.buyPrice, 4)}</span>
+                    <span>
+                      ${fmtNum(lot.remainingQuantity * lot.buyPrice, 2)} / ${fmtNum(lot.totalQuantity * lot.buyPrice, 2)}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      height: "6px",
+                      borderRadius: "3px",
+                      backgroundColor: "var(--bg-secondary)",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${Math.min(100, lot.progressPercent)}%`,
+                        height: "100%",
+                        backgroundColor: "var(--accent)",
+                      }}
+                    />
+                  </div>
+                </div>
+              ));
+            })()}
+          </div>
+          <div
+            style={{
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              padding: "8px",
+              backgroundColor: "var(--bg-primary)",
+              overflow: "auto",
+            }}
+          >
+            <div
+              style={{
+                fontSize: "12px",
+                fontWeight: 700,
+                color: "var(--text-secondary)",
+                marginBottom: "8px",
+              }}
+            >
+              Scale-out ladder targets
+            </div>
+            {freeShareTargets.length === 0 ? (
+              <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                No auto scale-out targets.
               </div>
-            ))
-          )}
+            ) : (
+              freeShareTargets.map((t) => (
+                <div
+                  key={t.level}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "48px 1fr 1fr",
+                    gap: "8px",
+                    fontSize: "12px",
+                    padding: "6px 0",
+                    borderBottom: "1px solid var(--border-color)",
+                  }}
+                >
+                  <div>L{t.level}</div>
+                  <div>{fmtNum(t.price, 4)}</div>
+                  <div>{fmtNum(t.quantity, 6)}</div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </div>
     </div>

@@ -5,6 +5,7 @@ import {
   GridLevel,
   GridLevelAggregate,
   GridPnLSummary,
+  GridSide,
 } from "./gridTypes";
 import { format } from "date-fns";
 
@@ -95,28 +96,31 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
         longBuys.push({ fill, remainingQty: fill.quantity });
         netPositionQty += fill.quantity;
       } else {
-        // Currently short => buy closes short FIFO.
-        let remainingToClose = fill.quantity;
-        while (remainingToClose > EPS && shortSells.length > 0) {
-          const earliest = shortSells[0];
-          const matchedQty = Math.min(earliest.remainingQty, remainingToClose);
+        // Currently short => buy closes short. Dynamic: eligible = sellPrice >= buyPrice, sort ascending.
+        const eligible = shortSells
+          .filter((l) => l.remainingQty > EPS && l.fill.price >= fill.price)
+          .sort((a, b) => a.fill.price - b.fill.price);
 
-          const entryLevel = levelByPrice.get(earliest.fill.price);
+        let remainingToClose = fill.quantity;
+        for (const lot of eligible) {
+          if (remainingToClose <= EPS) break;
+          const matchedQty = Math.min(lot.remainingQty, remainingToClose);
+
+          const entryLevel = levelByPrice.get(lot.fill.price);
           const entryAgg = entryLevel ? byId.get(entryLevel.id) : undefined;
           if (entryAgg) {
-            // Short entry is a SELL at earliest.fill.price; BUY exits at fill.price.
             entryAgg.realizedPnlAtLevel +=
-              (earliest.fill.price - fill.price) * matchedQty;
+              (lot.fill.price - fill.price) * matchedQty;
           }
 
-          earliest.remainingQty -= matchedQty;
+          lot.remainingQty -= matchedQty;
           remainingToClose -= matchedQty;
-          netPositionQty += matchedQty; // reducing short magnitude
-
-          if (earliest.remainingQty <= EPS) shortSells.shift();
+          netPositionQty += matchedQty;
+        }
+        for (let i = shortSells.length - 1; i >= 0; i--) {
+          if (shortSells[i].remainingQty <= EPS) shortSells.splice(i, 1);
         }
 
-        // If we bought more than the open short, we flip to a new long cycle.
         if (remainingToClose > EPS) {
           longBuys.push({ fill, remainingQty: remainingToClose });
           netPositionQty += remainingToClose;
@@ -136,27 +140,31 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
       shortSells.push({ fill, remainingQty: fill.quantity });
       netPositionQty -= fill.quantity;
     } else {
-      // Currently long => sell closes long FIFO.
-      let remainingToClose = fill.quantity;
-      while (remainingToClose > EPS && longBuys.length > 0) {
-        const earliest = longBuys[0];
-        const matchedQty = Math.min(earliest.remainingQty, remainingToClose);
+      // Currently long => sell closes long. Dynamic: eligible = buyPrice <= sellPrice, sort descending.
+      const eligible = longBuys
+        .filter((l) => l.remainingQty > EPS && l.fill.price <= fill.price)
+        .sort((a, b) => b.fill.price - a.fill.price);
 
-        const entryLevel = levelByPrice.get(earliest.fill.price);
+      let remainingToClose = fill.quantity;
+      for (const lot of eligible) {
+        if (remainingToClose <= EPS) break;
+        const matchedQty = Math.min(lot.remainingQty, remainingToClose);
+
+        const entryLevel = levelByPrice.get(lot.fill.price);
         const entryAgg = entryLevel ? byId.get(entryLevel.id) : undefined;
         if (entryAgg) {
           entryAgg.realizedPnlAtLevel +=
-            (fill.price - earliest.fill.price) * matchedQty;
+            (fill.price - lot.fill.price) * matchedQty;
         }
 
-        earliest.remainingQty -= matchedQty;
+        lot.remainingQty -= matchedQty;
         remainingToClose -= matchedQty;
-        netPositionQty -= matchedQty; // reducing long magnitude
-
-        if (earliest.remainingQty <= EPS) longBuys.shift();
+        netPositionQty -= matchedQty;
+      }
+      for (let i = longBuys.length - 1; i >= 0; i--) {
+        if (longBuys[i].remainingQty <= EPS) longBuys.splice(i, 1);
       }
 
-      // If we sold more than the open long, we flip to a new short cycle.
       if (remainingToClose > EPS) {
         shortSells.push({ fill, remainingQty: remainingToClose });
         netPositionQty -= remainingToClose;
@@ -252,7 +260,8 @@ function computeRealizedPnlFromCycleFills(fills: GridFill[]): number {
   const EPS = 1e-6;
 
   if (isLong) {
-    // FIFO match BUY lots against SELL fills.
+    // Dynamic matching: eligible lots = remainingQty > 0, buyPrice <= sellPrice
+    // Sort by buyPrice descending (closest buy below sell price first)
     const buyLots: { price: number; remainingQty: number }[] = [];
     let pnl = 0;
 
@@ -260,15 +269,17 @@ function computeRealizedPnlFromCycleFills(fills: GridFill[]): number {
       if (fill.side === "BUY") {
         buyLots.push({ price: fill.price, remainingQty: fill.quantity });
       } else {
-        // SELL closes long inventory
+        const eligible = buyLots
+          .filter((l) => l.remainingQty > EPS && l.price <= fill.price)
+          .sort((a, b) => b.price - a.price);
+
         let remainingToClose = fill.quantity;
-        while (remainingToClose > EPS && buyLots.length > 0) {
-          const earliest = buyLots[0];
-          const matchedQty = Math.min(earliest.remainingQty, remainingToClose);
-          pnl += (fill.price - earliest.price) * matchedQty;
-          earliest.remainingQty -= matchedQty;
+        for (const lot of eligible) {
+          if (remainingToClose <= EPS) break;
+          const matchedQty = Math.min(lot.remainingQty, remainingToClose);
+          pnl += (fill.price - lot.price) * matchedQty;
+          lot.remainingQty -= matchedQty;
           remainingToClose -= matchedQty;
-          if (earliest.remainingQty <= EPS) buyLots.shift();
         }
       }
     }
@@ -276,7 +287,8 @@ function computeRealizedPnlFromCycleFills(fills: GridFill[]): number {
     return pnl;
   }
 
-  // Short: FIFO match SELL lots against BUY fills.
+  // Short: Dynamic matching - eligible SELL lots = remainingQty > 0, sellPrice >= buyPrice
+  // Sort by sellPrice ascending (closest sell above buy price first)
   const sellLots: { price: number; remainingQty: number }[] = [];
   let pnl = 0;
 
@@ -284,15 +296,17 @@ function computeRealizedPnlFromCycleFills(fills: GridFill[]): number {
     if (fill.side === "SELL") {
       sellLots.push({ price: fill.price, remainingQty: fill.quantity });
     } else {
-      // BUY closes short inventory
+      const eligible = sellLots
+        .filter((l) => l.remainingQty > EPS && l.price >= fill.price)
+        .sort((a, b) => a.price - b.price);
+
       let remainingToClose = fill.quantity;
-      while (remainingToClose > EPS && sellLots.length > 0) {
-        const earliest = sellLots[0];
-        const matchedQty = Math.min(earliest.remainingQty, remainingToClose);
-        pnl += (earliest.price - fill.price) * matchedQty;
-        earliest.remainingQty -= matchedQty;
+      for (const lot of eligible) {
+        if (remainingToClose <= EPS) break;
+        const matchedQty = Math.min(lot.remainingQty, remainingToClose);
+        pnl += (lot.price - fill.price) * matchedQty;
+        lot.remainingQty -= matchedQty;
         remainingToClose -= matchedQty;
-        if (earliest.remainingQty <= EPS) sellLots.shift();
       }
     }
   }

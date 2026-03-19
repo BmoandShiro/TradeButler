@@ -6,7 +6,8 @@ interface GridCycleTimelineProps {
 }
 
 type Lot = { price: number; remainingQty: number };
-type TimelineSortKey = "time" | "side" | "qty" | "price" | "openQty" | "avgCost" | "status";
+const EPS = 1e-12;
+type TimelineSortKey = "time" | "side" | "qty" | "price" | "notional" | "openQty" | "avgCost" | "status";
 type SortDirection = "asc" | "desc";
 
 export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
@@ -24,7 +25,6 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
   const firstFill = cycle.fills.find((f) => f.kind !== "ORDER") ?? cycle.fills[0];
   const isLong = firstFill?.side === "BUY";
 
-  const EPS = 0;
   const lots: Lot[] = [];
 
   const rows = cycle.fills.map((fill) => {
@@ -38,13 +38,21 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
     if (shouldOpen) {
       lots.push({ price: fill.price, remainingQty: fill.quantity });
     } else if (shouldClose) {
+      // Dynamic matching: eligible = remainingQty > 0, price eligible for close
+      // Long: buyPrice <= sellPrice, sort buyPrice desc. Short: sellPrice >= buyPrice, sort sellPrice asc.
+      const eligible = isLong
+        ? lots.filter((l) => l.remainingQty > EPS && l.price <= fill.price).sort((a, b) => b.price - a.price)
+        : lots.filter((l) => l.remainingQty > EPS && l.price >= fill.price).sort((a, b) => a.price - b.price);
+
       let remainingToClose = fill.quantity;
-      while (remainingToClose > EPS && lots.length > 0) {
-        const earliest = lots[0];
-        const matchedQty = Math.min(earliest.remainingQty, remainingToClose);
-        earliest.remainingQty -= matchedQty;
+      for (const lot of eligible) {
+        if (remainingToClose <= EPS) break;
+        const matchedQty = Math.min(lot.remainingQty, remainingToClose);
+        lot.remainingQty -= matchedQty;
         remainingToClose -= matchedQty;
-        if (earliest.remainingQty <= EPS) lots.shift();
+      }
+      for (let i = lots.length - 1; i >= 0; i--) {
+        if (lots[i].remainingQty <= EPS) lots.splice(i, 1);
       }
     }
 
@@ -82,6 +90,10 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
         case "price":
           av = a.fill.price;
           bv = b.fill.price;
+          break;
+        case "notional":
+          av = a.fill.price * a.fill.quantity;
+          bv = b.fill.price * b.fill.quantity;
           break;
         case "openQty":
           av = a.openQty;
@@ -128,6 +140,7 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
               <th onClick={() => toggleSort("side")} style={{ textAlign: "center", padding: "6px 8px", cursor: "pointer" }}>Side{sortMarker("side")}</th>
               <th onClick={() => toggleSort("qty")} style={{ textAlign: "right", padding: "6px 8px", cursor: "pointer" }}>Qty{sortMarker("qty")}</th>
               <th onClick={() => toggleSort("price")} style={{ textAlign: "right", padding: "6px 8px", cursor: "pointer" }}>Price{sortMarker("price")}</th>
+              <th onClick={() => toggleSort("notional")} style={{ textAlign: "right", padding: "6px 8px", cursor: "pointer" }}>Notional{sortMarker("notional")}</th>
               <th onClick={() => toggleSort("openQty")} style={{ textAlign: "right", padding: "6px 8px", cursor: "pointer" }}>Open Qty{sortMarker("openQty")}</th>
               <th onClick={() => toggleSort("avgCost")} style={{ textAlign: "right", padding: "6px 8px", cursor: "pointer" }}>Avg Cost{sortMarker("avgCost")}</th>
               <th onClick={() => toggleSort("status")} style={{ textAlign: "center", padding: "6px 8px", cursor: "pointer" }}>Status{sortMarker("status")}</th>
@@ -157,6 +170,9 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
                 </td>
                 <td style={{ padding: "4px 8px", textAlign: "right" }}>
                   {r.fill.price.toFixed(2)}
+                </td>
+                <td style={{ padding: "4px 8px", textAlign: "right" }}>
+                  ${(r.fill.price * r.fill.quantity).toFixed(2)}
                 </td>
                 <td
                   style={{

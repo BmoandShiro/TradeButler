@@ -1,7 +1,10 @@
 import {
+  GridBuyLot,
   GridCycle,
   GridFill,
   GridFutureFreeShareTarget,
+  GridFutureLotFragment,
+  GridFutureMatchEvent,
   GridFutureSettings,
   GridFutureSlot,
   GridFutureState,
@@ -112,8 +115,11 @@ export function generateCompoundBuyLevels(settings: GridFutureSettings): Array<{
 }
 
 type OpenSlotLot = {
+  fragmentId: string;
   slotId: string;
   side: GridSide;
+  sourceFillId: string | number;
+  totalQuantity: number;
   openQty: number;
   openPrice: number;
   openTime: string;
@@ -186,6 +192,7 @@ export function buildGridFutureState(
   const slots: GridFutureSlot[] = [];
   const freeShareLots = [] as GridFutureState["freeShareLots"];
   const openLots: OpenSlotLot[] = [];
+  const matchEvents: GridFutureMatchEvent[] = [];
 
   let realizedPL = 0;
   let capitalRecovered = 0;
@@ -194,6 +201,51 @@ export function buildGridFutureState(
   const createSlotFromOpenFill = (fill: GridFill): GridFutureSlot => {
     const slotId = `slot-${fill.id}-${ladderSequence}`;
     const targetSellPrice = roundPrice(fill.price * (1 + sellStep), settings.priceTickSize);
+    const existing = slots.find(
+      (s) =>
+        s.status === "waiting_sell" &&
+        s.plannedSellPrice != null &&
+        Math.abs(s.plannedSellPrice - targetSellPrice) <= settings.priceTickSize / 2,
+    );
+    if (existing) {
+      existing.plannedBuyQuantity += fill.quantity;
+      existing.plannedBuyNotional += fill.price * fill.quantity;
+      existing.filledBuyQuantity = (existing.filledBuyQuantity ?? 0) + fill.quantity;
+      existing.filledBuyNotional = (existing.filledBuyNotional ?? 0) + fill.price * fill.quantity;
+      existing.buyFees += feeForNotional(fill.price * fill.quantity, settings);
+      existing.remainingLotQuantity += fill.quantity;
+      existing.remainingLotAccountingBasis += fill.price * fill.quantity;
+      existing.sourceBuyFillCount = (existing.sourceBuyFillCount ?? 1) + 1;
+      existing.sourceBuyAveragePrice = safeDiv(
+        existing.remainingLotAccountingBasis,
+        existing.remainingLotQuantity,
+      );
+      existing.plannedSellQuantity =
+        settings.shareSaleMode === "sell_full_quantity"
+          ? existing.remainingLotQuantity
+          : Math.min(
+              existing.remainingLotQuantity,
+              safeDiv(
+                Math.max(0, capitalPerLevel - existing.principalRecovered),
+                existing.plannedSellPrice ?? targetSellPrice,
+              ),
+            );
+
+      const fragmentId = `frag-${fill.id}-${existing.slotId}-${existing.sourceBuyFillCount}`;
+      openLots.push({
+        fragmentId,
+        slotId: existing.slotId,
+        side: fill.side,
+        sourceFillId: fill.id,
+        totalQuantity: fill.quantity,
+        openQty: fill.quantity,
+        openPrice: fill.price,
+        openTime: fill.timestamp,
+        accountingBasis: fill.price * fill.quantity,
+      });
+      return existing;
+    }
+
     const plannedSellQuantity =
       settings.shareSaleMode === "sell_full_quantity"
         ? fill.quantity
@@ -231,13 +283,19 @@ export function buildGridFutureState(
       targetBuyPrice: roundPrice(targetSellPrice * (1 - buyStep), settings.priceTickSize),
       targetSellPrice,
       sourceCycleFillId: fill.id,
+      sourceBuyAveragePrice: fill.price,
+      sourceBuyFillCount: 1,
     };
     ladderSequence += 1;
     slots.push(slot);
 
+    const fragmentId = `frag-${fill.id}-${slotId}-1`;
     openLots.push({
+      fragmentId,
       slotId,
       side: fill.side,
+      sourceFillId: fill.id,
+      totalQuantity: fill.quantity,
       openQty: fill.quantity,
       openPrice: fill.price,
       openTime: fill.timestamp,
@@ -253,21 +311,39 @@ export function buildGridFutureState(
       continue;
     }
 
+    // Dynamic matching: eligible lots = remainingQty > 0, buyPrice <= sellPrice
+    // Sort by buyPrice descending (closest buy below sell price first)
     let remainingCloseQty = fill.quantity;
-    while (remainingCloseQty > EPS && openLots.length > 0) {
-      const earliest = openLots[0];
-      const matched = Math.min(remainingCloseQty, earliest.openQty);
-      const slot = slots.find((s) => s.slotId === earliest.slotId);
-      if (!slot) break;
+    const eligible = openLots
+      .filter((l) => l.openQty > EPS && l.openPrice <= fill.price)
+      .sort((a, b) => b.openPrice - a.openPrice);
 
-      const matchedOpenBasis = safeDiv(earliest.accountingBasis * matched, earliest.openQty);
+    for (const lot of eligible) {
+      if (remainingCloseQty <= EPS) break;
+
+      const matched = Math.min(lot.openQty, remainingCloseQty);
+      const slot = slots.find((s) => s.slotId === lot.slotId);
+      if (!slot) continue;
+
+      const matchedOpenBasis = safeDiv(lot.accountingBasis * matched, lot.openQty);
       const closeNotional = fill.price * matched;
       const closeFee = feeForNotional(closeNotional, settings);
       const pnlSigned =
-        earliest.side === "BUY"
-          ? (fill.price - earliest.openPrice) * matched
-          : (earliest.openPrice - fill.price) * matched;
+        lot.side === "BUY"
+          ? (fill.price - lot.openPrice) * matched
+          : (lot.openPrice - fill.price) * matched;
       realizedPL += pnlSigned - closeFee;
+      matchEvents.push({
+        matchId: `match-${fill.id}-${lot.fragmentId}-${matchEvents.length + 1}`,
+        slotId: lot.slotId,
+        openFragmentId: lot.fragmentId,
+        closeFillId: fill.id,
+        matchedQty: matched,
+        openPrice: lot.openPrice,
+        closePrice: fill.price,
+        openTime: lot.openTime,
+        closeTime: fill.timestamp,
+      });
 
       slot.filledSellPrice = fill.price;
       slot.filledSellQuantity = (slot.filledSellQuantity ?? 0) + matched;
@@ -324,14 +400,56 @@ export function buildGridFutureState(
         slot.status = slot.remainingLotQuantity <= EPS ? "completed" : "partially_filled_sell";
       }
 
-      earliest.openQty -= matched;
-      earliest.accountingBasis = Math.max(0, earliest.accountingBasis - matchedOpenBasis);
+      lot.openQty -= matched;
+      lot.accountingBasis = Math.max(0, lot.accountingBasis - matchedOpenBasis);
       remainingCloseQty -= matched;
-      if (earliest.openQty <= EPS) {
-        openLots.shift();
-      }
     }
   }
+
+  // Build buy lots for UI (progress tracking, Free Share Targets)
+  const buyLots: GridBuyLot[] = openLots
+    .filter((l) => l.side === "BUY")
+    .map((lot) => {
+      const consumed = lot.totalQuantity - lot.openQty;
+      const status: GridBuyLot["status"] =
+        lot.openQty <= EPS ? "completed" : consumed <= EPS ? "open" : "partial";
+      return {
+        lotId: lot.fragmentId,
+        buyPrice: lot.openPrice,
+        totalQuantity: lot.totalQuantity,
+        remainingQuantity: lot.openQty,
+        consumedQuantity: consumed,
+        status,
+        progressPercent: safeDiv(consumed, lot.totalQuantity) * 100,
+        sourceFillId: lot.sourceFillId,
+        sourceTime: lot.openTime,
+        slotId: lot.slotId,
+      };
+    });
+
+  // Recompute per-slot source averages from remaining lot fragments.
+  slots.forEach((slot) => {
+    const fragments = openLots.filter((f) => f.slotId === slot.slotId && f.openQty > EPS);
+    if (fragments.length > 0) {
+      const remQty = fragments.reduce((sum, f) => sum + f.openQty, 0);
+      const remBasis = fragments.reduce((sum, f) => sum + f.accountingBasis, 0);
+      slot.sourceBuyAveragePrice = safeDiv(remBasis, remQty);
+      slot.sourceBuyFillCount = fragments.length;
+      slot.remainingLotQuantity = remQty;
+      slot.remainingLotAccountingBasis = remBasis;
+
+      const sellPx = slot.plannedSellPrice ?? slot.targetSellPrice ?? 0;
+      if (sellPx > 0) {
+        slot.plannedSellQuantity =
+          settings.shareSaleMode === "sell_full_quantity"
+            ? remQty
+            : Math.min(remQty, safeDiv(Math.max(0, capitalPerLevel - slot.principalRecovered), sellPx));
+      }
+    } else {
+      slot.sourceBuyAveragePrice = slot.sourceBuyAveragePrice ?? slot.filledBuyPrice ?? null;
+      slot.sourceBuyFillCount = slot.sourceBuyFillCount ?? 0;
+    }
+  });
 
   const capitalCommittedToOpenBuys = slots.reduce(
     (sum, s) => sum + s.remainingLotAccountingBasis,
@@ -461,6 +579,18 @@ export function buildGridFutureState(
 
   return {
     slots,
+    buyLots,
+    openFragments: openLots.map<GridFutureLotFragment>((lot) => ({
+      fragmentId: lot.fragmentId,
+      slotId: lot.slotId,
+      side: lot.side,
+      sourceFillId: lot.sourceFillId,
+      sourcePrice: lot.openPrice,
+      sourceTime: lot.openTime,
+      quantityRemaining: lot.openQty,
+      accountingBasisRemaining: lot.accountingBasis,
+    })),
+    matchEvents,
     freeShareLots,
     summary: {
       capital: {
