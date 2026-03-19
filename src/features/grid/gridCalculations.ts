@@ -9,15 +9,23 @@ import {
 } from "./gridTypes";
 import { format } from "date-fns";
 
+const PRICE_PRECISION = 2;
+
+function roundPrice(p: number): number {
+  const factor = Math.pow(10, PRICE_PRECISION);
+  return Math.round(p * factor) / factor;
+}
+
 function normalizeLevelsFromFills(fills: GridFill[]): GridLevel[] {
   const priceSet = new Map<number, GridLevel>();
   fills.forEach((fill) => {
     if (fill.status === "CANCELLED") return;
-    if (!priceSet.has(fill.price)) {
-      priceSet.set(fill.price, {
-        id: fill.price.toString(),
+    const priceKey = roundPrice(fill.price);
+    if (!priceSet.has(priceKey)) {
+      priceSet.set(priceKey, {
+        id: priceKey.toString(),
         index: 0,
-        price: fill.price,
+        price: priceKey,
       });
     }
   });
@@ -61,7 +69,7 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
   // Mark open orders (doesn't affect fill pairing).
   fills.forEach((fill) => {
     if (fill.kind === "ORDER" && fill.status === "OPEN") {
-      const level = levelByPrice.get(fill.price);
+      const level = levelByPrice.get(roundPrice(fill.price));
       if (!level) return;
       const agg = byId.get(level.id);
       if (!agg) return;
@@ -82,7 +90,7 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
   activeFillsSorted.forEach((fill) => {
-    const level = levelByPrice.get(fill.price);
+    const level = levelByPrice.get(roundPrice(fill.price));
     const agg = level ? byId.get(level.id) : undefined;
 
     if (fill.side === "BUY") {
@@ -106,7 +114,7 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
           if (remainingToClose <= EPS) break;
           const matchedQty = Math.min(lot.remainingQty, remainingToClose);
 
-          const entryLevel = levelByPrice.get(lot.fill.price);
+          const entryLevel = levelByPrice.get(roundPrice(lot.fill.price));
           const entryAgg = entryLevel ? byId.get(entryLevel.id) : undefined;
           if (entryAgg) {
             entryAgg.realizedPnlAtLevel +=
@@ -150,7 +158,7 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
         if (remainingToClose <= EPS) break;
         const matchedQty = Math.min(lot.remainingQty, remainingToClose);
 
-        const entryLevel = levelByPrice.get(lot.fill.price);
+        const entryLevel = levelByPrice.get(roundPrice(lot.fill.price));
         const entryAgg = entryLevel ? byId.get(entryLevel.id) : undefined;
         if (entryAgg) {
           entryAgg.realizedPnlAtLevel +=
@@ -174,7 +182,7 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
 
   // Remaining open inventory after pairing.
   longBuys.forEach((openBuy) => {
-    const entryLevel = levelByPrice.get(openBuy.fill.price);
+    const entryLevel = levelByPrice.get(roundPrice(openBuy.fill.price));
     if (!entryLevel) return;
     const agg = byId.get(entryLevel.id);
     if (!agg) return;
@@ -189,7 +197,7 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
   });
 
   shortSells.forEach((openSell) => {
-    const entryLevel = levelByPrice.get(openSell.fill.price);
+    const entryLevel = levelByPrice.get(roundPrice(openSell.fill.price));
     if (!entryLevel) return;
     const agg = byId.get(entryLevel.id);
     if (!agg) return;
