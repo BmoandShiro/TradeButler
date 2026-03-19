@@ -4,12 +4,14 @@ interface GridCyclesTableProps {
   cycles: GridCycle[];
   selectedCycleId?: string;
   onSelectCycle?: (cycleId: string) => void;
+  onViewGraph?: (cycleId: string) => void;
 }
 
 export function GridCyclesTable({
   cycles,
   selectedCycleId,
   onSelectCycle,
+  onViewGraph,
 }: GridCyclesTableProps) {
   if (!cycles.length) {
     return (
@@ -43,6 +45,7 @@ export function GridCyclesTable({
             <th style={{ textAlign: "right", padding: "6px 8px" }}>Gross PnL</th>
             <th style={{ textAlign: "left", padding: "6px 8px" }}>Open</th>
             <th style={{ textAlign: "left", padding: "6px 8px" }}>Close</th>
+            <th style={{ textAlign: "center", padding: "6px 8px" }}>Graph</th>
           </tr>
         </thead>
         <tbody>
@@ -98,6 +101,26 @@ export function GridCyclesTable({
                   {cycle.status === "completed" && cycle.closeTime
                     ? new Date(cycle.closeTime).toLocaleString()
                     : "Open"}
+                </td>
+                <td style={{ textAlign: "center", padding: "4px 8px" }}>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onViewGraph?.(cycle.id);
+                    }}
+                    style={{
+                      border: "1px solid var(--border-color)",
+                      backgroundColor: "transparent",
+                      color: "var(--accent)",
+                      borderRadius: "6px",
+                      padding: "2px 8px",
+                      fontSize: "11px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    View Graph
+                  </button>
                 </td>
               </tr>
             );

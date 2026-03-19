@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Calculator, DollarSign, BarChart3, TrendingUp, Grid3X3 } from "lucide-react";
 import AverageDownCalculator from "./AverageDownCalculator";
@@ -7,10 +8,15 @@ import IpoCalendar from "./IpoCalendar";
 import GridLadderTool from "./GridLadderTool";
 
 type ToolTab = "average-down" | "dividend" | "basic-financials" | "ipo-calendar" | "grid-ladder";
+const TOOLS_LAST_CALC_KEY = "tradebutler_tools_last_calc";
 
 export default function Tools() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const calc = (searchParams.get("calc") || "average-down") as ToolTab;
+  const calcFromUrl = searchParams.get("calc");
+  const calcFromStorage = !calcFromUrl
+    ? localStorage.getItem(TOOLS_LAST_CALC_KEY)
+    : null;
+  const calc = (calcFromUrl || calcFromStorage || "average-down") as ToolTab;
   const validCalc = ["average-down", "dividend", "basic-financials", "ipo-calendar", "grid-ladder"].includes(calc)
     ? calc
     : "average-down";
@@ -26,6 +32,10 @@ export default function Tools() {
       setSearchParams({ calc: value });
     }
   };
+
+  useEffect(() => {
+    localStorage.setItem(TOOLS_LAST_CALC_KEY, validCalc);
+  }, [validCalc]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>

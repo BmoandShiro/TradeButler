@@ -6,6 +6,7 @@ import { GridLadder } from "../features/grid/GridLadder";
 import { GridCyclesTable } from "../features/grid/GridCyclesTable";
 import { GridSummaryCards } from "../features/grid/GridSummaryCards";
 import { GridCycleTimeline } from "../features/grid/GridCycleTimeline";
+import { TradeChart } from "../components/TradeChart";
 import {
   deriveGridLevels,
   aggregateFillsByLevel,
@@ -25,6 +26,26 @@ type BasicTrade = {
   status?: string;
   fees?: number | null;
 };
+
+const GRID_TOOL_STATE_KEY = "tradebutler_grid_ladder_tool_state_v1";
+
+interface GridToolPersistedState {
+  symbol?: string;
+  instrumentFilter?: "shares" | "options" | "all";
+  gridAreaMode?: "grid" | "timeline";
+  selectedCycleId?: string;
+}
+
+function loadGridToolState(): GridToolPersistedState {
+  try {
+    const raw = localStorage.getItem(GRID_TOOL_STATE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as GridToolPersistedState;
+    return parsed ?? {};
+  } catch {
+    return {};
+  }
+}
 
 function isOptionsSymbol(sym: string): boolean {
   if (!sym) return false;
@@ -54,15 +75,25 @@ function mapTradesToFills(trades: BasicTrade[]): GridFill[] {
 }
 
 export default function GridLadderTool() {
-  const [symbol, setSymbol] = useState<string>("AAPL");
+  const initialState = loadGridToolState();
+  const [symbol, setSymbol] = useState<string>(initialState.symbol || "AAPL");
   const [selectedLevelId, setSelectedLevelId] = useState<string | undefined>();
-  const [selectedCycleId, setSelectedCycleId] = useState<string | undefined>();
-  const [gridAreaMode, setGridAreaMode] = useState<"grid" | "timeline">("grid");
-  const [instrumentFilter, setInstrumentFilter] = useState<"shares" | "options" | "all">("shares");
+  const [selectedCycleId, setSelectedCycleId] = useState<string | undefined>(
+    initialState.selectedCycleId || undefined,
+  );
+  const [gridAreaMode, setGridAreaMode] = useState<"grid" | "timeline">(
+    initialState.gridAreaMode === "timeline" ? "timeline" : "grid",
+  );
+  const [instrumentFilter, setInstrumentFilter] = useState<"shares" | "options" | "all">(
+    initialState.instrumentFilter === "options" || initialState.instrumentFilter === "all"
+      ? initialState.instrumentFilter
+      : "shares",
+  );
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [trades, setTrades] = useState<BasicTrade[]>([]);
   const [_isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [selectedCycleForChartId, setSelectedCycleForChartId] = useState<string | null>(null);
 
   const handleSelectCycle = (cycleId: string) => {
     setSelectedCycleId((prev) => (prev === cycleId ? undefined : cycleId));
@@ -135,6 +166,7 @@ export default function GridLadderTool() {
   );
 
   const selectedCycle = cycles.find((c) => c.id === selectedCycleId);
+  const selectedCycleForChart = cycles.find((c) => c.id === selectedCycleForChartId);
   const fillsForLadder = selectedCycle?.fills ?? fills;
 
   const levelsForLadder = useMemo(
@@ -164,10 +196,51 @@ export default function GridLadderTool() {
     [symbol, pnlCyclesForLadder, exposure],
   );
 
+  const selectedCycleChartTrades = useMemo(() => {
+    if (!selectedCycleForChart) return undefined;
+    return selectedCycleForChart.fills.map((fill, idx) => ({
+      id: idx + 1,
+      symbol: fill.symbol,
+      side: fill.side,
+      quantity: fill.quantity,
+      price: fill.price,
+      timestamp: fill.timestamp,
+      order_type: "MARKET",
+      status: "FILLED",
+      fees: null as number | null,
+      notes: null as string | null,
+      strategy_id: null as number | null,
+    }));
+  }, [selectedCycleForChart]);
+
   useEffect(() => {
     // If the selected cycle changes, the previous level selection may not exist anymore.
     setSelectedLevelId(undefined);
   }, [selectedCycleId]);
+
+  useEffect(() => {
+    if (!selectedCycleId) return;
+    if (!cycles.some((c) => c.id === selectedCycleId)) {
+      setSelectedCycleId(undefined);
+    }
+  }, [cycles, selectedCycleId]);
+
+  useEffect(() => {
+    if (!selectedCycleForChartId) return;
+    if (!cycles.some((c) => c.id === selectedCycleForChartId)) {
+      setSelectedCycleForChartId(null);
+    }
+  }, [cycles, selectedCycleForChartId]);
+
+  useEffect(() => {
+    const stateToPersist: GridToolPersistedState = {
+      symbol,
+      instrumentFilter,
+      gridAreaMode,
+      selectedCycleId,
+    };
+    localStorage.setItem(GRID_TOOL_STATE_KEY, JSON.stringify(stateToPersist));
+  }, [symbol, instrumentFilter, gridAreaMode, selectedCycleId]);
 
   return (
     <div
@@ -363,6 +436,7 @@ export default function GridLadderTool() {
             cycles={cycles}
             selectedCycleId={selectedCycleId}
             onSelectCycle={handleSelectCycle}
+            onViewGraph={(cycleId) => setSelectedCycleForChartId(cycleId)}
           />
         </div>
         {selectedCycle && (
@@ -378,6 +452,25 @@ export default function GridLadderTool() {
           </div>
         )}
       </div>
+      {selectedCycleForChart && selectedCycleChartTrades && (
+        <TradeChart
+          symbol={selectedCycleForChart.symbol}
+          entryTimestamp={selectedCycleForChart.openTime}
+          exitTimestamp={
+            selectedCycleForChart.closeTime ??
+            selectedCycleForChart.fills[selectedCycleForChart.fills.length - 1]?.timestamp ??
+            selectedCycleForChart.openTime
+          }
+          entryPrice={selectedCycleForChart.entryPrice}
+          exitPrice={
+            selectedCycleForChart.exitPrice ??
+            selectedCycleForChart.fills[selectedCycleForChart.fills.length - 1]?.price ??
+            selectedCycleForChart.entryPrice
+          }
+          onClose={() => setSelectedCycleForChartId(null)}
+          positionTrades={selectedCycleChartTrades}
+        />
+      )}
     </div>
   );
 }
