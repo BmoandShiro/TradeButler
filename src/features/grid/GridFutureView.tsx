@@ -80,6 +80,7 @@ export function GridFutureView({
 }: GridFutureViewProps) {
   const [showUnfilledBuys, setShowUnfilledBuys] = useState(false);
   const [expandedSlotIds, setExpandedSlotIds] = useState<Set<string>>(new Set());
+  const [uncheckedPriceSortDesc, setUncheckedPriceSortDesc] = useState(true);
   const [layout, setLayout] = useState(loadFutureViewLayout);
   const [resizing, setResizing] = useState<"horizontal" | "vertical" | null>(null);
   const layoutRef = useRef<HTMLDivElement>(null);
@@ -622,19 +623,39 @@ export function GridFutureView({
           >
             <div
               style={{
-                fontSize: "12px",
-                fontWeight: 700,
-                color: "var(--text-secondary)",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
                 marginBottom: "8px",
               }}
             >
-              Unchecked Buys (Free Share Targets)
+              <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)" }}>
+                Unchecked Buys (Free Share Targets)
+              </span>
+              <button
+                type="button"
+                onClick={() => setUncheckedPriceSortDesc((d) => !d)}
+                title={uncheckedPriceSortDesc ? "Highest first (click for lowest first)" : "Lowest first (click for highest first)"}
+                style={{
+                  border: "none",
+                  background: "none",
+                  cursor: "pointer",
+                  padding: "0 2px",
+                  fontSize: "10px",
+                  color: "var(--text-secondary)",
+                  lineHeight: 1,
+                }}
+              >
+                {uncheckedPriceSortDesc ? "↓" : "↑"}
+              </button>
             </div>
             <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "8px" }}>
               Remaining exposure (notional) not yet offset by sells.
             </div>
             {(() => {
-              const unchecked = buyLots.filter((b) => b.remainingQuantity > 1e-12);
+              const unchecked = buyLots
+                .filter((b) => b.remainingQuantity > 1e-12)
+                .sort((a, b) => (uncheckedPriceSortDesc ? b.buyPrice - a.buyPrice : a.buyPrice - b.buyPrice));
               if (unchecked.length === 0) {
                 return (
                   <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
