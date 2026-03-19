@@ -58,7 +58,18 @@ function OverviewChartAxisTick(props: { x?: number; y?: number; payload?: { valu
   );
 }
 import RichTextEditor from "../components/RichTextEditor";
-import { loadIndicators, loadStrategyIndicatorIds, saveStrategyIndicatorIds } from "../utils/indicatorsStore";
+import {
+  loadIndicators,
+  loadStrategyIndicatorIds,
+  saveStrategyIndicatorIds,
+  loadStrategyRulesEnabled,
+  saveStrategyRulesEnabled,
+  loadStrategyRuleTexts,
+  saveStrategyRuleTexts,
+  loadStrategyCustomRuleSets,
+  saveStrategyCustomRuleSets,
+  type StrategyCustomRuleSet,
+} from "../utils/indicatorsStore";
 import { ColorPicker } from "../components/ColorPicker";
 import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
@@ -122,7 +133,7 @@ interface PairedTrade {
   strategy_id: number | null;
 }
 
-type TabType = "notes" | "trades" | "checklists" | "survey" | "surveys";
+type TabType = "notes" | "trades" | "checklists" | "survey" | "surveys" | "rules";
 
 interface ChecklistItem {
   id: number;
@@ -1800,6 +1811,15 @@ export default function Strategies() {
   }>>([]);
 
   const [strategyIndicatorIds, setStrategyIndicatorIds] = useState<string[]>([]);
+  const [entryRulesEnabled, setEntryRulesEnabled] = useState<boolean>(true);
+  const [takeProfitRulesEnabled, setTakeProfitRulesEnabled] = useState<boolean>(true);
+  type RulesPanelMode = "entry" | "takeProfit" | "customSet";
+  const [activeRulesPanel, setActiveRulesPanel] = useState<RulesPanelMode>("entry");
+  const [activeCustomRuleSetId, setActiveCustomRuleSetId] = useState<string | null>(null);
+  const [entryRuleTexts, setEntryRuleTexts] = useState<string[]>([]);
+  const [takeProfitRuleTexts, setTakeProfitRuleTexts] = useState<string[]>([]);
+  const [customRuleSets, setCustomRuleSets] = useState<StrategyCustomRuleSet[]>([]);
+  const [ruleDraftText, setRuleDraftText] = useState<string>("");
   const [indicatorSearch, setIndicatorSearch] = useState("");
   const [indicatorDropdownOpen, setIndicatorDropdownOpen] = useState(false);
   const [presetModal, setPresetModal] = useState<null | "add" | number>(null);
@@ -2312,6 +2332,18 @@ export default function Strategies() {
     if (selectedStrategy == null) return;
     if (isEditing || isCreating) return;
     setStrategyIndicatorIds(loadStrategyIndicatorIds(dataMode, selectedStrategy));
+  }, [selectedStrategy, dataMode, isEditing, isCreating]);
+
+  // When viewing a strategy (not editing/creating), load text rules so the Rules tab can display them.
+  useEffect(() => {
+    if (selectedStrategy == null) return;
+    if (isEditing || isCreating) return;
+    setEntryRuleTexts(loadStrategyRuleTexts(dataMode, selectedStrategy, "entry"));
+    setTakeProfitRuleTexts(loadStrategyRuleTexts(dataMode, selectedStrategy, "takeProfit"));
+    const sets = loadStrategyCustomRuleSets(dataMode, selectedStrategy);
+    setCustomRuleSets(sets);
+    setActiveRulesPanel("entry");
+    setActiveCustomRuleSetId(null);
   }, [selectedStrategy, dataMode, isEditing, isCreating]);
 
   useEffect(() => {
@@ -4047,6 +4079,13 @@ export default function Strategies() {
         setTempChecklists(new Map());
         setEditingFormData({ name: "", description: "", color: "#3b82f6", author: "" });
         setNewStrategyNotes("");
+        saveStrategyRulesEnabled(dataMode, newStrategyId, {
+          entryRulesEnabled,
+          takeProfitRulesEnabled,
+        });
+        saveStrategyRuleTexts(dataMode, newStrategyId, "entry", entryRuleTexts);
+        saveStrategyRuleTexts(dataMode, newStrategyId, "takeProfit", takeProfitRuleTexts);
+        saveStrategyCustomRuleSets(dataMode, newStrategyId, customRuleSets);
         return;
       }
       // Create the strategy - returns just the ID
@@ -4062,6 +4101,15 @@ export default function Strategies() {
       if (strategyIndicatorIds.length > 0) {
         saveStrategyIndicatorIds(dataMode, newStrategyId, strategyIndicatorIds);
       }
+
+      // Persist Journal rule-panel enablement for the newly created strategy (per mode)
+      saveStrategyRulesEnabled(dataMode, newStrategyId, {
+        entryRulesEnabled,
+        takeProfitRulesEnabled,
+      });
+      saveStrategyRuleTexts(dataMode, newStrategyId, "entry", entryRuleTexts);
+      saveStrategyRuleTexts(dataMode, newStrategyId, "takeProfit", takeProfitRuleTexts);
+      saveStrategyCustomRuleSets(dataMode, newStrategyId, customRuleSets);
 
       // Assign pending trades to the strategy
       const hadPendingTrades = pendingTradeIds.length > 0;
@@ -4265,6 +4313,14 @@ export default function Strategies() {
     setTempCalculationPresets([]);
     setTempSurveyMetrics([]);
     setStrategyIndicatorIds([]);
+    setEntryRulesEnabled(true);
+    setTakeProfitRulesEnabled(true);
+    setEntryRuleTexts([]);
+    setTakeProfitRuleTexts([]);
+    setCustomRuleSets([]);
+    setActiveRulesPanel("entry");
+    setActiveCustomRuleSetId(null);
+    setRuleDraftText("");
     setIndicatorSearch("");
   };
 
@@ -4312,6 +4368,15 @@ export default function Strategies() {
 
       // Load indicator associations (per mode)
       setStrategyIndicatorIds(loadStrategyIndicatorIds(dataMode, selectedStrategyData.id));
+      const enabled = loadStrategyRulesEnabled(dataMode, selectedStrategyData.id);
+      setEntryRulesEnabled(enabled.entryRulesEnabled);
+      setTakeProfitRulesEnabled(enabled.takeProfitRulesEnabled);
+      setEntryRuleTexts(loadStrategyRuleTexts(dataMode, selectedStrategyData.id, "entry"));
+      setTakeProfitRuleTexts(loadStrategyRuleTexts(dataMode, selectedStrategyData.id, "takeProfit"));
+      const sets = loadStrategyCustomRuleSets(dataMode, selectedStrategyData.id);
+      setCustomRuleSets(sets);
+      setActiveRulesPanel("entry");
+      setActiveCustomRuleSetId(null);
       setIndicatorDropdownOpen(false);
       setIndicatorSearch("");
     }
@@ -5430,6 +5495,7 @@ export default function Strategies() {
                 { id: "notes" as TabType, label: "Details", icon: FileText },
                 { id: "trades" as TabType, label: "Trades", icon: TrendingUp },
                 { id: "checklists" as TabType, label: "Checklists", icon: ListChecks },
+                { id: "rules" as TabType, label: "Rules", icon: ListChecks },
                 { id: "surveys" as TabType, label: "Surveys", icon: ClipboardList },
                 { id: "survey" as TabType, label: "Metrics", icon: BarChart2 },
               ].map((tab) => {
@@ -5570,6 +5636,13 @@ export default function Strategies() {
                           Open Signals page
                         </a>
                       </div>
+
+                      <div style={{ display: "flex", gap: "14px", alignItems: "center", flexWrap: "wrap", marginBottom: "10px" }}>
+                        <span style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
+                          Entry/Take Profit rules are configured in the Rules tab.
+                        </span>
+                      </div>
+
                       <div style={{ position: "relative" }}>
                         <button
                           type="button"
@@ -6495,6 +6568,340 @@ export default function Strategies() {
                         </div>
                       </SortableContext>
                     </DndContext>
+                  </div>
+                );
+              })()}
+
+              {activeTab === "rules" && (selectedStrategy || isCreating) && (() => {
+                const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+                const canEditRules = isEditing || isCreating;
+                const selectedCustomRuleSet = activeCustomRuleSetId ? customRuleSets.find((s) => s.id === activeCustomRuleSetId) : null;
+                const selectedRules =
+                  activeRulesPanel === "entry"
+                    ? entryRuleTexts
+                    : activeRulesPanel === "takeProfit"
+                      ? takeProfitRuleTexts
+                      : selectedCustomRuleSet?.rules ?? [];
+
+                const saveSelectedRules = (next: string[]) => {
+                  if (activeRulesPanel === "entry") {
+                    setEntryRuleTexts(next);
+                    if (!isCreating && strategyId > 0) saveStrategyRuleTexts(dataMode, strategyId, "entry", next);
+                    return;
+                  }
+                  if (activeRulesPanel === "takeProfit") {
+                    setTakeProfitRuleTexts(next);
+                    if (!isCreating && strategyId > 0) saveStrategyRuleTexts(dataMode, strategyId, "takeProfit", next);
+                    return;
+                  }
+
+                  // Custom rule set
+                  if (!activeCustomRuleSetId) return;
+                  const nextSets = customRuleSets.map((s) =>
+                    s.id === activeCustomRuleSetId
+                      ? { ...s, rules: next }
+                      : s
+                  );
+                  setCustomRuleSets(nextSets);
+                  if (!isCreating && strategyId > 0) saveStrategyCustomRuleSets(dataMode, strategyId, nextSets);
+                };
+
+                const removeAt = (idx: number) => {
+                  const next = selectedRules.filter((_, i) => i !== idx);
+                  saveSelectedRules(next);
+                };
+
+                const addRuleText = (rawText: string) => {
+                  const text = rawText.trim();
+                  if (!text) return;
+                  saveSelectedRules([...selectedRules, text]);
+                };
+
+                const handleRuleDragEnd = (event: DragEndEvent) => {
+                  const { active, over } = event;
+                  if (!over) return;
+                  const oldIndex = Number(String(active.id));
+                  const newIndex = Number(String(over.id));
+                  if (Number.isNaN(oldIndex) || Number.isNaN(newIndex)) return;
+                  if (oldIndex === newIndex) return;
+                  saveSelectedRules(arrayMove(selectedRules, oldIndex, newIndex));
+                };
+
+                const sortableRuleItemIds = selectedRules.map((_, idx) => String(idx));
+
+                return (
+                  <div style={{ padding: "24px", overflowY: "auto" }}>
+                    <div style={{ marginBottom: "18px" }}>
+                      <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "6px" }}>Rules</h3>
+                      <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: 0, maxWidth: 680 }}>
+                        Manage the ordered free-text rule set for each phase. These rules are shown in the Journal.
+                      </p>
+                    </div>
+
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "16px", alignItems: "center" }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveRulesPanel("entry");
+                          setActiveCustomRuleSetId(null);
+                        }}
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: "999px",
+                          border: `1px solid ${activeRulesPanel === "entry" ? "var(--accent)" : "var(--border-color)"}`,
+                          background: activeRulesPanel === "entry" ? "var(--accent)" : "var(--bg-tertiary)",
+                          color: activeRulesPanel === "entry" ? "white" : "var(--text-primary)",
+                          cursor: "pointer",
+                          fontSize: "13px",
+                          fontWeight: 650,
+                        }}
+                      >
+                        Entry Rules
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveRulesPanel("takeProfit");
+                          setActiveCustomRuleSetId(null);
+                        }}
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: "999px",
+                          border: `1px solid ${activeRulesPanel === "takeProfit" ? "var(--accent)" : "var(--border-color)"}`,
+                          background: activeRulesPanel === "takeProfit" ? "var(--accent)" : "var(--bg-tertiary)",
+                          color: activeRulesPanel === "takeProfit" ? "white" : "var(--text-primary)",
+                          cursor: "pointer",
+                          fontSize: "13px",
+                          fontWeight: 650,
+                        }}
+                      >
+                        Take Profit Rules
+                      </button>
+
+                      {customRuleSets.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => {
+                            setActiveRulesPanel("customSet");
+                            setActiveCustomRuleSetId(s.id);
+                          }}
+                          style={{
+                            padding: "8px 12px",
+                            borderRadius: "999px",
+                            border: `1px solid ${activeRulesPanel === "customSet" && activeCustomRuleSetId === s.id ? "var(--accent)" : "var(--border-color)"}`,
+                            background: activeRulesPanel === "customSet" && activeCustomRuleSetId === s.id ? "var(--accent)" : "var(--bg-tertiary)",
+                            color: activeRulesPanel === "customSet" && activeCustomRuleSetId === s.id ? "white" : "var(--text-primary)",
+                            cursor: "pointer",
+                            fontSize: "13px",
+                            fontWeight: 650,
+                          }}
+                          title={s.title}
+                        >
+                          {s.title}
+                        </button>
+                      ))}
+
+                      {canEditRules && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const name = window.prompt("Custom rule set name:");
+                            const title = (name ?? "").trim();
+                            if (!title) return;
+                            const id = `crs_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+                            const newSet: StrategyCustomRuleSet = { id, title, rules: [] };
+                            const nextSets = [...customRuleSets, newSet];
+                            setCustomRuleSets(nextSets);
+                            setActiveRulesPanel("customSet");
+                            setActiveCustomRuleSetId(id);
+                            if (!isCreating && strategyId > 0) saveStrategyCustomRuleSets(dataMode, strategyId, nextSets);
+                          }}
+                          style={{
+                            padding: "8px 12px",
+                            borderRadius: "999px",
+                            border: `1px solid var(--accent)`,
+                            background: "var(--bg-tertiary)",
+                            color: "var(--accent)",
+                            cursor: "pointer",
+                            fontSize: "13px",
+                            fontWeight: 650,
+                          }}
+                          title="Add custom rule set"
+                        >
+                          + Add custom set
+                        </button>
+                      )}
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "16px" }}>
+                      <div style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: 10, padding: 14 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                            Rule list
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                            {selectedRules.length} items
+                          </div>
+                        </div>
+
+                        {selectedRules.length === 0 ? (
+                          <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+                            No rules selected for this type.
+                          </div>
+                        ) : (
+                          <>
+                            {canEditRules ? (
+                              <DndContext sensors={sensors} onDragEnd={handleRuleDragEnd}>
+                                <SortableContext items={sortableRuleItemIds} strategy={verticalListSortingStrategy}>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                    {selectedRules.map((ruleText, idx) => {
+                                      const SortableRuleRow = ({ id: itemId, text, itemIdx }: { id: string; text: string; itemIdx: number }) => {
+                                        const {
+                                          attributes,
+                                          listeners,
+                                          setNodeRef,
+                                          transform,
+                                          transition,
+                                          isDragging,
+                                        } = useSortable({ id: itemId });
+
+                                        return (
+                                          <div
+                                            ref={setNodeRef}
+                                            style={{
+                                              transform: CSS.Transform.toString(transform),
+                                              transition,
+                                              opacity: isDragging ? 0.65 : 1,
+                                              display: "flex",
+                                              alignItems: "flex-start",
+                                              gap: 10,
+                                              padding: "10px 12px",
+                                              border: "1px solid var(--border-color)",
+                                              background: "var(--bg-tertiary)",
+                                              borderRadius: 10,
+                                            }}
+                                          >
+                                            <div
+                                              {...attributes}
+                                              {...listeners}
+                                              style={{
+                                                paddingTop: 2,
+                                                paddingLeft: 2,
+                                                cursor: isDragging ? "grabbing" : "grab",
+                                                color: "var(--text-secondary)",
+                                              }}
+                                              title="Drag to reorder"
+                                            >
+                                              <GripVertical size={16} />
+                                            </div>
+
+                                            <div style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", fontWeight: 550, lineHeight: 1.35, whiteSpace: "pre-wrap" }}>
+                                              {text}
+                                            </div>
+
+                                            <button
+                                              type="button"
+                                              onClick={() => removeAt(itemIdx)}
+                                              style={{
+                                                padding: "6px 10px",
+                                                borderRadius: 8,
+                                                border: "1px solid var(--border-color)",
+                                                background: "var(--bg-secondary)",
+                                                color: "var(--danger)",
+                                                cursor: "pointer",
+                                                fontSize: 12,
+                                                fontWeight: 650,
+                                                height: 30,
+                                              }}
+                                              title="Remove"
+                                            >
+                                              ✕
+                                            </button>
+                                          </div>
+                                        );
+                                      };
+
+                                      return (
+                                        <SortableRuleRow
+                                          key={sortableRuleItemIds[idx]}
+                                          id={sortableRuleItemIds[idx]}
+                                          text={ruleText}
+                                          itemIdx={idx}
+                                        />
+                                      );
+                                    })}
+                                  </div>
+                                </SortableContext>
+                              </DndContext>
+                            ) : (
+                              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                {selectedRules.map((ruleText, idx) => (
+                                  <div
+                                    key={`${idx}`}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "flex-start",
+                                      gap: 10,
+                                      padding: "10px 12px",
+                                      border: "1px solid var(--border-color)",
+                                      background: "var(--bg-tertiary)",
+                                      borderRadius: 10,
+                                    }}
+                                  >
+                                    <div style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", fontWeight: 550, lineHeight: 1.35, whiteSpace: "pre-wrap" }}>
+                                      {ruleText}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      {canEditRules && (
+                        <div style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: 10, padding: 14 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                              Add rule
+                            </div>
+                          </div>
+
+                          <div>
+                            <input
+                              value={ruleDraftText}
+                              onChange={(e) => setRuleDraftText(e.target.value)}
+                              placeholder="Type a rule (free text) then press Enter"
+                              style={{
+                                width: "100%",
+                                padding: "10px 12px",
+                                background: "var(--bg-primary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: 10,
+                                color: "var(--text-primary)",
+                                outline: "none",
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key !== "Enter") return;
+                                e.preventDefault();
+                                addRuleText(ruleDraftText);
+                                setRuleDraftText("");
+                              }}
+                            />
+                            <div style={{ marginTop: 8, color: "var(--text-secondary)", fontSize: 12 }}>
+                              Example: “Stop = just beyond the LTF OB” (one rule per Enter key).
+                            </div>
+                          </div>
+
+                          {isCreating && (
+                            <div style={{ marginTop: 10, color: "var(--text-secondary)", fontSize: 12 }}>
+                              Rules will be saved after the strategy is created.
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })()}

@@ -63,6 +63,8 @@ import { sanitizeHtml, normalizeRichTextHtml } from "../utils/sanitizeHtml";
 import {
   loadIndicators,
   loadStrategyIndicatorIds,
+  loadStrategyRuleTexts,
+  loadStrategyCustomRuleSets,
   loadJournalIndicatorValue,
   setJournalIndicatorValue,
   migrateJournalIndicatorDraftValues,
@@ -74,6 +76,7 @@ import {
   migrateJournalIndicatorDraftOtherSignals,
   type Indicator,
   type IndicatorPhase,
+  type StrategyCustomRuleSet,
 } from "../utils/indicatorsStore";
 
 interface JournalEntry {
@@ -470,7 +473,7 @@ export default function Journal() {
       try {
         const parsed = JSON.parse(raw) as string[];
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const valid = parsed.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:")));
+                        const valid = parsed.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:") || id.startsWith("custom_rules:")));
           const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
           return [...valid, ...missing];
         }
@@ -1004,11 +1007,17 @@ export default function Journal() {
   useEffect(() => {
     if (!entryFormData.strategy_id) {
       setStrategyIndicators([]);
+      setStrategyEntryRuleTexts([]);
+      setStrategyTakeProfitRuleTexts([]);
+      setStrategyCustomRuleSets([]);
       return;
     }
-    const ids = loadStrategyIndicatorIds(dataMode, entryFormData.strategy_id);
     const all = loadIndicators();
-    setStrategyIndicators(all.filter((i) => ids.includes(i.id)));
+    const indicatorIds = loadStrategyIndicatorIds(dataMode, entryFormData.strategy_id);
+    setStrategyIndicators(all.filter((i) => indicatorIds.includes(i.id)));
+    setStrategyEntryRuleTexts(loadStrategyRuleTexts(dataMode, entryFormData.strategy_id, "entry"));
+    setStrategyTakeProfitRuleTexts(loadStrategyRuleTexts(dataMode, entryFormData.strategy_id, "takeProfit"));
+    setStrategyCustomRuleSets(loadStrategyCustomRuleSets(dataMode, entryFormData.strategy_id));
   }, [dataMode, entryFormData.strategy_id]);
 
   useEffect(() => {
@@ -2862,12 +2871,30 @@ export default function Journal() {
   const getSectionLabel = (sectionId: string): string => {
     if (JOURNAL_SECTION_LABELS[sectionId as JournalSectionId]) return JOURNAL_SECTION_LABELS[sectionId as JournalSectionId];
     if (sectionId.startsWith("custom:")) return getChecklistTitle(sectionId.slice(7));
+    if (sectionId.startsWith("custom_rules:")) {
+      const ruleSetId = sectionId.slice("custom_rules:".length);
+      if (!entryFormData.strategy_id) return "Custom Rules";
+      try {
+        return loadStrategyCustomRuleSets(dataMode, entryFormData.strategy_id).find((s) => s.id === ruleSetId)?.title ?? "Custom Rules";
+      } catch {
+        return "Custom Rules";
+      }
+    }
     return sectionId;
   };
 
   const getSectionLabelScroll = (sectionId: string): string => {
     if (JOURNAL_SECTION_LABELS_SCROLL[sectionId as JournalSectionId]) return JOURNAL_SECTION_LABELS_SCROLL[sectionId as JournalSectionId];
     if (sectionId.startsWith("custom:")) return getChecklistTitle(sectionId.slice(7));
+    if (sectionId.startsWith("custom_rules:")) {
+      const ruleSetId = sectionId.slice("custom_rules:".length);
+      if (!entryFormData.strategy_id) return "Custom Rules";
+      try {
+        return loadStrategyCustomRuleSets(dataMode, entryFormData.strategy_id).find((s) => s.id === ruleSetId)?.title ?? "Custom Rules";
+      } catch {
+        return "Custom Rules";
+      }
+    }
     return sectionId;
   };
 
@@ -3041,13 +3068,17 @@ export default function Journal() {
   const fullSectionOrder = useMemo(() => {
     const base = journalSectionOrder.filter((id) => id !== "custom_checklists_surveys");
     const surveyItems = (currentChecklists?.get("survey") || []).filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
+    const customRuleSectionIds = entryFormData.strategy_id
+      ? loadStrategyCustomRuleSets(dataMode, entryFormData.strategy_id).map((s) => `custom_rules:${s.id}`)
+      : [];
     const customSectionIds = [
       ...customTypes.map((t) => `custom:${t}`),
+      ...customRuleSectionIds,
       ...(surveyItems.length > 0 ? ["custom:survey"] : []),
     ];
     const newCustom = customSectionIds.filter((id) => !base.includes(id));
     return [...base, ...newCustom];
-  }, [journalSectionOrder, customTypes, currentChecklists]);
+  }, [journalSectionOrder, customTypes, currentChecklists, dataMode, entryFormData.strategy_id]);
 
   const effectiveSectionOrder = useMemo(
     () => fullSectionOrder.filter((id) => !hiddenSectionIds.includes(id)),
@@ -3121,11 +3152,18 @@ export default function Journal() {
     const entryId = selectedEntry?.id ?? draftEntryId;
     if (!isCreating && !selectedEntry?.id) return null;
     if (!entryFormData.strategy_id) return null;
-    if (strategyIndicators.length === 0) return null;
+    const phaseIndicators = strategyIndicators;
+    if (phaseIndicators.length === 0) return null;
 
     const tradeIndex = activeTradeIndex;
     const timeframeOptions = ["1m", "5m", "15m", "1H", "4H", "1D", "1W"];
     const globalSelectedTfs = indicatorTimeframesByPhase[phase] || [];
+    const signalFilter = indicatorSignalGroupFilterByPhase[phase];
+    const visibleIndicators = phaseIndicators.filter((ind) => {
+      if (ind.signalGroup === "TechnicalPattern") return signalFilter.technical;
+      if (ind.signalGroup === "Candlestick") return signalFilter.candlestick;
+      return true;
+    });
 
     const getIndicatorSelectedTfs = (indicatorId: string, isTfIndicator: boolean) => {
       const overrides = indicatorTimeframesByPhaseAndIndicator[phase]?.[indicatorId];
@@ -3145,7 +3183,7 @@ export default function Journal() {
       });
     };
 
-    const hasAnyIndicatorTfs = strategyIndicators.some((ind) => {
+    const hasAnyIndicatorTfs = visibleIndicators.some((ind) => {
       const isTfIndicator = ind.capturesTimeframes === true || ind.id.includes("_timeframe");
       if (isTfIndicator) return globalSelectedTfs.length > 0;
       return getIndicatorSelectedTfs(ind.id, false).length > 0;
@@ -3203,16 +3241,53 @@ export default function Journal() {
                     Show indicator colors
                   </label>
                 )}
+
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: "8px", cursor: "pointer", color: "var(--text-secondary)", fontSize: "12px", fontWeight: 650 }}>
+                    <input
+                      type="checkbox"
+                      checked={indicatorSignalGroupFilterByPhase[phase]?.technical ?? true}
+                      onChange={(e) => {
+                        const next = e.target.checked;
+                        setIndicatorSignalGroupFilterByPhase((prev) => ({
+                          ...prev,
+                          [phase]: { ...prev[phase], technical: next },
+                        }));
+                      }}
+                      style={{ width: "16px", height: "16px" }}
+                    />
+                    Technical Patterns
+                  </label>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: "8px", cursor: "pointer", color: "var(--text-secondary)", fontSize: "12px", fontWeight: 650 }}>
+                    <input
+                      type="checkbox"
+                      checked={indicatorSignalGroupFilterByPhase[phase]?.candlestick ?? true}
+                      onChange={(e) => {
+                        const next = e.target.checked;
+                        setIndicatorSignalGroupFilterByPhase((prev) => ({
+                          ...prev,
+                          [phase]: { ...prev[phase], candlestick: next },
+                        }));
+                      }}
+                      style={{ width: "16px", height: "16px" }}
+                    />
+                    Candlesticks
+                  </label>
+                </div>
               </div>
         </div>
 
-        {!hasAnyIndicatorTfs ? (
+        {visibleIndicators.length === 0 ? (
+          <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
+            No indicators match the selected pattern filters.
+          </div>
+        ) : !hasAnyIndicatorTfs ? (
           <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
             Select one or more timeframes to enter indicator values (optional).
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {strategyIndicators.map((ind) => {
+            {visibleIndicators.map((ind) => {
               const isTfIndicator = ind.capturesTimeframes === true || ind.id.includes("_timeframe");
               const indSelectedTfs = getIndicatorSelectedTfs(ind.id, isTfIndicator);
               const isMomentum = (ind.category ?? "").toLowerCase() === "momentum";
@@ -3640,7 +3715,14 @@ export default function Journal() {
   const [overviewDimBrushStart, setOverviewDimBrushStart] = useState(0);
   const [overviewDimBrushEnd, setOverviewDimBrushEnd] = useState(0);
 
+  // Indicators configured for this strategy (these drive Journal indicator inputs).
   const [strategyIndicators, setStrategyIndicators] = useState<Indicator[]>([]);
+  // Free-text rules configured in the Strategy "Rules" tab (these drive the Journal rules panel).
+  const [strategyEntryRuleTexts, setStrategyEntryRuleTexts] = useState<string[]>([]);
+  const [strategyTakeProfitRuleTexts, setStrategyTakeProfitRuleTexts] = useState<string[]>([]);
+  // Free-text "custom rule sets" configured in the Strategy "Rules" tab.
+  // Each set gets its own Journal section that can be reordered.
+  const [strategyCustomRuleSets, setStrategyCustomRuleSets] = useState<StrategyCustomRuleSet[]>([]);
   const SHOW_INDICATOR_COLORS_KEY = "tradebutler_show_indicator_colors_v1";
   const [showIndicatorColors, setShowIndicatorColors] = useState<boolean>(() => {
     try {
@@ -3650,6 +3732,12 @@ export default function Journal() {
     } catch {
       return true;
     }
+  });
+  const [indicatorSignalGroupFilterByPhase, setIndicatorSignalGroupFilterByPhase] = useState<
+    Record<IndicatorPhase, { technical: boolean; candlestick: boolean }>
+  >({
+    entry: { technical: true, candlestick: true },
+    exit: { technical: true, candlestick: true },
   });
   const [indicatorTimeframesByPhase, setIndicatorTimeframesByPhase] = useState<Record<IndicatorPhase, string[]>>({
     // Default indicator timeframes (top-of-section buttons).
@@ -4730,10 +4818,127 @@ export default function Journal() {
                         )}
                         {sectionId === "analysis_checklist" && renderChecklistForType("daily_analysis")}
                         {sectionId === "mantra_checklist" && renderChecklistForType("daily_mantra")}
-                        {sectionId === "entry_checklist" && renderChecklistForType("entry")}
-                        {sectionId === "entry_checklist" && renderIndicatorInputs("entry")}
-                        {sectionId === "take_profit_checklist" && renderChecklistForType("take_profit")}
-                        {sectionId === "take_profit_checklist" && renderIndicatorInputs("exit")}
+                        {sectionId === "entry_checklist" && (
+                          <>
+                          <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
+                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                                Entry Checklist
+                              </div>
+                              {renderChecklistForType("entry")}
+                            </div>
+                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                                Entry Rules
+                              </div>
+                              {strategyEntryRuleTexts.length === 0 ? (
+                                <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
+                                  No entry rules configured.
+                                </p>
+                              ) : (
+                                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                  {strategyEntryRuleTexts.map((rule, idx) => (
+                                    <div
+                                      key={`${idx}`}
+                                      style={{
+                                        padding: "10px 12px",
+                                        background: "var(--bg-tertiary)",
+                                        border: "1px solid var(--border-color)",
+                                        borderRadius: 8,
+                                        color: "var(--text-primary)",
+                                        fontSize: 13,
+                                        lineHeight: 1.35,
+                                        whiteSpace: "pre-wrap",
+                                      }}
+                                    >
+                                      {rule}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div style={{ marginTop: "12px" }}>{renderIndicatorInputs("entry")}</div>
+                          </>
+                        )}
+                        {sectionId === "take_profit_checklist" && (
+                          <>
+                          <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
+                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                                Take Profit Checklist
+                              </div>
+                              {renderChecklistForType("take_profit")}
+                            </div>
+                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                                Take Profit Rules
+                              </div>
+                              {strategyTakeProfitRuleTexts.length === 0 ? (
+                                <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
+                                  No take profit rules configured.
+                                </p>
+                              ) : (
+                                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                  {strategyTakeProfitRuleTexts.map((rule, idx) => (
+                                    <div
+                                      key={`${idx}`}
+                                      style={{
+                                        padding: "10px 12px",
+                                        background: "var(--bg-tertiary)",
+                                        border: "1px solid var(--border-color)",
+                                        borderRadius: 8,
+                                        color: "var(--text-primary)",
+                                        fontSize: 13,
+                                        lineHeight: 1.35,
+                                        whiteSpace: "pre-wrap",
+                                      }}
+                                    >
+                                      {rule}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div style={{ marginTop: "12px" }}>{renderIndicatorInputs("exit")}</div>
+                          </>
+                        )}
+                        {sectionId.startsWith("custom_rules:") && (!entryFormData.strategy_id || !strategyCustomRuleSets) && (
+                          <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load custom rules.</p>
+                        )}
+                        {sectionId.startsWith("custom_rules:") && entryFormData.strategy_id && (() => {
+                          const ruleSetId = sectionId.slice("custom_rules:".length);
+                          const ruleSet = strategyCustomRuleSets.find((s) => s.id === ruleSetId);
+                          const rules = ruleSet?.rules ?? [];
+                          return (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                              {rules.length === 0 ? (
+                                <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
+                                  No custom rules configured.
+                                </p>
+                              ) : (
+                                rules.map((rule, idx) => (
+                                  <div
+                                    key={`${ruleSetId}-${idx}`}
+                                    style={{
+                                      padding: "10px 12px",
+                                      background: "var(--bg-tertiary)",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: 8,
+                                      color: "var(--text-primary)",
+                                      fontSize: 13,
+                                      lineHeight: 1.35,
+                                      whiteSpace: "pre-wrap",
+                                    }}
+                                  >
+                                    {rule}
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          );
+                        })()}
                         {sectionId.startsWith("custom:") && (!entryFormData.strategy_id || !currentChecklists) && (
                           <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load custom checklists and surveys.</p>
                         )}

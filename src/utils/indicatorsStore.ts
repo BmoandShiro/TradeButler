@@ -30,6 +30,10 @@ export interface Indicator {
 
 const INDICATORS_KEY = "tradebutler_indicators_v1";
 const STRATEGY_INDICATORS_KEY = "tradebutler_strategy_indicators_v1";
+const STRATEGY_RULE_INDICATORS_KEY = "tradebutler_strategy_rule_indicators_v1";
+const STRATEGY_RULE_TEXT_KEY = "tradebutler_strategy_rule_text_v1";
+const STRATEGY_CUSTOM_RULE_SETS_KEY = "tradebutler_strategy_custom_rule_sets_v1";
+const STRATEGY_RULES_ENABLED_KEY = "tradebutler_strategy_rules_enabled_v1";
 const JOURNAL_INDICATOR_VALUES_KEY = "tradebutler_journal_indicator_values_v1";
 const JOURNAL_INDICATOR_DIVERGENCE_KEY = "tradebutler_journal_indicator_divergence_v1";
 const JOURNAL_INDICATOR_OTHER_SIGNALS_KEY = "tradebutler_journal_indicator_other_signals_v1";
@@ -2026,7 +2030,207 @@ export function saveStrategyIndicatorIds(mode: DataMode, strategyId: number, ind
   localStorage.setItem(STRATEGY_INDICATORS_KEY, JSON.stringify(data));
 }
 
+export type StrategyRuleType = "entry" | "takeProfit" | "custom";
+
+type StrategyRuleIndicatorsMap = Record<
+  DataMode,
+  Record<
+    string,
+    Partial<Record<StrategyRuleType, string[]>>
+  >
+>;
+
+function getDefaultStrategyRuleIndicatorsFallback(mode: DataMode, strategyId: number): string[] {
+  // Back-compat: if rule-specific indicator sets aren't stored yet, fall back to the old
+  // "Indicators for this strategy" selection.
+  return loadStrategyIndicatorIds(mode, strategyId);
+}
+
+export function loadStrategyRuleIndicatorIds(mode: DataMode, strategyId: number, ruleType: StrategyRuleType): string[] {
+  if (strategyId < 0) return [];
+  const data = safeParse<StrategyRuleIndicatorsMap>(localStorage.getItem(STRATEGY_RULE_INDICATORS_KEY), {} as any);
+  const byMode = data[mode] ?? {};
+  const stored = byMode[String(strategyId)] ?? {};
+  const ruleIds = stored?.[ruleType];
+
+  const indicatorIds = new Set(loadIndicators().map((i) => i.id));
+  const fallback = getDefaultStrategyRuleIndicatorsFallback(mode, strategyId);
+
+  if (!Array.isArray(ruleIds)) return fallback;
+  const cleaned = ruleIds.filter((id) => indicatorIds.has(id));
+  return cleaned.length > 0 ? cleaned : fallback;
+}
+
+export function saveStrategyRuleIndicatorIds(mode: DataMode, strategyId: number, ruleType: StrategyRuleType, indicatorIds: string[]) {
+  if (strategyId < 0) return;
+  const data = safeParse<StrategyRuleIndicatorsMap>(localStorage.getItem(STRATEGY_RULE_INDICATORS_KEY), {} as any);
+  const byMode = data[mode] ?? {};
+  const entry = byMode[String(strategyId)] ?? {};
+  entry[ruleType] = Array.from(new Set(indicatorIds));
+  byMode[String(strategyId)] = entry;
+  data[mode] = byMode;
+  localStorage.setItem(STRATEGY_RULE_INDICATORS_KEY, JSON.stringify(data));
+}
+
+type StrategyRuleTextMap = Record<
+  DataMode,
+  Record<
+    string,
+    Partial<Record<StrategyRuleType, string[]>>
+  >
+>;
+
+function sanitizeRuleTextRules(rules: string[]): string[] {
+  return rules.map((r) => r.trim()).filter((r) => r.length > 0);
+}
+
+export function loadStrategyRuleTexts(mode: DataMode, strategyId: number, ruleType: StrategyRuleType): string[] {
+  if (strategyId < 0) return [];
+
+  const data = safeParse<StrategyRuleTextMap>(localStorage.getItem(STRATEGY_RULE_TEXT_KEY), {} as any);
+  const byMode = data[mode] ?? {};
+  const stored = byMode[String(strategyId)] ?? {};
+  const ruleTexts = stored?.[ruleType];
+
+  if (Array.isArray(ruleTexts)) {
+    const cleaned = sanitizeRuleTextRules(ruleTexts);
+    if (cleaned.length > 0) return cleaned;
+  }
+
+  // Back-compat: if text rules aren't stored yet, fall back to the legacy indicator-id
+  // rule associations by converting selected indicator abbreviations into placeholder text.
+  const legacyIndicatorIds = loadStrategyRuleIndicatorIds(mode, strategyId, ruleType);
+  if (legacyIndicatorIds.length === 0) return [];
+
+  const allIndicators = loadIndicators();
+  const selected = allIndicators.filter((i) => legacyIndicatorIds.includes(i.id));
+  const fallback = selected.map((ind) => `Legacy indicator rule: ${ind.abbreviation}`);
+
+  return sanitizeRuleTextRules(fallback);
+}
+
+export function saveStrategyRuleTexts(mode: DataMode, strategyId: number, ruleType: StrategyRuleType, rules: string[]) {
+  if (strategyId < 0) return;
+  const data = safeParse<StrategyRuleTextMap>(localStorage.getItem(STRATEGY_RULE_TEXT_KEY), {} as any);
+  const byMode = data[mode] ?? {};
+  const entry = byMode[String(strategyId)] ?? {};
+  entry[ruleType] = sanitizeRuleTextRules(rules);
+  byMode[String(strategyId)] = entry;
+  data[mode] = byMode;
+  localStorage.setItem(STRATEGY_RULE_TEXT_KEY, JSON.stringify(data));
+}
+
+export type StrategyCustomRuleSet = {
+  id: string;
+  title: string;
+  rules: string[]; // ordered free-text rules
+};
+
+type StrategyCustomRuleSetsMap = Record<
+  DataMode,
+  Record<
+    string,
+    StrategyCustomRuleSet[]
+  >
+>;
+
+function sanitizeCustomRuleSets(sets: StrategyCustomRuleSet[]): StrategyCustomRuleSet[] {
+  const cleaned = sets
+    .map((s) => ({
+      id: (s.id ?? "").trim() || "",
+      title: (s.title ?? "").trim() || "Custom Rules",
+      rules: sanitizeRuleTextRules(Array.isArray(s.rules) ? s.rules : []),
+    }))
+    .filter((s) => s.id.length > 0);
+
+  // Stable de-dup by id (preserve first occurrence).
+  const seen = new Set<string>();
+  const out: StrategyCustomRuleSet[] = [];
+  for (const s of cleaned) {
+    if (seen.has(s.id)) continue;
+    seen.add(s.id);
+    out.push(s);
+  }
+  return out;
+}
+
+function makeRuleSetId(): string {
+  // Avoid external deps; good enough for local ids.
+  return `crs_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+export function loadStrategyCustomRuleSets(mode: DataMode, strategyId: number): StrategyCustomRuleSet[] {
+  if (strategyId < 0) return [];
+
+  const data = safeParse<StrategyCustomRuleSetsMap>(localStorage.getItem(STRATEGY_CUSTOM_RULE_SETS_KEY), {} as any);
+  const byMode = data[mode] ?? {};
+  const stored = byMode[String(strategyId)] ?? [];
+  const cleaned = sanitizeCustomRuleSets(stored);
+  if (cleaned.length > 0) return cleaned;
+
+  // Back-compat: if the old single "custom" rule text array exists,
+  // convert it into one default set.
+  const legacy = loadStrategyRuleTexts(mode, strategyId, "custom");
+  const legacyClean = sanitizeRuleTextRules(legacy);
+  if (legacyClean.length === 0) return [];
+
+  return [
+    {
+      id: makeRuleSetId(),
+      title: "Custom Rules",
+      rules: legacyClean,
+    },
+  ];
+}
+
+export function saveStrategyCustomRuleSets(mode: DataMode, strategyId: number, sets: StrategyCustomRuleSet[]) {
+  if (strategyId < 0) return;
+
+  const data = safeParse<StrategyCustomRuleSetsMap>(localStorage.getItem(STRATEGY_CUSTOM_RULE_SETS_KEY), {} as any);
+  const byMode = data[mode] ?? {};
+  byMode[String(strategyId)] = sanitizeCustomRuleSets(sets);
+  data[mode] = byMode;
+  localStorage.setItem(STRATEGY_CUSTOM_RULE_SETS_KEY, JSON.stringify(data));
+}
+
 export type IndicatorPhase = "entry" | "exit";
+
+export type StrategyRulesEnabled = {
+  entryRulesEnabled: boolean;
+  takeProfitRulesEnabled: boolean;
+};
+
+type StrategyRulesEnabledMap = Record<
+  DataMode,
+  Record<
+    string,
+    {
+      entryRulesEnabled?: boolean;
+      takeProfitRulesEnabled?: boolean;
+    }
+  >
+>;
+
+export function loadStrategyRulesEnabled(mode: DataMode, strategyId: number): StrategyRulesEnabled {
+  const data = safeParse<StrategyRulesEnabledMap>(localStorage.getItem(STRATEGY_RULES_ENABLED_KEY), {} as any);
+  const byMode = data[mode] ?? {};
+  const stored = byMode[String(strategyId)] ?? {};
+  const entryRulesEnabled = typeof stored.entryRulesEnabled === "boolean" ? stored.entryRulesEnabled : true;
+  const takeProfitRulesEnabled = typeof stored.takeProfitRulesEnabled === "boolean" ? stored.takeProfitRulesEnabled : true;
+  return { entryRulesEnabled, takeProfitRulesEnabled };
+}
+
+export function saveStrategyRulesEnabled(mode: DataMode, strategyId: number, enabled: StrategyRulesEnabled) {
+  if (strategyId < 0) return;
+  const data = safeParse<StrategyRulesEnabledMap>(localStorage.getItem(STRATEGY_RULES_ENABLED_KEY), {} as any);
+  const byMode = data[mode] ?? {};
+  byMode[String(strategyId)] = {
+    entryRulesEnabled: enabled.entryRulesEnabled,
+    takeProfitRulesEnabled: enabled.takeProfitRulesEnabled,
+  };
+  data[mode] = byMode;
+  localStorage.setItem(STRATEGY_RULES_ENABLED_KEY, JSON.stringify(data));
+}
 
 export function loadJournalIndicatorValue(
   mode: DataMode,
