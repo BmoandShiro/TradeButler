@@ -1,5 +1,11 @@
 import { GridExposureSummary, GridLevelAggregate } from "./gridTypes";
 
+/** Format number with max decimals, stripping trailing zeros */
+function fmt(n: number, maxDecimals: number): string {
+  const s = n.toFixed(maxDecimals);
+  return s.replace(/\.?0+$/, "");
+}
+
 interface GridLadderProps {
   aggregates: GridLevelAggregate[];
   currentPrice: number | null;
@@ -124,7 +130,7 @@ export function GridLadder({
                   }}
                 >
                   <td style={{ textAlign: "right", padding: "4px 8px" }}>
-                    {agg.level.price.toFixed(2)}
+                    {agg.level.label ?? fmt(agg.level.price, 2)}
                   </td>
                   <td
                     style={{
@@ -133,7 +139,7 @@ export function GridLadder({
                       color: "var(--success-color, #16a34a)",
                     }}
                   >
-                    {agg.totalBuyQty > 0 ? agg.totalBuyQty.toFixed(4) : "—"}
+                    {agg.totalBuyQty > 0 ? fmt(agg.totalBuyQty, 4) : "—"}
                   </td>
                   <td
                     style={{
@@ -142,13 +148,17 @@ export function GridLadder({
                       color: "var(--warning-color, #f97316)",
                     }}
                   >
-                    {agg.totalSellQty > 0 ? agg.totalSellQty.toFixed(4) : "—"}
+                    {agg.totalSellQty > 0 ? fmt(agg.totalSellQty, 4) : "—"}
                   </td>
                   <td style={{ textAlign: "right", padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)" }}>
                     {agg.totalBuyQty > 0 || agg.totalSellQty > 0
                       ? [
-                          agg.totalBuyQty > 0 ? `$${(agg.level.price * agg.totalBuyQty).toFixed(2)}` : null,
-                          agg.totalSellQty > 0 ? `$${(agg.level.price * agg.totalSellQty).toFixed(2)}` : null,
+                          agg.totalBuyQty > 0
+                            ? `$${fmt(agg.totalBuyNotional ?? agg.level.price * agg.totalBuyQty, 2)}`
+                            : null,
+                          agg.totalSellQty > 0
+                            ? `$${fmt(agg.totalSellNotional ?? agg.level.price * agg.totalSellQty, 2)}`
+                            : null,
                         ]
                           .filter(Boolean)
                           .join(" / ")
@@ -158,13 +168,13 @@ export function GridLadder({
                     <>
                       <td style={{ textAlign: "right", padding: "4px 8px" }}>
                         {Math.abs(agg.netOpenQty) > 0.000000001
-                          ? Math.abs(agg.netOpenQty).toFixed(4)
+                          ? fmt(Math.abs(agg.netOpenQty), 4)
                           : "—"}
                       </td>
                       <td style={{ textAlign: "right", padding: "4px 8px" }}>
                         {Math.abs(agg.netOpenQty) > 0.000000001 &&
                         agg.avgOpenEntry != null
-                          ? agg.avgOpenEntry.toFixed(2)
+                          ? fmt(agg.avgOpenEntry, 2)
                           : "—"}
                       </td>
                       <td style={{ textAlign: "center", padding: "4px 8px" }}>

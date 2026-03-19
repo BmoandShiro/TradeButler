@@ -32,6 +32,8 @@ export interface GridLevelAggregate {
   sellCount: number;
   totalBuyQty: number;
   totalSellQty: number;
+  totalBuyNotional?: number;
+  totalSellNotional?: number;
   netOpenQty: number;
   avgOpenEntry?: number;
   realizedPnlAtLevel: number;

@@ -1,5 +1,10 @@
 import { GridCycle } from "./gridTypes";
 
+function fmt(n: number, maxDecimals: number): string {
+  const s = n.toFixed(maxDecimals);
+  return s.replace(/\.?0+$/, "");
+}
+
 interface GridCyclesTableProps {
   cycles: GridCycle[];
   selectedCycleId?: string;
@@ -74,16 +79,16 @@ export function GridCyclesTable({
                     {cycle.cycleName}
                   </div>
                   <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
-                    {cycle.entryPrice.toFixed(2)} {cycle.entrySide}
+                    {fmt(cycle.entryPrice, 2)} {cycle.entrySide}
                   </div>
                 </td>
                 <td style={{ padding: "4px 8px" }}>
                   {cycle.status === "completed" && cycle.exitPrice != null
-                    ? cycle.exitPrice.toFixed(2)
+                    ? fmt(cycle.exitPrice, 2)
                     : "—"}
                 </td>
                 <td style={{ textAlign: "right", padding: "4px 8px" }}>
-                  {cycle.quantity.toFixed(4)}
+                  {fmt(cycle.quantity, 4)}
                 </td>
                 <td
                   style={{
@@ -92,7 +97,7 @@ export function GridCyclesTable({
                     color: pnlColor,
                   }}
                 >
-                  {cycle.grossPnl.toFixed(2)}
+                  {fmt(cycle.grossPnl, 2)}
                 </td>
                 <td style={{ padding: "4px 8px" }}>
                   {new Date(cycle.openTime).toLocaleString()}

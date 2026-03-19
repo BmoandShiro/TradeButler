@@ -15,7 +15,8 @@ interface GridFutureViewProps {
 
 function fmtNum(n: number, d = 2): string {
   if (!Number.isFinite(n)) return "—";
-  return n.toFixed(d);
+  const s = n.toFixed(d);
+  return s.replace(/\.?0+$/, "");
 }
 
 function slotSideLabel(slot: GridFutureSlot): "BUY" | "SELL" {

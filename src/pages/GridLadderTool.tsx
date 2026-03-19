@@ -42,6 +42,7 @@ interface GridToolPersistedState {
   gridAreaMode?: "grid" | "timeline" | "future";
   selectedCycleId?: string;
   leftPaneWidthPct?: number;
+  priceRangeStep?: number;
   futureSettings?: Partial<GridFutureSettings>;
 }
 
@@ -109,6 +110,11 @@ export default function GridLadderTool() {
     initialState.leftPaneWidthPct && Number.isFinite(initialState.leftPaneWidthPct)
       ? Math.max(35, Math.min(75, initialState.leftPaneWidthPct))
       : 62,
+  );
+  const [priceRangeStep, setPriceRangeStep] = useState<number>(
+    initialState.priceRangeStep != null && Number.isFinite(initialState.priceRangeStep)
+      ? Math.max(0, initialState.priceRangeStep)
+      : 0,
   );
   const [isResizingPanes, setIsResizingPanes] = useState(false);
   const layoutRef = useRef<HTMLDivElement | null>(null);
@@ -191,13 +197,13 @@ export default function GridLadderTool() {
   const fillsForLadder = selectedCycle?.fills ?? fills;
 
   const levelsForLadder = useMemo(
-    () => deriveGridLevels(undefined, fillsForLadder),
-    [fillsForLadder],
+    () => deriveGridLevels(undefined, fillsForLadder, priceRangeStep),
+    [fillsForLadder, priceRangeStep],
   );
 
   const aggregatesForLadder = useMemo(
-    () => aggregateFillsByLevel(levelsForLadder, fillsForLadder),
-    [levelsForLadder, fillsForLadder],
+    () => aggregateFillsByLevel(levelsForLadder, fillsForLadder, priceRangeStep),
+    [levelsForLadder, fillsForLadder, priceRangeStep],
   );
 
   const currentPriceForLadder: number | null = useMemo(() => {
@@ -272,6 +278,7 @@ export default function GridLadderTool() {
       gridAreaMode,
       selectedCycleId,
       leftPaneWidthPct,
+      priceRangeStep,
       futureSettings,
     };
     localStorage.setItem(GRID_TOOL_STATE_KEY, JSON.stringify(stateToPersist));
@@ -281,6 +288,7 @@ export default function GridLadderTool() {
     gridAreaMode,
     selectedCycleId,
     leftPaneWidthPct,
+    priceRangeStep,
     futureSettings,
   ]);
 
@@ -473,6 +481,48 @@ export default function GridLadderTool() {
             >
               Future
             </button>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              marginLeft: "16px",
+              paddingLeft: "16px",
+              borderLeft: "1px solid var(--border-color)",
+            }}
+          >
+            <label
+              style={{
+                fontSize: "12px",
+                fontWeight: 600,
+                color: "var(--text-secondary)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Price range
+            </label>
+            <input
+              type="number"
+              min={0}
+              step={0.5}
+              value={priceRangeStep}
+              onChange={(e) => setPriceRangeStep(Math.max(0, Number(e.target.value) || 0))}
+              placeholder="0 = exact"
+              title="0 = exact prices; e.g. 1 = 45-46, 5 = 45-50"
+              style={{
+                border: "1px solid var(--border-color)",
+                borderRadius: "6px",
+                padding: "4px 8px",
+                fontSize: "12px",
+                backgroundColor: "var(--bg-primary)",
+                color: "var(--text-primary)",
+                width: "70px",
+              }}
+            />
+            <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+              (0 = exact, 1 → 45-46, 5 → 45-50)
+            </span>
           </div>
         </div>
 

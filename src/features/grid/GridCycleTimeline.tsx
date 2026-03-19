@@ -7,6 +7,11 @@ interface GridCycleTimelineProps {
 
 type Lot = { price: number; remainingQty: number };
 const EPS = 1e-12;
+
+function fmt(n: number, maxDecimals: number): string {
+  const s = n.toFixed(maxDecimals);
+  return s.replace(/\.?0+$/, "");
+}
 type TimelineSortKey = "time" | "side" | "qty" | "price" | "notional" | "openQty" | "avgCost" | "status";
 type SortDirection = "asc" | "desc";
 
@@ -166,13 +171,13 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
                   {r.fill.side === "BUY" ? "BUY" : "SELL"}
                 </td>
                 <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                  {r.fill.quantity.toFixed(4)}
+                  {fmt(r.fill.quantity, 4)}
                 </td>
                 <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                  {r.fill.price.toFixed(2)}
+                  {fmt(r.fill.price, 2)}
                 </td>
                 <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                  ${(r.fill.price * r.fill.quantity).toFixed(2)}
+                  ${fmt(r.fill.price * r.fill.quantity, 2)}
                 </td>
                 <td
                   style={{
@@ -185,10 +190,10 @@ export function GridCycleTimeline({ cycle }: GridCycleTimelineProps) {
                     fontWeight: r.openQty > EPS ? 600 : 400,
                   }}
                 >
-                  {r.openQty > EPS ? r.openQty.toFixed(4) : "—"}
+                  {r.openQty > EPS ? fmt(r.openQty, 4) : "—"}
                 </td>
                 <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                  {r.avgCost != null ? `$${r.avgCost.toFixed(2)}` : "—"}
+                  {r.avgCost != null ? `$${fmt(r.avgCost, 2)}` : "—"}
                 </td>
                 <td style={{ padding: "4px 8px", textAlign: "center" }}>
                   <span

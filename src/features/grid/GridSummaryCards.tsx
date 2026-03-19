@@ -75,7 +75,7 @@ function SummaryCard({
       ? "—"
       : isCount
       ? value.toString()
-      : value.toFixed(2);
+      : value.toFixed(2).replace(/\.?0+$/, "");
 
   const color =
     !isCount && value != null

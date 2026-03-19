@@ -16,16 +16,34 @@ function roundPrice(p: number): number {
   return Math.round(p * factor) / factor;
 }
 
-function normalizeLevelsFromFills(fills: GridFill[]): GridLevel[] {
+function getBucketKey(price: number, rangeStep: number): number {
+  if (rangeStep <= 0) return roundPrice(price);
+  return Math.floor(price / rangeStep) * rangeStep;
+}
+
+/** Round for display to avoid floating-point noise (e.g. 48.800000000000004 → 48.8) */
+function roundForDisplay(n: number, step: number): number {
+  if (step <= 0) return n;
+  const decimals = Math.max(0, Math.min(8, Math.ceil(-Math.log10(step))));
+  const factor = Math.pow(10, decimals);
+  return Math.round(n * factor) / factor;
+}
+
+function normalizeLevelsFromFills(fills: GridFill[], priceRangeStep: number): GridLevel[] {
   const priceSet = new Map<number, GridLevel>();
   fills.forEach((fill) => {
     if (fill.status === "CANCELLED") return;
-    const priceKey = roundPrice(fill.price);
+    const rawKey = priceRangeStep > 0 ? getBucketKey(fill.price, priceRangeStep) : roundPrice(fill.price);
+    const priceKey = priceRangeStep > 0 ? roundForDisplay(rawKey, priceRangeStep) : rawKey;
     if (!priceSet.has(priceKey)) {
+      const lo = priceKey;
+      const hi = priceRangeStep > 0 ? roundForDisplay(rawKey + priceRangeStep, priceRangeStep) : priceKey;
+      const label = priceRangeStep > 0 ? `${lo}-${hi}` : undefined;
       priceSet.set(priceKey, {
-        id: priceKey.toString(),
+        id: priceRangeStep > 0 ? `range-${lo}-${hi}` : priceKey.toString(),
         index: 0,
         price: priceKey,
+        label,
       });
     }
   });
@@ -33,15 +51,23 @@ function normalizeLevelsFromFills(fills: GridFill[]): GridLevel[] {
   return levels.map((level, index) => ({ ...level, index }));
 }
 
-export function deriveGridLevels(explicitLevels: GridLevel[] | undefined, fills: GridFill[]): GridLevel[] {
+export function deriveGridLevels(
+  explicitLevels: GridLevel[] | undefined,
+  fills: GridFill[],
+  priceRangeStep = 0,
+): GridLevel[] {
   if (explicitLevels && explicitLevels.length > 0) {
     const sorted = [...explicitLevels].sort((a, b) => b.price - a.price);
     return sorted.map((l, index) => ({ ...l, index }));
   }
-  return normalizeLevelsFromFills(fills);
+  return normalizeLevelsFromFills(fills, priceRangeStep);
 }
 
-export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): GridLevelAggregate[] {
+export function aggregateFillsByLevel(
+  levels: GridLevel[],
+  fills: GridFill[],
+  priceRangeStep = 0,
+): GridLevelAggregate[] {
   const byId = new Map<string, GridLevelAggregate>();
 
   levels.forEach((level) => {
@@ -51,7 +77,8 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
       sellCount: 0,
       totalBuyQty: 0,
       totalSellQty: 0,
-      // Signed: + long open inventory, - short open inventory.
+      totalBuyNotional: 0,
+      totalSellNotional: 0,
       netOpenQty: 0,
       realizedPnlAtLevel: 0,
       avgOpenEntry: undefined,
@@ -61,15 +88,20 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
     });
   });
 
-  const levelByPrice = new Map<number, GridLevel>();
-  levels.forEach((l) => levelByPrice.set(l.price, l));
+  const levelByKey = new Map<number, GridLevel>();
+  levels.forEach((l) => levelByKey.set(l.price, l));
+
+  const getLevelKey = (price: number) =>
+    priceRangeStep > 0
+      ? roundForDisplay(getBucketKey(price, priceRangeStep), priceRangeStep)
+      : roundPrice(price);
 
   const EPS = 1e-9;
 
   // Mark open orders (doesn't affect fill pairing).
   fills.forEach((fill) => {
     if (fill.kind === "ORDER" && fill.status === "OPEN") {
-      const level = levelByPrice.get(roundPrice(fill.price));
+      const level = levelByKey.get(getLevelKey(fill.price));
       if (!level) return;
       const agg = byId.get(level.id);
       if (!agg) return;
@@ -90,13 +122,14 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
   activeFillsSorted.forEach((fill) => {
-    const level = levelByPrice.get(roundPrice(fill.price));
+    const level = levelByKey.get(getLevelKey(fill.price));
     const agg = level ? byId.get(level.id) : undefined;
 
     if (fill.side === "BUY") {
       if (agg) {
         agg.buyCount += 1;
         agg.totalBuyQty += fill.quantity;
+        agg.totalBuyNotional = (agg.totalBuyNotional ?? 0) + fill.price * fill.quantity;
       }
 
       if (netPositionQty >= -EPS) {
@@ -114,7 +147,7 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
           if (remainingToClose <= EPS) break;
           const matchedQty = Math.min(lot.remainingQty, remainingToClose);
 
-          const entryLevel = levelByPrice.get(roundPrice(lot.fill.price));
+          const entryLevel = levelByKey.get(getLevelKey(lot.fill.price));
           const entryAgg = entryLevel ? byId.get(entryLevel.id) : undefined;
           if (entryAgg) {
             entryAgg.realizedPnlAtLevel +=
@@ -141,6 +174,7 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
     if (agg) {
       agg.sellCount += 1;
       agg.totalSellQty += fill.quantity;
+      agg.totalSellNotional = (agg.totalSellNotional ?? 0) + fill.price * fill.quantity;
     }
 
     if (netPositionQty <= EPS) {
@@ -158,7 +192,7 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
         if (remainingToClose <= EPS) break;
         const matchedQty = Math.min(lot.remainingQty, remainingToClose);
 
-        const entryLevel = levelByPrice.get(roundPrice(lot.fill.price));
+        const entryLevel = levelByKey.get(getLevelKey(lot.fill.price));
         const entryAgg = entryLevel ? byId.get(entryLevel.id) : undefined;
         if (entryAgg) {
           entryAgg.realizedPnlAtLevel +=
@@ -182,7 +216,7 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
 
   // Remaining open inventory after pairing.
   longBuys.forEach((openBuy) => {
-    const entryLevel = levelByPrice.get(roundPrice(openBuy.fill.price));
+    const entryLevel = levelByKey.get(getLevelKey(openBuy.fill.price));
     if (!entryLevel) return;
     const agg = byId.get(entryLevel.id);
     if (!agg) return;
@@ -197,7 +231,7 @@ export function aggregateFillsByLevel(levels: GridLevel[], fills: GridFill[]): G
   });
 
   shortSells.forEach((openSell) => {
-    const entryLevel = levelByPrice.get(roundPrice(openSell.fill.price));
+    const entryLevel = levelByKey.get(getLevelKey(openSell.fill.price));
     if (!entryLevel) return;
     const agg = byId.get(entryLevel.id);
     if (!agg) return;
