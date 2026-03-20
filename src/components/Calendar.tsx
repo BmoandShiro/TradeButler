@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useNavigate } from "react-router-dom";
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isToday } from "date-fns";
-import { ChevronLeft, ChevronRight, Heart, BookOpen, DollarSign, TrendingUp, Calendar as CalendarIcon, RefreshCw, Settings } from "lucide-react";
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isToday, addDays, addWeeks, addMonths, addYears } from "date-fns";
+import { ChevronLeft, ChevronRight, Heart, BookOpen, DollarSign, TrendingUp, Calendar as CalendarIcon, RefreshCw, Settings, Plus } from "lucide-react";
 import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import type { DataMode } from "../utils/dataMode";
 import { loadSandboxState, getSandboxEmotionalStates } from "../utils/sandboxStore";
@@ -75,10 +75,39 @@ interface IpoEvent {
   status: string | null;
 }
 
+interface CustomReminder {
+  id: number;
+  mode: DataMode;
+  type?:
+    | "general"
+    | "event"
+    | "review"
+    | "meeting"
+    | "deadline"
+    | "task"
+    | "payment"
+    | "close_trade"
+    | "open_trade"
+    | "earnings_watch"
+    | "risk_check"
+    | "rebalance"
+    | "journal";
+  title: string;
+  description?: string;
+  startDate: string; // yyyy-MM-dd
+  time?: string; // HH:mm
+  color?: string;
+  recurrence: {
+    unit: "once" | "day" | "week" | "month" | "year";
+    interval: number; // 1 = every unit, 2 = bi-weekly if unit=week, etc.
+  };
+}
+
 const CALENDAR_SHOW_EARNINGS_KEY = "tradebutler_calendar_show_earnings";
 const CALENDAR_SHOW_DIVIDENDS_KEY = "tradebutler_calendar_show_dividends";
 const CALENDAR_SHOW_ECONOMIC_KEY = "tradebutler_calendar_show_economic";
 const CALENDAR_SHOW_IPO_KEY = "tradebutler_calendar_show_ipo";
+const CALENDAR_CUSTOM_REMINDERS_KEY = "tradebutler_calendar_custom_reminders_v1";
 
 // Cache keys and duration
 const CALENDAR_EVENTS_CACHE_KEY = "tradebutler_calendar_events_cache_v2";
@@ -214,6 +243,42 @@ export default function Calendar() {
   const [ipoEvents, setIpoEvents] = useState<Record<string, IpoEvent[]>>({});
   const [showEventSettings, setShowEventSettings] = useState(false);
 
+  // Custom reminders state
+  const [customReminders, setCustomReminders] = useState<CustomReminder[]>(() => {
+    try {
+      const saved = localStorage.getItem(CALENDAR_CUSTOM_REMINDERS_KEY);
+      if (!saved) return [];
+      const parsed = JSON.parse(saved) as CustomReminder[];
+      const currentMode = getCurrentDataMode();
+      // Migration: ensure every reminder has a mode; default to current mode for legacy entries.
+      return parsed.map((r: any) => ({
+        ...r,
+        mode: r.mode ?? currentMode,
+      }));
+    } catch {
+      return [];
+    }
+  });
+  const [customRemindersByDate, setCustomRemindersByDate] = useState<Record<string, CustomReminder[]>>({});
+  const [showAddReminder, setShowAddReminder] = useState(false);
+  const [newReminderTitle, setNewReminderTitle] = useState("");
+  const [newReminderType, setNewReminderType] = useState<NonNullable<CustomReminder["type"]>>("general");
+  const [newReminderDescription, setNewReminderDescription] = useState("");
+  const [newReminderDate, setNewReminderDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
+  const [newReminderTime, setNewReminderTime] = useState("09:00");
+  const [newReminderColor, setNewReminderColor] = useState("#0EA5E9");
+  const [newReminderRepeatUnit, setNewReminderRepeatUnit] = useState<CustomReminder["recurrence"]["unit"]>("month");
+  const [newReminderRepeatInterval, setNewReminderRepeatInterval] = useState(1);
+  const [editingReminderId, setEditingReminderId] = useState<number | null>(null);
+  const [editReminderTitle, setEditReminderTitle] = useState("");
+  const [editReminderType, setEditReminderType] = useState<NonNullable<CustomReminder["type"]>>("general");
+  const [editReminderDescription, setEditReminderDescription] = useState("");
+  const [editReminderDate, setEditReminderDate] = useState("");
+  const [editReminderTime, setEditReminderTime] = useState("");
+  const [editReminderColor, setEditReminderColor] = useState("#0EA5E9");
+  const [editReminderRepeatUnit, setEditReminderRepeatUnit] = useState<CustomReminder["recurrence"]["unit"]>("month");
+  const [editReminderRepeatInterval, setEditReminderRepeatInterval] = useState(1);
+
   // Save toggle settings
   useEffect(() => {
     localStorage.setItem(CALENDAR_SHOW_EARNINGS_KEY, JSON.stringify(showEarnings));
@@ -227,6 +292,67 @@ export default function Calendar() {
   useEffect(() => {
     localStorage.setItem(CALENDAR_SHOW_IPO_KEY, JSON.stringify(showIPOs));
   }, [showIPOs]);
+
+  // Persist custom reminders
+  useEffect(() => {
+    try {
+      localStorage.setItem(CALENDAR_CUSTOM_REMINDERS_KEY, JSON.stringify(customReminders));
+    } catch {
+      // ignore
+    }
+  }, [customReminders]);
+
+  // Recompute reminder occurrences for the visible month
+  useEffect(() => {
+    const monthStart = startOfMonth(currentDate);
+    const monthEnd = endOfMonth(currentDate);
+    const map: Record<string, CustomReminder[]> = {};
+
+    for (const reminder of customReminders) {
+      if (reminder.mode !== dataMode) continue;
+      const start = new Date(reminder.startDate);
+      if (Number.isNaN(start.getTime())) continue;
+
+      const unit = reminder.recurrence?.unit ?? "once";
+      const intervalRaw = reminder.recurrence?.interval ?? 1;
+      const interval = Number.isFinite(intervalRaw) && intervalRaw > 0 ? Math.floor(intervalRaw) : 1;
+
+      if (unit === "once") {
+        const key = reminder.startDate;
+        if (key >= format(monthStart, "yyyy-MM-dd") && key <= format(monthEnd, "yyyy-MM-dd")) {
+          if (!map[key]) map[key] = [];
+          map[key].push(reminder);
+        }
+        continue;
+      }
+
+      // Generate occurrences from start until end of visible month.
+      // This supports "every N days/weeks/months/years" and naturally covers bi-weekly via unit=week interval=2.
+      let occurrence = start;
+
+      // Fast-forward close to monthStart to avoid long loops for old reminders.
+      // For days/weeks, we can jump by repeated adds; month/year cadence is already bounded by monthEnd.
+      while (occurrence < monthStart) {
+        if (unit === "day") occurrence = addDays(occurrence, interval);
+        else if (unit === "week") occurrence = addWeeks(occurrence, interval);
+        else if (unit === "month") occurrence = addMonths(occurrence, interval);
+        else occurrence = addYears(occurrence, interval);
+      }
+
+      while (occurrence <= monthEnd) {
+        const key = format(occurrence, "yyyy-MM-dd");
+        if (!map[key]) map[key] = [];
+        map[key].push(reminder);
+
+        if (unit === "day") occurrence = addDays(occurrence, interval);
+        else if (unit === "week") occurrence = addWeeks(occurrence, interval);
+        else if (unit === "month") occurrence = addMonths(occurrence, interval);
+        else occurrence = addYears(occurrence, interval);
+      }
+    }
+
+    setCustomRemindersByDate(map);
+  }, [customReminders, currentDate]);
 
   useEffect(() => {
     const unsub = subscribeToDataMode(setDataMode);
@@ -597,6 +723,89 @@ export default function Calendar() {
 
   const getDateKey = (date: Date): string => format(date, "yyyy-MM-dd");
 
+  const startEditingReminder = (reminder: CustomReminder, fallbackDate: string) => {
+    setEditingReminderId(reminder.id);
+    setEditReminderTitle(reminder.title);
+    setEditReminderType(reminder.type || "general");
+    setEditReminderDescription(reminder.description || "");
+    setEditReminderDate(reminder.startDate || fallbackDate);
+    setEditReminderTime(reminder.time || "");
+    setEditReminderColor(reminder.color || "#0EA5E9");
+    setEditReminderRepeatUnit(reminder.recurrence?.unit || "month");
+    setEditReminderRepeatInterval(reminder.recurrence?.interval || 1);
+  };
+
+  const cancelEditingReminder = () => {
+    setEditingReminderId(null);
+  };
+
+  const saveEditedReminder = () => {
+    if (!editingReminderId) return;
+    if (!editReminderTitle.trim()) return;
+    setCustomReminders((prev) =>
+      prev.map((r) =>
+        r.id === editingReminderId
+          ? {
+              ...r,
+              mode: r.mode ?? dataMode,
+              title: editReminderTitle.trim(),
+              type: editReminderType,
+              description: editReminderDescription.trim() || undefined,
+              startDate: editReminderDate,
+              time: editReminderTime || undefined,
+              color: editReminderColor || undefined,
+              recurrence: {
+                unit: editReminderRepeatUnit,
+                interval: editReminderRepeatUnit === "once" ? 1 : Math.max(1, Math.floor(editReminderRepeatInterval || 1)),
+              },
+            }
+          : r
+      )
+    );
+    setEditingReminderId(null);
+  };
+
+  const deleteReminder = (id: number) => {
+    setCustomReminders((prev) => prev.filter((r) => r.id !== id));
+    if (editingReminderId === id) setEditingReminderId(null);
+  };
+
+  const getReminderTypeLabel = (type?: CustomReminder["type"]) => {
+    switch (type || "general") {
+      case "event": return "Event";
+      case "review": return "Review";
+      case "meeting": return "Meeting";
+      case "deadline": return "Deadline";
+      case "task": return "Task";
+      case "payment": return "Payment";
+      case "close_trade": return "Close trade";
+      case "open_trade": return "Open trade";
+      case "earnings_watch": return "Earnings watch";
+      case "risk_check": return "Risk check";
+      case "rebalance": return "Rebalance";
+      case "journal": return "Trading journal";
+      default: return "General reminder";
+    }
+  };
+
+  const getReminderTypeAbbreviation = (type?: CustomReminder["type"]) => {
+    switch (type || "general") {
+      case "event": return "EVT";
+      case "review": return "REV";
+      case "meeting": return "MTG";
+      case "deadline": return "DUE";
+      case "task": return "TSK";
+      case "payment": return "PAY";
+      case "close_trade": return "CLOSE";
+      case "open_trade": return "OPEN";
+      case "earnings_watch": return "ERN";
+      case "risk_check": return "RISK";
+      case "rebalance": return "REBAL";
+      case "journal": return "JRN";
+      default: return "REM";
+    }
+  };
+
   // Event type colors
   const getEventBadgeColor = (eventType: string): string => {
     switch (eventType) {
@@ -610,6 +819,8 @@ export default function Calendar() {
       case "jobs": return "#6366F1";
       case "ppi": return "#EC4899";
       case "retail_sales": return "#14B8A6";
+      case "custom_review": return "#0EA5E9";
+      case "custom": return "#6B7280";
       default: return "var(--accent)";
     }
   };
@@ -626,6 +837,8 @@ export default function Calendar() {
       case "jobs": return "NFP";
       case "ppi": return "PPI";
       case "retail_sales": return "RET";
+      case "custom_review": return "REV";
+      case "custom": return "R";
       default: return eventType.charAt(0).toUpperCase();
     }
   };
@@ -794,6 +1007,38 @@ export default function Calendar() {
             }}
           >
             <ChevronRight size={20} />
+          </button>
+
+          {/* Add custom reminder button */}
+          <button
+            onClick={() => {
+              setNewReminderTitle("");
+              setNewReminderType("general");
+              setNewReminderDescription("");
+              setNewReminderDate(format(currentDate, "yyyy-MM-dd"));
+              setNewReminderTime("09:00");
+              setNewReminderColor("#0EA5E9");
+              setNewReminderRepeatUnit("month");
+              setNewReminderRepeatInterval(1);
+              setShowAddReminder(true);
+            }}
+            title="Add custom reminder (e.g. monthly review)"
+            style={{
+              background: "var(--accent)",
+              border: "1px solid var(--accent)",
+              borderRadius: "10px",
+              padding: "8px 12px",
+              color: "var(--bg-primary)",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              fontSize: "13px",
+              fontWeight: 600,
+            }}
+          >
+            <Plus size={16} />
+            Reminder
           </button>
           
           {/* Refresh events button */}
@@ -1024,9 +1269,10 @@ export default function Calendar() {
           const emotionalStates = getDayEmotionalStates(day);
           const dayCalEvents = getDayCalendarEvents(day);
           const dayEconEvents = getDayEconomicEvents(day);
+          const dateKey = getDateKey(day);
+          const dayCustomReminders = customRemindersByDate[dateKey] || [];
           const isCurrentDay = isToday(day);
           const pnlColor = getDayColor(dayPnL?.profit_loss ?? null);
-          const dateKey = getDateKey(day);
           const isDropdownOpen = openJournalDate === dateKey;
           
           // Filter events based on settings
@@ -1036,7 +1282,7 @@ export default function Calendar() {
           const dayIpoEvents = showIPOs ? (ipoEvents[dateKey] || []) : [];
           
           const hasContent = dayPnL || journalEntries.length > 0 || emotionalStates.length > 0 ||
-            earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0 || dayIpoEvents.length > 0;
+            earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0 || dayIpoEvents.length > 0 || dayCustomReminders.length > 0;
 
           const openDetails = (e: React.MouseEvent) => {
             e.stopPropagation();
@@ -1098,7 +1344,7 @@ export default function Calendar() {
                   </span>
                 </>
               )}
-              {(journalEntries.length > 0 || emotionalStates.length > 0 || earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0 || dayIpoEvents.length > 0) && (
+              {(journalEntries.length > 0 || emotionalStates.length > 0 || earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0 || dayIpoEvents.length > 0 || dayCustomReminders.length > 0) && (
                 <div
                   style={{
                     display: "flex",
@@ -1234,6 +1480,30 @@ export default function Calendar() {
                       IPO
                     </span>
                   ))}
+                  {dayCustomReminders.map((reminder, idx) => {
+                    const reminderColor = reminder.color || getEventBadgeColor(reminder.type === "review" ? "custom_review" : "custom");
+                    return (
+                      <span
+                        key={`reminder-${idx}`}
+                        onClick={openDetails}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          padding: "2px 6px",
+                          borderRadius: "4px",
+                          backgroundColor: reminderColor,
+                          color: "white",
+                          fontSize: "9px",
+                          fontWeight: "700",
+                          cursor: "pointer",
+                        }}
+                        title={reminder.title}
+                      >
+                        {getReminderTypeAbbreviation(reminder.type)}
+                      </span>
+                    );
+                  })}
                 </div>
               )}
               {isDropdownOpen && (
@@ -1354,11 +1624,11 @@ export default function Calendar() {
                         </div>
                       )}
                       {/* Events section */}
-                      {(earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0 || dayIpoEvents.length > 0) && (
+                      {(earningsEvents.length > 0 || dividendEvents.length > 0 || filteredEconEvents.length > 0 || dayIpoEvents.length > 0 || dayCustomReminders.length > 0) && (
                         <div style={{ marginBottom: "14px", paddingBottom: "14px", borderBottom: journalEntries.length > 0 ? "1px solid var(--border-color)" : "none" }}>
                           <div style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", marginBottom: "10px", display: "flex", alignItems: "center", gap: "8px" }}>
                             <CalendarIcon size={14} style={{ color: "var(--accent)" }} />
-                            Events
+                            Events & Reminders
                           </div>
                           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                             {earningsEvents.map((event, idx) => (
@@ -1513,6 +1783,312 @@ export default function Calendar() {
                                 </div>
                               </div>
                             ))}
+                            {dayCustomReminders.map((reminder, idx) => {
+                              const reminderColor = reminder.color || getEventBadgeColor(reminder.type === "review" ? "custom_review" : "custom");
+                              const isEditing = editingReminderId === reminder.id;
+                              return (
+                                <div
+                                  key={`reminder-detail-${idx}`}
+                                  style={{
+                                    padding: "10px 12px",
+                                    background: "var(--bg-tertiary)",
+                                    borderRadius: "8px",
+                                    borderLeft: `3px solid ${reminderColor}`,
+                                  }}
+                                >
+                                  <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                                    <span
+                                      style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        padding: "2px 6px",
+                                        borderRadius: "4px",
+                                        backgroundColor: reminderColor,
+                                        color: "white",
+                                        fontSize: "9px",
+                                        fontWeight: "700",
+                                      }}
+                                    >
+                                      {getReminderTypeAbbreviation(reminder.type)}
+                                    </span>
+                                    <span
+                                      style={{
+                                        fontSize: "11px",
+                                        padding: "2px 6px",
+                                        borderRadius: "4px",
+                                        backgroundColor: "var(--bg-secondary)",
+                                        color: "var(--text-secondary)",
+                                        fontWeight: "600",
+                                      }}
+                                    >
+                                      {getReminderTypeLabel(reminder.type)}
+                                    </span>
+                                    <span
+                                      style={{
+                                        fontSize: "11px",
+                                        padding: "2px 6px",
+                                        borderRadius: "4px",
+                                        backgroundColor: "var(--bg-secondary)",
+                                        color: "var(--text-secondary)",
+                                        fontWeight: "600",
+                                        textTransform: "uppercase",
+                                      }}
+                                    >
+                                    {reminder.recurrence.unit === "once"
+                                      ? "One-time"
+                                      : `Every ${reminder.recurrence.interval} ${reminder.recurrence.unit}${reminder.recurrence.interval === 1 ? "" : "s"}`}
+                                    </span>
+                                  </div>
+                                  <p style={{ margin: 0, fontSize: "14px", color: "var(--text-primary)", fontWeight: "500" }}>
+                                    {reminder.title}{reminder.time ? ` · ${reminder.time}` : ""}
+                                  </p>
+                                  {reminder.description && (
+                                    <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "var(--text-secondary)" }}>
+                                      {reminder.description}
+                                    </p>
+                                  )}
+                                  <div style={{ display: "flex", gap: "8px", marginTop: "8px", flexWrap: "wrap" }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => startEditingReminder(reminder, dateKey)}
+                                      style={{
+                                        border: "1px solid var(--border-color)",
+                                        background: "var(--bg-secondary)",
+                                        color: "var(--text-primary)",
+                                        fontSize: "12px",
+                                        borderRadius: "6px",
+                                        padding: "5px 8px",
+                                        cursor: "pointer",
+                                      }}
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setCustomReminders((prev) =>
+                                          prev.map((r) =>
+                                            r.id === reminder.id
+                                              ? {
+                                                  ...r,
+                                                  startDate: dateKey,
+                                                }
+                                              : r
+                                          )
+                                        );
+                                      }}
+                                      style={{
+                                        border: "1px solid var(--border-color)",
+                                        background: "var(--bg-secondary)",
+                                        color: "var(--text-primary)",
+                                        fontSize: "12px",
+                                        borderRadius: "6px",
+                                        padding: "5px 8px",
+                                        cursor: "pointer",
+                                      }}
+                                    >
+                                      Move to this day
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => deleteReminder(reminder.id)}
+                                      style={{
+                                        border: "1px solid color-mix(in srgb, #EF4444 60%, var(--border-color))",
+                                        background: "transparent",
+                                        color: "#EF4444",
+                                        fontSize: "12px",
+                                        borderRadius: "6px",
+                                        padding: "5px 8px",
+                                        cursor: "pointer",
+                                      }}
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                  {isEditing && (
+                                    <div
+                                      style={{
+                                        marginTop: "10px",
+                                        paddingTop: "10px",
+                                        borderTop: "1px solid var(--border-color)",
+                                        display: "flex",
+                                        flexDirection: "column",
+                                        gap: "8px",
+                                      }}
+                                    >
+                                      <input
+                                        type="text"
+                                        value={editReminderTitle}
+                                        onChange={(e) => setEditReminderTitle(e.target.value)}
+                                        style={{
+                                          padding: "8px 10px",
+                                          borderRadius: "8px",
+                                          border: "1px solid var(--border-color)",
+                                          background: "var(--bg-secondary)",
+                                          color: "var(--text-primary)",
+                                          fontSize: "13px",
+                                        }}
+                                      />
+                                      <select
+                                        className="themed-control"
+                                        value={editReminderType}
+                                        onChange={(e) => setEditReminderType(e.target.value as NonNullable<CustomReminder["type"]>)}
+                                        style={{
+                                          padding: "8px 10px",
+                                          borderRadius: "8px",
+                                          border: "1px solid var(--border-color)",
+                                          background: "var(--bg-secondary)",
+                                          color: "var(--text-primary)",
+                                          fontSize: "13px",
+                                        }}
+                                      >
+                                        <option value="general">General reminder (REM)</option>
+                                        <option value="event">Event (EVT)</option>
+                                        <option value="review">Review (REV)</option>
+                                        <option value="meeting">Meeting (MTG)</option>
+                                        <option value="deadline">Deadline (DUE)</option>
+                                        <option value="task">Task (TSK)</option>
+                                        <option value="payment">Payment (PAY)</option>
+                                        <option value="close_trade">Close trade (CLOSE)</option>
+                                        <option value="open_trade">Open trade (OPEN)</option>
+                                        <option value="earnings_watch">Earnings watch (ERN)</option>
+                                        <option value="risk_check">Risk check (RISK)</option>
+                                        <option value="rebalance">Rebalance (REBAL)</option>
+                                        <option value="journal">Trading journal (JRN)</option>
+                                      </select>
+                                      <textarea
+                                        value={editReminderDescription}
+                                        onChange={(e) => setEditReminderDescription(e.target.value)}
+                                        rows={2}
+                                        style={{
+                                          padding: "8px 10px",
+                                          borderRadius: "8px",
+                                          border: "1px solid var(--border-color)",
+                                          background: "var(--bg-secondary)",
+                                          color: "var(--text-primary)",
+                                          fontSize: "12px",
+                                          resize: "vertical",
+                                        }}
+                                      />
+                                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 82px", gap: "8px" }}>
+                                        <input
+                                        className="themed-control date-input"
+                                          type="date"
+                                          value={editReminderDate}
+                                          onChange={(e) => setEditReminderDate(e.target.value)}
+                                          style={{
+                                            padding: "8px 10px",
+                                            borderRadius: "8px",
+                                            border: "1px solid var(--border-color)",
+                                            background: "var(--bg-secondary)",
+                                            color: "var(--text-primary)",
+                                            fontSize: "12px",
+                                          }}
+                                        />
+                                        <input
+                                        className="themed-control time-input"
+                                          type="time"
+                                          value={editReminderTime}
+                                          onChange={(e) => setEditReminderTime(e.target.value)}
+                                          style={{
+                                            padding: "8px 10px",
+                                            borderRadius: "8px",
+                                            border: "1px solid var(--border-color)",
+                                            background: "var(--bg-secondary)",
+                                            color: "var(--text-primary)",
+                                            fontSize: "12px",
+                                          }}
+                                        />
+                                        <input
+                                          type="color"
+                                          value={editReminderColor}
+                                          onChange={(e) => setEditReminderColor(e.target.value)}
+                                          style={{
+                                            height: "34px",
+                                            borderRadius: "8px",
+                                            border: "1px solid var(--border-color)",
+                                            background: "var(--bg-secondary)",
+                                          }}
+                                        />
+                                      </div>
+                                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                                        <select
+                                          className="themed-control"
+                                          value={editReminderRepeatUnit}
+                                          onChange={(e) => setEditReminderRepeatUnit(e.target.value as CustomReminder["recurrence"]["unit"])}
+                                          style={{
+                                            padding: "8px 10px",
+                                            borderRadius: "8px",
+                                            border: "1px solid var(--border-color)",
+                                            background: "var(--bg-secondary)",
+                                            color: "var(--text-primary)",
+                                            fontSize: "12px",
+                                          }}
+                                        >
+                                          <option value="once">Once</option>
+                                          <option value="day">Daily</option>
+                                          <option value="week">Weekly</option>
+                                          <option value="month">Monthly</option>
+                                          <option value="year">Yearly</option>
+                                        </select>
+                                        <input
+                                          className="themed-control"
+                                          type="number"
+                                          min={1}
+                                          step={1}
+                                          value={editReminderRepeatInterval}
+                                          disabled={editReminderRepeatUnit === "once"}
+                                          onChange={(e) => setEditReminderRepeatInterval(parseInt(e.target.value || "1", 10))}
+                                          style={{
+                                            padding: "8px 10px",
+                                            borderRadius: "8px",
+                                            border: "1px solid var(--border-color)",
+                                            background: "var(--bg-secondary)",
+                                            color: "var(--text-primary)",
+                                            fontSize: "12px",
+                                            opacity: editReminderRepeatUnit === "once" ? 0.6 : 1,
+                                          }}
+                                        />
+                                      </div>
+                                      <div style={{ display: "flex", gap: "8px" }}>
+                                        <button
+                                          type="button"
+                                          onClick={saveEditedReminder}
+                                          style={{
+                                            border: "none",
+                                            background: "var(--accent)",
+                                            color: "var(--bg-primary)",
+                                            fontSize: "12px",
+                                            borderRadius: "6px",
+                                            padding: "6px 10px",
+                                            cursor: "pointer",
+                                            fontWeight: "600",
+                                          }}
+                                        >
+                                          Save
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={cancelEditingReminder}
+                                          style={{
+                                            border: "1px solid var(--border-color)",
+                                            background: "var(--bg-secondary)",
+                                            color: "var(--text-primary)",
+                                            fontSize: "12px",
+                                            borderRadius: "6px",
+                                            padding: "6px 10px",
+                                            cursor: "pointer",
+                                          }}
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       )}
@@ -1669,7 +2245,316 @@ export default function Calendar() {
             <span style={{ fontWeight: "500" }}>Economic events</span>
           </div>
         )}
+        {customReminders.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: "16px",
+                height: "16px",
+                borderRadius: "4px",
+                backgroundColor: "#0EA5E9",
+                color: "white",
+                fontSize: "9px",
+                fontWeight: "700",
+              }}
+            >
+              REV
+            </span>
+            <span style={{ fontWeight: "500" }}>Custom reminders</span>
+          </div>
+        )}
       </div>
+
+      {/* Add reminder modal */}
+      {showAddReminder && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 200,
+          }}
+          onClick={() => setShowAddReminder(false)}
+        >
+          <div
+            style={{
+              background: "var(--bg-primary)",
+              borderRadius: "14px",
+              border: "1px solid var(--border-color)",
+              padding: "20px 22px",
+              width: "100%",
+              maxWidth: "420px",
+              boxShadow: "0 18px 40px rgba(0,0,0,0.6)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+              <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 650, color: "var(--text-primary)" }}>
+                Add reminder
+              </h2>
+              <button
+                onClick={() => setShowAddReminder(false)}
+                style={{
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-secondary)",
+                  borderRadius: "999px",
+                  padding: "4px 10px",
+                  fontSize: "12px",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                  fontWeight: 500,
+                }}
+              >
+                Close
+              </button>
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!newReminderTitle.trim()) return;
+                const reminder: CustomReminder = {
+                  id: Date.now(),
+              mode: dataMode,
+                  type: newReminderType,
+                  title: newReminderTitle.trim(),
+                  description: newReminderDescription.trim() || undefined,
+                  startDate: newReminderDate,
+                    time: newReminderTime || undefined,
+                  color: newReminderColor || undefined,
+                    recurrence: {
+                      unit: newReminderRepeatUnit,
+                      interval: Math.max(1, Math.floor(newReminderRepeatInterval || 1)),
+                    },
+                };
+                setCustomReminders((prev) => [...prev, reminder]);
+                setShowAddReminder(false);
+              }}
+              style={{ display: "flex", flexDirection: "column", gap: "12px" }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 600 }}>
+                  Title
+                </label>
+                <input
+                  className="themed-control"
+                  type="text"
+                  value={newReminderTitle}
+                  onChange={(e) => setNewReminderTitle(e.target.value)}
+                  placeholder="e.g. Monthly review"
+                  required
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-secondary)",
+                    color: "var(--text-primary)",
+                    fontSize: "14px",
+                    outline: "none",
+                  }}
+                />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 600 }}>
+                  Type
+                </label>
+                <select
+                  className="themed-control"
+                  value={newReminderType}
+                  onChange={(e) => setNewReminderType(e.target.value as NonNullable<CustomReminder["type"]>)}
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-secondary)",
+                    color: "var(--text-primary)",
+                    fontSize: "14px",
+                    outline: "none",
+                  }}
+                >
+                  <option value="general">General reminder (REM)</option>
+                  <option value="event">Event (EVT)</option>
+                  <option value="review">Review (REV)</option>
+                  <option value="meeting">Meeting (MTG)</option>
+                  <option value="deadline">Deadline (DUE)</option>
+                  <option value="task">Task (TSK)</option>
+                  <option value="payment">Payment (PAY)</option>
+                  <option value="close_trade">Close trade (CLOSE)</option>
+                  <option value="open_trade">Open trade (OPEN)</option>
+                  <option value="earnings_watch">Earnings watch (ERN)</option>
+                  <option value="risk_check">Risk check (RISK)</option>
+                  <option value="rebalance">Rebalance (REBAL)</option>
+                  <option value="journal">Trading journal (JRN)</option>
+                </select>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 600 }}>
+                  Description <span style={{ fontWeight: 400 }}>(optional)</span>
+                </label>
+                <textarea
+                  className="themed-control"
+                  value={newReminderDescription}
+                  onChange={(e) => setNewReminderDescription(e.target.value)}
+                  rows={3}
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-secondary)",
+                    color: "var(--text-primary)",
+                    fontSize: "14px",
+                    resize: "vertical",
+                    outline: "none",
+                  }}
+                />
+              </div>
+              <div style={{ display: "flex", gap: "10px" }}>
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "4px" }}>
+                  <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 600 }}>
+                    Start date
+                  </label>
+                  <input
+                    className="themed-control date-input"
+                    type="date"
+                    value={newReminderDate}
+                    onChange={(e) => setNewReminderDate(e.target.value)}
+                    style={{
+                      padding: "10px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-secondary)",
+                      color: "var(--text-primary)",
+                      fontSize: "14px",
+                      outline: "none",
+                    }}
+                  />
+                </div>
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "4px" }}>
+                  <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 600 }}>
+                    Time
+                  </label>
+                  <input
+                    className="themed-control time-input"
+                    type="time"
+                    value={newReminderTime}
+                    onChange={(e) => setNewReminderTime(e.target.value)}
+                    style={{
+                      padding: "10px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-secondary)",
+                      color: "var(--text-primary)",
+                      fontSize: "14px",
+                      outline: "none",
+                    }}
+                  />
+                </div>
+                <div style={{ width: "92px", display: "flex", flexDirection: "column", gap: "4px" }}>
+                  <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 600 }}>
+                    Color
+                  </label>
+                  <input
+                    type="color"
+                    value={newReminderColor}
+                    onChange={(e) => setNewReminderColor(e.target.value)}
+                    style={{
+                      height: "42px",
+                      width: "100%",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-secondary)",
+                      cursor: "pointer",
+                    }}
+                  />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "10px" }}>
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "4px" }}>
+                  <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 600 }}>
+                    Repeat
+                  </label>
+                  <select
+                    className="themed-control"
+                    value={newReminderRepeatUnit}
+                    onChange={(e) => setNewReminderRepeatUnit(e.target.value as CustomReminder["recurrence"]["unit"])}
+                    style={{
+                      padding: "10px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-secondary)",
+                      color: "var(--text-primary)",
+                      fontSize: "14px",
+                      outline: "none",
+                    }}
+                  >
+                    <option value="once">Once</option>
+                    <option value="day">Daily</option>
+                    <option value="week">Weekly</option>
+                    <option value="month">Monthly</option>
+                    <option value="year">Yearly</option>
+                  </select>
+                </div>
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "4px" }}>
+                  <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 600 }}>
+                    Every
+                  </label>
+                  <input
+                    className="themed-control"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={newReminderRepeatInterval}
+                    disabled={newReminderRepeatUnit === "once"}
+                    onChange={(e) => setNewReminderRepeatInterval(parseInt(e.target.value || "1", 10))}
+                    style={{
+                      padding: "10px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-secondary)",
+                      color: "var(--text-primary)",
+                      fontSize: "14px",
+                      outline: "none",
+                      opacity: newReminderRepeatUnit === "once" ? 0.6 : 1,
+                    }}
+                  />
+                  <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "2px" }}>
+                    {newReminderRepeatUnit === "once"
+                      ? "One-time"
+                      : newReminderRepeatUnit === "day"
+                        ? "days (2 = every 2 days)"
+                        : newReminderRepeatUnit === "week"
+                          ? "weeks (2 = bi-weekly)"
+                          : newReminderRepeatUnit === "month"
+                            ? "months"
+                            : "years"}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="submit"
+                style={{
+                  marginTop: "6px",
+                  padding: "10px 14px",
+                  borderRadius: "10px",
+                  border: "none",
+                  background: "var(--accent)",
+                  color: "var(--bg-primary)",
+                  fontSize: "14px",
+                  fontWeight: 650,
+                  cursor: "pointer",
+                }}
+              >
+                Save reminder
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* CSS for spin animation */}
       <style>{`
@@ -1679,6 +2564,35 @@ export default function Calendar() {
         }
         .spin {
           animation: spin 1s linear infinite;
+        }
+        .themed-control {
+          color-scheme: dark;
+        }
+        .date-input,
+        .time-input {
+          position: relative;
+          padding-right: 34px !important;
+          background-repeat: no-repeat !important;
+          background-position: right 10px center !important;
+          background-size: 14px 14px !important;
+        }
+        .date-input {
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 2v4'/%3E%3Cpath d='M16 2v4'/%3E%3Crect width='18' height='18' x='3' y='4' rx='2'/%3E%3Cpath d='M3 10h18'/%3E%3C/svg%3E");
+        }
+        .time-input {
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpolyline points='12 6 12 12 16 14'/%3E%3C/svg%3E");
+        }
+        .themed-control::-webkit-calendar-picker-indicator {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          opacity: 0;
+          cursor: pointer;
+        }
+        .themed-control:focus {
+          border-color: var(--accent) !important;
+          box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
         }
       `}</style>
     </div>

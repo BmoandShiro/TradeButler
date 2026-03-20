@@ -2,12 +2,11 @@ use crate::database::{get_connection, Trade, EmotionalState, EmotionSurvey, Stra
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use chrono::{Timelike, Datelike, Utc};
+use chrono::{Timelike, Datelike};
 use std::fs;
 use std::process::Command;
 use evalexpr::{eval_float_with_context, HashMapContext, Value, ContextWithMutableVariables, DefaultNumericTypes};
 use reqwest::cookie::CookieStore;
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CsvTrade {
     pub symbol: String,
@@ -3169,7 +3168,7 @@ pub struct JournalChecklistResponse {
     pub is_checked: bool,
     /// JSON array of journal_trade IDs when associated with specific trades, e.g. "[1,2,3]". Null/empty = entry-level (whole journal).
     pub journal_trade_ids: Option<String>,
-    /// For survey items: 1-5 scale value. Null = use is_checked for Yes/No.
+    /// For survey items: 1-10 scale value. Null = use is_checked for Yes/No.
     pub response_value: Option<i32>,
 }
 
@@ -4948,7 +4947,7 @@ fn compute_custom_metric_value(conn: &rusqlite::Connection, item_ids: &[i64], fo
     let result = match effective_type.as_str() {
         "invert" => {
             let avg = values_f.iter().sum::<f64>() / values_f.len() as f64;
-            6.0 - avg
+            11.0 - avg
         }
         "min" => values_f.iter().cloned().fold(f64::INFINITY, f64::min),
         "max" => values_f.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
@@ -5258,18 +5257,46 @@ pub fn delete_strategy_checklist_item(id: i64) -> Result<(), String> {
     Ok(())
 }
 
-/// Removes duplicate checklist rows (same strategy_id, checklist_type, item_text, item_order).
-/// Keeps the row with the smallest id in each group. Returns the number of rows deleted.
+#[tauri::command]
+pub fn delete_strategy_checklist_type(strategy_id: i64, checklist_type: String) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+
+    // Delete all checklist rows (including any placeholder row used to persist empty custom types).
+    conn.execute(
+        "DELETE FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = ?2",
+        params![strategy_id, checklist_type],
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Also remove any section description so deleted custom sections don't reappear.
+    conn.execute(
+        "DELETE FROM strategy_checklist_section_descriptions WHERE strategy_id = ?1 AND checklist_type = ?2",
+        params![strategy_id, checklist_type],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Removes duplicate checklist rows.
+///
+/// Edits can sometimes create a new row instead of updating the existing one. When that happens,
+/// we want to keep the *newest* row for a given slot in the checklist.
+///
+/// We scope the "slot" by (strategy_id, checklist_type, parent_id, item_order) so regrouping and
+/// item_text edits don't leave stale duplicates behind.
+/// Returns the number of rows deleted.
 #[tauri::command]
 pub fn remove_duplicate_checklist_items() -> Result<i64, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
 
-    // Delete all rows whose id is not the minimum id for its (strategy_id, checklist_type, item_text, item_order) group.
+    // Delete all rows whose id is not the maximum id for its (strategy_id, checklist_type, parent_id, item_order) group.
     let deleted = conn.execute(
         "DELETE FROM strategy_checklists WHERE id NOT IN (
-            SELECT MIN(id) FROM strategy_checklists
-            GROUP BY strategy_id, checklist_type, item_text, item_order
+            SELECT MAX(id) FROM strategy_checklists
+            GROUP BY strategy_id, checklist_type, parent_id, item_order
         )",
         [],
     ).map_err(|e| e.to_string())?;

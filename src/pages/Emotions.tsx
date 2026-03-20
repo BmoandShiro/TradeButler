@@ -119,106 +119,106 @@ const SURVEY_QUESTIONS = {
     {
       key: "before_calm_clear",
       question: "How calm and mentally clear did you feel before considering this trade?",
-      scale: "1 = Very anxious/confused, 5 = Very calm/clear",
+      scale: "1 = Very anxious/confused, 10 = Very calm/clear",
     },
     {
       key: "before_urgency_pressure",
       question: "Did you feel any urgency or pressure to \"make something happen\" in the market?",
-      scale: "1 = No urgency, 5 = Extreme pressure",
+      scale: "1 = No urgency, 10 = Extreme pressure",
     },
     {
       key: "before_confidence_vs_validation",
       question: "Were you feeling confident in yourself, or seeking validation from a win?",
-      scale: "1 = Confident in self, 5 = Seeking validation",
+      scale: "1 = Confident in self, 10 = Seeking validation",
     },
     {
       key: "before_fomo",
       question: "Did fear of missing out (FOMO) influence your desire to enter?",
-      scale: "1 = No FOMO, 5 = Strong FOMO",
+      scale: "1 = No FOMO, 10 = Strong FOMO",
     },
     {
       key: "before_recovering_loss",
       question: "Were you trying to recover from a previous loss emotionally?",
-      scale: "1 = Not at all, 5 = Strongly trying to recover",
+      scale: "1 = Not at all, 10 = Strongly trying to recover",
     },
     {
       key: "before_patient_detached",
       question: "Did you feel patient and detached, or restless and impulsive?",
-      scale: "1 = Patient/detached, 5 = Restless/impulsive",
+      scale: "1 = Patient/detached, 10 = Restless/impulsive",
     },
     {
       key: "before_trust_process",
       question: "How strong was your trust in your process at that moment?",
-      scale: "1 = No trust, 5 = Complete trust",
+      scale: "1 = No trust, 10 = Complete trust",
     },
     {
       key: "before_emotional_state",
       question: "Were you feeling bored, excited, anxious, or neutral before entry?",
-      scale: "1 = Neutral/calm, 5 = Extremely emotional (any)",
+      scale: "1 = Neutral/calm, 10 = Extremely emotional (any)",
     },
   ],
   during: [
     {
       key: "during_stable",
       question: "How stable were your emotions once the trade was live?",
-      scale: "1 = Very stable, 5 = Very unstable",
+      scale: "1 = Very stable, 10 = Very unstable",
     },
     {
       key: "during_tension_stress",
       question: "Did you feel tension, nervousness, or physical stress while price moved?",
-      scale: "1 = No tension, 5 = Extreme tension/stress",
+      scale: "1 = No tension, 10 = Extreme tension/stress",
     },
     {
       key: "during_tempted_interfere",
       question: "Were you tempted to interfere with the trade out of fear or hope?",
-      scale: "1 = No temptation, 5 = Strong temptation",
+      scale: "1 = No temptation, 10 = Strong temptation",
     },
     {
       key: "during_need_control",
       question: "Did you feel a need to \"control\" the outcome instead of letting it play out?",
-      scale: "1 = Let it play, 5 = Strong need to control",
+      scale: "1 = Let it play, 10 = Strong need to control",
     },
     {
       key: "during_fear_loss",
       question: "How strong was your fear of loss while in the position?",
-      scale: "1 = No fear, 5 = Extreme fear",
+      scale: "1 = No fear, 10 = Extreme fear",
     },
     {
       key: "during_excitement_greed",
       question: "How strong was your excitement or greed as price moved in your favor?",
-      scale: "1 = Calm, 5 = Extreme excitement/greed",
+      scale: "1 = Calm, 10 = Extreme excitement/greed",
     },
     {
       key: "during_mentally_present",
       question: "Did you feel mentally present, or distracted and reactive?",
-      scale: "1 = Very present, 5 = Very distracted/reactive",
+      scale: "1 = Very present, 10 = Very distracted/reactive",
     },
   ],
   after: [
     {
       key: "after_accept_outcome",
       question: "How well did you accept the outcome emotionally, regardless of win or loss?",
-      scale: "1 = Full acceptance, 5 = Poor acceptance",
+      scale: "1 = Full acceptance, 10 = Poor acceptance",
     },
     {
       key: "after_emotional_reaction",
       question: "Did you feel relief, frustration, disappointment, or satisfaction?",
-      scale: "1 = Neutral/balanced, 5 = Strong emotional reaction",
+      scale: "1 = Neutral/balanced, 10 = Strong emotional reaction",
     },
     {
       key: "after_confidence_affected",
       question: "Did the result affect your confidence in yourself?",
-      scale: "1 = No effect, 5 = Strong effect (positive or negative)",
+      scale: "1 = No effect, 10 = Strong effect (positive or negative)",
     },
     {
       key: "after_tempted_another_trade",
       question: "Did you feel tempted to immediately take another trade to change your emotional state?",
-      scale: "1 = No temptation, 5 = Strong temptation",
+      scale: "1 = No temptation, 10 = Strong temptation",
     },
     {
       key: "after_proud_discipline",
       question: "Did you feel proud of your discipline, or focused only on the money outcome?",
-      scale: "1 = Proud of discipline, 5 = Only focused on money",
+      scale: "1 = Proud of discipline, 10 = Only focused on money",
     },
   ],
 };
@@ -279,16 +279,16 @@ function wrapLabel(text: string, maxChars: number): string[] {
 
 /** Metric → survey keys and formula for diagram. */
 const SURVEY_METRIC_DIAGRAMS: { metric: string; keys: string[]; formula: string; phaseColor: string }[] = [
-  { metric: "Emotional Stability Index", keys: ["during_stable", "during_mentally_present", "after_accept_outcome"], formula: "6 − avg (inverted)", phaseColor: "#3b82f6" },
-  { metric: "FOMO Index", keys: ["before_fomo"], formula: "6 − avg", phaseColor: "#22c55e" },
+  { metric: "Emotional Stability Index", keys: ["during_stable", "during_mentally_present", "after_accept_outcome"], formula: "11 − avg (inverted)", phaseColor: "#3b82f6" },
+  { metric: "FOMO Index", keys: ["before_fomo"], formula: "11 − avg", phaseColor: "#22c55e" },
   { metric: "Discipline Consistency", keys: ["before_patient_detached", "during_need_control", "after_proud_discipline"], formula: "mixed invert + direct", phaseColor: "#22c55e" },
-  { metric: "Revenge-Trade Risk", keys: ["before_recovering_loss", "after_tempted_another_trade"], formula: "6 − avg", phaseColor: "#f59e0b" },
-  { metric: "Overconfidence After Wins", keys: ["after_confidence_affected"], formula: "6 − avg", phaseColor: "#f59e0b" },
-  { metric: "Fear After Losses", keys: ["during_fear_loss", "after_emotional_reaction"], formula: "6 − avg", phaseColor: "#ef4444" },
+  { metric: "Revenge-Trade Risk", keys: ["before_recovering_loss", "after_tempted_another_trade"], formula: "11 − avg", phaseColor: "#f59e0b" },
+  { metric: "Overconfidence After Wins", keys: ["after_confidence_affected"], formula: "11 − avg", phaseColor: "#f59e0b" },
+  { metric: "Fear After Losses", keys: ["during_fear_loss", "after_emotional_reaction"], formula: "11 − avg", phaseColor: "#ef4444" },
   { metric: "Pre-Trade Clarity", keys: ["before_calm_clear"], formula: "avg", phaseColor: "#22c55e" },
-  { metric: "Urgency Resistance", keys: ["before_urgency_pressure"], formula: "6 − avg", phaseColor: "#22c55e" },
-  { metric: "Interference Resistance", keys: ["during_tempted_interfere"], formula: "6 − avg", phaseColor: "#3b82f6" },
-  { metric: "Excitement/Greed Control", keys: ["during_excitement_greed"], formula: "6 − avg", phaseColor: "#3b82f6" },
+  { metric: "Urgency Resistance", keys: ["before_urgency_pressure"], formula: "11 − avg", phaseColor: "#22c55e" },
+  { metric: "Interference Resistance", keys: ["during_tempted_interfere"], formula: "11 − avg", phaseColor: "#3b82f6" },
+  { metric: "Excitement/Greed Control", keys: ["during_excitement_greed"], formula: "11 − avg", phaseColor: "#3b82f6" },
 ];
 
 /** Rounded-rect (pill) dimensions — sized to fill grid cell without overwhelming. */
@@ -738,47 +738,47 @@ function MetricsDisplay({
     });
   }, [states, chartTimeframe, chartCustomStart, chartCustomEnd]);
 
-  // —— Survey-based metrics (1–5 scale). Survey default is 3 = neutral; formulas preserve it (6−3=3, avg(3)=3).
+  // —— Survey-based metrics (1–10 scale). Neutral midpoint is 5.5.
   const calculateMetric = (values: number[], inverted: boolean = false, fallback: number | null = null) => {
     if (values.length === 0) return fallback;
     const avg = values.reduce((a, b) => a + b, 0) / values.length;
-    return inverted ? 6 - avg : avg;
+    return inverted ? 11 - avg : avg;
   };
-  /** Neutral midpoint on 1–5 scale; used when there's no data. Displayed as 5 on 0–10 (see surveyMetricToDisplay). */
-  const DEFAULT_NO_DATA = 3;
-  /** Convert survey metric from 1–5 (internal) to 0–10 (display) so 3 = neutral → 5. State metrics are 0–10. */
-  const surveyMetricToDisplay = (raw: number): number => Math.max(0, Math.min(10, (raw - 1) * 2.5));
+  /** Neutral midpoint on 1–10 scale; used when there's no data. */
+  const DEFAULT_NO_DATA = 5.5;
+  /** Convert survey metric from 1–10 (internal) to 0–10 (display). */
+  const surveyMetricToDisplay = (raw: number): number => Math.max(0, Math.min(10, (raw - 1) * (10 / 9)));
   const METRIC_MAX = 10;
 
   const emotionalStabilityValues = surveys.flatMap((s) => [
-    6 - s.during_stable,
-    6 - s.during_mentally_present,
-    6 - s.after_accept_outcome,
+    11 - s.during_stable,
+    11 - s.during_mentally_present,
+    11 - s.after_accept_outcome,
   ]);
   const emotionalStabilityIndex = calculateMetric(emotionalStabilityValues, false, DEFAULT_NO_DATA) ?? DEFAULT_NO_DATA;
   const fomoValues = surveys.map((s) => s.before_fomo);
-  const fomoIndex = surveys.length > 0 ? 6 - (fomoValues.reduce((a, b) => a + b, 0) / fomoValues.length) : DEFAULT_NO_DATA;
+  const fomoIndex = surveys.length > 0 ? 11 - (fomoValues.reduce((a, b) => a + b, 0) / fomoValues.length) : DEFAULT_NO_DATA;
   const disciplineValues = surveys.flatMap((s) => [
-    6 - s.before_patient_detached,
-    6 - s.during_need_control,
+    11 - s.before_patient_detached,
+    11 - s.during_need_control,
     s.after_proud_discipline,
   ]);
   const disciplineConsistency = calculateMetric(disciplineValues, false, DEFAULT_NO_DATA) ?? DEFAULT_NO_DATA;
   const revengeTradeValues = surveys.flatMap((s) => [s.before_recovering_loss, s.after_tempted_another_trade]);
-  const revengeTradeRisk = surveys.length > 0 ? 6 - (calculateMetric(revengeTradeValues, false, null) ?? 0) : DEFAULT_NO_DATA;
+  const revengeTradeRisk = surveys.length > 0 ? 11 - (calculateMetric(revengeTradeValues, false, null) ?? 0) : DEFAULT_NO_DATA;
   const overconfidenceValues = surveys.map((s) => s.after_confidence_affected);
-  const overconfidenceAfterWins = surveys.length > 0 ? 6 - (overconfidenceValues.reduce((a, b) => a + b, 0) / overconfidenceValues.length) : DEFAULT_NO_DATA;
+  const overconfidenceAfterWins = surveys.length > 0 ? 11 - (overconfidenceValues.reduce((a, b) => a + b, 0) / overconfidenceValues.length) : DEFAULT_NO_DATA;
   const fearAfterLossesValues = surveys.flatMap((s) => [s.during_fear_loss, s.after_emotional_reaction]);
   const fearAfterLossesRaw = calculateMetric(fearAfterLossesValues, false, null);
-  const fearAfterLosses = fearAfterLossesRaw !== null ? 6 - fearAfterLossesRaw : DEFAULT_NO_DATA;
+  const fearAfterLosses = fearAfterLossesRaw !== null ? 11 - fearAfterLossesRaw : DEFAULT_NO_DATA;
   const preTradeClarityValues = surveys.map((s) => s.before_calm_clear);
   const preTradeClarity = calculateMetric(preTradeClarityValues, false, DEFAULT_NO_DATA) ?? DEFAULT_NO_DATA;
   const urgencyValues = surveys.map((s) => s.before_urgency_pressure);
-  const urgencyResistance = surveys.length > 0 ? 6 - (urgencyValues.reduce((a, b) => a + b, 0) / urgencyValues.length) : DEFAULT_NO_DATA;
+  const urgencyResistance = surveys.length > 0 ? 11 - (urgencyValues.reduce((a, b) => a + b, 0) / urgencyValues.length) : DEFAULT_NO_DATA;
   const interferenceValues = surveys.map((s) => s.during_tempted_interfere);
-  const interferenceResistance = surveys.length > 0 ? 6 - (interferenceValues.reduce((a, b) => a + b, 0) / interferenceValues.length) : DEFAULT_NO_DATA;
+  const interferenceResistance = surveys.length > 0 ? 11 - (interferenceValues.reduce((a, b) => a + b, 0) / interferenceValues.length) : DEFAULT_NO_DATA;
   const excitementGreedValues = surveys.map((s) => s.during_excitement_greed);
-  const excitementGreedControl = surveys.length > 0 ? 6 - (excitementGreedValues.reduce((a, b) => a + b, 0) / excitementGreedValues.length) : DEFAULT_NO_DATA;
+  const excitementGreedControl = surveys.length > 0 ? 11 - (excitementGreedValues.reduce((a, b) => a + b, 0) / excitementGreedValues.length) : DEFAULT_NO_DATA;
 
   // —— State-based metrics (from emotional state entries: intensity 0–10, emotion type)
   const intensities = states.map((s) => s.intensity);
@@ -1397,10 +1397,10 @@ function MetricsDisplay({
   }, [states]);
   void chartData; // reserved for chart use
 
-  // Safe 1–5 value for survey fields (avoids NaN when sandbox/localStorage has missing keys)
+  // Safe 1–10 value for survey fields (avoids NaN when sandbox/localStorage has missing keys)
   const surveyVal = (s: EmotionSurvey, key: keyof EmotionSurvey): number => {
     const v = Number(s[key]);
-    return Number.isFinite(v) ? Math.max(1, Math.min(5, v)) : 3;
+    return Number.isFinite(v) ? Math.max(1, Math.min(10, v)) : 5.5;
   };
 
   // Full survey time-series: one row per survey with all metric values (for metric graph modal)
@@ -1426,18 +1426,18 @@ function MetricsDisplay({
         const during_tempted_interfere = surveyVal(survey, "during_tempted_interfere");
         const during_excitement_greed = surveyVal(survey, "during_excitement_greed");
 
-        const emotionalStability = (6 - during_stable + 6 - during_mentally_present + 6 - after_accept_outcome) / 3;
-        const discipline = (6 - before_patient_detached + 6 - during_need_control + after_proud_discipline) / 3;
-        const fomo = 6 - before_fomo;
+        const emotionalStability = (11 - during_stable + 11 - during_mentally_present + 11 - after_accept_outcome) / 3;
+        const discipline = (11 - before_patient_detached + 11 - during_need_control + after_proud_discipline) / 3;
+        const fomo = 11 - before_fomo;
         const revengeRaw = (before_recovering_loss + after_tempted_another_trade) / 2;
-        const revengeRisk = 6 - revengeRaw;
-        const overconfidence = 6 - after_confidence_affected;
+        const revengeRisk = 11 - revengeRaw;
+        const overconfidence = 11 - after_confidence_affected;
         const fearRaw = (during_fear_loss + after_emotional_reaction) / 2;
-        const fear = 6 - fearRaw;
+        const fear = 11 - fearRaw;
         const preTradeClarity = before_calm_clear;
-        const urgency = 6 - before_urgency_pressure;
-        const interference = 6 - during_tempted_interfere;
-        const excitementGreed = 6 - during_excitement_greed;
+        const urgency = 11 - before_urgency_pressure;
+        const interference = 11 - during_tempted_interfere;
+        const excitementGreed = 11 - during_excitement_greed;
 
         const ts = survey.timestamp && !Number.isNaN(new Date(survey.timestamp).getTime()) ? survey.timestamp : new Date().toISOString();
         return {
@@ -1532,7 +1532,7 @@ function MetricsDisplay({
   const surveyToDisplay10 = (raw: number) => {
     const n = Number(raw);
     if (!Number.isFinite(n)) return 5;
-    return Math.max(0, Math.min(10, (n - 1) * 2.5));
+    return Math.max(0, Math.min(10, (n - 1) * (10 / 9)));
   };
   const surveyChartData = useMemo(
     () =>
@@ -1554,7 +1554,7 @@ function MetricsDisplay({
       ),
     [surveyChartDataFull]
   );
-  // Good-low chart data: raw metrics (1–5) scaled to 0–10 for display; lower = better
+  // Good-low chart data: raw metrics (1–10) scaled to 0–10 for display; lower = better
   const surveyGoodLowChartData = useMemo(
     () =>
       surveyChartDataFull.length === 0
@@ -1818,7 +1818,7 @@ function MetricsDisplay({
             </div>
             <div style={{ padding: "24px" }}>
               <p style={{ fontSize: "14px", color: "var(--text-secondary)", marginBottom: "24px", lineHeight: 1.5 }}>
-                Each metric is built from survey questions or logged emotions. Survey questions use a 1–5 scale with <strong style={{ color: "var(--text-primary)" }}>3 = neutral</strong> (the default if you don’t change a slider). We display metrics on 0–10 so 5 = neutral (no data or neutral answers show as 5.0/10). We use 6 − avg to invert the 1–5 scale when “lower is better” (1→5, 5→1, 3→3). Below, each metric is shown with its inputs and how it’s calculated.
+                Each metric is built from survey questions or logged emotions. Survey questions use a 1–10 scale with <strong style={{ color: "var(--text-primary)" }}>5.5 = neutral</strong> (the default if you don’t change a slider). We display metrics on 0–10 so ~5 = neutral (no data or neutral answers show as 5.0/10). We use 11 − avg to invert the 1–10 scale when “lower is better”. Below, each metric is shown with its inputs and how it’s calculated.
               </p>
               <section style={{ marginBottom: "28px" }}>
                 <h3 style={{ fontSize: "14px", fontWeight: "600", color: "var(--accent)", marginBottom: "12px" }}>From your before/during/after survey</h3>
@@ -1835,13 +1835,13 @@ function MetricsDisplay({
                     border: "1px solid var(--border-color)",
                   }}
                 >
-                  <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Survey (1–5, 3 = neutral)</span>
+                  <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Survey (1–10, 5.5 = neutral)</span>
                   <span style={{ color: "var(--text-secondary)", fontSize: "18px" }}>→</span>
                   <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Average</span>
                   <span style={{ color: "var(--text-secondary)", fontSize: "18px" }}>→</span>
-                  <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>If invert: 6 − avg</span>
+                  <span style={{ padding: "6px 12px", backgroundColor: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>If invert: 11 − avg</span>
                   <span style={{ color: "var(--text-secondary)", fontSize: "18px" }}>→</span>
-                  <span style={{ padding: "6px 12px", backgroundColor: "var(--accent)", color: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Display 0–10 (5 = neutral)</span>
+                  <span style={{ padding: "6px 12px", backgroundColor: "var(--accent)", color: "var(--bg-primary)", borderRadius: "6px", fontSize: "13px", fontWeight: "600" }}>Display 0–10 (~5 = neutral)</span>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(380px, 1fr))", gap: "24px" }}>
                   {SURVEY_METRIC_DIAGRAMS.map((d) => (
@@ -1938,7 +1938,7 @@ function MetricsDisplay({
             </div>
             <div style={{ padding: "20px 24px", fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.6 }}>
               <p style={{ marginBottom: "20px", marginTop: 0 }}>
-                Feedback uses the same 0–10 scale as your metric cards (survey 1–5 → 5 = neutral). Treat it as a coach on top of your plan.
+                Feedback uses the same 0–10 scale as your metric cards (survey 1–10 → ~5 = neutral). Treat it as a coach on top of your plan.
               </p>
 
               {/* Section: Overall + single-card + positive */}
@@ -1983,18 +1983,18 @@ function MetricsDisplay({
                 <h3 style={{ fontSize: "12px", fontWeight: 600, color: "var(--accent)", margin: "0 0 8px 0", textTransform: "uppercase", letterSpacing: "0.04em" }}>
                   Metric values and formulas
                 </h3>
-                <p style={{ margin: "0 0 12px 0", fontSize: "12px" }}>Survey: 1–5 (3 = neutral), flipped with 6 − X when “higher is better”, then shown 0–10 (5 = neutral).</p>
+                <p style={{ margin: "0 0 12px 0", fontSize: "12px" }}>Survey: 1–10 (5.5 = neutral), flipped with 11 − X when “higher is better”, then shown 0–10 (~5 = neutral).</p>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "10px 24px" }}>
-                  <div><strong style={{ color: "var(--text-primary)" }}>Emotional Stability Index</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>avg(6−during_stable, 6−during_mentally_present, 6−after_accept_outcome)</div></div>
-                  <div><strong style={{ color: "var(--text-primary)" }}>FOMO Index</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(before_fomo)</div></div>
-                  <div><strong style={{ color: "var(--text-primary)" }}>Discipline Consistency</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>mixed: 6−before_patient_detached, 6−during_need_control, after_proud_discipline</div></div>
-                  <div><strong style={{ color: "var(--text-primary)" }}>Revenge‑Trade Risk</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(before_recovering_loss, after_tempted_another_trade)</div></div>
-                  <div><strong style={{ color: "var(--text-primary)" }}>Overconfidence After Wins</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(after_confidence_affected)</div></div>
-                  <div><strong style={{ color: "var(--text-primary)" }}>Fear After Losses</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(during_fear_loss, after_emotional_reaction)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Emotional Stability Index</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>avg(11−during_stable, 11−during_mentally_present, 11−after_accept_outcome)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>FOMO Index</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>11 − avg(before_fomo)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Discipline Consistency</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>mixed: 11−before_patient_detached, 11−during_need_control, after_proud_discipline</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Revenge‑Trade Risk</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>11 − avg(before_recovering_loss, after_tempted_another_trade)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Overconfidence After Wins</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>11 − avg(after_confidence_affected)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Fear After Losses</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>11 − avg(during_fear_loss, after_emotional_reaction)</div></div>
                   <div><strong style={{ color: "var(--text-primary)" }}>Pre‑Trade Clarity</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>avg(before_calm_clear)</div></div>
-                  <div><strong style={{ color: "var(--text-primary)" }}>Urgency Resistance</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(before_urgency_pressure)</div></div>
-                  <div><strong style={{ color: "var(--text-primary)" }}>Interference Resistance</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(during_tempted_interfere)</div></div>
-                  <div><strong style={{ color: "var(--text-primary)" }}>Excitement/Greed Control</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>6 − avg(during_excitement_greed)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Urgency Resistance</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>11 − avg(before_urgency_pressure)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Interference Resistance</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>11 − avg(during_tempted_interfere)</div></div>
+                  <div><strong style={{ color: "var(--text-primary)" }}>Excitement/Greed Control</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>11 − avg(during_excitement_greed)</div></div>
                   <div><strong style={{ color: "var(--text-primary)" }}>Calm Index</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>5 − (avgIntensity ÷ 2)</div></div>
                   <div><strong style={{ color: "var(--text-primary)" }}>Emotional Consistency</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>10 − 2×std dev (or 10−avg/2 if one entry)</div></div>
                   <div><strong style={{ color: "var(--text-primary)" }}>Negative Emotion Load</strong><div style={{ fontSize: "11px", opacity: 0.9 }}>5 − (avgNegative ÷ 2)</div></div>
@@ -3152,33 +3152,33 @@ export default function Emotions() {
 
       const shouldSaveSurvey = Object.values(SURVEY_QUESTIONS)
         .flat()
-        .some((q) => (surveyResponses?.[q.key] ?? 3) !== 3);
+        .some((q) => (surveyResponses?.[q.key] ?? 6) !== 6);
 
       if (shouldSaveSurvey && firstStateId != null) {
         try {
           await invoke("add_emotion_survey", {
             emotional_state_id: firstStateId,
             timestamp,
-            before_calm_clear: surveyResponses.before_calm_clear ?? 3,
-            before_urgency_pressure: surveyResponses.before_urgency_pressure ?? 3,
-            before_confidence_vs_validation: surveyResponses.before_confidence_vs_validation ?? 3,
-            before_fomo: surveyResponses.before_fomo ?? 3,
-            before_recovering_loss: surveyResponses.before_recovering_loss ?? 3,
-            before_patient_detached: surveyResponses.before_patient_detached ?? 3,
-            before_trust_process: surveyResponses.before_trust_process ?? 3,
-            before_emotional_state: surveyResponses.before_emotional_state ?? 3,
-            during_stable: surveyResponses.during_stable ?? 3,
-            during_tension_stress: surveyResponses.during_tension_stress ?? 3,
-            during_tempted_interfere: surveyResponses.during_tempted_interfere ?? 3,
-            during_need_control: surveyResponses.during_need_control ?? 3,
-            during_fear_loss: surveyResponses.during_fear_loss ?? 3,
-            during_excitement_greed: surveyResponses.during_excitement_greed ?? 3,
-            during_mentally_present: surveyResponses.during_mentally_present ?? 3,
-            after_accept_outcome: surveyResponses.after_accept_outcome ?? 3,
-            after_emotional_reaction: surveyResponses.after_emotional_reaction ?? 3,
-            after_confidence_affected: surveyResponses.after_confidence_affected ?? 3,
-            after_tempted_another_trade: surveyResponses.after_tempted_another_trade ?? 3,
-            after_proud_discipline: surveyResponses.after_proud_discipline ?? 3,
+            before_calm_clear: surveyResponses.before_calm_clear ?? 6,
+            before_urgency_pressure: surveyResponses.before_urgency_pressure ?? 6,
+            before_confidence_vs_validation: surveyResponses.before_confidence_vs_validation ?? 6,
+            before_fomo: surveyResponses.before_fomo ?? 6,
+            before_recovering_loss: surveyResponses.before_recovering_loss ?? 6,
+            before_patient_detached: surveyResponses.before_patient_detached ?? 6,
+            before_trust_process: surveyResponses.before_trust_process ?? 6,
+            before_emotional_state: surveyResponses.before_emotional_state ?? 6,
+            during_stable: surveyResponses.during_stable ?? 6,
+            during_tension_stress: surveyResponses.during_tension_stress ?? 6,
+            during_tempted_interfere: surveyResponses.during_tempted_interfere ?? 6,
+            during_need_control: surveyResponses.during_need_control ?? 6,
+            during_fear_loss: surveyResponses.during_fear_loss ?? 6,
+            during_excitement_greed: surveyResponses.during_excitement_greed ?? 6,
+            during_mentally_present: surveyResponses.during_mentally_present ?? 6,
+            after_accept_outcome: surveyResponses.after_accept_outcome ?? 6,
+            after_emotional_reaction: surveyResponses.after_emotional_reaction ?? 6,
+            after_confidence_affected: surveyResponses.after_confidence_affected ?? 6,
+            after_tempted_another_trade: surveyResponses.after_tempted_another_trade ?? 6,
+            after_proud_discipline: surveyResponses.after_proud_discipline ?? 6,
           });
         } catch (error) {
           console.error("Error saving survey:", error);
@@ -3200,7 +3200,7 @@ export default function Emotions() {
       localStorage.setItem('emotions_show_form', "false");
       const initial: Record<string, number> = {};
       Object.values(SURVEY_QUESTIONS).flat().forEach((q) => {
-        initial[q.key] = 3;
+        initial[q.key] = 6;
       });
       setSurveyResponses(initial);
     } catch (error) {
@@ -4437,14 +4437,14 @@ export default function Emotions() {
                                 <input
                                   type="range"
                                   min="1"
-                                  max="5"
-                                  value={surveyResponses[q.key] || 3}
+                                  max="10"
+                                  value={surveyResponses[q.key] || 6}
                                   onChange={(e) => setSurveyResponses({ ...surveyResponses, [q.key]: parseInt(e.target.value) })}
                                   style={{ flex: 1, accentColor: "var(--accent)" }}
                                 />
-                                <span style={{ fontSize: "12px", color: "var(--text-secondary)", minWidth: "20px" }}>5</span>
+                                <span style={{ fontSize: "12px", color: "var(--text-secondary)", minWidth: "20px" }}>10</span>
                                 <span style={{ minWidth: "40px", textAlign: "center", fontSize: "14px", fontWeight: "600", color: "var(--accent)" }}>
-                                  {surveyResponses[q.key] || 3}
+                                  {surveyResponses[q.key] || 6}
                                 </span>
                               </div>
                             </div>

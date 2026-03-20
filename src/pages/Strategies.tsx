@@ -31,6 +31,15 @@ function wrapLabelLines(value: string, maxChars: number): string[] {
   if (line) lines.push(line);
   return lines;
 }
+
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!m) return `rgba(245,158,11,${alpha})`;
+  const r = parseInt(m[1], 16);
+  const g = parseInt(m[2], 16);
+  const b = parseInt(m[3], 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 /** Custom X-axis tick that wraps strategy names onto multiple lines. Uses fullName when present to avoid truncated labels. */
 function OverviewChartAxisTick(props: { x?: number; y?: number; payload?: { value?: string; name?: string; fullName?: string }; fontSize?: number }) {
   const { x = 0, y = 0, payload } = props;
@@ -49,6 +58,18 @@ function OverviewChartAxisTick(props: { x?: number; y?: number; payload?: { valu
   );
 }
 import RichTextEditor from "../components/RichTextEditor";
+import {
+  loadIndicators,
+  loadStrategyIndicatorIds,
+  saveStrategyIndicatorIds,
+  loadStrategyRulesEnabled,
+  saveStrategyRulesEnabled,
+  loadStrategyRuleTexts,
+  saveStrategyRuleTexts,
+  loadStrategyCustomRuleSets,
+  saveStrategyCustomRuleSets,
+  type StrategyCustomRuleSet,
+} from "../utils/indicatorsStore";
 import { ColorPicker } from "../components/ColorPicker";
 import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
@@ -112,7 +133,7 @@ interface PairedTrade {
   strategy_id: number | null;
 }
 
-type TabType = "notes" | "trades" | "checklists" | "survey" | "surveys";
+type TabType = "notes" | "trades" | "checklists" | "survey" | "surveys" | "rules";
 
 interface ChecklistItem {
   id: number;
@@ -687,6 +708,213 @@ function SortableChecklistItem({
   );
 }
 
+/** Single draggable rule row with inline edit (multiline), similar to checklist items. */
+function SortableRuleRow({
+  id: itemId,
+  text,
+  isEditingThis,
+  editingText,
+  onEditingTextChange,
+  onStartEdit,
+  onSaveEdit,
+  onCancelEdit,
+  onRemove,
+  canEdit,
+}: {
+  id: string;
+  text: string;
+  isEditingThis: boolean;
+  editingText: string;
+  onEditingTextChange: (v: string) => void;
+  onStartEdit: () => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
+  onRemove: () => void;
+  canEdit: boolean;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: itemId, disabled: !canEdit || isEditingThis });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.65 : 1,
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 10,
+        padding: "10px 12px",
+        border: "1px solid var(--border-color)",
+        background: "var(--bg-tertiary)",
+        borderRadius: 10,
+      }}
+    >
+      {canEdit && (
+        <div
+          {...attributes}
+          {...listeners}
+          style={{
+            paddingTop: 2,
+            paddingLeft: 2,
+            cursor: isDragging ? "grabbing" : isEditingThis ? "default" : "grab",
+            color: "var(--text-secondary)",
+          }}
+          title="Drag to reorder"
+        >
+          <GripVertical size={16} />
+        </div>
+      )}
+
+      {isEditingThis ? (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
+          <textarea
+            value={editingText}
+            onChange={(e) => onEditingTextChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                onCancelEdit();
+              }
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                e.preventDefault();
+                onSaveEdit();
+              }
+            }}
+            rows={Math.min(12, Math.max(3, editingText.split("\n").length + 1))}
+            autoFocus
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              background: "var(--bg-primary)",
+              border: "1px solid var(--accent)",
+              borderRadius: 8,
+              color: "var(--text-primary)",
+              fontSize: 13,
+              lineHeight: 1.35,
+              outline: "none",
+              resize: "vertical",
+              fontFamily: "inherit",
+            }}
+          />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={onSaveEdit}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: "none",
+                background: "var(--accent)",
+                color: "white",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={onCancelEdit}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-secondary)",
+                color: "var(--text-primary)",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 650,
+              }}
+            >
+              Cancel
+            </button>
+            <span style={{ fontSize: 11, color: "var(--text-secondary)", alignSelf: "center" }}>
+              Ctrl+Enter to save · Esc to cancel
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div
+          style={{
+            flex: 1,
+            fontSize: 13,
+            color: "var(--text-primary)",
+            fontWeight: 550,
+            lineHeight: 1.35,
+            whiteSpace: "pre-wrap",
+            cursor: canEdit ? "text" : "default",
+            minWidth: 0,
+          }}
+          onClick={canEdit ? onStartEdit : undefined}
+          title={canEdit ? "Click to edit" : undefined}
+        >
+          {text}
+        </div>
+      )}
+
+      {canEdit && !isEditingThis && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onStartEdit();
+            }}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-secondary)",
+              color: "var(--text-primary)",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 650,
+              height: 30,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+            }}
+            title="Edit rule"
+          >
+            <Edit2 size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-secondary)",
+              color: "var(--danger)",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 650,
+              height: 30,
+            }}
+            title="Remove"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** @internal Reserved for optional sortable list UI */
 export function SortableStrategyItemUnused({
   strategy,
@@ -1064,14 +1292,14 @@ function ChecklistSection({
   
   // Organize items: groups (items with no parent_id that have children) and regular items
   const itemIdsSet = new Set(sortedItems.map(item => item.id));
-  const groups = sortedItems.filter(item => !item.parent_id && sortedItems.some(child => child.parent_id === item.id));
-  const regularItems = sortedItems.filter(item => !item.parent_id && !sortedItems.some(child => child.parent_id === item.id));
+  const groups = sortedItems.filter(item => item.parent_id == null && sortedItems.some(child => child.parent_id === item.id));
+  const regularItems = sortedItems.filter(item => item.parent_id == null && !sortedItems.some(child => child.parent_id === item.id));
   const groupedItems = sortedItems.filter(item => item.parent_id !== null && itemIdsSet.has(item.parent_id));
   
   // Organize by parent
   const itemsByParent = new Map<number, ChecklistItem[]>();
   groupedItems.forEach(item => {
-    if (item.parent_id) {
+    if (item.parent_id != null) {
       const parentId = item.parent_id;
       if (!itemsByParent.has(parentId)) {
         itemsByParent.set(parentId, []);
@@ -1788,6 +2016,22 @@ export default function Strategies() {
   const [tempSurveyMetrics, setTempSurveyMetrics] = useState<Array<{
     name: string; description: string | null; formula_type: string; item_ids: number[]; display_order: number; color_scale: string | null;
   }>>([]);
+
+  const [strategyIndicatorIds, setStrategyIndicatorIds] = useState<string[]>([]);
+  const [entryRulesEnabled, setEntryRulesEnabled] = useState<boolean>(true);
+  const [takeProfitRulesEnabled, setTakeProfitRulesEnabled] = useState<boolean>(true);
+  type RulesPanelMode = "entry" | "takeProfit" | "customSet";
+  const [activeRulesPanel, setActiveRulesPanel] = useState<RulesPanelMode>("entry");
+  const [activeCustomRuleSetId, setActiveCustomRuleSetId] = useState<string | null>(null);
+  const [entryRuleTexts, setEntryRuleTexts] = useState<string[]>([]);
+  const [takeProfitRuleTexts, setTakeProfitRuleTexts] = useState<string[]>([]);
+  const [customRuleSets, setCustomRuleSets] = useState<StrategyCustomRuleSet[]>([]);
+  const [ruleDraftText, setRuleDraftText] = useState<string>("");
+  /** Index of rule row being edited (Entry / Take Profit / active custom set). */
+  const [editingRuleIndex, setEditingRuleIndex] = useState<number | null>(null);
+  const [editingRuleText, setEditingRuleText] = useState<string>("");
+  const [indicatorSearch, setIndicatorSearch] = useState("");
+  const [indicatorDropdownOpen, setIndicatorDropdownOpen] = useState(false);
   const [presetModal, setPresetModal] = useState<null | "add" | number>(null);
   const [presetForm, setPresetForm] = useState<{ name: string; formula_expression: string }>({ name: "", formula_expression: "" });
   /** When true, preset modal was opened from Add/Edit metric; after saving new preset we select it in the metric form. */
@@ -2292,6 +2536,26 @@ export default function Strategies() {
     }
   }, [selectedStrategy, activeTab, dataMode, modeSwitchReloadKey]);
 
+  // When viewing a strategy (not editing/creating), keep indicator associations loaded
+  // so the UI can show them at the top of the details page.
+  useEffect(() => {
+    if (selectedStrategy == null) return;
+    if (isEditing || isCreating) return;
+    setStrategyIndicatorIds(loadStrategyIndicatorIds(dataMode, selectedStrategy));
+  }, [selectedStrategy, dataMode, isEditing, isCreating]);
+
+  // When viewing a strategy (not editing/creating), load text rules so the Rules tab can display them.
+  useEffect(() => {
+    if (selectedStrategy == null) return;
+    if (isEditing || isCreating) return;
+    setEntryRuleTexts(loadStrategyRuleTexts(dataMode, selectedStrategy, "entry"));
+    setTakeProfitRuleTexts(loadStrategyRuleTexts(dataMode, selectedStrategy, "takeProfit"));
+    const sets = loadStrategyCustomRuleSets(dataMode, selectedStrategy);
+    setCustomRuleSets(sets);
+    setActiveRulesPanel("entry");
+    setActiveCustomRuleSetId(null);
+  }, [selectedStrategy, dataMode, isEditing, isCreating]);
+
   useEffect(() => {
     if ((activeTab === "survey" || activeTab === "surveys") && selectedStrategy != null && !isCreating) {
       if (dataMode === "sandbox") {
@@ -2770,7 +3034,7 @@ export default function Strategies() {
       }
       
       // Default checklist types - always include these even if empty
-      const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+      const defaultTypes = ["daily_analysis", "entry", "take_profit"];
       const checklistMap = new Map<string, ChecklistItem[]>();
       const customTypesSet = new Set<string>();
       
@@ -2779,6 +3043,16 @@ export default function Strategies() {
       // Initialize default types
       for (const type of defaultTypes) {
         checklistMap.set(type, []);
+      }
+
+      // Mantra used to be a default checklist type. If an existing strategy was ordered/titled with it,
+      // keep it visible even if it currently has no checklist items by registering it as an empty custom type.
+      const strategyChecklistOrder = checklistTypeOrder.get(strategyId) ?? [];
+      const strategyHasMantraTitle = checklistTitles.get(strategyId)?.has("daily_mantra") ?? false;
+      const shouldIncludeMantra = strategyChecklistOrder.includes("daily_mantra") || strategyHasMantraTitle;
+      if (shouldIncludeMantra && !checklistMap.has("daily_mantra")) {
+        checklistMap.set("daily_mantra", []);
+        customTypesSet.add("daily_mantra");
       }
       
       // Group items by type (exclude placeholder items from display, but ensure their type is registered).
@@ -2848,7 +3122,6 @@ export default function Strategies() {
       // Fallback to default structure
       const checklistMap = new Map<string, ChecklistItem[]>();
       checklistMap.set("daily_analysis", []);
-      checklistMap.set("daily_mantra", []);
       checklistMap.set("entry", []);
       checklistMap.set("take_profit", []);
       setChecklists((prev) => {
@@ -2924,7 +3197,7 @@ export default function Strategies() {
       
       // Calculate order: if adding to a group, order within that group; otherwise top-level order
       let itemOrder = maxOrder + 1;
-      if (parentId) {
+      if (parentId != null) {
         const groupChildren = items.filter(i => i.parent_id === parentId);
         if (groupChildren.length > 0) {
           itemOrder = Math.max(...groupChildren.map(i => i.item_order)) + 1;
@@ -2986,7 +3259,7 @@ export default function Strategies() {
       
       // Calculate order: if adding to a group, order within that group; otherwise top-level order
       let itemOrder = maxOrder + 1;
-      if (parentId) {
+      if (parentId != null) {
         const groupChildren = items.filter(i => i.parent_id === parentId);
         if (groupChildren.length > 0) {
           itemOrder = Math.max(...groupChildren.map(i => i.item_order)) + 1;
@@ -3032,7 +3305,7 @@ export default function Strategies() {
       
       // Calculate order: if adding to a group, order within that group; otherwise top-level order
       let itemOrder = maxOrder + 1;
-      if (parentId) {
+      if (parentId != null) {
         const groupChildren = items.filter(i => i.parent_id === parentId);
         if (groupChildren.length > 0) {
           itemOrder = Math.max(...groupChildren.map(i => i.item_order)) + 1;
@@ -3122,10 +3395,10 @@ export default function Strategies() {
   };
 
   const deleteChecklistType = async (strategyId: number, type: string) => {
-    const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+    const defaultTypes = ["daily_analysis", "entry", "take_profit"];
     if (defaultTypes.includes(type) || type === "survey") {
       if (type === "survey") return; // Post-Trade Survey is not deletable
-      alert("Cannot delete default checklist types (Analysis, Mantra, Entry, or Take Profit)");
+      alert("Cannot delete default checklist types (Analysis, Entry, or Take Profit)");
       return;
     }
 
@@ -3147,6 +3420,16 @@ export default function Strategies() {
 
     // If editing, use editingChecklists instead of deleting directly
     if (isEditing) {
+      // Persist deletion immediately so placeholder-only custom types don't reappear on reload.
+      if (dataMode !== "sandbox" && strategyId !== -1) {
+        try {
+          await invoke("delete_strategy_checklist_type", { strategyId, checklistType: type });
+        } catch (e) {
+          console.error("Error deleting checklist type:", e);
+          alert("Failed to delete checklist: " + e);
+          return;
+        }
+      }
       // Initialize editingChecklists if it doesn't have this strategy yet
       let currentChecklist: Map<string, ChecklistItem[]>;
       if (editingChecklists.has(strategyId)) {
@@ -3178,6 +3461,27 @@ export default function Strategies() {
       const history = checklistEditHistory.get(strategyId) || [];
       const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
       setChecklistEditHistory(new Map(checklistEditHistory.set(strategyId, newHistory)));
+
+      // Update custom type/title/description UI state too.
+      const customTypesSet = new Set(customChecklistTypes.get(strategyId) || []);
+      customTypesSet.delete(type);
+      setCustomChecklistTypes(new Map(customChecklistTypes.set(strategyId, customTypesSet)));
+
+      setChecklistTitles((prev) => {
+        const next = new Map(prev);
+        const titles = next.get(strategyId) ? new Map(next.get(strategyId)) : new Map<string, string>();
+        titles.delete(type);
+        next.set(strategyId, titles);
+        return next;
+      });
+
+      setChecklistSectionDescriptions((prev) => {
+        const next = new Map(prev);
+        const mapForStrategy = new Map(next.get(strategyId) || []);
+        mapForStrategy.delete(type);
+        next.set(strategyId, mapForStrategy);
+        return next;
+      });
       
       // Clear the input field for this type
       setNewChecklistItem(prev => {
@@ -3189,15 +3493,11 @@ export default function Strategies() {
     }
 
     try {
-      const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
-      const items = currentChecklist.get(type) || [];
-      
-      // Delete all items in this checklist type
-      for (const item of items) {
-        if (item.id) {
-          await invoke("delete_strategy_checklist_item", { id: item.id });
-        }
+      if (dataMode !== "sandbox" && strategyId !== -1) {
+        await invoke("delete_strategy_checklist_type", { strategyId, checklistType: type });
       }
+
+      const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
 
       // Remove the checklist type from state
       const updatedChecklist = new Map(currentChecklist);
@@ -3208,6 +3508,22 @@ export default function Strategies() {
       const customTypesSet = new Set(customChecklistTypes.get(strategyId) || []);
       customTypesSet.delete(type);
       setCustomChecklistTypes(new Map(customChecklistTypes.set(strategyId, customTypesSet)));
+
+      // Clear any custom title/description state so it doesn't linger in UI.
+      setChecklistTitles((prev) => {
+        const next = new Map(prev);
+        const titles = next.get(strategyId) ? new Map(next.get(strategyId)) : new Map<string, string>();
+        titles.delete(type);
+        next.set(strategyId, titles);
+        return next;
+      });
+      setChecklistSectionDescriptions((prev) => {
+        const next = new Map(prev);
+        const mapForStrategy = new Map(next.get(strategyId) || []);
+        mapForStrategy.delete(type);
+        next.set(strategyId, mapForStrategy);
+        return next;
+      });
 
       // Clear the input field for this type
       setNewChecklistItem(prev => {
@@ -4025,6 +4341,13 @@ export default function Strategies() {
         setTempChecklists(new Map());
         setEditingFormData({ name: "", description: "", color: "#3b82f6", author: "" });
         setNewStrategyNotes("");
+        saveStrategyRulesEnabled(dataMode, newStrategyId, {
+          entryRulesEnabled,
+          takeProfitRulesEnabled,
+        });
+        saveStrategyRuleTexts(dataMode, newStrategyId, "entry", entryRuleTexts);
+        saveStrategyRuleTexts(dataMode, newStrategyId, "takeProfit", takeProfitRuleTexts);
+        saveStrategyCustomRuleSets(dataMode, newStrategyId, customRuleSets);
         return;
       }
       // Create the strategy - returns just the ID
@@ -4035,6 +4358,20 @@ export default function Strategies() {
         color: editingFormData.color || null,
         author: editingFormData.author?.trim() || null,
       });
+
+      // Persist indicator associations for the newly created strategy (per mode)
+      if (strategyIndicatorIds.length > 0) {
+        saveStrategyIndicatorIds(dataMode, newStrategyId, strategyIndicatorIds);
+      }
+
+      // Persist Journal rule-panel enablement for the newly created strategy (per mode)
+      saveStrategyRulesEnabled(dataMode, newStrategyId, {
+        entryRulesEnabled,
+        takeProfitRulesEnabled,
+      });
+      saveStrategyRuleTexts(dataMode, newStrategyId, "entry", entryRuleTexts);
+      saveStrategyRuleTexts(dataMode, newStrategyId, "takeProfit", takeProfitRuleTexts);
+      saveStrategyCustomRuleSets(dataMode, newStrategyId, customRuleSets);
 
       // Assign pending trades to the strategy
       const hadPendingTrades = pendingTradeIds.length > 0;
@@ -4050,7 +4387,7 @@ export default function Strategies() {
         
         // First pass: Save all items without parents (groups and regular items)
         for (const [type, items] of tempChecklists.entries()) {
-          const itemsWithoutParents = items.filter(item => !item.parent_id);
+          const itemsWithoutParents = items.filter(item => item.parent_id == null);
           for (const item of itemsWithoutParents) {
             const newId = await invoke<number>("save_strategy_checklist_item", {
               id: null,
@@ -4068,10 +4405,10 @@ export default function Strategies() {
         
         // Second pass: Save items with parents (children of groups)
         for (const [type, items] of tempChecklists.entries()) {
-          const itemsWithParents = items.filter(item => item.parent_id);
+          const itemsWithParents = items.filter(item => item.parent_id != null);
           for (const item of itemsWithParents) {
             const newParentId = idMap.get(item.parent_id!);
-            if (newParentId) {
+            if (newParentId != null) {
               const newId = await invoke<number>("save_strategy_checklist_item", {
                 id: null,
                 strategyId: newStrategyId,
@@ -4088,7 +4425,7 @@ export default function Strategies() {
         }
 
         // Third pass: Persist empty custom checklist types with a placeholder item so they display when viewing
-        const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+        const defaultTypes = ["daily_analysis", "entry", "take_profit"];
         for (const [type, items] of tempChecklists.entries()) {
           if (defaultTypes.includes(type) || type === "survey") continue;
           if (items.length > 0) continue;
@@ -4237,6 +4574,18 @@ export default function Strategies() {
     setTempChecklists(new Map());
     setTempCalculationPresets([]);
     setTempSurveyMetrics([]);
+    setStrategyIndicatorIds([]);
+    setEntryRulesEnabled(true);
+    setTakeProfitRulesEnabled(true);
+    setEntryRuleTexts([]);
+    setTakeProfitRuleTexts([]);
+    setCustomRuleSets([]);
+    setActiveRulesPanel("entry");
+    setActiveCustomRuleSetId(null);
+    setRuleDraftText("");
+    setEditingRuleIndex(null);
+    setEditingRuleText("");
+    setIndicatorSearch("");
   };
 
   const handleEditClick = () => {
@@ -4280,6 +4629,20 @@ export default function Strategies() {
         // Initialize history with original state
         setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategyData.id, [originalCopy])));
       }
+
+      // Load indicator associations (per mode)
+      setStrategyIndicatorIds(loadStrategyIndicatorIds(dataMode, selectedStrategyData.id));
+      const enabled = loadStrategyRulesEnabled(dataMode, selectedStrategyData.id);
+      setEntryRulesEnabled(enabled.entryRulesEnabled);
+      setTakeProfitRulesEnabled(enabled.takeProfitRulesEnabled);
+      setEntryRuleTexts(loadStrategyRuleTexts(dataMode, selectedStrategyData.id, "entry"));
+      setTakeProfitRuleTexts(loadStrategyRuleTexts(dataMode, selectedStrategyData.id, "takeProfit"));
+      const sets = loadStrategyCustomRuleSets(dataMode, selectedStrategyData.id);
+      setCustomRuleSets(sets);
+      setActiveRulesPanel("entry");
+      setActiveCustomRuleSetId(null);
+      setIndicatorDropdownOpen(false);
+      setIndicatorSearch("");
     }
   };
 
@@ -4316,8 +4679,8 @@ export default function Strategies() {
     
     // First pass: Save all parent items (groups) first
     for (const [type, items] of editingChecklist.entries()) {
-      // Filter to only parent items (groups)
-      const parentItems = items.filter(item => !item.parent_id);
+      // Filter to only parent items (top-level)
+      const parentItems = items.filter(item => item.parent_id == null);
       
       // Save parent items first
       for (const item of parentItems) {
@@ -4352,7 +4715,7 @@ export default function Strategies() {
     
     // Second pass: Save all child items with updated parent IDs
     for (const [type, items] of editingChecklist.entries()) {
-      const childItems = items.filter(item => item.parent_id !== null);
+      const childItems = items.filter(item => item.parent_id != null);
       
       for (const item of childItems) {
         const originalItem = allOriginalItems.get(item.id);
@@ -4392,7 +4755,7 @@ export default function Strategies() {
     }
     
     // Third pass: Persist empty custom checklist types with a placeholder item so they display when viewing
-    const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+    const defaultTypes = ["daily_analysis", "entry", "take_profit"];
     for (const [type, items] of editingChecklist.entries()) {
       if (defaultTypes.includes(type) || type === "survey") continue;
       if (items.length > 0) continue;
@@ -4471,10 +4834,16 @@ export default function Strategies() {
       // Save checklist changes if any
       if (selectedStrategyData.id && editingChecklists.has(selectedStrategyData.id)) {
         await handleSaveChecklists(selectedStrategyData.id);
+        // Safety: ensure checklist DB rows don't accumulate duplicates after complex edits.
+        try {
+          await invoke<number>("remove_duplicate_checklist_items");
+        } catch {
+          // ignore
+        }
         
         // Update custom checklist types based on what's in editingChecklists
         const editingChecklist = editingChecklists.get(selectedStrategyData.id)!;
-        const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+        const defaultTypes = ["daily_analysis", "entry", "take_profit"];
         const customTypesSet = new Set<string>();
         for (const type of editingChecklist.keys()) {
           // Exclude "survey" from being treated as a custom type - it has its own tab
@@ -4775,7 +5144,7 @@ export default function Strategies() {
         const idMap = new Map<number, number>(); // Maps original ID to new database ID
         
         // First pass: Save all items without parents (groups and regular items)
-        const itemsWithoutParents = allItems.filter(item => !item.parent_id);
+        const itemsWithoutParents = allItems.filter(item => item.parent_id == null);
         for (const item of itemsWithoutParents) {
           const newId = await invoke<number>("save_strategy_checklist_item", {
             id: null,
@@ -4791,10 +5160,10 @@ export default function Strategies() {
         }
         
         // Second pass: Save items with parents (children of groups)
-        const itemsWithParents = allItems.filter(item => item.parent_id);
+        const itemsWithParents = allItems.filter(item => item.parent_id != null);
         for (const item of itemsWithParents) {
           const newParentId = idMap.get(item.parent_id!);
-          if (newParentId) {
+          if (newParentId != null) {
             await invoke<number>("save_strategy_checklist_item", {
               id: null,
               strategyId: newStrategyId,
@@ -5390,6 +5759,7 @@ export default function Strategies() {
                 { id: "notes" as TabType, label: "Details", icon: FileText },
                 { id: "trades" as TabType, label: "Trades", icon: TrendingUp },
                 { id: "checklists" as TabType, label: "Checklists", icon: ListChecks },
+                { id: "rules" as TabType, label: "Rules", icon: ListChecks },
                 { id: "surveys" as TabType, label: "Surveys", icon: ClipboardList },
                 { id: "survey" as TabType, label: "Metrics", icon: BarChart2 },
               ].map((tab) => {
@@ -5466,6 +5836,269 @@ export default function Strategies() {
                       Strategy Details
                     </h3>
                   </div>
+                  {!(isEditing || isCreating) && selectedStrategyData && strategyIndicatorIds.length > 0 && (
+                    <div style={{ marginBottom: "16px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "10px", padding: "14px" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+                        <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                          Indicators for this strategy
+                        </div>
+                        <a href="#/signals" style={{ color: "var(--accent)", fontSize: "13px", fontWeight: 650, textDecoration: "none" }}>
+                          Open Signals page
+                        </a>
+                      </div>
+                      {(() => {
+                        const all = loadIndicators();
+                        const selected = all.filter((i) => strategyIndicatorIds.includes(i.id));
+                        if (selected.length === 0) return null;
+                        return (
+                          <div style={{ marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                            {selected.map((i) => (
+                              <span
+                                key={i.id}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  padding: "6px 10px",
+                                  borderRadius: "999px",
+                                  border: "1px solid var(--border-color)",
+                                  background: "var(--bg-tertiary)",
+                                  color: "var(--text-primary)",
+                                  cursor: "default",
+                                  fontSize: "12px",
+                                  fontWeight: 650,
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    fontSize: "11px",
+                                    fontWeight: 800,
+                                    padding: "2px 7px",
+                                    borderRadius: "999px",
+                                    background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
+                                    border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
+                                    color: i.accentColor ?? "#F59E0B",
+                                  }}
+                                >
+                                  {i.abbreviation}
+                                </span>
+                                <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
+                              </span>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                  {(isEditing || isCreating) && (
+                    <div style={{ marginBottom: "16px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "10px", padding: "14px" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+                        <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                          Indicators for this strategy
+                        </div>
+                        <a href="#/signals" style={{ color: "var(--accent)", fontSize: "13px", fontWeight: 650, textDecoration: "none" }}>
+                          Open Signals page
+                        </a>
+                      </div>
+
+                      <div style={{ display: "flex", gap: "14px", alignItems: "center", flexWrap: "wrap", marginBottom: "10px" }}>
+                        <span style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
+                          Entry/Take Profit rules are configured in the Rules tab.
+                        </span>
+                      </div>
+
+                      <div style={{ position: "relative" }}>
+                        <button
+                          type="button"
+                          onClick={() => setIndicatorDropdownOpen((o) => !o)}
+                          style={{
+                            width: "100%",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: "10px",
+                            padding: "10px 12px",
+                            background: "var(--bg-tertiary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "10px",
+                            color: "var(--text-primary)",
+                            cursor: "pointer",
+                            fontSize: "13px",
+                            fontWeight: 650,
+                          }}
+                        >
+                          <span style={{ color: "var(--text-secondary)", fontWeight: 600 }}>
+                            {strategyIndicatorIds.length > 0 ? `${strategyIndicatorIds.length} selected` : "Select indicators..."}
+                          </span>
+                          <span style={{ opacity: 0.8 }}>▾</span>
+                        </button>
+
+                        {indicatorDropdownOpen && (
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: "100%",
+                              left: 0,
+                              right: 0,
+                              marginTop: "8px",
+                              background: "var(--bg-primary)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "12px",
+                              boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
+                              zIndex: 50,
+                              padding: "12px",
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              value={indicatorSearch}
+                              onChange={(e) => setIndicatorSearch(e.target.value)}
+                              placeholder="Search indicators..."
+                              style={{
+                                width: "100%",
+                                padding: "10px 12px",
+                                background: "var(--bg-secondary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "10px",
+                                color: "var(--text-primary)",
+                                outline: "none",
+                                marginBottom: "10px",
+                              }}
+                              autoFocus
+                            />
+                            <div style={{ maxHeight: "220px", overflow: "auto", display: "flex", flexDirection: "column", gap: "8px" }}>
+                              {(() => {
+                                const all = loadIndicators();
+                                const q = indicatorSearch.trim().toLowerCase();
+                                const shown = q ? all.filter((i) => `${i.name} ${i.abbreviation}`.toLowerCase().includes(q)) : all;
+                                if (shown.length === 0) {
+                                  return <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>No indicators found.</div>;
+                                }
+                                const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+                                return shown.map((i) => {
+                                  const checked = strategyIndicatorIds.includes(i.id);
+                                  return (
+                                    <label key={i.id} style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={(e) => {
+                                          const next = e.target.checked
+                                            ? [...strategyIndicatorIds, i.id]
+                                            : strategyIndicatorIds.filter((id) => id !== i.id);
+                                          setStrategyIndicatorIds(next);
+                                          if (!isCreating && strategyId > 0) {
+                                            saveStrategyIndicatorIds(dataMode, strategyId, next);
+                                          }
+                                        }}
+                                        style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                                      />
+                                      <span style={{ color: "var(--text-primary)", fontSize: "13px", fontWeight: 650 }}>
+                                        {i.name}
+                                      </span>
+                                      <span
+                                        style={{
+                                          marginLeft: "auto",
+                                          fontSize: "11px",
+                                          fontWeight: 800,
+                                          padding: "3px 7px",
+                                          borderRadius: "8px",
+                                          background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
+                                          border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
+                                          color: i.accentColor ?? "#F59E0B",
+                                        }}
+                                      >
+                                        {i.abbreviation}
+                                      </span>
+                                    </label>
+                                  );
+                                });
+                              })()}
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "10px" }}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIndicatorSearch("");
+                                  setIndicatorDropdownOpen(false);
+                                }}
+                                style={{
+                                  border: "1px solid var(--border-color)",
+                                  background: "var(--bg-secondary)",
+                                  color: "var(--text-primary)",
+                                  borderRadius: "10px",
+                                  padding: "8px 12px",
+                                  cursor: "pointer",
+                                  fontWeight: 650,
+                                  fontSize: "13px",
+                                }}
+                              >
+                                Done
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {(() => {
+                        const all = loadIndicators();
+                        const selected = all.filter((i) => strategyIndicatorIds.includes(i.id));
+                        if (selected.length === 0) return null;
+                        const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+                        return (
+                          <div style={{ marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                            {selected.map((i) => (
+                              <button
+                                type="button"
+                                key={i.id}
+                                onClick={() => {
+                                  const next = strategyIndicatorIds.filter((id) => id !== i.id);
+                                  setStrategyIndicatorIds(next);
+                                  if (!isCreating && strategyId > 0) saveStrategyIndicatorIds(dataMode, strategyId, next);
+                                }}
+                                title="Remove"
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  padding: "6px 10px",
+                                  borderRadius: "999px",
+                                  border: "1px solid var(--border-color)",
+                                  background: "var(--bg-tertiary)",
+                                  color: "var(--text-primary)",
+                                  cursor: "pointer",
+                                  fontSize: "12px",
+                                  fontWeight: 650,
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    fontSize: "11px",
+                                    fontWeight: 800,
+                                    padding: "2px 7px",
+                                    borderRadius: "999px",
+                                    background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
+                                    border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
+                                    color: i.accentColor ?? "#F59E0B",
+                                  }}
+                                >
+                                  {i.abbreviation}
+                                </span>
+                                <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
+                                <span style={{ color: "var(--text-secondary)", fontWeight: 900 }}>×</span>
+                              </button>
+                            ))}
+                          </div>
+                        );
+                      })()}
+
+                      {isCreating && (
+                        <div style={{ marginTop: "10px", color: "var(--text-secondary)", fontSize: "12px" }}>
+                          Indicator associations will be saved after the strategy is created.
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div style={{ 
                     flex: 1, 
                     display: "flex", 
@@ -5942,7 +6575,7 @@ export default function Strategies() {
                 };
 
                 // Ordered checklist types: use saved order if any, else default first then custom. Allows custom above Analysis/Mantra/Entry/Take Profit.
-                const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+                const defaultTypes = ["daily_analysis", "entry", "take_profit"];
                 const tempCustomTypes = isCreating 
                   ? Array.from(new Set(Array.from(tempChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")))
                   : isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)
@@ -6046,7 +6679,46 @@ export default function Strategies() {
                           onClick={async () => {
                             try {
                               const deleted = await invoke<number>("remove_duplicate_checklist_items");
-                              if (selectedStrategy) await loadChecklists(selectedStrategy);
+                              if (selectedStrategy) {
+                                await loadChecklists(selectedStrategy);
+                                // If we are currently editing this strategy, refresh editing/original checklist state
+                                if (isEditing) {
+                                  const currentChecklist =
+                                    checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
+                                  // Deep copy as original
+                                  const originalCopy = new Map<string, ChecklistItem[]>();
+                                  for (const [type, items] of currentChecklist.entries()) {
+                                    originalCopy.set(
+                                      type,
+                                      items.map((item) => ({ ...item }))
+                                    );
+                                  }
+                                  setOriginalChecklists((prev) => {
+                                    const next = new Map(prev);
+                                    next.set(selectedStrategy, originalCopy);
+                                    return next;
+                                  });
+                                  // Working copy for editing
+                                  const editingCopy = new Map<string, ChecklistItem[]>();
+                                  for (const [type, items] of currentChecklist.entries()) {
+                                    editingCopy.set(
+                                      type,
+                                      items.map((item) => ({ ...item }))
+                                    );
+                                  }
+                                  setEditingChecklists((prev) => {
+                                    const next = new Map(prev);
+                                    next.set(selectedStrategy, editingCopy);
+                                    return next;
+                                  });
+                                  // Reset checklist edit history for this strategy
+                                  setChecklistEditHistory((prev) => {
+                                    const next = new Map(prev);
+                                    next.set(selectedStrategy, [originalCopy]);
+                                    return next;
+                                  });
+                                }
+                              }
                               if (deleted > 0) {
                                 alert(`Removed ${deleted} duplicate checklist item(s).`);
                               } else {
@@ -6160,6 +6832,312 @@ export default function Strategies() {
                         </div>
                       </SortableContext>
                     </DndContext>
+                  </div>
+                );
+              })()}
+
+              {activeTab === "rules" && (selectedStrategy || isCreating) && (() => {
+                const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+                const canEditRules = isEditing || isCreating;
+                const selectedCustomRuleSet = activeCustomRuleSetId ? customRuleSets.find((s) => s.id === activeCustomRuleSetId) : null;
+                const selectedRules =
+                  activeRulesPanel === "entry"
+                    ? entryRuleTexts
+                    : activeRulesPanel === "takeProfit"
+                      ? takeProfitRuleTexts
+                      : selectedCustomRuleSet?.rules ?? [];
+
+                const saveSelectedRules = (next: string[]) => {
+                  if (activeRulesPanel === "entry") {
+                    setEntryRuleTexts(next);
+                    if (!isCreating && strategyId > 0) saveStrategyRuleTexts(dataMode, strategyId, "entry", next);
+                    return;
+                  }
+                  if (activeRulesPanel === "takeProfit") {
+                    setTakeProfitRuleTexts(next);
+                    if (!isCreating && strategyId > 0) saveStrategyRuleTexts(dataMode, strategyId, "takeProfit", next);
+                    return;
+                  }
+
+                  // Custom rule set
+                  if (!activeCustomRuleSetId) return;
+                  const nextSets = customRuleSets.map((s) =>
+                    s.id === activeCustomRuleSetId
+                      ? { ...s, rules: next }
+                      : s
+                  );
+                  setCustomRuleSets(nextSets);
+                  if (!isCreating && strategyId > 0) saveStrategyCustomRuleSets(dataMode, strategyId, nextSets);
+                };
+
+                const cancelEditingRule = () => {
+                  setEditingRuleIndex(null);
+                  setEditingRuleText("");
+                };
+
+                const saveEditedRule = () => {
+                  if (editingRuleIndex === null) return;
+                  const t = editingRuleText.trim();
+                  if (!t) {
+                    cancelEditingRule();
+                    return;
+                  }
+                  const next = [...selectedRules];
+                  next[editingRuleIndex] = t;
+                  saveSelectedRules(next);
+                  cancelEditingRule();
+                };
+
+                const startEditingRule = (idx: number) => {
+                  setEditingRuleIndex(idx);
+                  setEditingRuleText(selectedRules[idx] ?? "");
+                };
+
+                const removeAt = (idx: number) => {
+                  if (editingRuleIndex === idx) {
+                    cancelEditingRule();
+                  } else if (editingRuleIndex !== null && idx < editingRuleIndex) {
+                    setEditingRuleIndex(editingRuleIndex - 1);
+                  }
+                  const next = selectedRules.filter((_, i) => i !== idx);
+                  saveSelectedRules(next);
+                };
+
+                const addRuleText = (rawText: string) => {
+                  const text = rawText.trim();
+                  if (!text) return;
+                  saveSelectedRules([...selectedRules, text]);
+                };
+
+                const handleRuleDragEnd = (event: DragEndEvent) => {
+                  cancelEditingRule();
+                  const { active, over } = event;
+                  if (!over) return;
+                  const oldIndex = Number(String(active.id));
+                  const newIndex = Number(String(over.id));
+                  if (Number.isNaN(oldIndex) || Number.isNaN(newIndex)) return;
+                  if (oldIndex === newIndex) return;
+                  saveSelectedRules(arrayMove(selectedRules, oldIndex, newIndex));
+                };
+
+                const sortableRuleItemIds = selectedRules.map((_, idx) => String(idx));
+
+                return (
+                  <div style={{ padding: "24px", overflowY: "auto" }}>
+                    <div style={{ marginBottom: "18px" }}>
+                      <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "6px" }}>Rules</h3>
+                      <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: 0, maxWidth: 680 }}>
+                        Manage the ordered free-text rule set for each phase. These rules are shown in the Journal.
+                      </p>
+                    </div>
+
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "16px", alignItems: "center" }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          cancelEditingRule();
+                          setActiveRulesPanel("entry");
+                          setActiveCustomRuleSetId(null);
+                        }}
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: "999px",
+                          border: `1px solid ${activeRulesPanel === "entry" ? "var(--accent)" : "var(--border-color)"}`,
+                          background: activeRulesPanel === "entry" ? "var(--accent)" : "var(--bg-tertiary)",
+                          color: activeRulesPanel === "entry" ? "white" : "var(--text-primary)",
+                          cursor: "pointer",
+                          fontSize: "13px",
+                          fontWeight: 650,
+                        }}
+                      >
+                        Entry Rules
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          cancelEditingRule();
+                          setActiveRulesPanel("takeProfit");
+                          setActiveCustomRuleSetId(null);
+                        }}
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: "999px",
+                          border: `1px solid ${activeRulesPanel === "takeProfit" ? "var(--accent)" : "var(--border-color)"}`,
+                          background: activeRulesPanel === "takeProfit" ? "var(--accent)" : "var(--bg-tertiary)",
+                          color: activeRulesPanel === "takeProfit" ? "white" : "var(--text-primary)",
+                          cursor: "pointer",
+                          fontSize: "13px",
+                          fontWeight: 650,
+                        }}
+                      >
+                        Take Profit Rules
+                      </button>
+
+                      {customRuleSets.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => {
+                            cancelEditingRule();
+                            setActiveRulesPanel("customSet");
+                            setActiveCustomRuleSetId(s.id);
+                          }}
+                          style={{
+                            padding: "8px 12px",
+                            borderRadius: "999px",
+                            border: `1px solid ${activeRulesPanel === "customSet" && activeCustomRuleSetId === s.id ? "var(--accent)" : "var(--border-color)"}`,
+                            background: activeRulesPanel === "customSet" && activeCustomRuleSetId === s.id ? "var(--accent)" : "var(--bg-tertiary)",
+                            color: activeRulesPanel === "customSet" && activeCustomRuleSetId === s.id ? "white" : "var(--text-primary)",
+                            cursor: "pointer",
+                            fontSize: "13px",
+                            fontWeight: 650,
+                          }}
+                          title={s.title}
+                        >
+                          {s.title}
+                        </button>
+                      ))}
+
+                      {canEditRules && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            cancelEditingRule();
+                            const name = window.prompt("Custom rule set name:");
+                            const title = (name ?? "").trim();
+                            if (!title) return;
+                            const id = `crs_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+                            const newSet: StrategyCustomRuleSet = { id, title, rules: [] };
+                            const nextSets = [...customRuleSets, newSet];
+                            setCustomRuleSets(nextSets);
+                            setActiveRulesPanel("customSet");
+                            setActiveCustomRuleSetId(id);
+                            if (!isCreating && strategyId > 0) saveStrategyCustomRuleSets(dataMode, strategyId, nextSets);
+                          }}
+                          style={{
+                            padding: "8px 12px",
+                            borderRadius: "999px",
+                            border: `1px solid var(--accent)`,
+                            background: "var(--bg-tertiary)",
+                            color: "var(--accent)",
+                            cursor: "pointer",
+                            fontSize: "13px",
+                            fontWeight: 650,
+                          }}
+                          title="Add custom rule set"
+                        >
+                          + Add custom set
+                        </button>
+                      )}
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "16px" }}>
+                      <div style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: 10, padding: 14 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                            Rule list
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                            {selectedRules.length} items
+                          </div>
+                        </div>
+
+                        {selectedRules.length === 0 ? (
+                          <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+                            No rules selected for this type.
+                          </div>
+                        ) : (
+                          <>
+                            {canEditRules ? (
+                              <DndContext sensors={sensors} onDragEnd={handleRuleDragEnd}>
+                                <SortableContext items={sortableRuleItemIds} strategy={verticalListSortingStrategy}>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                    {selectedRules.map((ruleText, idx) => (
+                                      <SortableRuleRow
+                                        key={sortableRuleItemIds[idx]}
+                                        id={sortableRuleItemIds[idx]}
+                                        text={ruleText}
+                                        isEditingThis={editingRuleIndex === idx}
+                                        editingText={editingRuleText}
+                                        onEditingTextChange={setEditingRuleText}
+                                        onStartEdit={() => startEditingRule(idx)}
+                                        onSaveEdit={saveEditedRule}
+                                        onCancelEdit={cancelEditingRule}
+                                        onRemove={() => removeAt(idx)}
+                                        canEdit={canEditRules}
+                                      />
+                                    ))}
+                                  </div>
+                                </SortableContext>
+                              </DndContext>
+                            ) : (
+                              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                {selectedRules.map((ruleText, idx) => (
+                                  <div
+                                    key={`${idx}`}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "flex-start",
+                                      gap: 10,
+                                      padding: "10px 12px",
+                                      border: "1px solid var(--border-color)",
+                                      background: "var(--bg-tertiary)",
+                                      borderRadius: 10,
+                                    }}
+                                  >
+                                    <div style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", fontWeight: 550, lineHeight: 1.35, whiteSpace: "pre-wrap" }}>
+                                      {ruleText}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      {canEditRules && (
+                        <div style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: 10, padding: 14 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                              Add rule
+                            </div>
+                          </div>
+
+                          <div>
+                            <input
+                              value={ruleDraftText}
+                              onChange={(e) => setRuleDraftText(e.target.value)}
+                              placeholder="Type a rule (free text) then press Enter"
+                              style={{
+                                width: "100%",
+                                padding: "10px 12px",
+                                background: "var(--bg-primary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: 10,
+                                color: "var(--text-primary)",
+                                outline: "none",
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key !== "Enter") return;
+                                e.preventDefault();
+                                addRuleText(ruleDraftText);
+                                setRuleDraftText("");
+                              }}
+                            />
+                            <div style={{ marginTop: 8, color: "var(--text-secondary)", fontSize: 12 }}>
+                              Example: “Stop = just beyond the LTF OB” (one rule per Enter key).
+                            </div>
+                          </div>
+
+                          {isCreating && (
+                            <div style={{ marginTop: 10, color: "var(--text-secondary)", fontSize: 12 }}>
+                              Rules will be saved after the strategy is created.
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })()}
@@ -6282,7 +7260,7 @@ export default function Strategies() {
                                   const expr = (p as { formula_expression?: string | null }).formula_expression?.trim();
                                   if (expr) return expr;
                                   const ft = (p as { formula_type?: string }).formula_type;
-                                  return ft === "invert" ? "6 − avg" : ft === "min" ? "min" : ft === "max" ? "max" : "avg";
+                                  return ft === "invert" ? "11 − avg" : ft === "min" ? "min" : ft === "max" ? "max" : "avg";
                                 })()}
                               </span>
                               {canEditMetrics && (
@@ -6454,7 +7432,7 @@ export default function Strategies() {
                                   {m.formula_type.startsWith("preset:")
                                     ? "Preset formula"
                                     : m.formula_type === "invert"
-                                      ? "6 − avg (lower raw = better)"
+                                      ? "11 − avg (lower raw = better)"
                                       : m.formula_type === "min"
                                         ? "min (higher = better)"
                                         : m.formula_type === "max"
@@ -6694,7 +7672,7 @@ export default function Strategies() {
                               >
                                 {(isCreating ? tempCalculationPresets : calculationPresets).map((p, idx) => {
                                   const preset = p as { name: string; formula_type?: string; formula_expression?: string | null };
-                                  const formulaLabel = (preset.formula_expression && preset.formula_expression.trim()) ? preset.formula_expression.trim() : (preset.formula_type === "invert" ? "6 − avg" : preset.formula_type === "min" ? "min" : preset.formula_type === "max" ? "max" : "avg");
+                                  const formulaLabel = (preset.formula_expression && preset.formula_expression.trim()) ? preset.formula_expression.trim() : (preset.formula_type === "invert" ? "11 − avg" : preset.formula_type === "min" ? "min" : preset.formula_type === "max" ? "max" : "avg");
                                   return (
                                     <option key={isCreating ? `temp-${idx}` : (p as unknown as { id: number }).id} value={isCreating ? `preset:${idx}` : `preset:${(p as unknown as { id: number }).id}`}>
                                       Preset: {preset.name} ({formulaLabel})
@@ -6703,7 +7681,7 @@ export default function Strategies() {
                                 })}
                                 {(isCreating ? tempCalculationPresets : calculationPresets).length > 0 && <option disabled>— Inline —</option>}
                                 <option value="avg">Average (higher = better)</option>
-                                <option value="invert">Inverted (6 − avg; lower raw = better)</option>
+                                <option value="invert">Inverted (11 − avg; lower raw = better)</option>
                                 <option value="min">Min of items (higher = better)</option>
                                 <option value="max">Max of items (higher = better)</option>
                               </select>
@@ -6988,7 +7966,7 @@ export default function Strategies() {
                               type="text"
                               value={presetForm.formula_expression}
                               onChange={(e) => setPresetForm((f) => ({ ...f, formula_expression: e.target.value }))}
-                              placeholder="e.g. (v1 + v2) / 2 or 6 - (v1 + v2 + v3) / 3"
+                              placeholder="e.g. (v1 + v2) / 2 or 11 - (v1 + v2 + v3) / 3"
                               style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", fontFamily: "monospace" }}
                             />
                             <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "6px 0 0 0" }}>
@@ -7080,7 +8058,7 @@ export default function Strategies() {
                             Surveys
                           </h2>
                           <p style={{ fontSize: "14px", color: "var(--text-secondary)", margin: 0, maxWidth: "560px" }}>
-                            Add survey questions (1–5 scale) under each survey. Post-Trade Survey is used in Journal when logging trades. Survey items can be tied to survey metrics in the Metrics tab.
+                            Add survey questions (1–10 scale) under each survey. Post-Trade Survey is used in Journal when logging trades. Survey items can be tied to survey metrics in the Metrics tab.
                           </p>
                         </div>
                         {canEditMetrics && (
@@ -8629,7 +9607,7 @@ export default function Strategies() {
                 if (e.key === "Enter" && newChecklistName.trim()) {
                   const typeName = newChecklistName.trim().toLowerCase().replace(/\s+/g, '_');
                   const virtualId = isCreating ? -1 : (selectedStrategy ?? 0);
-                  const defaultTypesList = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+                  const defaultTypesList = ["daily_analysis", "entry", "take_profit"];
                   const currentMapForOrder = isCreating ? tempChecklists : (editingChecklists.get(selectedStrategy!) ?? checklists.get(selectedStrategy!) ?? new Map<string, ChecklistItem[]>());
                   const existingCustom = Array.from(currentMapForOrder.keys()).filter((t: string) => !defaultTypesList.includes(t) && t !== "survey");
                   const currentOrder = checklistTypeOrder.get(virtualId) ?? [...defaultTypesList, ...existingCustom];
@@ -8730,7 +9708,7 @@ export default function Strategies() {
                   if (newChecklistName.trim()) {
                     const typeName = newChecklistName.trim().toLowerCase().replace(/\s+/g, '_');
                     const virtualId = isCreating ? -1 : (selectedStrategy ?? 0);
-                    const defaultTypesList = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+                    const defaultTypesList = ["daily_analysis", "entry", "take_profit"];
                     const currentMapForOrder = isCreating ? tempChecklists : (editingChecklists.get(selectedStrategy!) ?? checklists.get(selectedStrategy!) ?? new Map<string, ChecklistItem[]>());
                     const existingCustom = Array.from(currentMapForOrder.keys()).filter((t: string) => !defaultTypesList.includes(t) && t !== "survey");
                     const currentOrder = checklistTypeOrder.get(virtualId) ?? [...defaultTypesList, ...existingCustom];

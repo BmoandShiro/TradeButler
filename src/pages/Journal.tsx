@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, ChevronUp, Search, LayoutDashboard, GripVertical, Eye, EyeOff } from "lucide-react";
+import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronUp, Search, LayoutDashboard, GripVertical, Eye, EyeOff, Settings } from "lucide-react";
 import {
   DndContext,
   closestCenter,
@@ -49,8 +49,38 @@ import {
   deleteSandboxEmotionalState,
   loadSandboxState,
 } from "../utils/sandboxStore";
+
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!m) return `rgba(245,158,11,${alpha})`;
+  const r = parseInt(m[1], 16);
+  const g = parseInt(m[2], 16);
+  const b = parseInt(m[3], 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 import { sanitizeHtml, normalizeRichTextHtml } from "../utils/sanitizeHtml";
+import {
+  loadIndicators,
+  loadStrategyIndicatorIds,
+  loadStrategyRuleTexts,
+  loadStrategyCustomRuleSets,
+  loadJournalIndicatorValue,
+  setJournalIndicatorValue,
+  migrateJournalIndicatorDraftValues,
+  loadJournalIndicatorDivergence,
+  setJournalIndicatorDivergence,
+  migrateJournalIndicatorDraftDivergence,
+  loadJournalIndicatorOtherSignals,
+  setJournalIndicatorOtherSignal,
+  migrateJournalIndicatorDraftOtherSignals,
+  loadJournalTradePatternIndicatorIds,
+  setJournalTradePatternIndicatorIds,
+  migrateJournalIndicatorDraftTradePatterns,
+  type Indicator,
+  type IndicatorPhase,
+  type StrategyCustomRuleSet,
+} from "../utils/indicatorsStore";
 
 interface JournalEntry {
   id: number;
@@ -122,7 +152,7 @@ interface JournalChecklistResponse {
   checklist_item_id: number;
   is_checked: boolean;
   journal_trade_ids?: string | null; // JSON array of trade IDs when associated with specific trades, null = whole entry
-  response_value?: number | null; // For survey items: 1-5 scale
+  response_value?: number | null; // For survey items: 1-10 scale
 }
 
 // All checklist and survey items are scoped per journal trade.
@@ -160,37 +190,37 @@ const INTENSITY_LABELS: Record<number, string> = {
   6: "Strong", 7: "Very strong", 8: "Intense", 9: "Severe", 10: "Extreme",
 };
 
-/** Same question groups as Emotions page — unified emotional state entry format. highIsGood: true = 5 is desirable, false = 1 is desirable. */
+/** Same question groups as Emotions page — unified emotional state entry format (1–10 scale). */
 const JOURNAL_SURVEY_QUESTIONS = {
   before: [
-    { key: "before_calm_clear", question: "How calm and mentally clear did you feel before considering this trade?", scale: "1 = Very anxious/confused, 5 = Very calm/clear", highIsGood: true },
-    { key: "before_urgency_pressure", question: "Did you feel any urgency or pressure to \"make something happen\" in the market?", scale: "1 = No urgency, 5 = Extreme pressure", highIsGood: false },
-    { key: "before_confidence_vs_validation", question: "Were you feeling confident in yourself, or seeking validation from a win?", scale: "1 = Confident in self, 5 = Seeking validation", highIsGood: false },
-    { key: "before_fomo", question: "Did fear of missing out (FOMO) influence your desire to enter?", scale: "1 = No FOMO, 5 = Strong FOMO", highIsGood: false },
-    { key: "before_recovering_loss", question: "Were you trying to recover from a previous loss emotionally?", scale: "1 = Not at all, 5 = Strongly trying to recover", highIsGood: false },
-    { key: "before_patient_detached", question: "Did you feel patient and detached, or restless and impulsive?", scale: "1 = Patient/detached, 5 = Restless/impulsive", highIsGood: false },
-    { key: "before_trust_process", question: "How strong was your trust in your process at that moment?", scale: "1 = No trust, 5 = Complete trust", highIsGood: true },
-    { key: "before_emotional_state", question: "Were you feeling bored, excited, anxious, or neutral before entry?", scale: "1 = Neutral/calm, 5 = Extremely emotional (any)", highIsGood: false },
+    { key: "before_calm_clear", question: "How calm and mentally clear did you feel before considering this trade?", scale: "1 = Very anxious/confused, 10 = Very calm/clear", highIsGood: true },
+    { key: "before_urgency_pressure", question: "Did you feel any urgency or pressure to \"make something happen\" in the market?", scale: "1 = No urgency, 10 = Extreme pressure", highIsGood: false },
+    { key: "before_confidence_vs_validation", question: "Were you feeling confident in yourself, or seeking validation from a win?", scale: "1 = Confident in self, 10 = Seeking validation", highIsGood: false },
+    { key: "before_fomo", question: "Did fear of missing out (FOMO) influence your desire to enter?", scale: "1 = No FOMO, 10 = Strong FOMO", highIsGood: false },
+    { key: "before_recovering_loss", question: "Were you trying to recover from a previous loss emotionally?", scale: "1 = Not at all, 10 = Strongly trying to recover", highIsGood: false },
+    { key: "before_patient_detached", question: "Did you feel patient and detached, or restless and impulsive?", scale: "1 = Patient/detached, 10 = Restless/impulsive", highIsGood: false },
+    { key: "before_trust_process", question: "How strong was your trust in your process at that moment?", scale: "1 = No trust, 10 = Complete trust", highIsGood: true },
+    { key: "before_emotional_state", question: "Were you feeling bored, excited, anxious, or neutral before entry?", scale: "1 = Neutral/calm, 10 = Extremely emotional (any)", highIsGood: false },
   ],
   during: [
-    { key: "during_stable", question: "How stable were your emotions once the trade was live?", scale: "1 = Very stable, 5 = Very unstable", highIsGood: false },
-    { key: "during_tension_stress", question: "Did you feel tension, nervousness, or physical stress while price moved?", scale: "1 = No tension, 5 = Extreme tension/stress", highIsGood: false },
-    { key: "during_tempted_interfere", question: "Were you tempted to interfere with the trade out of fear or hope?", scale: "1 = No temptation, 5 = Strong temptation", highIsGood: false },
-    { key: "during_need_control", question: "Did you feel a need to \"control\" the outcome instead of letting it play out?", scale: "1 = Let it play, 5 = Strong need to control", highIsGood: false },
-    { key: "during_fear_loss", question: "How strong was your fear of loss while in the position?", scale: "1 = No fear, 5 = Extreme fear", highIsGood: false },
-    { key: "during_excitement_greed", question: "How strong was your excitement or greed as price moved in your favor?", scale: "1 = Calm, 5 = Extreme excitement/greed", highIsGood: false },
-    { key: "during_mentally_present", question: "Did you feel mentally present, or distracted and reactive?", scale: "1 = Very present, 5 = Very distracted/reactive", highIsGood: false },
+    { key: "during_stable", question: "How stable were your emotions once the trade was live?", scale: "1 = Very stable, 10 = Very unstable", highIsGood: false },
+    { key: "during_tension_stress", question: "Did you feel tension, nervousness, or physical stress while price moved?", scale: "1 = No tension, 10 = Extreme tension/stress", highIsGood: false },
+    { key: "during_tempted_interfere", question: "Were you tempted to interfere with the trade out of fear or hope?", scale: "1 = No temptation, 10 = Strong temptation", highIsGood: false },
+    { key: "during_need_control", question: "Did you feel a need to \"control\" the outcome instead of letting it play out?", scale: "1 = Let it play, 10 = Strong need to control", highIsGood: false },
+    { key: "during_fear_loss", question: "How strong was your fear of loss while in the position?", scale: "1 = No fear, 10 = Extreme fear", highIsGood: false },
+    { key: "during_excitement_greed", question: "How strong was your excitement or greed as price moved in your favor?", scale: "1 = Calm, 10 = Extreme excitement/greed", highIsGood: false },
+    { key: "during_mentally_present", question: "Did you feel mentally present, or distracted and reactive?", scale: "1 = Very present, 10 = Very distracted/reactive", highIsGood: false },
   ],
   after: [
-    { key: "after_accept_outcome", question: "How well did you accept the outcome emotionally, regardless of win or loss?", scale: "1 = Full acceptance, 5 = Poor acceptance", highIsGood: false },
-    { key: "after_emotional_reaction", question: "Did you feel relief, frustration, disappointment, or satisfaction?", scale: "1 = Neutral/balanced, 5 = Strong emotional reaction", highIsGood: false },
-    { key: "after_confidence_affected", question: "Did the result affect your confidence in yourself?", scale: "1 = No effect, 5 = Strong effect (positive or negative)", highIsGood: false },
-    { key: "after_tempted_another_trade", question: "Did you feel tempted to immediately take another trade to change your emotional state?", scale: "1 = No temptation, 5 = Strong temptation", highIsGood: false },
-    { key: "after_proud_discipline", question: "Did you feel proud of your discipline, or focused only on the money outcome?", scale: "1 = Proud of discipline, 5 = Only focused on money", highIsGood: false },
+    { key: "after_accept_outcome", question: "How well did you accept the outcome emotionally, regardless of win or loss?", scale: "1 = Full acceptance, 10 = Poor acceptance", highIsGood: false },
+    { key: "after_emotional_reaction", question: "Did you feel relief, frustration, disappointment, or satisfaction?", scale: "1 = Neutral/balanced, 10 = Strong emotional reaction", highIsGood: false },
+    { key: "after_confidence_affected", question: "Did the result affect your confidence in yourself?", scale: "1 = No effect, 10 = Strong effect (positive or negative)", highIsGood: false },
+    { key: "after_tempted_another_trade", question: "Did you feel tempted to immediately take another trade to change your emotional state?", scale: "1 = No temptation, 10 = Strong temptation", highIsGood: false },
+    { key: "after_proud_discipline", question: "Did you feel proud of your discipline, or focused only on the money outcome?", scale: "1 = Proud of discipline, 10 = Only focused on money", highIsGood: false },
   ],
 };
 
-/** Emotion survey linked to an emotional state (before/during/after 1–5 responses). */
+/** Emotion survey linked to an emotional state (before/during/after 1–10 responses). */
 interface JournalEmotionSurvey {
   id: number;
   emotional_state_id: number;
@@ -289,7 +319,6 @@ export type JournalSectionId =
 const CORE_SECTION_ORDER: JournalSectionId[] = [
   "analysis_checklist",
   "emotional_state_before",
-  "mantra_checklist",
   "implementation",
   "entry_checklist",
   "emotional_state_during",
@@ -436,13 +465,18 @@ export default function Journal() {
   const [activeTab, setActiveTab] = useState<TabType>("trade");
   // After a successful manual save, suppress background autosaves that could re-enter edit mode
   const [justSaved, setJustSaved] = useState(false);
+  const justSavedRef = useRef(justSaved);
+  useEffect(() => {
+    justSavedRef.current = justSaved;
+  }, [justSaved]);
   const [journalSectionOrder, setJournalSectionOrder] = useState<string[]>(() => {
     const parseOrder = (raw: string | null): string[] | null => {
       if (!raw) return null;
       try {
         const parsed = JSON.parse(raw) as string[];
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const valid = parsed.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:")));
+                        const normalized = parsed.map((id) => (id === "mantra_checklist" ? "custom:daily_mantra" : id));
+                        const valid = normalized.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:") || id.startsWith("custom_rules:")));
           const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
           return [...valid, ...missing];
         }
@@ -545,7 +579,7 @@ export default function Journal() {
   // Checklist state (per trade, but checklists come from strategy)
   const [strategyChecklists, setStrategyChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
   const [checklistResponses, setChecklistResponses] = useState<Map<number, Map<number, boolean>>>(new Map()); // trade_index -> checklist_item_id -> is_checked
-  const [surveyScores, setSurveyScores] = useState<Map<number, Map<number, number>>>(new Map()); // trade_index -> checklist_item_id -> 1-5 (for survey type items)
+  const [surveyScores, setSurveyScores] = useState<Map<number, Map<number, number>>>(new Map()); // trade_index -> checklist_item_id -> 1-10 (for survey type items)
   // Entry-level (Analysis & Mantra): associated with whole journal by default, optionally with specific trades
   const [entryLevelChecklistResponses, setEntryLevelChecklistResponses] = useState<Map<number, boolean>>(new Map()); // item_id -> is_checked
   const [checklistTradeAssociations, setChecklistTradeAssociations] = useState<Map<number, number[] | null>>(new Map()); // item_id -> null (whole entry) or [trade_id, ...]
@@ -630,10 +664,16 @@ export default function Journal() {
   const [showTitleRequiredModal, setShowTitleRequiredModal] = useState(false);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [emotionalStateDeleteTarget, setEmotionalStateDeleteTarget] = useState<null | { type: "saved"; states: JournalEmotionalState[] } | { type: "pending"; tradeIndex: number; idx: number }>(null);
-  // View mode: emotional states for the selected entry (when not editing), and whether the section is expanded
+  // View mode: emotional states for the selected entry (when not editing)
   const [viewEntryEmotionalStates, setViewEntryEmotionalStates] = useState<JournalEmotionalState[]>([]);
   const [viewEntrySurveys, setViewEntrySurveys] = useState<JournalEmotionSurvey[]>([]);
-  const [emotionalStatesSectionExpanded, setEmotionalStatesSectionExpanded] = useState(false);
+  // View mode: which trade card is currently expanded/focused.
+  const [viewFocusedTradeIndex, setViewFocusedTradeIndex] = useState<number | null>(0);
+  const stripHtml = (html: string) =>
+    (html || "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   // For "Link to emotional states" / "Link to real trades" from Journal (entry-level)
   const [allEmotionalStates, setAllEmotionalStates] = useState<JournalEmotionalState[]>([]);
   const [realTradesForLink, setRealTradesForLink] = useState<{ id: number; symbol: string; side: string; timestamp: string; quantity: number; pnl?: number }[]>([]);
@@ -665,6 +705,13 @@ export default function Journal() {
     setIsCreating(false);
     setIsEditing(false);
   }, [dataMode]);
+
+  // When entering view mode for a selected entry, default focus to the first trade.
+  useEffect(() => {
+    if (!selectedEntry?.id) return;
+    if (isCreating || isEditing) return;
+    setViewFocusedTradeIndex(0);
+  }, [selectedEntry?.id, isCreating, isEditing]);
 
   // When navigating from Analytics (e.g. "Journal Overview" link) with ?overview=1, show the overview (no entry selected, no create form)
   useEffect(() => {
@@ -724,6 +771,7 @@ export default function Journal() {
   const journalScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const leftPanelScrollRef = useRef<HTMLDivElement>(null);
+  const isManualSaveInProgressRef = useRef(false);
 
   // Save work-in-progress to localStorage
   const saveWorkInProgress = () => {
@@ -973,12 +1021,30 @@ export default function Journal() {
   }, [entryFormData.strategy_id]);
 
   useEffect(() => {
+    if (!entryFormData.strategy_id) {
+      setStrategyIndicators([]);
+      setStrategyEntryRuleTexts([]);
+      setStrategyTakeProfitRuleTexts([]);
+      setStrategyCustomRuleSets([]);
+      return;
+    }
+    const all = loadIndicators();
+    const indicatorIds = loadStrategyIndicatorIds(dataMode, entryFormData.strategy_id);
+    setStrategyIndicators(all.filter((i) => indicatorIds.includes(i.id)));
+    setStrategyEntryRuleTexts(loadStrategyRuleTexts(dataMode, entryFormData.strategy_id, "entry"));
+    setStrategyTakeProfitRuleTexts(loadStrategyRuleTexts(dataMode, entryFormData.strategy_id, "takeProfit"));
+    setStrategyCustomRuleSets(loadStrategyCustomRuleSets(dataMode, entryFormData.strategy_id));
+  }, [dataMode, entryFormData.strategy_id]);
+
+  useEffect(() => {
     if (selectedEntry && !isCreating && !isEditing) {
-      loadTrades(selectedEntry.id);
-      loadLinkedPairs(selectedEntry.id);
-      if (selectedEntry.strategy_id) {
-        loadChecklistResponses(selectedEntry.id, selectedEntry.strategy_id);
-      }
+      (async () => {
+        const loadedTrades = await loadTrades(selectedEntry.id);
+        await loadLinkedPairs(selectedEntry.id);
+        if (selectedEntry.strategy_id) {
+          await loadChecklistResponses(selectedEntry.id, selectedEntry.strategy_id, loadedTrades);
+        }
+      })();
       
       // Restore scroll positions after entry data is loaded (entry-specific)
       if (selectedEntry?.id) {
@@ -1450,7 +1516,7 @@ export default function Journal() {
     }
   };
 
-  const loadChecklistResponses = async (entryId: number, strategyId: number) => {
+  const loadChecklistResponses = async (entryId: number, strategyId: number, tradesForMapping?: JournalTrade[]) => {
     try {
       const [responses, allChecklistItems] = await Promise.all([
         invoke<JournalChecklistResponse[]>("get_journal_checklist_responses", { journalEntryId: entryId }),
@@ -1466,13 +1532,14 @@ export default function Journal() {
       const entryLevelTradeAssociations = new Map<number, number[] | null>();
       const newResponses = new Map<number, Map<number, boolean>>();
       const loadedSurveyScoresPerTrade = new Map<number, Map<number, number>>();
-      selectedTrades.forEach((_, index) => {
+      const tradesToUse = tradesForMapping ?? selectedTrades;
+      tradesToUse.forEach((_, index) => {
         newResponses.set(index, new Map());
         loadedSurveyScoresPerTrade.set(index, new Map());
       });
 
       const tradeIdToIndex = new Map<number, number>();
-      selectedTrades.forEach((t, idx) => {
+      tradesToUse.forEach((t, idx) => {
         const id = (t as { id?: number }).id;
         if (id != null) tradeIdToIndex.set(id, idx);
       });
@@ -1602,7 +1669,81 @@ export default function Journal() {
       await loadLinkedPairs(selectedEntry.id);
       if (selectedEntry.strategy_id) {
         await loadStrategyChecklists(selectedEntry.strategy_id);
-        await loadChecklistResponses(selectedEntry.id, selectedEntry.strategy_id);
+        await loadChecklistResponses(selectedEntry.id, selectedEntry.strategy_id, loadedTrades);
+      }
+      try {
+        if (dataMode === "sandbox") {
+          const states = getSandboxEmotionalStatesForJournal(selectedEntry.id) as unknown as JournalEmotionalState[];
+          const allSurveys = getSandboxEmotionSurveys() as unknown as JournalEmotionSurvey[];
+          const surveysByStateId = new Map<number, JournalEmotionSurvey>();
+          for (const sv of allSurveys) surveysByStateId.set(sv.emotional_state_id, sv);
+          setJournalEmotionalStates(states);
+          const entryLevelGroups = groupEmotionalStatesByTimestamp(states.filter((s) => s.journal_trade_id == null));
+          const entryLevelGroup = entryLevelGroups[0];
+          const nextForms = new Map<number, { selectedEmotions: Record<string, number>; notes: string; surveyResponses: Record<string, number> }>();
+          loadedTrades.forEach((t, idx) => {
+            const tradeGroups = groupEmotionalStatesByTimestamp(states.filter((s) => t.id != null && s.journal_trade_id === t.id));
+            const picked = tradeGroups[0] ?? entryLevelGroup;
+            if (!picked) return;
+            const selectedEmotions: Record<string, number> = {};
+            picked.forEach((s) => {
+              selectedEmotions[s.emotion] = s.intensity;
+            });
+            const survey = picked.map((s) => surveysByStateId.get(s.id)).find((sv): sv is JournalEmotionSurvey => sv != null);
+            const surveyResponses: Record<string, number> = {};
+            if (survey) {
+              for (const q of [...JOURNAL_SURVEY_QUESTIONS.before, ...JOURNAL_SURVEY_QUESTIONS.during, ...JOURNAL_SURVEY_QUESTIONS.after]) {
+                const raw = (survey as unknown as Record<string, number>)[q.key];
+                if (typeof raw === "number") surveyResponses[q.key] = raw;
+              }
+            }
+            nextForms.set(idx, {
+              selectedEmotions,
+              notes: picked[0]?.notes || "",
+              surveyResponses,
+            });
+          });
+          setEmotionalStateFormByTrade(nextForms);
+          setShowAddEmotionalStateForm(nextForms.size > 0);
+        } else {
+          const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+          const [states, allSurveys] = await Promise.all([
+            invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry.id, ...paperArgs }),
+            invoke<JournalEmotionSurvey[]>("get_all_emotion_surveys"),
+          ]);
+          const surveysByStateId = new Map<number, JournalEmotionSurvey>();
+          for (const sv of allSurveys) surveysByStateId.set(sv.emotional_state_id, sv);
+          setJournalEmotionalStates(states);
+          const entryLevelGroups = groupEmotionalStatesByTimestamp(states.filter((s) => s.journal_trade_id == null));
+          const entryLevelGroup = entryLevelGroups[0];
+          const nextForms = new Map<number, { selectedEmotions: Record<string, number>; notes: string; surveyResponses: Record<string, number> }>();
+          loadedTrades.forEach((t, idx) => {
+            const tradeGroups = groupEmotionalStatesByTimestamp(states.filter((s) => t.id != null && s.journal_trade_id === t.id));
+            const picked = tradeGroups[0] ?? entryLevelGroup;
+            if (!picked) return;
+            const selectedEmotions: Record<string, number> = {};
+            picked.forEach((s) => {
+              selectedEmotions[s.emotion] = s.intensity;
+            });
+            const survey = picked.map((s) => surveysByStateId.get(s.id)).find((sv): sv is JournalEmotionSurvey => sv != null);
+            const surveyResponses: Record<string, number> = {};
+            if (survey) {
+              for (const q of [...JOURNAL_SURVEY_QUESTIONS.before, ...JOURNAL_SURVEY_QUESTIONS.during, ...JOURNAL_SURVEY_QUESTIONS.after]) {
+                const raw = (survey as unknown as Record<string, number>)[q.key];
+                if (typeof raw === "number") surveyResponses[q.key] = raw;
+              }
+            }
+            nextForms.set(idx, {
+              selectedEmotions,
+              notes: picked[0]?.notes || "",
+              surveyResponses,
+            });
+          });
+          setEmotionalStateFormByTrade(nextForms);
+          setShowAddEmotionalStateForm(nextForms.size > 0);
+        }
+      } catch {
+        setEmotionalStateFormByTrade(new Map());
       }
       
       // Convert trades to form data (use loadedTrades, not selectedTrades - state updates are async)
@@ -1808,9 +1949,15 @@ export default function Journal() {
     const reorderedTrades = newTrades.map((trade, i) => ({ ...trade, trade_order: i }));
     setTradesFormData(reorderedTrades);
     
-    if (activeTradeIndex >= reorderedTrades.length) {
-      setActiveTradeIndex(reorderedTrades.length - 1);
-    }
+    // Keep active trade deterministic after deletion:
+    // - if deleting current tab, keep same numeric index (now next trade) when possible
+    // - if deleting a tab before current, shift active index left
+    // - clamp to valid bounds
+    setActiveTradeIndex((prev) => {
+      if (prev > index) return prev - 1;
+      if (prev === index) return Math.min(index, reorderedTrades.length - 1);
+      return Math.min(prev, reorderedTrades.length - 1);
+    });
     
     // Remove checklist responses and survey scores for removed trade, then reindex
     const newResponses = new Map(checklistResponses);
@@ -1843,9 +1990,12 @@ export default function Journal() {
   };
 
   // Auto-save function (silent, doesn't require title)
-  const autoSave = async () => {
+  const autoSave = async (opts?: { isManualSave?: boolean }) => {
+    if (isManualSaveInProgressRef.current && !opts?.isManualSave) {
+      return;
+    }
     // Only auto-save if we have a title, are creating/editing, and haven't just manually saved
-    if (!entryFormData.title.trim() || (!isCreating && !isEditing) || justSaved) {
+    if (!entryFormData.title.trim() || (!isCreating && !isEditing) || (justSavedRef.current && !opts?.isManualSave)) {
       return;
     }
 
@@ -1862,6 +2012,8 @@ export default function Journal() {
             linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null,
           });
           updateSandboxJournalEntry(entryId, { linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null });
+          // If the user manually clicked Save, don't re-enter edit mode due to a queued auto-save.
+          if ((isManualSaveInProgressRef.current || justSavedRef.current) && !opts?.isManualSave) return;
           setIsCreating(false);
           setIsEditing(true);
           const savedEntry = getSandboxJournalEntry(entryId) as unknown as JournalEntry;
@@ -1927,7 +2079,7 @@ export default function Journal() {
       }
 
       if (isCreating) {
-        entryId = await invoke<number>("create_journal_entry", {
+      entryId = await invoke<number>("create_journal_entry", {
           date: entryFormData.date,
           title: entryFormData.title,
           strategyId: entryFormData.strategy_id,
@@ -1941,8 +2093,15 @@ export default function Journal() {
           strategyId: entryFormData.strategy_id,
           linked_trade_ids: (entryFormData.linked_trade_ids?.length ?? 0) > 0 ? JSON.stringify(entryFormData.linked_trade_ids) : null,
         });
+      // Migrate any draft indicator data (from temporary entry id 0)
+      migrateJournalIndicatorDraftValues(dataMode, 0, entryId);
+      migrateJournalIndicatorDraftDivergence(dataMode, 0, entryId);
+      migrateJournalIndicatorDraftOtherSignals(dataMode, 0, entryId);
+      migrateJournalIndicatorDraftTradePatterns(dataMode, 0, entryId);
         // Link to emotional state entries (chosen while creating) — scope applied after trades below
         // After first auto-save, switch from creating to editing
+        // If the user manually clicked Save, don't re-enter edit mode due to a queued auto-save.
+        if ((isManualSaveInProgressRef.current || justSavedRef.current) && !opts?.isManualSave) return;
         setIsCreating(false);
         setIsEditing(true);
         const savedEntry = await invoke<JournalEntry>("get_journal_entry", { id: entryId });
@@ -1968,6 +2127,12 @@ export default function Journal() {
         if (toRemove.length > 0) await invoke("remove_journal_entry_from_emotional_states", { journalEntryId: entryId, emotionalStateIds: toRemove });
         if (toAdd.length > 0) await invoke("add_journal_entry_to_emotional_states", { journalEntryId: entryId, emotionalStateIds: toAdd });
       } else {
+        return;
+      }
+
+      // For real/paper mode, background auto-save should only persist entry metadata.
+      // Trade/checklist/emotion persistence is reserved for explicit manual Save.
+      if (!opts?.isManualSave) {
         return;
       }
 
@@ -2193,21 +2358,33 @@ export default function Journal() {
 
     return () => clearTimeout(timeoutId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entryFormData.title, entryFormData.date, entryFormData.strategy_id, tradesFormData.length]);
+  }, [entryFormData.title, entryFormData.date, entryFormData.strategy_id]);
 
   const handleSave = async () => {
-    if (!entryFormData.title.trim()) {
-      setShowTitleRequiredModal(true);
-      return;
-    }
-    // Prevent saving a bloated trade list (e.g. from stale work-in-progress)
-    const MAX_TRADES_PER_ENTRY = 100;
-    if (tradesFormData.length > MAX_TRADES_PER_ENTRY) {
-      alert(`This entry has ${tradesFormData.length} trades (max ${MAX_TRADES_PER_ENTRY}). Reload the entry from the list to fix, or remove extra trades before saving.`);
-      return;
-    }
+    isManualSaveInProgressRef.current = true;
+    // Prevent any background auto-save from re-entering edit mode while we're saving.
+    setJustSaved(true);
+    const wasCreatingAtStart = isCreating;
 
     try {
+      if (!entryFormData.title.trim()) {
+        setShowTitleRequiredModal(true);
+        return;
+      }
+      // Prevent saving a bloated trade list (e.g. from stale work-in-progress)
+      const MAX_TRADES_PER_ENTRY = 100;
+      if (tradesFormData.length > MAX_TRADES_PER_ENTRY) {
+        alert(`This entry has ${tradesFormData.length} trades (max ${MAX_TRADES_PER_ENTRY}). Reload the entry from the list to fix, or remove extra trades before saving.`);
+        return;
+      }
+
+      // In real/paper mode, close the editor immediately for existing entries.
+      // (Closing later can feel broken if the server work for checklist/emotional states is slow.)
+      if (dataMode !== "sandbox" && selectedEntry && !wasCreatingAtStart) {
+        setIsCreating(false);
+        setIsEditing(false);
+      }
+
       if (dataMode === "sandbox") {
         // Keep sandbox save path lightweight but align UX with real-mode save:
         // - autosave to sandbox store
@@ -2220,28 +2397,32 @@ export default function Journal() {
           }
         }
 
-        await autoSave();
+        // Manual save delegates to autoSave() in sandbox mode.
+        // We keep the "justSaved" suppression on so background autosaves can't re-open the editor.
+        await autoSave({ isManualSave: true });
 
         if (selectedEntry) {
           await loadTrades(selectedEntry.id);
           await loadLinkedPairs(selectedEntry.id);
         }
 
-        await loadEntries();
-
+        // Close the edit UI as soon as core sandbox persistence finishes.
+        // (loadEntries() can take longer; we don't want that to keep the editor open)
         setIsCreating(false);
         setIsEditing(false);
         setShowAddEmotionalStateForm(false);
         setPendingEmotionalStates([]);
         setJustSaved(true);
         clearWorkInProgress();
+        // Don't block UI closing on list refresh; reload in background.
+        loadEntries().catch((e) => console.error("Failed to reload entries after save:", e));
         return;
       }
 
       let entryId: number;
       let toAdd: number[] = [];
 
-      if (isCreating) {
+      if (wasCreatingAtStart) {
         entryId = await invoke<number>("create_journal_entry", {
           date: entryFormData.date,
           title: entryFormData.title,
@@ -2368,6 +2549,16 @@ export default function Journal() {
         }
       }
 
+      // Exit edit UI immediately after core journal/trade + checklist persistence.
+      // Emotional-state and other follow-up saves can take longer, and the user
+      // expects the journal edit panel to close right away (like demo mode).
+      setIsCreating(false);
+      setIsEditing(false);
+      setEditHistory([]);
+      setOriginalEntryData(null);
+      setJustSaved(true);
+      clearWorkInProgress();
+
       // Persist emotional states: pending list + any form-in-progress (one state per trade or one for entire entry)
       const toPersist: Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string; surveyResponses?: Record<string, number> }> = [...pendingEmotionalStates];
       const hasFormContent = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 || (newEmotionalStateForm.notes || "").trim() !== "";
@@ -2428,32 +2619,32 @@ export default function Journal() {
             }
           }
           const sr = pending.surveyResponses ?? {};
-          const shouldSaveSurvey = firstStateId != null && Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 3) !== 3);
+          const shouldSaveSurvey = firstStateId != null && Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 6) !== 6);
           if (shouldSaveSurvey && firstStateId != null) {
             try {
               await invoke("add_emotion_survey", {
                 emotional_state_id: firstStateId,
                 timestamp: now,
-                before_calm_clear: sr.before_calm_clear ?? 3,
-                before_urgency_pressure: sr.before_urgency_pressure ?? 3,
-                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 3,
-                before_fomo: sr.before_fomo ?? 3,
-                before_recovering_loss: sr.before_recovering_loss ?? 3,
-                before_patient_detached: sr.before_patient_detached ?? 3,
-                before_trust_process: sr.before_trust_process ?? 3,
-                before_emotional_state: sr.before_emotional_state ?? 3,
-                during_stable: sr.during_stable ?? 3,
-                during_tension_stress: sr.during_tension_stress ?? 3,
-                during_tempted_interfere: sr.during_tempted_interfere ?? 3,
-                during_need_control: sr.during_need_control ?? 3,
-                during_fear_loss: sr.during_fear_loss ?? 3,
-                during_excitement_greed: sr.during_excitement_greed ?? 3,
-                during_mentally_present: sr.during_mentally_present ?? 3,
-                after_accept_outcome: sr.after_accept_outcome ?? 3,
-                after_emotional_reaction: sr.after_emotional_reaction ?? 3,
-                after_confidence_affected: sr.after_confidence_affected ?? 3,
-                after_tempted_another_trade: sr.after_tempted_another_trade ?? 3,
-                after_proud_discipline: sr.after_proud_discipline ?? 3,
+                before_calm_clear: sr.before_calm_clear ?? 6,
+                before_urgency_pressure: sr.before_urgency_pressure ?? 6,
+                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6,
+                before_fomo: sr.before_fomo ?? 6,
+                before_recovering_loss: sr.before_recovering_loss ?? 6,
+                before_patient_detached: sr.before_patient_detached ?? 6,
+                before_trust_process: sr.before_trust_process ?? 6,
+                before_emotional_state: sr.before_emotional_state ?? 6,
+                during_stable: sr.during_stable ?? 6,
+                during_tension_stress: sr.during_tension_stress ?? 6,
+                during_tempted_interfere: sr.during_tempted_interfere ?? 6,
+                during_need_control: sr.during_need_control ?? 6,
+                during_fear_loss: sr.during_fear_loss ?? 6,
+                during_excitement_greed: sr.during_excitement_greed ?? 6,
+                during_mentally_present: sr.during_mentally_present ?? 6,
+                after_accept_outcome: sr.after_accept_outcome ?? 6,
+                after_emotional_reaction: sr.after_emotional_reaction ?? 6,
+                after_confidence_affected: sr.after_confidence_affected ?? 6,
+                after_tempted_another_trade: sr.after_tempted_another_trade ?? 6,
+                after_proud_discipline: sr.after_proud_discipline ?? 6,
               });
             } catch (e) {
               console.error(e);
@@ -2479,17 +2670,17 @@ export default function Journal() {
       // Reload the saved entry
       const savedEntry = await invoke<JournalEntry>("get_journal_entry", { id: entryId });
       setSelectedEntry(savedEntry);
-      await loadTrades(entryId);
-      await loadLinkedPairs(entryId);
-      setIsCreating(false);
-      setIsEditing(false);
-      setEditHistory([]);
-      setOriginalEntryData(null);
-      setJustSaved(true);
-      clearWorkInProgress();
+      try {
+        await loadTrades(entryId);
+        await loadLinkedPairs(entryId);
+      } catch (refreshErr) {
+        console.error("Post-save refresh failed:", refreshErr);
+      }
     } catch (error) {
       console.error("Error saving entry:", error);
-      alert("Failed to save entry: " + error);
+      alert("Failed to save entry: " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      isManualSaveInProgressRef.current = false;
     }
   };
 
@@ -2733,6 +2924,17 @@ export default function Journal() {
     const newTrades = [...tradesFormData];
     newTrades[index] = { ...newTrades[index], [field]: value };
     setTradesFormData(newTrades);
+
+    // Include trade-level edits in undo history (e.g., Implementation rich text),
+    // so undo restores the latest typed state instead of stale snapshots.
+    if (isEditing) {
+      const currentState = {
+        entry: { ...entryFormData },
+        trades: newTrades.map(t => ({ ...t })),
+        checklistResponses: new Map(checklistResponses),
+      };
+      setEditHistory(prev => [...prev, currentState].slice(-10));
+    }
   };
 
   const toggleChecklistItem = (tradeIndex: number, itemId: number) => {
@@ -2786,12 +2988,30 @@ export default function Journal() {
   const getSectionLabel = (sectionId: string): string => {
     if (JOURNAL_SECTION_LABELS[sectionId as JournalSectionId]) return JOURNAL_SECTION_LABELS[sectionId as JournalSectionId];
     if (sectionId.startsWith("custom:")) return getChecklistTitle(sectionId.slice(7));
+    if (sectionId.startsWith("custom_rules:")) {
+      const ruleSetId = sectionId.slice("custom_rules:".length);
+      if (!entryFormData.strategy_id) return "Custom Rules";
+      try {
+        return loadStrategyCustomRuleSets(dataMode, entryFormData.strategy_id).find((s) => s.id === ruleSetId)?.title ?? "Custom Rules";
+      } catch {
+        return "Custom Rules";
+      }
+    }
     return sectionId;
   };
 
   const getSectionLabelScroll = (sectionId: string): string => {
     if (JOURNAL_SECTION_LABELS_SCROLL[sectionId as JournalSectionId]) return JOURNAL_SECTION_LABELS_SCROLL[sectionId as JournalSectionId];
     if (sectionId.startsWith("custom:")) return getChecklistTitle(sectionId.slice(7));
+    if (sectionId.startsWith("custom_rules:")) {
+      const ruleSetId = sectionId.slice("custom_rules:".length);
+      if (!entryFormData.strategy_id) return "Custom Rules";
+      try {
+        return loadStrategyCustomRuleSets(dataMode, entryFormData.strategy_id).find((s) => s.id === ruleSetId)?.title ?? "Custom Rules";
+      } catch {
+        return "Custom Rules";
+      }
+    }
     return sectionId;
   };
 
@@ -2934,7 +3154,7 @@ export default function Journal() {
   const currentChecklists = entryFormData.strategy_id ? strategyChecklists.get(entryFormData.strategy_id) : null;
   // Trades that belong to this journal entry only (for Associate modal). When editing, use tradesFormData (set from loaded trades in handleEdit) so we always show the correct 7; when viewing, use selectedTrades.
   const entryTradesForAssociation = selectedEntry && !isEditing ? selectedTrades : tradesFormData;
-  const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+  const defaultTypes = ["daily_analysis", "entry", "take_profit"];
   const customTypes = currentChecklists 
     ? Array.from(currentChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")
     : [];
@@ -2965,13 +3185,17 @@ export default function Journal() {
   const fullSectionOrder = useMemo(() => {
     const base = journalSectionOrder.filter((id) => id !== "custom_checklists_surveys");
     const surveyItems = (currentChecklists?.get("survey") || []).filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
+    const customRuleSectionIds = entryFormData.strategy_id
+      ? loadStrategyCustomRuleSets(dataMode, entryFormData.strategy_id).map((s) => `custom_rules:${s.id}`)
+      : [];
     const customSectionIds = [
       ...customTypes.map((t) => `custom:${t}`),
+      ...customRuleSectionIds,
       ...(surveyItems.length > 0 ? ["custom:survey"] : []),
     ];
     const newCustom = customSectionIds.filter((id) => !base.includes(id));
     return [...base, ...newCustom];
-  }, [journalSectionOrder, customTypes, currentChecklists]);
+  }, [journalSectionOrder, customTypes, currentChecklists, dataMode, entryFormData.strategy_id]);
 
   const effectiveSectionOrder = useMemo(
     () => fullSectionOrder.filter((id) => !hiddenSectionIds.includes(id)),
@@ -3036,6 +3260,907 @@ export default function Journal() {
             )}
           </div>
         ))}
+      </div>
+    );
+  };
+
+  /** Read-only checklist rendering (for view-mode trade cards). */
+  const renderChecklistReadOnlyForType = (type: string, tradeIndexForResponses: number) => {
+    if (!currentChecklists) return null;
+    const rawItems = currentChecklists.get(type) || [];
+    const items = rawItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
+    if (items.length === 0) return null;
+
+    const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(type);
+    const isSurveyType = type === "survey";
+    const responses = isEntryLevel ? entryLevelChecklistResponses : checklistResponses.get(tradeIndexForResponses) || new Map();
+    const scoreMap = surveyScores.get(tradeIndexForResponses) || new Map<number, number>();
+    const getChecked = (id: number) => responses.get(id) || false;
+    const getScore = (id: number) => scoreMap.get(id);
+
+    const groups = items.filter((item) => !item.parent_id && items.some((child) => child.parent_id === item.id));
+    const regularItems = items.filter((item) => !item.parent_id && !items.some((child) => child.parent_id === item.id));
+    const groupedItems = items.filter((item) => item.parent_id !== null && items.some((p) => p.id === item.parent_id));
+    const itemsByParent = new Map<number, ChecklistItem[]>();
+    groupedItems.forEach((item) => {
+      if (item.parent_id == null) return;
+      const parentId = item.parent_id;
+      if (!itemsByParent.has(parentId)) itemsByParent.set(parentId, []);
+      itemsByParent.get(parentId)!.push(item);
+    });
+
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+        {groups.map((group) => {
+          const children = itemsByParent.get(group.id) || [];
+          return (
+            <div key={group.id} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div style={{ padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 6, fontWeight: 600, color: "var(--text-primary)", fontSize: 13 }}>
+                {group.item_text}
+              </div>
+              {children.map((child) => (
+                <div key={child.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", marginLeft: 16 }}>
+                  <input type="checkbox" checked={getChecked(child.id)} disabled style={{ cursor: "default", width: 16, height: 16 }} />
+                  <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)" }}>{child.item_text}</label>
+                  {isSurveyType && (
+                    <span
+                      style={{
+                        flexShrink: 0,
+                        minWidth: "28px",
+                        padding: "3px 8px",
+                        borderRadius: "6px",
+                        backgroundColor: getScore(child.id) != null ? getSurveyScoreBgRgba(getScore(child.id) as number) : "var(--bg-tertiary)",
+                        color: getScore(child.id) != null ? getSurveyScoreColor(getScore(child.id) as number) : "var(--text-secondary)",
+                        fontSize: "12px",
+                        fontWeight: "500",
+                        textAlign: "center",
+                      }}
+                    >
+                      {getScore(child.id) != null ? getScore(child.id) : "—"}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          );
+        })}
+
+        {regularItems.map((item) => (
+          <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px" }}>
+            <input type="checkbox" checked={getChecked(item.id)} disabled style={{ cursor: "default", width: 16, height: 16 }} />
+            <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)" }}>{item.item_text}</label>
+            {isSurveyType && (
+              <span
+                style={{
+                  flexShrink: 0,
+                  minWidth: "28px",
+                  padding: "3px 8px",
+                  borderRadius: "6px",
+                  backgroundColor: getScore(item.id) != null ? getSurveyScoreBgRgba(getScore(item.id) as number) : "var(--bg-tertiary)",
+                  color: getScore(item.id) != null ? getSurveyScoreColor(getScore(item.id) as number) : "var(--text-secondary)",
+                  fontSize: "12px",
+                  fontWeight: "500",
+                  textAlign: "center",
+                }}
+              >
+                {getScore(item.id) != null ? getScore(item.id) : "—"}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const TradePatternsPicker = ({
+    phase,
+    entryId,
+    tradeIndex,
+    canEdit,
+    alignButtonRight,
+  }: {
+    phase: IndicatorPhase;
+    entryId: number;
+    tradeIndex: number;
+    canEdit: boolean;
+    alignButtonRight?: boolean;
+  }) => {
+    const [open, setOpen] = useState(false);
+    const [selectedIds, setSelectedIds] = useState<string[]>(() => loadJournalTradePatternIndicatorIds(dataMode, entryId, tradeIndex, phase));
+    const [showBullish, setShowBullish] = useState(true);
+    const [showBearish, setShowBearish] = useState(true);
+    const pickerRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+      setSelectedIds(loadJournalTradePatternIndicatorIds(dataMode, entryId, tradeIndex, phase));
+    }, [dataMode, entryId, tradeIndex, phase]);
+
+    useEffect(() => {
+      if (!open) return;
+
+      const onPointerDown = (e: MouseEvent | TouchEvent) => {
+        const el = pickerRef.current;
+        if (!el) return;
+        const target = e.target as Node | null;
+        if (!target) return;
+        if (!el.contains(target)) setOpen(false);
+      };
+
+      const onKeyDown = (e: KeyboardEvent) => {
+        if (e.key === "Escape") setOpen(false);
+      };
+
+      document.addEventListener("mousedown", onPointerDown, { passive: true });
+      document.addEventListener("touchstart", onPointerDown, { passive: true });
+      document.addEventListener("keydown", onKeyDown);
+
+      return () => {
+        document.removeEventListener("mousedown", onPointerDown);
+        document.removeEventListener("touchstart", onPointerDown);
+        document.removeEventListener("keydown", onKeyDown);
+      };
+    }, [open]);
+
+    const allPatternIndicators = useMemo(() => {
+      const all = loadIndicators();
+      return all.filter((i) => i.signalGroup === "TechnicalPattern" || i.signalGroup === "Candlestick");
+    }, []);
+
+    const idToInd = useMemo(() => new Map(allPatternIndicators.map((i) => [i.id, i] as const)), [allPatternIndicators]);
+
+    const toggle = (id: string) => {
+      if (!canEdit) return;
+      setSelectedIds((prev) => {
+        const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+        setJournalTradePatternIndicatorIds(dataMode, entryId, tradeIndex, phase, next);
+        return next;
+      });
+    };
+
+    const technical = allPatternIndicators.filter((i) => i.signalGroup === "TechnicalPattern");
+    const candlesticks = allPatternIndicators.filter((i) => i.signalGroup === "Candlestick");
+
+    const getPatternBias = (ind: Indicator): "bullish" | "bearish" | "neutral" => {
+      const text = `${ind.name} ${ind.abbreviation}`.toLowerCase();
+      if (/(bull|buy|long|ascending|rising)/.test(text)) return "bullish";
+      if (/(bear|sell|short|descending|falling)/.test(text)) return "bearish";
+      return "neutral";
+    };
+
+    const passBiasFilter = (ind: Indicator): boolean => {
+      const bias = getPatternBias(ind);
+      if (bias === "neutral") return true;
+      if (bias === "bullish") return showBullish;
+      return showBearish;
+    };
+
+    const filteredTechnical = technical.filter(passBiasFilter);
+    const filteredCandlesticks = candlesticks.filter(passBiasFilter);
+
+    return (
+      <div ref={pickerRef} style={{ marginTop: 6, position: "relative" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: alignButtonRight ? "flex-start" : "center",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: alignButtonRight ? "nowrap" : "wrap",
+            marginBottom: 8,
+          }}
+        >
+          <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              Patterns
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>Select which patterns are present in this trade.</div>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: alignButtonRight ? "flex-end" : "flex-start",
+              gap: 8,
+              flexWrap: "wrap",
+              minWidth: 0,
+              flex: alignButtonRight ? "0 1 auto" : "1 1 200px",
+            }}
+          >
+            {selectedIds.length > 0 && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                {selectedIds.map((id) => {
+                  const ind = idToInd.get(id);
+                  if (!ind) return null;
+                  return (
+                    <span
+                      key={id}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        border: `1px solid ${hexToRgba(ind.accentColor ?? "#F59E0B", 0.55)}`,
+                        background: hexToRgba(ind.accentColor ?? "#F59E0B", 0.18),
+                        color: ind.accentColor ?? "#F59E0B",
+                        fontSize: 12,
+                        fontWeight: 800,
+                        maxWidth: "100%",
+                      }}
+                      title={ind.name}
+                    >
+                      {ind.abbreviation}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+            <button
+              type="button"
+              disabled={!canEdit}
+              onClick={() => {
+                if (!canEdit) return;
+                setOpen((v) => !v);
+              }}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 999,
+                border: `1px solid var(--border-color)`,
+                background: "var(--accent)",
+                color: "white",
+                cursor: canEdit ? "pointer" : "not-allowed",
+                fontSize: 12,
+                fontWeight: 700,
+                width: 220,
+                maxWidth: "100%",
+                flexShrink: 0,
+              }}
+              title="Select patterns"
+            >
+              {selectedIds.length > 0 ? `${selectedIds.length} selected` : "Choose patterns"}
+            </button>
+          </div>
+        </div>
+
+        {open && (
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: "calc(100% + 8px)",
+              width: "100%",
+              maxWidth: "none",
+              background: "var(--bg-primary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 12,
+              boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
+              zIndex: 60,
+              padding: 12,
+            }}
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 2 }}>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 12, fontWeight: 700, cursor: canEdit ? "pointer" : "default" }}>
+                  <input
+                    type="checkbox"
+                    checked={showBullish}
+                    onChange={(e) => {
+                      if (!canEdit) return;
+                      setShowBullish(e.target.checked);
+                    }}
+                    disabled={!canEdit}
+                    style={{ width: 16, height: 16 }}
+                  />
+                  Bullish
+                </label>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 12, fontWeight: 700, cursor: canEdit ? "pointer" : "default" }}>
+                  <input
+                    type="checkbox"
+                    checked={showBearish}
+                    onChange={(e) => {
+                      if (!canEdit) return;
+                      setShowBearish(e.target.checked);
+                    }}
+                    disabled={!canEdit}
+                    style={{ width: 16, height: 16 }}
+                  />
+                  Bearish
+                </label>
+              </div>
+
+              {[{ label: "Technical Patterns", items: filteredTechnical }, { label: "Candlesticks", items: filteredCandlesticks }].map(
+                ({ label, items }) => (
+                  <div key={label} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                      {label}
+                    </div>
+                    {items.length === 0 ? (
+                      <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>None available.</div>
+                    ) : (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
+                        {items.map((ind) => {
+                          const isOn = selectedIds.includes(ind.id);
+                          return (
+                            <button
+                              key={ind.id}
+                              type="button"
+                              onClick={() => toggle(ind.id)}
+                              disabled={!canEdit}
+                              style={{
+                                padding: 10,
+                                borderRadius: 10,
+                                border: `1px solid ${isOn ? hexToRgba(ind.accentColor ?? "#F59E0B", 0.85) : "var(--border-color)"}`,
+                                background: isOn ? hexToRgba(ind.accentColor ?? "#F59E0B", 0.18) : "var(--bg-tertiary)",
+                                color: "var(--text-primary)",
+                                cursor: canEdit ? "pointer" : "default",
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: 8,
+                                alignItems: "flex-start",
+                                textAlign: "left",
+                                minHeight: 70,
+                              }}
+                              title={ind.name}
+                            >
+                              <span style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0, flex: 1 }}>
+                                <span
+                                  style={{
+                                    fontSize: 11,
+                                    fontWeight: 900,
+                                    padding: "2px 7px",
+                                    borderRadius: 999,
+                                    border: `1px solid ${hexToRgba(ind.accentColor ?? "#F59E0B", 0.55)}`,
+                                    background: hexToRgba(ind.accentColor ?? "#F59E0B", 0.18),
+                                    color: ind.accentColor ?? "#F59E0B",
+                                    alignSelf: "flex-start",
+                                  }}
+                                >
+                                  {ind.abbreviation}
+                                </span>
+                                <span style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.1, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                                  {ind.name}
+                                </span>
+                              </span>
+                              <span
+                                style={{
+                                  width: 42,
+                                  height: 42,
+                                  borderRadius: 6,
+                                  border: "1px solid var(--border-color)",
+                                  background: "var(--bg-secondary)",
+                                  overflow: "hidden",
+                                  flex: "0 0 auto",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                }}
+                              >
+                                {ind.exampleImage ? (
+                                  <img
+                                    src={ind.exampleImage}
+                                    alt=""
+                                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                                  />
+                                ) : (
+                                  <span style={{ fontSize: 9, color: "var(--text-secondary)", fontWeight: 700 }}>N/A</span>
+                                )}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              )}
+
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!canEdit) return;
+                    setSelectedIds([]);
+                    setJournalTradePatternIndicatorIds(dataMode, entryId, tradeIndex, phase, []);
+                  }}
+                  disabled={!canEdit}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 10,
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-tertiary)",
+                    color: "var(--text-secondary)",
+                    cursor: canEdit ? "pointer" : "not-allowed",
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 10,
+                    border: "none",
+                    background: "var(--accent)",
+                    color: "white",
+                    cursor: canEdit ? "pointer" : "default",
+                    fontSize: 12,
+                    fontWeight: 800,
+                  }}
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderIndicatorInputs = (phase: IndicatorPhase) => {
+    const draftEntryId = 0;
+    const entryId = selectedEntry?.id ?? draftEntryId;
+    if (!isCreating && !selectedEntry?.id) return null;
+    if (!entryFormData.strategy_id) return null;
+    const phaseIndicators = strategyIndicators;
+
+    const tradeIndex = activeTradeIndex;
+    const timeframeOptions = ["1m", "5m", "15m", "1H", "4H", "1D", "1W"];
+    const globalSelectedTfs = indicatorTimeframesByPhase[phase] || [];
+    const signalFilter = indicatorSignalGroupFilterByPhase[phase];
+    const visibleIndicators = phaseIndicators.filter((ind) => {
+      if (ind.signalGroup === "TechnicalPattern") return signalFilter.technical;
+      if (ind.signalGroup === "Candlestick") return signalFilter.candlestick;
+      return true;
+    });
+
+    const getIndicatorSelectedTfs = (indicatorId: string, isTfIndicator: boolean) => {
+      const overrides = indicatorTimeframesByPhaseAndIndicator[phase]?.[indicatorId];
+      if (overrides && Array.isArray(overrides)) return overrides;
+      // Important: do not auto-select indicator-specific timeframe buttons for timeframe-capturing indicators.
+      // Non-timeframe indicators should still default to globalSelectedTfs so their Value inputs show by default.
+      return isTfIndicator ? [] : globalSelectedTfs;
+    };
+
+    const toggleIndicatorTf = (indicatorId: string, tf: string) => {
+      setIndicatorTimeframesByPhaseAndIndicator((prev) => {
+        const phaseOverrides = prev[phase] ?? {};
+        // Start from empty so clicking a timeframe button selects only that timeframe.
+        const cur = phaseOverrides[indicatorId] ?? [];
+        const next = cur.includes(tf) ? cur.filter((x) => x !== tf) : [...cur, tf];
+        return { ...prev, [phase]: { ...phaseOverrides, [indicatorId]: next } };
+      });
+    };
+
+    const hasAnyIndicatorTfs = visibleIndicators.some((ind) => {
+      const isTfIndicator = ind.capturesTimeframes === true || ind.id.includes("_timeframe");
+      if (isTfIndicator) return globalSelectedTfs.length > 0;
+      return getIndicatorSelectedTfs(ind.id, false).length > 0;
+    });
+
+    const toggleTf = (tf: string) => {
+      setIndicatorTimeframesByPhase((prev) => {
+        const cur = prev[phase] || [];
+        const next = cur.includes(tf) ? cur.filter((x) => x !== tf) : [...cur, tf];
+        return { ...prev, [phase]: next };
+      });
+    };
+
+    const canEditIndicators = isCreating || isEditing;
+    const isReadOnlySignals = !canEditIndicators;
+
+    const phaseLabel = phase === "entry" ? "Entry" : "Take Profit";
+
+    return (
+      <div
+        style={{
+          marginTop: "14px",
+          padding: "12px",
+          borderRadius: "10px",
+          border: "1px solid var(--border-color)",
+          background: "var(--bg-secondary)",
+          pointerEvents: isReadOnlySignals ? "none" : "auto",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            Signals ({phaseLabel})
+          </div>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "8px" }}>
+                <div style={{ position: "relative" }}>
+                  <button
+                    type="button"
+                    disabled={!canEditIndicators}
+                    onClick={() => setIndicatorSettingsOpenByPhase((prev) => ({ ...prev, [phase]: !prev[phase] }))}
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-tertiary)",
+                      color: "var(--text-primary)",
+                      cursor: canEditIndicators ? "pointer" : "not-allowed",
+                      fontSize: 12,
+                      fontWeight: 800,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                    title="Signal settings"
+                  >
+                    <Settings size={16} />
+                  </button>
+
+                  {indicatorSettingsOpenByPhase[phase] && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        right: 0,
+                        top: "calc(100% + 8px)",
+                        zIndex: 50,
+                        width: 280,
+                        background: "var(--bg-primary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 12,
+                        boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
+                        padding: 12,
+                      }}
+                    >
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        {phase === "entry" && (
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", color: "var(--text-secondary)", fontSize: 12, fontWeight: 650 }}>
+                            <input
+                              type="checkbox"
+                              checked={showIndicatorColors}
+                              onChange={(e) => setShowIndicatorColors(e.target.checked)}
+                              style={{ width: 16, height: 16 }}
+                            />
+                            Show indicator colors
+                          </label>
+                        )}
+
+                        <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: canEditIndicators ? "pointer" : "default", color: "var(--text-secondary)", fontSize: 12, fontWeight: 650 }}>
+                          <input
+                            type="checkbox"
+                            checked={indicatorSignalGroupFilterByPhase[phase]?.technical ?? true}
+                            disabled={!canEditIndicators}
+                            onChange={(e) => {
+                              if (!canEditIndicators) return;
+                              const next = e.target.checked;
+                              setIndicatorSignalGroupFilterByPhase((prev) => ({
+                                ...prev,
+                                [phase]: { ...prev[phase], technical: next },
+                              }));
+                            }}
+                            style={{ width: 16, height: 16 }}
+                          />
+                          Technical Patterns
+                        </label>
+
+                        <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: canEditIndicators ? "pointer" : "default", color: "var(--text-secondary)", fontSize: 12, fontWeight: 650 }}>
+                          <input
+                            type="checkbox"
+                            checked={indicatorSignalGroupFilterByPhase[phase]?.candlestick ?? true}
+                            disabled={!canEditIndicators}
+                            onChange={(e) => {
+                              if (!canEditIndicators) return;
+                              const next = e.target.checked;
+                              setIndicatorSignalGroupFilterByPhase((prev) => ({
+                                ...prev,
+                                [phase]: { ...prev[phase], candlestick: next },
+                              }));
+                            }}
+                            style={{ width: 16, height: 16 }}
+                          />
+                          Candlesticks
+                        </label>
+                      </div>
+
+                      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+                        <button
+                          type="button"
+                          onClick={() => setIndicatorSettingsOpenByPhase((prev) => ({ ...prev, [phase]: false }))}
+                          style={{
+                            padding: "8px 12px",
+                            borderRadius: 10,
+                            border: "none",
+                            background: "var(--accent)",
+                            color: "white",
+                            cursor: "pointer",
+                            fontSize: 12,
+                            fontWeight: 800,
+                          }}
+                        >
+                          Done
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+        </div>
+
+        <TradePatternsPicker
+          phase={phase}
+          entryId={entryId}
+          tradeIndex={tradeIndex}
+          canEdit={canEditIndicators}
+          alignButtonRight={true}
+        />
+
+        <div style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "nowrap" }}>
+          <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              Indicators
+            </div>
+            <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
+              Select one or more timeframes to enter indicator values (optional).
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end", flex: "0 0 auto" }}>
+            {timeframeOptions.map((tf) => {
+              const active = globalSelectedTfs.includes(tf);
+              return (
+                <button
+                  key={tf}
+                  type="button"
+                  disabled={!canEditIndicators}
+                  onClick={() => {
+                    if (!canEditIndicators) return;
+                    toggleTf(tf);
+                  }}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: "999px",
+                    border: "1px solid var(--border-color)",
+                    background: active ? "var(--accent)" : "var(--bg-tertiary)",
+                    color: active ? "white" : "var(--text-primary)",
+                    cursor: canEditIndicators ? "pointer" : "default",
+                    fontSize: "12px",
+                    fontWeight: 650,
+                  }}
+                >
+                  {tf}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {visibleIndicators.length === 0 ? (
+          <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
+            No indicators match the selected pattern filters.
+          </div>
+        ) : !hasAnyIndicatorTfs ? (
+          null
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {visibleIndicators.map((ind) => {
+              const isTfIndicator = ind.capturesTimeframes === true || ind.id.includes("_timeframe");
+              const indSelectedTfs = getIndicatorSelectedTfs(ind.id, isTfIndicator);
+              const isMomentum = (ind.category ?? "").toLowerCase() === "momentum";
+              const colTfs = isTfIndicator ? globalSelectedTfs : indSelectedTfs;
+              const otherSignals = ind.kind === "custom" ? loadJournalIndicatorOtherSignals(dataMode, entryId, tradeIndex, phase, ind.id) : {};
+              // Prefer labels defined on the Indicator; fall back to any previously-stored draft labels for older sessions.
+              const otherSignalLabels =
+                ind.kind === "custom"
+                  ? (ind.otherSignals ?? []).length > 0
+                    ? ind.otherSignals ?? []
+                    : Object.keys(otherSignals)
+                  : [];
+              return (
+                <div
+                  key={ind.id}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: `minmax(220px, 1fr) repeat(${colTfs.length}, minmax(110px, 140px))`,
+                    gap: "10px",
+                    alignItems: isTfIndicator ? "center" : "stretch",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "8px",
+                      alignItems: "flex-start",
+                      padding: "10px 12px",
+                      borderRadius: "10px",
+                      background: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-color)",
+                    }}
+                  >
+                          <span
+                            style={{
+                              fontSize: "11px",
+                              fontWeight: 800,
+                              padding: "3px 7px",
+                              borderRadius: "8px",
+                              background: showIndicatorColors ? hexToRgba(ind.accentColor ?? "#F59E0B", 0.18) : "var(--bg-secondary)",
+                              border: `1px solid ${showIndicatorColors ? hexToRgba(ind.accentColor ?? "#F59E0B", 0.55) : "var(--border-color)"}`,
+                              color: showIndicatorColors ? ind.accentColor ?? "#F59E0B" : "var(--text-secondary)",
+                            }}
+                          >
+                            {ind.abbreviation}
+                          </span>
+                  <span
+                    style={{ color: "var(--text-primary)", fontSize: "13px", fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    title={ind.name}
+                  >
+                    {ind.name}
+                  </span>
+                  </div>
+                  {colTfs.map((tf) =>
+                    isTfIndicator ? (
+                      <div
+                        key={`${entryId}:${tradeIndex}:${phase}:${ind.id}:${tf}`}
+                        style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "stretch", width: "100%" }}
+                      >
+                        <button
+                          type="button"
+                          disabled={!canEditIndicators}
+                          onClick={() => {
+                            if (!canEditIndicators) return;
+                            toggleIndicatorTf(ind.id, tf);
+                          }}
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: "999px",
+                            border: "1px solid var(--border-color)",
+                            background: indSelectedTfs.includes(tf) ? "var(--accent)" : "var(--bg-tertiary)",
+                            color: indSelectedTfs.includes(tf) ? "white" : "var(--text-primary)",
+                            cursor: canEditIndicators ? "pointer" : "default",
+                            fontSize: "12px",
+                            fontWeight: 650,
+                            width: "100%",
+                          }}
+                        >
+                          {tf}
+                        </button>
+                        {isMomentum && (
+                          <label
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              gap: "6px",
+                              cursor: canEditIndicators ? "pointer" : "default",
+                              color: "var(--text-secondary)",
+                              fontSize: "11px",
+                              fontWeight: 650,
+                              userSelect: "none",
+                              width: "100%",
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={loadJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                              disabled={!canEditIndicators}
+                              onChange={(e) => {
+                                const next = e.target.checked;
+                                if (next && !indSelectedTfs.includes(tf)) {
+                                  setIndicatorTimeframesByPhaseAndIndicator((prev) => {
+                                    const phaseOverrides = prev[phase] ?? {};
+                                    // Start from empty: we only want to select the clicked timeframe,
+                                    // not auto-select all global timeframes.
+                                    const cur = phaseOverrides[ind.id] ?? [];
+                                    const nextTfs = cur.includes(tf) ? cur : [...cur, tf];
+                                    return { ...prev, [phase]: { ...phaseOverrides, [ind.id]: nextTfs } };
+                                  });
+                                }
+                                setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, next);
+                                setJournalSignalInputsTick((t) => t + 1);
+                              }}
+                              style={{ width: "16px", height: "16px" }}
+                            />
+                            Divergence
+                          </label>
+                        )}
+                      </div>
+                    ) : (
+                      <div key={`${entryId}:${tradeIndex}:${phase}:${ind.id}:${tf}`} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                        <div style={{ fontSize: "10px", color: "var(--text-secondary)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", paddingLeft: "2px" }}>
+                          {tf}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <input
+                            type="text"
+                            placeholder="Value"
+                            defaultValue={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                            onChange={(e) => {
+                              if (!canEditIndicators) return;
+                              setJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.value);
+                            }}
+                            readOnly={!canEditIndicators}
+                            disabled={!canEditIndicators}
+                            spellCheck={false}
+                            style={{
+                              padding: "10px 12px",
+                              background: "var(--bg-tertiary)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "10px",
+                              color: "var(--text-primary)",
+                              outline: "none",
+                              flex: "1 1 120px",
+                              minWidth: 0,
+                            }}
+                          />
+
+                          {isMomentum && (
+                            <label
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "6px",
+                                cursor: canEditIndicators ? "pointer" : "default",
+                                color: "var(--text-secondary)",
+                                fontSize: "11px",
+                                fontWeight: 650,
+                                userSelect: "none",
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={loadJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                                disabled={!canEditIndicators}
+                                onChange={(e) => {
+                                  setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.checked);
+                                  setJournalSignalInputsTick((t) => t + 1);
+                                }}
+                                style={{ width: "16px", height: "16px" }}
+                              />
+                              Divergence
+                            </label>
+                          )}
+
+                          {ind.kind === "custom" && otherSignalLabels.length > 0 && tf === (colTfs[0] ?? tf) && (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                              {otherSignalLabels.map((label) => {
+                                const checked = !!otherSignals[label];
+                                return (
+                                  <label
+                                    key={label}
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: 8,
+                                      color: "var(--text-primary)",
+                                      fontSize: 12,
+                                      fontWeight: 650,
+                                      userSelect: "none",
+                                      cursor: canEditIndicators ? "pointer" : "default",
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      disabled={!canEditIndicators}
+                                      onChange={(e) => {
+                                        setJournalIndicatorOtherSignal(dataMode, entryId, tradeIndex, phase, ind.id, label, e.target.checked);
+                                        setJournalSignalInputsTick((t) => t + 1);
+                                      }}
+                                      style={{ width: 16, height: 16 }}
+                                    />
+                                    {label}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
       </div>
     );
   };
@@ -3164,13 +4289,16 @@ export default function Journal() {
       !!outcome ||
       !!text.trim();
 
+    // Use same order as scrolling left panel (sorted by date) so list and overview match
+    const sourceOrder = sortedJournalEntries;
+
     if (!hasFilters) {
-      return entries;
+      return sourceOrder;
     }
 
     const q = text.trim().toLowerCase();
 
-    return entries.filter((entry) => {
+    return sourceOrder.filter((entry) => {
       const trades = journalTradesByEntry.get(entry.id) || [];
 
       if (symbol) {
@@ -3230,7 +4358,7 @@ export default function Journal() {
 
       return true;
     });
-  }, [entries, journalTradesByEntry, journalFilters]);
+  }, [sortedJournalEntries, journalTradesByEntry, journalFilters]);
 
   const [overviewChartTab, setOverviewChartTab] = useState<
     "entries_over_time" | "symbol" | "position" | "timeframe" | "entry_type" | "exit_type" | "outcome"
@@ -3242,6 +4370,60 @@ export default function Journal() {
   const [overviewEntriesBrushEnd, setOverviewEntriesBrushEnd] = useState(0);
   const [overviewDimBrushStart, setOverviewDimBrushStart] = useState(0);
   const [overviewDimBrushEnd, setOverviewDimBrushEnd] = useState(0);
+
+  // Indicators configured for this strategy (these drive Journal indicator inputs).
+  const [strategyIndicators, setStrategyIndicators] = useState<Indicator[]>([]);
+  // Free-text rules configured in the Strategy "Rules" tab (these drive the Journal rules panel).
+  const [strategyEntryRuleTexts, setStrategyEntryRuleTexts] = useState<string[]>([]);
+  const [strategyTakeProfitRuleTexts, setStrategyTakeProfitRuleTexts] = useState<string[]>([]);
+  // Free-text "custom rule sets" configured in the Strategy "Rules" tab.
+  // Each set gets its own Journal section that can be reordered.
+  const [strategyCustomRuleSets, setStrategyCustomRuleSets] = useState<StrategyCustomRuleSet[]>([]);
+  const SHOW_INDICATOR_COLORS_KEY = "tradebutler_show_indicator_colors_v1";
+  const [showIndicatorColors, setShowIndicatorColors] = useState<boolean>(() => {
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(SHOW_INDICATOR_COLORS_KEY) : null;
+      if (raw === null) return true;
+      return raw === "1" || raw.toLowerCase() === "true";
+    } catch {
+      return true;
+    }
+  });
+  const [indicatorSettingsOpenByPhase, setIndicatorSettingsOpenByPhase] = useState<Record<IndicatorPhase, boolean>>({
+    entry: false,
+    exit: false,
+  });
+  /** Bumped when divergence / other-signal prefs change in localStorage so controlled checkboxes re-render. */
+  const [, setJournalSignalInputsTick] = useState(0);
+  const [indicatorSignalGroupFilterByPhase, setIndicatorSignalGroupFilterByPhase] = useState<
+    Record<IndicatorPhase, { technical: boolean; candlestick: boolean }>
+  >({
+    entry: { technical: true, candlestick: true },
+    exit: { technical: true, candlestick: true },
+  });
+  const [indicatorTimeframesByPhase, setIndicatorTimeframesByPhase] = useState<Record<IndicatorPhase, string[]>>({
+    // Default indicator timeframes (top-of-section buttons).
+    entry: ["15m", "1H", "4H"],
+    exit: ["15m", "1H", "4H"],
+  });
+  // Timeframe-capturing indicators (concept inputs) can optionally override the global phase selection.
+  const [indicatorTimeframesByPhaseAndIndicator, setIndicatorTimeframesByPhaseAndIndicator] = useState<
+    Record<IndicatorPhase, Record<string, string[]>>
+  >({
+    entry: {},
+    exit: {},
+  });
+
+  // Custom-indicator "Other signals" labels are managed on the Indicators page.
+
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined") return;
+      window.localStorage.setItem(SHOW_INDICATOR_COLORS_KEY, showIndicatorColors ? "1" : "0");
+    } catch {
+      /* optional */
+    }
+  }, [showIndicatorColors]);
 
   const overviewEntriesFiltered = useMemo(() => {
     const { start, end } = getTimeframeDates(chartTimeframe, chartCustomStart || undefined, chartCustomEnd || undefined);
@@ -3350,10 +4532,23 @@ export default function Journal() {
           </div>
         ) : selectedEntry && !isCreating && !isEditing ? (
           <>
-            <div style={{ padding: "24px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h2 style={{ fontSize: "24px", fontWeight: "bold", marginBottom: "8px" }}>
-                {format(parse(selectedEntry.date, "yyyy-MM-dd", new Date()), "MM/dd/yyyy")} - {selectedEntry.title}
-              </h2>
+            <div
+              style={{
+                padding: "18px 20px",
+                borderBottom: "1px solid var(--border-color)",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: 16,
+                backgroundColor: "var(--bg-secondary)",
+                boxShadow: "0 2px 10px rgba(0,0,0,0.06)",
+              }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <h2 style={{ fontSize: "20px", fontWeight: "800", margin: 0, lineHeight: 1.25, color: "var(--text-primary)" }}>
+                  {format(parse(selectedEntry.date, "yyyy-MM-dd", new Date()), "MM/dd/yyyy")} - {selectedEntry.title}
+                </h2>
+              </div>
               <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                 <button
                   onClick={() => setSelectedEntry(null)}
@@ -3423,186 +4618,473 @@ export default function Journal() {
             </div>
             <div style={{ flex: 1, overflowY: "auto", padding: "24px" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                <div>
-                  <label style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
-                    Date
-                  </label>
-                  <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
-                    {selectedEntry.date}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12, minWidth: 260, flex: "1 1 520px" }}>
+                    <div style={{ flex: "1 1 220px", minWidth: 200, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
+                      <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
+                        Date
+                      </label>
+                      <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
+                        {selectedEntry.date}
+                      </div>
+                    </div>
+
+                    <div style={{ flex: "2 1 260px", minWidth: 240, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
+                      <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
+                        Title
+                      </label>
+                      <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={selectedEntry.title}>
+                        {selectedEntry.title}
+                      </div>
+                    </div>
+
+                    {selectedEntry.strategy_id && (
+                      <div style={{ flex: "1 1 220px", minWidth: 200, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
+                        <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
+                          Strategy
+                        </label>
+                        <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={strategies.find(s => s.id === selectedEntry.strategy_id)?.name || "Unknown"}>
+                          {strategies.find(s => s.id === selectedEntry.strategy_id)?.name || "Unknown"}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-                <div>
-                  <label style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
-                    Title
-                  </label>
-                  <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
-                    {selectedEntry.title}
-                  </div>
-                </div>
-                {selectedEntry.strategy_id && (
-                  <div>
-                    <label style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
-                      Strategy
-                    </label>
-                    <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
-                      {strategies.find(s => s.id === selectedEntry.strategy_id)?.name || "Unknown"}
+
+                  <div style={{ flex: "1 1 280px", minWidth: 280 }}>
+                    <div style={{ padding: "14px 14px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                        <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Overview</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--accent)" }}>{selectedEntry.strategy_id ? "Strategy-backed" : "Unassigned"}</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                        <div style={{ flex: "1 1 120px", minWidth: 120, padding: "10px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Trades</div>
+                          <div style={{ fontSize: 16, fontWeight: 900, color: "var(--text-primary)" }}>{selectedTrades.length}</div>
+                        </div>
+                        <div style={{ flex: "1 1 120px", minWidth: 120, padding: "10px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Emotions</div>
+                          <div style={{ fontSize: 16, fontWeight: 900, color: "var(--text-primary)" }}>{viewEntryEmotionalStates.length > 0 ? groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).length : 0}</div>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                        Click a trade card to expand checklists and details. Use the Emotions cards to jump to the related trade.
+                      </div>
                     </div>
                   </div>
-                )}
+                </div>
 
                 {/* Display all trades */}
                 {selectedTrades.length > 0 && (
                   <div style={{ marginTop: "24px" }}>
-                    <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
-                      Trades ({selectedTrades.length})
-                    </h3>
+                    <div
+                      style={{
+                        marginBottom: "16px",
+                        padding: "10px 12px",
+                        background: "var(--bg-tertiary)",
+                        border: "1px solid var(--border-color)",
+                        borderLeft: "3px solid var(--accent)",
+                        borderRadius: 10,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <h3
+                        style={{
+                          fontSize: "13px",
+                          fontWeight: "900",
+                          margin: 0,
+                          color: "var(--text-primary)",
+                          letterSpacing: "0.04em",
+                          textTransform: "uppercase",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        Trades ({selectedTrades.length})
+                      </h3>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          flexWrap: "wrap",
+                          minWidth: 0,
+                        }}
+                      >
+                        {selectedTrades.map((trade, index) => {
+                          const tabLabel = trade.symbol
+                            ? (trade.position ? `${trade.symbol} ${trade.position}` : trade.symbol)
+                            : `Trade ${index + 1}`;
+                          const isActiveTab = index === (viewFocusedTradeIndex ?? 0);
+                          return (
+                            <button
+                              key={trade.id || `trade-tab-${index}`}
+                              type="button"
+                              onClick={() => setViewFocusedTradeIndex(index)}
+                              style={{
+                                border: `1px solid ${isActiveTab ? "var(--accent)" : "var(--border-color)"}`,
+                                background: isActiveTab ? "var(--bg-secondary)" : "var(--bg-primary)",
+                                color: isActiveTab ? "var(--text-primary)" : "var(--text-secondary)",
+                                borderRadius: 8,
+                                padding: "6px 10px",
+                                fontSize: 12,
+                                fontWeight: isActiveTab ? 700 : 600,
+                                cursor: "pointer",
+                                maxWidth: 180,
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                              }}
+                              title={tabLabel}
+                            >
+                              {tabLabel}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                     {selectedTrades.map((trade, index) => {
                       const tradeName = trade.symbol
                         ? (trade.position ? `${trade.symbol} (${trade.position})` : trade.symbol)
                         : `Trade ${index + 1}`;
+                      const isFocused = index === (viewFocusedTradeIndex ?? 0);
+                      if (!isFocused) return null;
                       return (
-                      <div key={trade.id || index} style={{ marginBottom: "24px", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
-                        <h4 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>
+                      <div
+                        key={trade.id || index}
+                        id={`journal-trade-card-${index}`}
+                        style={{
+                          marginBottom: "24px",
+                          padding: "12px",
+                          backgroundColor: isFocused ? "var(--bg-secondary)" : "var(--bg-tertiary)",
+                          borderRadius: "8px",
+                          border: `1px solid ${isFocused ? "var(--accent)" : "var(--border-color)"}`,
+                          cursor: "default",
+                        }}
+                      >
+                        <h4 style={{ fontSize: "16px", fontWeight: "700", margin: "0 0 12px", color: "var(--text-primary)" }}>
                           {tradeName}
                         </h4>
-                        {trade.symbol && (
-                          <div style={{ marginBottom: "8px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
-                              Symbol
-                            </label>
-                            <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
-                              {trade.symbol}
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "10px", marginBottom: "14px" }}>
+                          {trade.symbol && (
+                            <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
+                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                                Symbol
+                              </label>
+                              <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
+                                {trade.symbol}
+                              </div>
                             </div>
+                          )}
+                          {trade.position && (
+                            <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
+                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                                Position
+                              </label>
+                              <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
+                                {trade.position}
+                              </div>
+                            </div>
+                          )}
+                          {trade.timeframe && (
+                            <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
+                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                                Trade Timeframe
+                              </label>
+                              <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
+                                {trade.timeframe}
+                              </div>
+                            </div>
+                          )}
+                          {isFocused && trade.entry_type && (
+                            <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
+                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                                Entry Type
+                              </label>
+                              <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
+                                {trade.entry_type}
+                              </div>
+                            </div>
+                          )}
+                          {isFocused && trade.exit_type && (
+                            <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
+                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                                Exit Type
+                              </label>
+                              <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
+                                {trade.exit_type}
+                              </div>
+                            </div>
+                          )}
+                          {trade.outcome != null && (
+                            <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
+                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                                Outcome
+                              </label>
+                              <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
+                                {trade.outcome}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        {trade.trade != null && (
+                          <div style={{ marginBottom: isFocused ? "24px" : "14px", padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
+                            <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px", display: "block" }}>
+                              Implementation
+                            </label>
+                            {isFocused ? (
+                              <div style={{ overflow: "hidden" }}>
+                                <RichTextEditor value={trade.trade || ""} onChange={() => {}} readOnly={true} />
+                              </div>
+                            ) : (
+                              <div
+                                style={{
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  display: "-webkit-box",
+                                  WebkitLineClamp: 2,
+                                  WebkitBoxOrient: "vertical",
+                                  color: "var(--text-primary)",
+                                  fontSize: 13,
+                                  lineHeight: 1.35,
+                                }}
+                                title={stripHtml(trade.trade || "")}
+                              >
+                                {stripHtml(trade.trade || "").slice(0, 140)}
+                                {stripHtml(trade.trade || "").length > 140 ? "…" : ""}
+                              </div>
+                            )}
                           </div>
                         )}
-                        {trade.position && (
-                          <div style={{ marginBottom: "8px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
-                              Position
-                            </label>
-                            <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
-                              {trade.position}
-                            </div>
-                          </div>
-                        )}
-                        {trade.timeframe && (
-                          <div style={{ marginBottom: "8px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
-                              Trade Timeframe
-                            </label>
-                            <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
-                              {trade.timeframe}
-                            </div>
-                          </div>
-                        )}
-                        {trade.entry_type && (
-                          <div style={{ marginBottom: "8px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
-                              Entry Type
-                            </label>
-                            <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
-                              {trade.entry_type}
-                            </div>
-                          </div>
-                        )}
-                        {trade.exit_type && (
-                          <div style={{ marginBottom: "8px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
-                              Exit Type
-                            </label>
-                            <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
-                              {trade.exit_type}
-                            </div>
-                          </div>
-                        )}
-                        {trade.outcome && (
-                          <div style={{ marginBottom: "8px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px", display: "block" }}>
-                              Outcome
-                            </label>
-                            <div style={{ color: "var(--text-primary)", fontSize: "14px" }}>
-                              {trade.outcome}
-                            </div>
-                          </div>
-                        )}
-                        {trade.trade && (
-                          <div style={{ marginBottom: "24px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "8px", display: "block" }}>
-                              Trade
-                            </label>
-                            <div style={{ 
-                              overflow: "hidden"
-                            }}>
-                              <RichTextEditor
-                                value={trade.trade || ""}
-                                onChange={() => {}}
-                                readOnly={true}
-                              />
-                            </div>
-                          </div>
-                        )}
-                        {trade.what_went_well && (
-                          <div style={{ marginBottom: "24px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "8px", display: "block" }}>
-                              What Went Well
-                            </label>
-                            <div style={{ 
-                              overflow: "hidden"
-                            }}>
-                              <RichTextEditor
-                                value={trade.what_went_well || ""}
-                                onChange={() => {}}
-                                readOnly={true}
-                              />
-                            </div>
-                          </div>
-                        )}
-                        {trade.what_could_be_improved && (
-                          <div style={{ marginBottom: "24px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "8px", display: "block" }}>
-                              What Could Be Improved
-                            </label>
-                            <div style={{ 
-                              overflow: "hidden"
-                            }}>
-                              <RichTextEditor
-                                value={trade.what_could_be_improved || ""}
-                                onChange={() => {}}
-                                readOnly={true}
-                              />
-                            </div>
-                          </div>
-                        )}
-                        {trade.emotional_state && (
-                          <div style={{ marginBottom: "24px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "8px", display: "block" }}>
-                              Emotional State
-                            </label>
-                            <div style={{ 
-                              overflow: "hidden"
-                            }}>
-                              <RichTextEditor
-                                value={trade.emotional_state || ""}
-                                onChange={() => {}}
-                                readOnly={true}
-                              />
-                            </div>
-                          </div>
-                        )}
-                        {trade.notes && (
-                          <div style={{ marginBottom: "24px" }}>
-                            <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "8px", display: "block" }}>
-                              Notes
-                            </label>
-                            <div style={{ 
-                              overflow: "hidden"
-                            }}>
-                              <RichTextEditor
-                                value={trade.notes || ""}
-                                onChange={() => {}}
-                                readOnly={true}
-                              />
-                            </div>
+
+                        {isFocused && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+                            {effectiveSectionOrder.map((sectionId) => {
+                              if (sectionId === "implementation") return null; // already rendered above
+                              return (
+                                <div key={`readonly-${sectionId}`}>
+                                  <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "8px", display: "block" }}>
+                                    {getSectionLabelScroll(sectionId)}
+                                  </label>
+
+                                  {sectionId === "what_went_well" && (
+                                    <div style={{ overflow: "hidden" }}>
+                                      <RichTextEditor value={trade.what_went_well || ""} onChange={() => {}} readOnly={true} />
+                                    </div>
+                                  )}
+                                  {sectionId === "what_could_be_improved" && (
+                                    <div style={{ overflow: "hidden" }}>
+                                      <RichTextEditor value={trade.what_could_be_improved || ""} onChange={() => {}} readOnly={true} />
+                                    </div>
+                                  )}
+                                  {sectionId === "notes" && (
+                                    <div style={{ overflow: "hidden" }}>
+                                      <RichTextEditor value={trade.notes || ""} onChange={() => {}} readOnly={true} />
+                                    </div>
+                                  )}
+                                  {sectionId === "analysis_checklist" && renderChecklistReadOnlyForType("daily_analysis", index)}
+                                  {sectionId === "entry_checklist" && (
+                                    <>
+                                      <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
+                                        <div style={{ flex: "1 1 0", minWidth: 280 }}>
+                                          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                                            Entry Checklist
+                                          </div>
+                                          {renderChecklistReadOnlyForType("entry", index)}
+                                        </div>
+                                        <div style={{ flex: "1 1 0", minWidth: 280 }}>
+                                          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                                            Entry Rules
+                                          </div>
+                                          {strategyEntryRuleTexts.length === 0 ? (
+                                            <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>No entry rules configured.</p>
+                                          ) : (
+                                            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                              {strategyEntryRuleTexts.map((rule, idx) => (
+                                                <div key={`entry-rule-${idx}`} style={{ padding: "10px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderLeft: "3px solid var(--accent)", borderRadius: 8, color: "var(--text-primary)", fontSize: 13, lineHeight: 1.35, whiteSpace: "pre-wrap" }}>
+                                                  {rule}
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <div style={{ marginTop: "12px" }}>{renderIndicatorInputs("entry")}</div>
+                                    </>
+                                  )}
+                                  {sectionId === "take_profit_checklist" && (
+                                    <>
+                                      <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
+                                        <div style={{ flex: "1 1 0", minWidth: 280 }}>
+                                          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                                            Take Profit Checklist
+                                          </div>
+                                          {renderChecklistReadOnlyForType("take_profit", index)}
+                                        </div>
+                                        <div style={{ flex: "1 1 0", minWidth: 280 }}>
+                                          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                                            Take Profit Rules
+                                          </div>
+                                          {strategyTakeProfitRuleTexts.length === 0 ? (
+                                            <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>No take profit rules configured.</p>
+                                          ) : (
+                                            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                              {strategyTakeProfitRuleTexts.map((rule, idx) => (
+                                                <div key={`tp-rule-${idx}`} style={{ padding: "10px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderLeft: "3px solid var(--accent)", borderRadius: 8, color: "var(--text-primary)", fontSize: 13, lineHeight: 1.35, whiteSpace: "pre-wrap" }}>
+                                                  {rule}
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <div style={{ marginTop: "12px" }}>{renderIndicatorInputs("exit")}</div>
+                                    </>
+                                  )}
+                                  {sectionId.startsWith("custom_rules:") && (() => {
+                                    const ruleSetId = sectionId.slice("custom_rules:".length);
+                                    const ruleSet = strategyCustomRuleSets?.find((s) => s.id === ruleSetId);
+                                    const rules = ruleSet?.rules ?? [];
+                                    return rules.length === 0 ? (
+                                      <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>No custom rules configured.</p>
+                                    ) : (
+                                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                        {rules.map((rule, idx) => (
+                                          <div key={`${ruleSetId}-${idx}`} style={{ padding: "10px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderLeft: "3px solid var(--accent)", borderRadius: 8, color: "var(--text-primary)", fontSize: 13, lineHeight: 1.35, whiteSpace: "pre-wrap" }}>
+                                            {rule}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    );
+                                  })()}
+                                  {sectionId.startsWith("custom:") && (() => {
+                                    const type = sectionId.slice(7);
+                                    return currentChecklists ? renderChecklistReadOnlyForType(type, index) : <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No checklist data available.</p>;
+                                  })()}
+                                  {(sectionId === "emotional_state_before" || sectionId === "emotional_state_during" || sectionId === "emotional_state_after") && (
+                                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                                      {(() => {
+                                        const visibleSurveyPhases = sectionId === "emotional_state_before"
+                                          ? (["before"] as const)
+                                          : sectionId === "emotional_state_during"
+                                            ? (["during"] as const)
+                                            : (["after"] as const);
+                                        const currentTradeId = trade.id ?? null;
+                                        const relevantGroups = groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).filter((group) => {
+                                          const jtId = group[0]?.journal_trade_id ?? null;
+                                          return jtId == null || (currentTradeId != null && jtId === currentTradeId);
+                                        });
+                                        if (relevantGroups.length === 0) {
+                                          return <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: 0 }}>No emotional state survey results for this trade.</p>;
+                                        }
+                                        return relevantGroups.map((group) => {
+                                          const first = group[0];
+                                          const targetTradeId = first.journal_trade_id ?? null;
+                                          const targetTradeIndex = targetTradeId != null ? selectedTrades.findIndex((t) => t.id === targetTradeId) : -1;
+                                          const isCardFocused = targetTradeIndex === (viewFocusedTradeIndex ?? 0);
+                                          const notes = first.notes;
+                                          const groupStateIds = new Set(group.map((s) => s.id));
+                                          const survey = viewEntrySurveys.find((s) => groupStateIds.has(s.emotional_state_id));
+                                          return (
+                                            <div
+                                              key={first.timestamp}
+                                              style={{
+                                                padding: "12px",
+                                                backgroundColor: "var(--bg-secondary)",
+                                                border: `1px solid ${isCardFocused ? "var(--accent)" : "var(--border-color)"}`,
+                                                borderRadius: "6px",
+                                              }}
+                                            >
+                                              <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                                {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")}
+                                              </div>
+                                              {notes && (
+                                                <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "12px" }} dangerouslySetInnerHTML={{ __html: notes }} />
+                                              )}
+                                              <div style={{ marginTop: "14px", paddingTop: "14px", borderTop: "1px solid var(--border-color)" }}>
+                                                <div style={{ fontSize: "11px", color: "var(--accent)", marginBottom: "12px", letterSpacing: "0.03em", fontWeight: "500" }}>
+                                                  Survey{!survey ? " (defaults shown)" : ""}
+                                                </div>
+                                                <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                                                  0 = not present - 10 = extremely strong. Rate how strongly you feel each emotion; values are used for trends and insights over time.
+                                                </p>
+                                                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "14px" }}>
+                                                  {group.map((s) => (
+                                                    <span
+                                                      key={`emo-chip-${s.id}`}
+                                                      style={{
+                                                        display: "inline-flex",
+                                                        alignItems: "center",
+                                                        gap: "6px",
+                                                        padding: "4px 10px",
+                                                        borderRadius: "999px",
+                                                        border: "1px solid var(--border-color)",
+                                                        background: "var(--bg-tertiary)",
+                                                        fontSize: "12px",
+                                                        fontWeight: 600,
+                                                        color: "var(--text-primary)",
+                                                      }}
+                                                    >
+                                                      {s.emotion}
+                                                      <span style={{ color: "var(--accent)", fontWeight: 700 }}>{s.intensity}/10</span>
+                                                    </span>
+                                                  ))}
+                                                </div>
+                                                {visibleSurveyPhases.map((phase) => {
+                                                    const phaseStyle = phase === "before"
+                                                      ? { borderColor: "var(--accent)", labelColor: "var(--accent)" }
+                                                      : phase === "during"
+                                                        ? { borderColor: "var(--warning)", labelColor: "var(--warning)" }
+                                                        : { borderColor: "var(--success)", labelColor: "var(--success)" };
+                                                    return (
+                                                        <div key={phase} style={{ marginBottom: "14px", paddingLeft: "12px", borderLeft: `2px solid ${phaseStyle.borderColor}` }}>
+                                                          <div style={{ fontSize: "11px", color: phaseStyle.labelColor, marginBottom: "8px", fontWeight: "500" }}>
+                                                            {phase === "before" ? "Before Trade" : phase === "during" ? "During Trade" : "After Trade"}
+                                                          </div>
+                                                        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                                                          {JOURNAL_SURVEY_QUESTIONS[phase].map((q, idx) => {
+                                                            const score = survey ? (survey as unknown as Record<string, number>)[q.key] : undefined;
+                                                            const scoreNum = typeof score === "number" && score >= 1 && score <= 10 ? score : 6;
+                                                            return (
+                                                              <div key={q.key} style={{ marginBottom: "2px" }}>
+                                                                <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: "var(--text-primary)" }}>
+                                                                  {idx + 1}. {q.question}
+                                                                </label>
+                                                                <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "0 0 6px" }}>{q.scale}</p>
+                                                                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                                                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "16px" }}>1</span>
+                                                                  <input
+                                                                    type="range"
+                                                                    min={1}
+                                                                    max={10}
+                                                                    value={scoreNum}
+                                                                    readOnly
+                                                                    disabled
+                                                                    style={{ flex: 1, minWidth: "80px", accentColor: "var(--accent)" }}
+                                                                  />
+                                                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "16px" }}>10</span>
+                                                                  <span style={{ minWidth: "28px", textAlign: "center", fontSize: "13px", fontWeight: "600", color: "var(--accent)" }}>
+                                                                    {scoreNum}
+                                                                  </span>
+                                                                </div>
+                                                              </div>
+                                                            );
+                                                          })}
+                                                        </div>
+                                                      </div>
+                                                    );
+                                                  })}
+                                              </div>
+                                            </div>
+                                          );
+                                        });
+                                      })()}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -3611,138 +5093,15 @@ export default function Journal() {
                   </div>
                 )}
 
-                {/* Emotional state entries - at bottom, collapsible, hidden by default */}
-                <div style={{ marginTop: "24px" }}>
-                  <button
-                    type="button"
-                    onClick={() => setEmotionalStatesSectionExpanded((e) => !e)}
-                    title={emotionalStatesSectionExpanded ? "Click to collapse" : "Click to expand"}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "10px",
-                      width: "100%",
-                      padding: "12px 16px",
-                      margin: 0,
-                      background: "var(--bg-secondary)",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: "8px",
-                      cursor: "pointer",
-                      color: "var(--text-primary)",
-                      fontSize: "15px",
-                      fontWeight: 600,
-                      textAlign: "left",
-                      boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = "var(--bg-tertiary)";
-                      e.currentTarget.style.borderColor = "var(--accent)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = "var(--bg-secondary)";
-                      e.currentTarget.style.borderColor = "var(--border-color)";
-                    }}
-                  >
-                    {emotionalStatesSectionExpanded ? (
-                      <ChevronDown size={20} style={{ flexShrink: 0 }} />
-                    ) : (
-                      <ChevronRight size={20} style={{ flexShrink: 0 }} />
-                    )}
-                    <span>Emotional state entries ({viewEntryEmotionalStates.length > 0 ? groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).length : 0})</span>
-                    <span style={{ marginLeft: "auto", fontSize: "12px", fontWeight: 400, color: "var(--text-secondary)" }}>
-                      {emotionalStatesSectionExpanded ? "Click to collapse" : "Click to expand"}
-                    </span>
-                  </button>
-                  {emotionalStatesSectionExpanded && (
-                    <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "8px" }}>
-                      {viewEntryEmotionalStates.length === 0 ? (
-                        <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No emotional state entries linked to this journal.</p>
-                      ) : (
-                        groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).map((group) => {
-                          const first = group[0];
-                          const notes = first.notes;
-                          const survey = viewEntrySurveys.find((s) => s.emotional_state_id === first.id);
-                          return (
-                            <div
-                              key={first.timestamp}
-                              style={{
-                                padding: "12px",
-                                backgroundColor: "var(--bg-secondary)",
-                                border: "1px solid var(--border-color)",
-                                borderRadius: "6px",
-                              }}
-                            >
-                              <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px" }}>
-                                {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")}
-                              </div>
-                              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center", marginBottom: notes ? "8px" : 0 }}>
-                                {group.map((s) => (
-                                  <span key={s.id} style={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>
-                                    {s.emotion} {s.intensity}/10
-                                  </span>
-                                ))}
-                              </div>
-                              {notes && (
-                                <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: survey ? "12px" : 0 }} dangerouslySetInnerHTML={{ __html: notes }} />
-                              )}
-                              {survey && (
-                                <div style={{ marginTop: "14px", paddingTop: "14px", borderTop: "1px solid var(--border-color)" }}>
-                                  <div style={{ fontSize: "11px", color: "var(--accent)", marginBottom: "12px", letterSpacing: "0.03em", fontWeight: "500" }}>Survey</div>
-                                  {(["before", "during", "after"] as const).map((phase) => {
-                                    const phaseStyle = phase === "before"
-                                      ? { borderColor: "var(--accent)", labelColor: "var(--accent)" }
-                                      : phase === "during"
-                                        ? { borderColor: "var(--warning)", labelColor: "var(--warning)" }
-                                        : { borderColor: "var(--success)", labelColor: "var(--success)" };
-                                    return (
-                                      <div key={phase} style={{ marginBottom: "14px", paddingLeft: "12px", borderLeft: `2px solid ${phaseStyle.borderColor}` }}>
-                                        <div style={{ fontSize: "11px", color: phaseStyle.labelColor, marginBottom: "8px", fontWeight: "500" }}>{phase}</div>
-                                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                                          {JOURNAL_SURVEY_QUESTIONS[phase].map((q) => {
-                                            const score = (survey as unknown as Record<string, number>)[q.key];
-                                            const scoreNum = typeof score === "number" && score >= 1 && score <= 5 ? score : null;
-                                            const pillColor = scoreNum != null ? getSurveyScoreColor(scoreNum) : "var(--text-secondary)";
-                                            const pillBg = scoreNum != null ? getSurveyScoreBgRgba(scoreNum) : "var(--bg-tertiary)";
-                                            return (
-                                              <div key={q.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", fontSize: "12px" }}>
-                                                <span style={{ color: "var(--text-secondary)", flex: 1, lineHeight: 1.35 }}>{q.question}</span>
-                                                <span
-                                                  style={{
-                                                    flexShrink: 0,
-                                                    minWidth: "28px",
-                                                    padding: "3px 8px",
-                                                    borderRadius: "6px",
-                                                    backgroundColor: pillBg,
-                                                    color: pillColor,
-                                                    fontSize: "12px",
-                                                    fontWeight: "500",
-                                                    textAlign: "center",
-                                                  }}
-                                                >
-                                                  {score != null ? score : "—"}
-                                                </span>
-                                              </div>
-                                            );
-                                          })}
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  )}
-                </div>
-                {/* Linked positions with charts */}
+                {/* Links */}
                 {linkedPairs.length > 0 && (
                   <div style={{ marginTop: "24px" }}>
-                    <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "16px", color: "var(--text-primary)" }}>
-                      Linked positions ({linkedPairs.length})
+                    <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "6px", color: "var(--text-primary)" }}>
+                      Links
                     </h3>
+                    <p style={{ margin: "0 0 16px", fontSize: 12, color: "var(--text-secondary)" }}>
+                      Linked positions: {linkedPairs.length}
+                    </p>
                     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
                       {linkedPairs.map((pair) => (
                         <div
@@ -4059,6 +5418,7 @@ export default function Journal() {
                           {tradesFormData.length > 1 && (
                             <button
                               type="button"
+                              onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
                               onClick={(e) => { e.stopPropagation(); handleRemoveTrade(index); }}
                               style={{ padding: "4px", marginLeft: "2px", background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer" }}
                               title="Remove trade"
@@ -4298,8 +5658,130 @@ export default function Journal() {
                         )}
                         {sectionId === "analysis_checklist" && renderChecklistForType("daily_analysis")}
                         {sectionId === "mantra_checklist" && renderChecklistForType("daily_mantra")}
-                        {sectionId === "entry_checklist" && renderChecklistForType("entry")}
-                        {sectionId === "take_profit_checklist" && renderChecklistForType("take_profit")}
+                        {sectionId === "entry_checklist" && (
+                          <>
+                          <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
+                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                                Entry Checklist
+                              </div>
+                              {renderChecklistForType("entry")}
+                            </div>
+                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                                Entry Rules
+                              </div>
+                              {strategyEntryRuleTexts.length === 0 ? (
+                                <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
+                                  No entry rules configured.
+                                </p>
+                              ) : (
+                                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                  {strategyEntryRuleTexts.map((rule, idx) => (
+                                    <div
+                                      key={`${idx}`}
+                                      style={{
+                                        padding: "10px 12px",
+                                        background: "var(--bg-tertiary)",
+                                        border: "1px solid var(--border-color)",
+                                        borderLeft: "3px solid var(--accent)",
+                                        borderRadius: 8,
+                                        color: "var(--text-primary)",
+                                        fontSize: 13,
+                                        lineHeight: 1.35,
+                                        whiteSpace: "pre-wrap",
+                                      }}
+                                    >
+                                      {rule}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div style={{ marginTop: "12px" }}>{renderIndicatorInputs("entry")}</div>
+                          </>
+                        )}
+                        {sectionId === "take_profit_checklist" && (
+                          <>
+                          <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
+                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                                Take Profit Checklist
+                              </div>
+                              {renderChecklistForType("take_profit")}
+                            </div>
+                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                                Take Profit Rules
+                              </div>
+                              {strategyTakeProfitRuleTexts.length === 0 ? (
+                                <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
+                                  No take profit rules configured.
+                                </p>
+                              ) : (
+                                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                  {strategyTakeProfitRuleTexts.map((rule, idx) => (
+                                    <div
+                                      key={`${idx}`}
+                                      style={{
+                                        padding: "10px 12px",
+                                        background: "var(--bg-tertiary)",
+                                        border: "1px solid var(--border-color)",
+                                        borderLeft: "3px solid var(--accent)",
+                                        borderRadius: 8,
+                                        color: "var(--text-primary)",
+                                        fontSize: 13,
+                                        lineHeight: 1.35,
+                                        whiteSpace: "pre-wrap",
+                                      }}
+                                    >
+                                      {rule}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div style={{ marginTop: "12px" }}>{renderIndicatorInputs("exit")}</div>
+                          </>
+                        )}
+                        {sectionId.startsWith("custom_rules:") && (!entryFormData.strategy_id || !strategyCustomRuleSets) && (
+                          <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load custom rules.</p>
+                        )}
+                        {sectionId.startsWith("custom_rules:") && entryFormData.strategy_id && (() => {
+                          const ruleSetId = sectionId.slice("custom_rules:".length);
+                          const ruleSet = strategyCustomRuleSets.find((s) => s.id === ruleSetId);
+                          const rules = ruleSet?.rules ?? [];
+                          return (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                              {rules.length === 0 ? (
+                                <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
+                                  No custom rules configured.
+                                </p>
+                              ) : (
+                                rules.map((rule, idx) => (
+                                  <div
+                                    key={`${ruleSetId}-${idx}`}
+                                    style={{
+                                      padding: "10px 12px",
+                                      background: "var(--bg-tertiary)",
+                                      border: "1px solid var(--border-color)",
+                                      borderLeft: "3px solid var(--accent)",
+                                      borderRadius: 8,
+                                      color: "var(--text-primary)",
+                                      fontSize: 13,
+                                      lineHeight: 1.35,
+                                      whiteSpace: "pre-wrap",
+                                    }}
+                                  >
+                                    {rule}
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          );
+                        })()}
                         {sectionId.startsWith("custom:") && (!entryFormData.strategy_id || !currentChecklists) && (
                           <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load custom checklists and surveys.</p>
                         )}
@@ -4327,7 +5809,7 @@ export default function Journal() {
                                           <div key={child.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginLeft: "16px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                                             <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{child.item_text}</label>
                                             <div style={{ display: "flex", gap: "4px" }}>
-                                              {[1, 2, 3, 4, 5].map((n) => (
+                                              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
                                                 <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(child.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(child.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
                                               ))}
                                             </div>
@@ -4343,7 +5825,7 @@ export default function Journal() {
                                     <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                                       <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{item.item_text}</label>
                                       <div style={{ display: "flex", gap: "4px" }}>
-                                        {[1, 2, 3, 4, 5].map((n) => (
+                                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
                                           <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(item.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(item.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
                                         ))}
                                       </div>
@@ -4724,9 +6206,9 @@ export default function Journal() {
                                     <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>{q.scale}</p>
                                     <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                                       <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>1</span>
-                                      <input type="range" min={1} max={5} value={newEmotionalStateSurveyResponses[q.key] ?? 3} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
-                                      <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>5</span>
-                                      <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 3}</span>
+                                      <input type="range" min={1} max={10} value={newEmotionalStateSurveyResponses[q.key] ?? 6} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
+                                      <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>10</span>
+                                      <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 6}</span>
                                     </div>
                                   </div>
                                 ))}
@@ -4745,9 +6227,9 @@ export default function Journal() {
                                 <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>{q.scale}</p>
                                 <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                                   <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>1</span>
-                                  <input type="range" min={1} max={5} value={newEmotionalStateSurveyResponses[q.key] ?? 3} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
-                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>5</span>
-                                  <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 3}</span>
+                                  <input type="range" min={1} max={10} value={newEmotionalStateSurveyResponses[q.key] ?? 6} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
+                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>10</span>
+                                  <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 6}</span>
                                 </div>
                               </div>
                             ))}
@@ -4762,9 +6244,9 @@ export default function Journal() {
                                 <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>{q.scale}</p>
                                 <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                                   <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>1</span>
-                                  <input type="range" min={1} max={5} value={newEmotionalStateSurveyResponses[q.key] ?? 3} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
-                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>5</span>
-                                  <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 3}</span>
+                                  <input type="range" min={1} max={10} value={newEmotionalStateSurveyResponses[q.key] ?? 6} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
+                                  <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>10</span>
+                                  <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 6}</span>
                                 </div>
                               </div>
                             ))}
@@ -4810,10 +6292,10 @@ export default function Journal() {
                                       }
                                     }
                                     const sr = newEmotionalStateSurveyResponses;
-                                    const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 3) !== 3);
+                                    const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 6) !== 6);
                                     if (shouldSaveSurvey && firstStateId != null) {
                                       try {
-                                        await invoke("add_emotion_survey", { emotional_state_id: firstStateId, timestamp: now, before_calm_clear: sr.before_calm_clear ?? 3, before_urgency_pressure: sr.before_urgency_pressure ?? 3, before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 3, before_fomo: sr.before_fomo ?? 3, before_recovering_loss: sr.before_recovering_loss ?? 3, before_patient_detached: sr.before_patient_detached ?? 3, before_trust_process: sr.before_trust_process ?? 3, before_emotional_state: sr.before_emotional_state ?? 3, during_stable: sr.during_stable ?? 3, during_tension_stress: sr.during_tension_stress ?? 3, during_tempted_interfere: sr.during_tempted_interfere ?? 3, during_need_control: sr.during_need_control ?? 3, during_fear_loss: sr.during_fear_loss ?? 3, during_excitement_greed: sr.during_excitement_greed ?? 3, during_mentally_present: sr.during_mentally_present ?? 3, after_accept_outcome: sr.after_accept_outcome ?? 3, after_emotional_reaction: sr.after_emotional_reaction ?? 3, after_confidence_affected: sr.after_confidence_affected ?? 3, after_tempted_another_trade: sr.after_tempted_another_trade ?? 3, after_proud_discipline: sr.after_proud_discipline ?? 3 });
+                                        await invoke("add_emotion_survey", { emotional_state_id: firstStateId, timestamp: now, before_calm_clear: sr.before_calm_clear ?? 6, before_urgency_pressure: sr.before_urgency_pressure ?? 6, before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6, before_fomo: sr.before_fomo ?? 6, before_recovering_loss: sr.before_recovering_loss ?? 6, before_patient_detached: sr.before_patient_detached ?? 6, before_trust_process: sr.before_trust_process ?? 6, before_emotional_state: sr.before_emotional_state ?? 6, during_stable: sr.during_stable ?? 6, during_tension_stress: sr.during_tension_stress ?? 6, during_tempted_interfere: sr.during_tempted_interfere ?? 6, during_need_control: sr.during_need_control ?? 6, during_fear_loss: sr.during_fear_loss ?? 6, during_excitement_greed: sr.during_excitement_greed ?? 6, during_mentally_present: sr.during_mentally_present ?? 6, after_accept_outcome: sr.after_accept_outcome ?? 6, after_emotional_reaction: sr.after_emotional_reaction ?? 6, after_confidence_affected: sr.after_confidence_affected ?? 6, after_tempted_another_trade: sr.after_tempted_another_trade ?? 6, after_proud_discipline: sr.after_proud_discipline ?? 6 });
                                       } catch (err) { console.error("Failed to save emotion survey:", err); }
                                     }
                                     const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
@@ -5632,32 +7114,32 @@ export default function Journal() {
                                             }
                                           }
                                           const sr = newEmotionalStateSurveyResponses;
-                                          const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 3) !== 3);
+                                          const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 6) !== 6);
                                           if (shouldSaveSurvey && firstStateId != null) {
                                             try {
                                               await invoke("add_emotion_survey", {
                                                 emotional_state_id: firstStateId,
                                                 timestamp: now,
-                                                before_calm_clear: sr.before_calm_clear ?? 3,
-                                                before_urgency_pressure: sr.before_urgency_pressure ?? 3,
-                                                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 3,
-                                                before_fomo: sr.before_fomo ?? 3,
-                                                before_recovering_loss: sr.before_recovering_loss ?? 3,
-                                                before_patient_detached: sr.before_patient_detached ?? 3,
-                                                before_trust_process: sr.before_trust_process ?? 3,
-                                                before_emotional_state: sr.before_emotional_state ?? 3,
-                                                during_stable: sr.during_stable ?? 3,
-                                                during_tension_stress: sr.during_tension_stress ?? 3,
-                                                during_tempted_interfere: sr.during_tempted_interfere ?? 3,
-                                                during_need_control: sr.during_need_control ?? 3,
-                                                during_fear_loss: sr.during_fear_loss ?? 3,
-                                                during_excitement_greed: sr.during_excitement_greed ?? 3,
-                                                during_mentally_present: sr.during_mentally_present ?? 3,
-                                                after_accept_outcome: sr.after_accept_outcome ?? 3,
-                                                after_emotional_reaction: sr.after_emotional_reaction ?? 3,
-                                                after_confidence_affected: sr.after_confidence_affected ?? 3,
-                                                after_tempted_another_trade: sr.after_tempted_another_trade ?? 3,
-                                                after_proud_discipline: sr.after_proud_discipline ?? 3,
+                                                before_calm_clear: sr.before_calm_clear ?? 6,
+                                                before_urgency_pressure: sr.before_urgency_pressure ?? 6,
+                                                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6,
+                                                before_fomo: sr.before_fomo ?? 6,
+                                                before_recovering_loss: sr.before_recovering_loss ?? 6,
+                                                before_patient_detached: sr.before_patient_detached ?? 6,
+                                                before_trust_process: sr.before_trust_process ?? 6,
+                                                before_emotional_state: sr.before_emotional_state ?? 6,
+                                                during_stable: sr.during_stable ?? 6,
+                                                during_tension_stress: sr.during_tension_stress ?? 6,
+                                                during_tempted_interfere: sr.during_tempted_interfere ?? 6,
+                                                during_need_control: sr.during_need_control ?? 6,
+                                                during_fear_loss: sr.during_fear_loss ?? 6,
+                                                during_excitement_greed: sr.during_excitement_greed ?? 6,
+                                                during_mentally_present: sr.during_mentally_present ?? 6,
+                                                after_accept_outcome: sr.after_accept_outcome ?? 6,
+                                                after_emotional_reaction: sr.after_emotional_reaction ?? 6,
+                                                after_confidence_affected: sr.after_confidence_affected ?? 6,
+                                                after_tempted_another_trade: sr.after_tempted_another_trade ?? 6,
+                                                after_proud_discipline: sr.after_proud_discipline ?? 6,
                                               });
                                             } catch (err) {
                                               console.error("Failed to save emotion survey:", err);
@@ -5814,13 +7296,13 @@ export default function Journal() {
                                             <input
                                               type="range"
                                               min={1}
-                                              max={5}
-                                              value={newEmotionalStateSurveyResponses[q.key] ?? 3}
+                                              max={10}
+                                              value={newEmotionalStateSurveyResponses[q.key] ?? 6}
                                               onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))}
                                               style={{ flex: 1, minWidth: "80px", accentColor: "var(--accent)" }}
                                             />
-                                            <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "16px" }}>5</span>
-                                            <span style={{ minWidth: "28px", textAlign: "center", fontSize: "13px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 3}</span>
+                                            <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "16px" }}>10</span>
+                                            <span style={{ minWidth: "28px", textAlign: "center", fontSize: "13px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 6}</span>
                                           </div>
                                         </div>
                                       ))}
@@ -6118,7 +7600,7 @@ export default function Journal() {
                                                 {child.item_text}
                                               </label>
                                               <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                                                {[1, 2, 3, 4, 5].map((n) => (
+                                                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
                                                   <button
                                                     key={n}
                                                     type="button"
@@ -6182,7 +7664,7 @@ export default function Journal() {
                                           {item.item_text}
                                         </label>
                                         <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                                          {[1, 2, 3, 4, 5].map((n) => (
+                                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
                                             <button
                                               key={n}
                                               type="button"
@@ -7425,7 +8907,8 @@ export default function Journal() {
                       if (raw) {
                         const parsed = JSON.parse(raw) as string[];
                         if (Array.isArray(parsed) && parsed.length > 0) {
-                          const valid = parsed.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:")));
+                          const normalized = parsed.map((id) => (id === "mantra_checklist" ? "custom:daily_mantra" : id));
+                          const valid = normalized.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:")));
                           const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
                           setJournalSectionOrder([...valid, ...missing]);
                         }

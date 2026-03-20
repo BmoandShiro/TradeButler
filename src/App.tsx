@@ -15,6 +15,9 @@ import Tools from "./pages/Tools";
 import Settings from "./pages/Settings";
 import News from "./pages/News";
 import SecFilingViewer from "./pages/SecFilingViewer";
+import Signals from "./pages/Signals";
+import TechnicalAnalysis from "./pages/TechnicalAnalysis";
+import Candles from "./pages/Candles";
 
 function App() {
   return (
@@ -25,6 +28,11 @@ function App() {
           <Route path="/trades" element={<PageErrorBoundary pageName="Trades"><Trades /></PageErrorBoundary>} />
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/news" element={<News />} />
+          <Route path="/signals" element={<Signals />} />
+          <Route path="/technical-analysis" element={<TechnicalAnalysis />} />
+          <Route path="/candles" element={<Candles />} />
+          <Route path="/market" element={<Navigate to="/" replace />} />
+          <Route path="/indicators" element={<Navigate to="/signals" replace />} />
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/journal" element={<Journal />} />
           <Route path="/resources" element={<Documentation />} />

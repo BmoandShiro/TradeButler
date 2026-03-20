@@ -51,6 +51,12 @@ export default function RichTextEditor({
         flexDirection: "column",
         minHeight: 0,
       }}
+      onKeyDown={(e) => {
+        // Ensure Space and other typing keys are not captured by parent (e.g. global shortcuts)
+        if (e.key === " " || e.key.length === 1) {
+          e.stopPropagation();
+        }
+      }}
     >
       <ReactQuill
         ref={quillRef}
