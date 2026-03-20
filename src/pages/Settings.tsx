@@ -32,6 +32,11 @@ import {
   LockScreenStyle 
 } from "../utils/lockScreenManager";
 import {
+  getLockScreenRendererPreference,
+  setLockScreenRendererPreference,
+  type LockScreenRendererMode,
+} from "../utils/lockScreenRenderer";
+import {
   getGalaxyThemeSettings,
   setGalaxyThemeSettings,
   resetGalaxyThemeSettings,
@@ -103,6 +108,9 @@ export default function Settings() {
   const [removeVerification, setRemoveVerification] = useState("");
   const [removePinDigits, setRemovePinDigits] = useState<string[]>(["", "", "", "", "", ""]);
   const [lockScreenStyle, setLockScreenStyle] = useState<LockScreenStyle>(() => getLockScreenStyle());
+  const [lockScreenRenderer, setLockScreenRenderer] = useState<LockScreenRendererMode>(() =>
+    getLockScreenRendererPreference()
+  );
   const [galaxySettings, setGalaxySettings] = useState<GalaxyThemeSettings>(() => getGalaxyThemeSettings());
   const [sphereSettings, setSphereSettings] = useState<SphereThemeSettings>(() => getSphereThemeSettings());
   const newPasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -1235,6 +1243,69 @@ export default function Settings() {
                       }}
                     >
                       Sphere
+                    </button>
+                  </div>
+                </div>
+                <div style={{ marginTop: "14px" }}>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Animated lock screen rendering
+                  </label>
+                  <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "8px", lineHeight: 1.45 }}>
+                    Accelerated (WebGL) uses the GPU for Galaxy, Aurora, Milky Way, and Sphere backgrounds. Falls back to
+                    Classic (2D canvas) if WebGL is unavailable.
+                  </p>
+                  <div
+                    style={{
+                      display: "flex",
+                      backgroundColor: "var(--bg-tertiary)",
+                      borderRadius: "6px",
+                      padding: "2px",
+                      border: "1px solid var(--border-color)",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const mode: LockScreenRendererMode = "webgl";
+                        setLockScreenRenderer(mode);
+                        setLockScreenRendererPreference(mode);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                        border: "none",
+                        backgroundColor: lockScreenRenderer === "webgl" ? "var(--accent)" : "transparent",
+                        color: lockScreenRenderer === "webgl" ? "white" : "var(--text-primary)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      Accelerated (WebGL)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const mode: LockScreenRendererMode = "canvas";
+                        setLockScreenRenderer(mode);
+                        setLockScreenRendererPreference(mode);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                        border: "none",
+                        backgroundColor: lockScreenRenderer === "canvas" ? "var(--accent)" : "transparent",
+                        color: lockScreenRenderer === "canvas" ? "white" : "var(--text-primary)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      Classic (2D)
                     </button>
                   </div>
                 </div>

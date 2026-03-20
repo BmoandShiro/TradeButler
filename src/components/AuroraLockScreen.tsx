@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { Lock, Unlock, AlertCircle, Trash2 } from "lucide-react";
 import { unlockApp, getPasswordType, deletePassword } from "../utils/passwordManager";
 import { invoke } from "@tauri-apps/api/tauri";
+import { getLockScreenRendererPreference, canUseWebGL2 } from "../utils/lockScreenRenderer";
+import { createAuroraWebGLApi, type AuroraWebGLApi } from "../features/lockScreen/auroraWebGL";
 
 interface AuroraLockScreenProps {
   onUnlock: () => void;
@@ -27,84 +29,22 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const passwordInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const mountRef = useRef<HTMLDivElement>(null);
   const animationFrameRef = useRef<number>();
   const auroraBandsRef = useRef<AuroraBand[]>([]);
   const starsRef = useRef<Array<{ x: number; y: number; brightness: number }>>([]);
   const timeRef = useRef(0);
+  const [webglFailed, setWebglFailed] = useState(false);
+  const wantWebgl = getLockScreenRendererPreference() === "webgl" && canUseWebGL2();
+  const useWebgl = wantWebgl && !webglFailed;
   const passwordType = getPasswordType();
 
-  // Initialize aurora bands and stars
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    let webglApi: AuroraWebGLApi | null = null;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    // Set canvas size
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      
-      // Create aurora bands
-      const bands: AuroraBand[] = [
-        {
-          y: canvas.height * 0.2,
-          speed: 0.3,
-          amplitude: 80,
-          frequency: 0.002,
-          phase: 0,
-          color: { r: 0, g: 255, b: 150 }, // Green
-          opacity: 0.25,
-        },
-        {
-          y: canvas.height * 0.35,
-          speed: 0.25,
-          amplitude: 100,
-          frequency: 0.0015,
-          phase: Math.PI / 3,
-          color: { r: 0, g: 200, b: 255 }, // Cyan
-          opacity: 0.2,
-        },
-        {
-          y: canvas.height * 0.5,
-          speed: 0.2,
-          amplitude: 120,
-          frequency: 0.0012,
-          phase: Math.PI / 2,
-          color: { r: 138, g: 43, b: 226 }, // Purple
-          opacity: 0.18,
-        },
-        {
-          y: canvas.height * 0.65,
-          speed: 0.35,
-          amplitude: 90,
-          frequency: 0.0018,
-          phase: Math.PI,
-          color: { r: 255, g: 20, b: 147 }, // Pink
-          opacity: 0.15,
-        },
-      ];
-      auroraBandsRef.current = bands;
-
-      // Create background stars
-      const stars: Array<{ x: number; y: number; brightness: number }> = [];
-      for (let i = 0; i < 200; i++) {
-        stars.push({
-          x: Math.random() * canvas.width,
-          y: Math.random() * canvas.height,
-          brightness: Math.random() * 0.8 + 0.2,
-        });
-      }
-      starsRef.current = stars;
-    };
-    resizeCanvas();
-    window.addEventListener("resize", resizeCanvas);
-
-    // Create initial aurora bands
-    const bands: AuroraBand[] = [
+    const makeBands = (h: number): AuroraBand[] => [
       {
-        y: canvas.height * 0.2,
+        y: h * 0.2,
         speed: 0.3,
         amplitude: 80,
         frequency: 0.002,
@@ -113,7 +53,7 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
         opacity: 0.25,
       },
       {
-        y: canvas.height * 0.35,
+        y: h * 0.35,
         speed: 0.25,
         amplitude: 100,
         frequency: 0.0015,
@@ -122,7 +62,7 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
         opacity: 0.2,
       },
       {
-        y: canvas.height * 0.5,
+        y: h * 0.5,
         speed: 0.2,
         amplitude: 120,
         frequency: 0.0012,
@@ -131,7 +71,7 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
         opacity: 0.18,
       },
       {
-        y: canvas.height * 0.65,
+        y: h * 0.65,
         speed: 0.35,
         amplitude: 90,
         frequency: 0.0018,
@@ -140,27 +80,70 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
         opacity: 0.15,
       },
     ];
-    auroraBandsRef.current = bands;
 
-    // Create initial stars
-    const stars: Array<{ x: number; y: number; brightness: number }> = [];
-    for (let i = 0; i < 200; i++) {
-      stars.push({
-        x: Math.random() * canvas.width,
-        y: Math.random() * canvas.height,
-        brightness: Math.random() * 0.8 + 0.2,
-      });
+    const resizeCanvas = () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const c = canvasRef.current;
+      if (c) {
+        c.width = w;
+        c.height = h;
+      }
+      auroraBandsRef.current = makeBands(h);
+      const stars: Array<{ x: number; y: number; brightness: number }> = [];
+      for (let i = 0; i < 200; i++) {
+        stars.push({
+          x: Math.random() * w,
+          y: Math.random() * h,
+          brightness: Math.random() * 0.8 + 0.2,
+        });
+      }
+      starsRef.current = stars;
+      webglApi?.resize(w, h);
+    };
+
+    resizeCanvas();
+    window.addEventListener("resize", resizeCanvas);
+
+    if (useWebgl && mountRef.current) {
+      const api = createAuroraWebGLApi(mountRef.current, () => setWebglFailed(true));
+      webglApi = api;
+      api.resize(window.innerWidth, window.innerHeight);
     }
-    starsRef.current = stars;
 
-    // Animation loop
     const animate = () => {
-      timeRef.current += 0.016; // ~60fps
-      
+      timeRef.current += 0.016;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const bands = auroraBandsRef.current;
+
+      for (const band of bands) {
+        band.y += band.speed * Math.sin(timeRef.current * 0.3 + band.phase) * 0.3;
+        if (band.y < -200) band.y = h + 200;
+        if (band.y > h + 200) band.y = -200;
+      }
+
+      if (webglApi) {
+        webglApi.renderFrame({
+          time: timeRef.current,
+          width: w,
+          height: h,
+          bands: [...bands],
+        });
+        animationFrameRef.current = requestAnimationFrame(animate);
+        return;
+      }
+
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext("2d");
+      if (!canvas || !ctx) {
+        animationFrameRef.current = requestAnimationFrame(animate);
+        return;
+      }
+
       ctx.fillStyle = "#000011";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Draw stars
       starsRef.current.forEach((star) => {
         const twinkle = Math.sin(timeRef.current * 2 + star.x * 0.01) * 0.3 + 0.7;
         ctx.beginPath();
@@ -169,68 +152,44 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
         ctx.fill();
       });
 
-      const bands = auroraBandsRef.current;
-
-      // Draw aurora bands
       bands.forEach((band) => {
-        // Update band position with smoother movement
-        band.y += band.speed * Math.sin(timeRef.current * 0.3 + band.phase) * 0.3;
-        if (band.y < -200) band.y = canvas.height + 200;
-        if (band.y > canvas.height + 200) band.y = -200;
-
-        // Create flowing wave pattern with smoother curves
         const points: Array<{ x: number; y: number }> = [];
-        const segments = 400; // More segments for smoother curves
-        
+        const segments = 400;
         for (let i = 0; i <= segments; i++) {
           const x = (canvas.width / segments) * i;
-          // Smoother wave calculations with reduced frequency variations
           const wave1 = Math.sin(x * band.frequency + timeRef.current * 0.4 + band.phase) * band.amplitude;
-          const wave2 = Math.sin(x * band.frequency * 1.5 + timeRef.current * 0.6 + band.phase) * (band.amplitude * 0.4);
-          const wave3 = Math.sin(x * band.frequency * 0.7 + timeRef.current * 0.25 + band.phase) * (band.amplitude * 0.25);
+          const wave2 =
+            Math.sin(x * band.frequency * 1.5 + timeRef.current * 0.6 + band.phase) * (band.amplitude * 0.4);
+          const wave3 =
+            Math.sin(x * band.frequency * 0.7 + timeRef.current * 0.25 + band.phase) * (band.amplitude * 0.25);
           const y = band.y + wave1 + wave2 + wave3;
           points.push({ x, y });
         }
 
-        // Draw aurora with gradient and glow
         for (let layer = 0; layer < 3; layer++) {
           const layerOpacity = band.opacity * (1 - layer * 0.4);
           const layerWidth = 180 - layer * 50;
-          
           ctx.beginPath();
           ctx.moveTo(points[0].x, points[0].y);
-          
-          // Create ultra-smooth curve through points using better control points
           for (let i = 1; i < points.length; i++) {
             const prev = points[Math.max(i - 1, 0)];
             const curr = points[i];
             const next = points[Math.min(i + 1, points.length - 1)];
-            
-            // Calculate smoother control points for more fluid curves
             const dx = (next.x - prev.x) * 0.3;
             const dy = (next.y - prev.y) * 0.3;
-            
-            const cp1x = prev.x + dx;
-            const cp1y = prev.y + dy;
-            const cp2x = curr.x - dx;
-            const cp2y = curr.y - dy;
-            
-            ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, curr.x, curr.y);
+            ctx.bezierCurveTo(prev.x + dx, prev.y + dy, curr.x - dx, curr.y - dy, curr.x, curr.y);
           }
-
-          // Draw top edge with same smooth wave pattern
           for (let i = points.length - 1; i >= 0; i--) {
             const point = points[i];
             const wave1 = Math.sin(point.x * band.frequency + timeRef.current * 0.4 + band.phase) * band.amplitude;
-            const wave2 = Math.sin(point.x * band.frequency * 1.5 + timeRef.current * 0.6 + band.phase) * (band.amplitude * 0.4);
-            const wave3 = Math.sin(point.x * band.frequency * 0.7 + timeRef.current * 0.25 + band.phase) * (band.amplitude * 0.25);
+            const wave2 =
+              Math.sin(point.x * band.frequency * 1.5 + timeRef.current * 0.6 + band.phase) * (band.amplitude * 0.4);
+            const wave3 =
+              Math.sin(point.x * band.frequency * 0.7 + timeRef.current * 0.25 + band.phase) * (band.amplitude * 0.25);
             const topY = band.y + wave1 + wave2 + wave3 - layerWidth;
             ctx.lineTo(point.x, topY);
           }
-          
           ctx.closePath();
-
-          // Create gradient for aurora with smoother fade
           const gradient = ctx.createLinearGradient(0, band.y - layerWidth, 0, band.y + layerWidth);
           const alpha = layerOpacity;
           gradient.addColorStop(0, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, 0)`);
@@ -240,27 +199,35 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
           gradient.addColorStop(0.6, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.4})`);
           gradient.addColorStop(0.8, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${alpha * 0.15})`);
           gradient.addColorStop(1, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, 0)`);
-          
           ctx.fillStyle = gradient;
           ctx.fill();
         }
 
-        // Add subtle particle sparkles along the aurora
         for (let i = 0; i < 15; i++) {
           const sparkleX = (canvas.width / 15) * i + Math.sin(timeRef.current + i) * 50;
           const wave1 = Math.sin(sparkleX * band.frequency + timeRef.current * 0.4 + band.phase) * band.amplitude;
-          const wave2 = Math.sin(sparkleX * band.frequency * 1.5 + timeRef.current * 0.6 + band.phase) * (band.amplitude * 0.4);
-          const wave3 = Math.sin(sparkleX * band.frequency * 0.7 + timeRef.current * 0.25 + band.phase) * (band.amplitude * 0.25);
+          const wave2 =
+            Math.sin(sparkleX * band.frequency * 1.5 + timeRef.current * 0.6 + band.phase) * (band.amplitude * 0.4);
+          const wave3 =
+            Math.sin(sparkleX * band.frequency * 0.7 + timeRef.current * 0.25 + band.phase) * (band.amplitude * 0.25);
           const sparkleY = band.y + wave1 + wave2 + wave3;
-          
           const sparkleSize = Math.sin(timeRef.current * 3 + i) * 1.5 + 2;
           const sparkleOpacity = (Math.sin(timeRef.current * 2 + i) * 0.3 + 0.3) * band.opacity;
-          
           ctx.beginPath();
           ctx.arc(sparkleX, sparkleY, sparkleSize, 0, Math.PI * 2);
-          const sparkleGradient = ctx.createRadialGradient(sparkleX, sparkleY, 0, sparkleX, sparkleY, sparkleSize * 3);
+          const sparkleGradient = ctx.createRadialGradient(
+            sparkleX,
+            sparkleY,
+            0,
+            sparkleX,
+            sparkleY,
+            sparkleSize * 3
+          );
           sparkleGradient.addColorStop(0, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${sparkleOpacity})`);
-          sparkleGradient.addColorStop(0.5, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${sparkleOpacity * 0.5})`);
+          sparkleGradient.addColorStop(
+            0.5,
+            `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, ${sparkleOpacity * 0.5})`
+          );
           sparkleGradient.addColorStop(1, `rgba(${band.color.r}, ${band.color.g}, ${band.color.b}, 0)`);
           ctx.fillStyle = sparkleGradient;
           ctx.fill();
@@ -277,8 +244,9 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
+      webglApi?.dispose();
     };
-  }, []);
+  }, [useWebgl]);
 
   useEffect(() => {
     // Focus first input on mount
@@ -432,18 +400,30 @@ export default function AuroraLockScreen({ onUnlock }: AuroraLockScreenProps) {
         overflow: "hidden",
       }}
     >
-      {/* Aurora Canvas Background */}
-      <canvas
-        ref={canvasRef}
+      <div
+        ref={mountRef}
         style={{
           position: "absolute",
           top: 0,
           left: 0,
-          width: "100%",
-          height: "100%",
+          right: 0,
+          bottom: 0,
           zIndex: 0,
         }}
       />
+      {!useWebgl && (
+        <canvas
+          ref={canvasRef}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            zIndex: 0,
+          }}
+        />
+      )}
 
       {/* Lock Screen Content */}
       <div
