@@ -2,14 +2,11 @@ use crate::database::{get_connection, Trade, EmotionalState, EmotionSurvey, Stra
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use chrono::{Timelike, Datelike, Utc};
+use chrono::{Timelike, Datelike};
 use std::fs;
 use std::process::Command;
-use std::time::Duration;
 use evalexpr::{eval_float_with_context, HashMapContext, Value, ContextWithMutableVariables, DefaultNumericTypes};
 use reqwest::cookie::CookieStore;
-use regex::Regex;
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CsvTrade {
     pub symbol: String,
@@ -4566,131 +4563,6 @@ pub async fn fetch_stock_quote(symbol: String) -> Result<StockQuote, String> {
         trailing_annual_dividend_rate,
         trailing_annual_dividend_yield,
     })
-}
-
-#[derive(Debug, Serialize)]
-pub struct MarketMetricResult {
-    pub value: String,
-    pub updated_at: String,
-    pub source: String,
-}
-
-fn normalize_number_string(raw: &str) -> String {
-    // Keep commas/periods, drop any other cruft.
-    raw.chars()
-        .filter(|c| c.is_ascii_digit() || *c == ',' || *c == '.')
-        .collect::<String>()
-}
-
-#[tauri::command]
-pub async fn fetch_crypto_total_market_cap() -> Result<MarketMetricResult, String> {
-    let source = "fiatmarketcap.com";
-    let url = "https://fiatmarketcap.com/";
-    let updated_at = Utc::now().to_rfc3339();
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let response = client
-        .get(url)
-        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-        .send()
-        .await
-        .map_err(|e| format!("Network error fetching total market cap: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("Failed to fetch total market cap: {}", response.status()));
-    }
-
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read total market cap HTML: {}", e))?;
-
-    // Primary heuristics:
-    // - Many pages include a "Total Market Cap" label near the numeric value.
-    // - Some include "Total Fiat Market Cap".
-    let patterns = vec![
-        Regex::new(r"Total Market Cap[^0-9]*([0-9][0-9,\\.]*)(?:\\s*BTC)?").map_err(|e| e.to_string())?,
-        Regex::new(r"Total Fiat Market Cap[^0-9]*([0-9][0-9,\\.]*)(?:\\s*BTC)?").map_err(|e| e.to_string())?,
-        Regex::new(r"Total\\s*Market\\s*Cap[^0-9]*([0-9][0-9,\\.]*)(?:\\s*BTC)?").map_err(|e| e.to_string())?,
-    ];
-
-    for re in patterns {
-        if let Some(cap) = re.captures(&body) {
-            if let Some(m) = cap.get(1) {
-                let value = normalize_number_string(m.as_str());
-                if !value.is_empty() {
-                    return Ok(MarketMetricResult {
-                        value,
-                        updated_at,
-                        source: source.to_string(),
-                    });
-                }
-            }
-        }
-    }
-
-    Err("Unable to parse Total Market Cap from fiatmarketcap.com HTML".to_string())
-}
-
-#[tauri::command]
-pub async fn fetch_crypto_altcoin_season_index() -> Result<MarketMetricResult, String> {
-    let source = "blockchaincenter.net/altcoin-season-index/";
-    let url = "https://www.blockchaincenter.net/altcoin-season-index/";
-    let updated_at = Utc::now().to_rfc3339();
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let response = client
-        .get(url)
-        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-        .send()
-        .await
-        .map_err(|e| format!("Network error fetching altcoin season index: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("Failed to fetch altcoin season index: {}", response.status()));
-    }
-
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read altcoin season index HTML: {}", e))?;
-
-    // From page content we typically see:
-    // "It is not Altcoin Season! 53 Bitcoin Season"
-    // We capture the number next to that phrase.
-    let re = Regex::new(r"It is (?:not )?Altcoin Season!\\s*([0-9]{1,3})\\s*Bitcoin Season").map_err(|e| e.to_string())?;
-    if let Some(cap) = re.captures(&body) {
-        if let Some(m) = cap.get(1) {
-            return Ok(MarketMetricResult {
-                value: normalize_number_string(m.as_str()),
-                updated_at,
-                source: source.to_string(),
-            });
-        }
-    }
-
-    let re2 = Regex::new(r"Altcoin Season Index[\\s\\S]*?It is (?:not )?Altcoin Season!\\s*([0-9]{1,3})").map_err(|e| e.to_string())?;
-    if let Some(cap) = re2.captures(&body) {
-        if let Some(m) = cap.get(1) {
-            return Ok(MarketMetricResult {
-                value: normalize_number_string(m.as_str()),
-                updated_at,
-                source: source.to_string(),
-            });
-        }
-    }
-
-    Err("Unable to parse Altcoin Season Index from blockchaincenter HTML".to_string())
 }
 
 // Helper function to load notes for paired trades

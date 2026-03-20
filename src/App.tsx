@@ -17,7 +17,6 @@ import News from "./pages/News";
 import SecFilingViewer from "./pages/SecFilingViewer";
 import Signals from "./pages/Signals";
 import TechnicalAnalysis from "./pages/TechnicalAnalysis";
-import Market from "./pages/Market";
 import Candles from "./pages/Candles";
 
 function App() {
@@ -32,7 +31,7 @@ function App() {
           <Route path="/signals" element={<Signals />} />
           <Route path="/technical-analysis" element={<TechnicalAnalysis />} />
           <Route path="/candles" element={<Candles />} />
-          <Route path="/market" element={<Market />} />
+          <Route path="/market" element={<Navigate to="/" replace />} />
           <Route path="/indicators" element={<Navigate to="/signals" replace />} />
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/journal" element={<Journal />} />

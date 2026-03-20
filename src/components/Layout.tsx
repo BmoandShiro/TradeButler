@@ -101,7 +101,7 @@ export default function Layout({ children }: LayoutProps) {
   // Initialize: Load saved scroll positions from localStorage
   useEffect(() => {
     // Load all saved scroll positions on mount
-    const paths = ["/", "/trades", "/calendar", "/news", "/signals", "/market", "/strategies", "/journal", "/resources", "/emotions", "/analytics", "/evaluation", "/tools", "/settings"];
+    const paths = ["/", "/trades", "/calendar", "/news", "/signals", "/strategies", "/journal", "/resources", "/emotions", "/analytics", "/evaluation", "/tools", "/settings"];
     paths.forEach(path => {
       const saved = localStorage.getItem(`scroll_${path}`);
       if (saved) {
@@ -714,7 +714,6 @@ export default function Layout({ children }: LayoutProps) {
     { path: "/calendar", icon: Calendar, label: "Calendar" },
     { path: "/news", icon: Newspaper, label: "News" },
     { path: "/signals", icon: Activity, label: "Signals" },
-    { path: "/market", icon: BarChart3, label: "Market" },
     { path: "/strategies", icon: Target, label: "Strategies" },
     { path: "/journal", icon: FileText, label: "Journal" },
     { path: "/resources", icon: BookOpen, label: "Resources" },

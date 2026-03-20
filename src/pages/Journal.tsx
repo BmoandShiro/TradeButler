@@ -1671,6 +1671,80 @@ export default function Journal() {
         await loadStrategyChecklists(selectedEntry.strategy_id);
         await loadChecklistResponses(selectedEntry.id, selectedEntry.strategy_id, loadedTrades);
       }
+      try {
+        if (dataMode === "sandbox") {
+          const states = getSandboxEmotionalStatesForJournal(selectedEntry.id) as unknown as JournalEmotionalState[];
+          const allSurveys = getSandboxEmotionSurveys() as unknown as JournalEmotionSurvey[];
+          const surveysByStateId = new Map<number, JournalEmotionSurvey>();
+          for (const sv of allSurveys) surveysByStateId.set(sv.emotional_state_id, sv);
+          setJournalEmotionalStates(states);
+          const entryLevelGroups = groupEmotionalStatesByTimestamp(states.filter((s) => s.journal_trade_id == null));
+          const entryLevelGroup = entryLevelGroups[0];
+          const nextForms = new Map<number, { selectedEmotions: Record<string, number>; notes: string; surveyResponses: Record<string, number> }>();
+          loadedTrades.forEach((t, idx) => {
+            const tradeGroups = groupEmotionalStatesByTimestamp(states.filter((s) => t.id != null && s.journal_trade_id === t.id));
+            const picked = tradeGroups[0] ?? entryLevelGroup;
+            if (!picked) return;
+            const selectedEmotions: Record<string, number> = {};
+            picked.forEach((s) => {
+              selectedEmotions[s.emotion] = s.intensity;
+            });
+            const survey = picked.map((s) => surveysByStateId.get(s.id)).find((sv): sv is JournalEmotionSurvey => sv != null);
+            const surveyResponses: Record<string, number> = {};
+            if (survey) {
+              for (const q of [...JOURNAL_SURVEY_QUESTIONS.before, ...JOURNAL_SURVEY_QUESTIONS.during, ...JOURNAL_SURVEY_QUESTIONS.after]) {
+                const raw = (survey as unknown as Record<string, number>)[q.key];
+                if (typeof raw === "number") surveyResponses[q.key] = raw;
+              }
+            }
+            nextForms.set(idx, {
+              selectedEmotions,
+              notes: picked[0]?.notes || "",
+              surveyResponses,
+            });
+          });
+          setEmotionalStateFormByTrade(nextForms);
+          setShowAddEmotionalStateForm(nextForms.size > 0);
+        } else {
+          const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+          const [states, allSurveys] = await Promise.all([
+            invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry.id, ...paperArgs }),
+            invoke<JournalEmotionSurvey[]>("get_all_emotion_surveys"),
+          ]);
+          const surveysByStateId = new Map<number, JournalEmotionSurvey>();
+          for (const sv of allSurveys) surveysByStateId.set(sv.emotional_state_id, sv);
+          setJournalEmotionalStates(states);
+          const entryLevelGroups = groupEmotionalStatesByTimestamp(states.filter((s) => s.journal_trade_id == null));
+          const entryLevelGroup = entryLevelGroups[0];
+          const nextForms = new Map<number, { selectedEmotions: Record<string, number>; notes: string; surveyResponses: Record<string, number> }>();
+          loadedTrades.forEach((t, idx) => {
+            const tradeGroups = groupEmotionalStatesByTimestamp(states.filter((s) => t.id != null && s.journal_trade_id === t.id));
+            const picked = tradeGroups[0] ?? entryLevelGroup;
+            if (!picked) return;
+            const selectedEmotions: Record<string, number> = {};
+            picked.forEach((s) => {
+              selectedEmotions[s.emotion] = s.intensity;
+            });
+            const survey = picked.map((s) => surveysByStateId.get(s.id)).find((sv): sv is JournalEmotionSurvey => sv != null);
+            const surveyResponses: Record<string, number> = {};
+            if (survey) {
+              for (const q of [...JOURNAL_SURVEY_QUESTIONS.before, ...JOURNAL_SURVEY_QUESTIONS.during, ...JOURNAL_SURVEY_QUESTIONS.after]) {
+                const raw = (survey as unknown as Record<string, number>)[q.key];
+                if (typeof raw === "number") surveyResponses[q.key] = raw;
+              }
+            }
+            nextForms.set(idx, {
+              selectedEmotions,
+              notes: picked[0]?.notes || "",
+              surveyResponses,
+            });
+          });
+          setEmotionalStateFormByTrade(nextForms);
+          setShowAddEmotionalStateForm(nextForms.size > 0);
+        }
+      } catch {
+        setEmotionalStateFormByTrade(new Map());
+      }
       
       // Convert trades to form data (use loadedTrades, not selectedTrades - state updates are async)
       const tradesData: Array<{
@@ -4888,9 +4962,14 @@ export default function Journal() {
                                     const type = sectionId.slice(7);
                                     return currentChecklists ? renderChecklistReadOnlyForType(type, index) : <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No checklist data available.</p>;
                                   })()}
-                                  {sectionId === "emotional_state_before" && (
+                                  {(sectionId === "emotional_state_before" || sectionId === "emotional_state_during" || sectionId === "emotional_state_after") && (
                                     <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                                       {(() => {
+                                        const visibleSurveyPhases = sectionId === "emotional_state_before"
+                                          ? (["before"] as const)
+                                          : sectionId === "emotional_state_during"
+                                            ? (["during"] as const)
+                                            : (["after"] as const);
                                         const currentTradeId = trade.id ?? null;
                                         const relevantGroups = groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).filter((group) => {
                                           const jtId = group[0]?.journal_trade_id ?? null;
@@ -4921,49 +5000,52 @@ export default function Journal() {
                                                 {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")}
                                               </div>
                                               {notes && (
-                                                <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: survey ? "12px" : 0 }} dangerouslySetInnerHTML={{ __html: notes }} />
+                                                <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "12px" }} dangerouslySetInnerHTML={{ __html: notes }} />
                                               )}
-                                              {survey && (
-                                                <div style={{ marginTop: "14px", paddingTop: "14px", borderTop: "1px solid var(--border-color)" }}>
-                                                  <div style={{ fontSize: "11px", color: "var(--accent)", marginBottom: "12px", letterSpacing: "0.03em", fontWeight: "500" }}>Survey</div>
-                                                  <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>
-                                                    0 = not present - 10 = extremely strong. Rate how strongly you feel each emotion; values are used for trends and insights over time.
-                                                  </p>
-                                                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "14px" }}>
-                                                    {group.map((s) => (
-                                                      <span
-                                                        key={`emo-chip-${s.id}`}
-                                                        style={{
-                                                          display: "inline-flex",
-                                                          alignItems: "center",
-                                                          gap: "6px",
-                                                          padding: "4px 10px",
-                                                          borderRadius: "999px",
-                                                          border: "1px solid var(--border-color)",
-                                                          background: "var(--bg-tertiary)",
-                                                          fontSize: "12px",
-                                                          fontWeight: 600,
-                                                          color: "var(--text-primary)",
-                                                        }}
-                                                      >
-                                                        {s.emotion}
-                                                        <span style={{ color: "var(--accent)", fontWeight: 700 }}>{s.intensity}/10</span>
-                                                      </span>
-                                                    ))}
-                                                  </div>
-                                                  {(["before", "during", "after"] as const).map((phase) => {
+                                              <div style={{ marginTop: "14px", paddingTop: "14px", borderTop: "1px solid var(--border-color)" }}>
+                                                <div style={{ fontSize: "11px", color: "var(--accent)", marginBottom: "12px", letterSpacing: "0.03em", fontWeight: "500" }}>
+                                                  Survey{!survey ? " (defaults shown)" : ""}
+                                                </div>
+                                                <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                                                  0 = not present - 10 = extremely strong. Rate how strongly you feel each emotion; values are used for trends and insights over time.
+                                                </p>
+                                                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "14px" }}>
+                                                  {group.map((s) => (
+                                                    <span
+                                                      key={`emo-chip-${s.id}`}
+                                                      style={{
+                                                        display: "inline-flex",
+                                                        alignItems: "center",
+                                                        gap: "6px",
+                                                        padding: "4px 10px",
+                                                        borderRadius: "999px",
+                                                        border: "1px solid var(--border-color)",
+                                                        background: "var(--bg-tertiary)",
+                                                        fontSize: "12px",
+                                                        fontWeight: 600,
+                                                        color: "var(--text-primary)",
+                                                      }}
+                                                    >
+                                                      {s.emotion}
+                                                      <span style={{ color: "var(--accent)", fontWeight: 700 }}>{s.intensity}/10</span>
+                                                    </span>
+                                                  ))}
+                                                </div>
+                                                {visibleSurveyPhases.map((phase) => {
                                                     const phaseStyle = phase === "before"
                                                       ? { borderColor: "var(--accent)", labelColor: "var(--accent)" }
                                                       : phase === "during"
                                                         ? { borderColor: "var(--warning)", labelColor: "var(--warning)" }
                                                         : { borderColor: "var(--success)", labelColor: "var(--success)" };
                                                     return (
-                                                      <div key={phase} style={{ marginBottom: "14px", paddingLeft: "12px", borderLeft: `2px solid ${phaseStyle.borderColor}` }}>
-                                                        <div style={{ fontSize: "11px", color: phaseStyle.labelColor, marginBottom: "8px", fontWeight: "500" }}>{phase}</div>
+                                                        <div key={phase} style={{ marginBottom: "14px", paddingLeft: "12px", borderLeft: `2px solid ${phaseStyle.borderColor}` }}>
+                                                          <div style={{ fontSize: "11px", color: phaseStyle.labelColor, marginBottom: "8px", fontWeight: "500" }}>
+                                                            {phase === "before" ? "Before Trade" : phase === "during" ? "During Trade" : "After Trade"}
+                                                          </div>
                                                         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                                                           {JOURNAL_SURVEY_QUESTIONS[phase].map((q, idx) => {
-                                                            const score = (survey as unknown as Record<string, number>)[q.key];
-                                                            const scoreNum = typeof score === "number" && score >= 1 && score <= 10 ? score : null;
+                                                            const score = survey ? (survey as unknown as Record<string, number>)[q.key] : undefined;
+                                                            const scoreNum = typeof score === "number" && score >= 1 && score <= 10 ? score : 6;
                                                             return (
                                                               <div key={q.key} style={{ marginBottom: "2px" }}>
                                                                 <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: "var(--text-primary)" }}>
@@ -4976,14 +5058,14 @@ export default function Journal() {
                                                                     type="range"
                                                                     min={1}
                                                                     max={10}
-                                                                    value={scoreNum ?? 6}
+                                                                    value={scoreNum}
                                                                     readOnly
                                                                     disabled
                                                                     style={{ flex: 1, minWidth: "80px", accentColor: "var(--accent)" }}
                                                                   />
                                                                   <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "16px" }}>10</span>
                                                                   <span style={{ minWidth: "28px", textAlign: "center", fontSize: "13px", fontWeight: "600", color: "var(--accent)" }}>
-                                                                    {scoreNum ?? 6}
+                                                                    {scoreNum}
                                                                   </span>
                                                                 </div>
                                                               </div>
@@ -4993,18 +5075,12 @@ export default function Journal() {
                                                       </div>
                                                     );
                                                   })}
-                                                </div>
-                                              )}
+                                              </div>
                                             </div>
                                           );
                                         });
                                       })()}
                                     </div>
-                                  )}
-                                  {(sectionId === "emotional_state_during" || sectionId === "emotional_state_after") && (
-                                    <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: 0 }}>
-                                      Emotional states are shown in the Emotional State (Before) section above.
-                                    </p>
                                   )}
                                 </div>
                               );
