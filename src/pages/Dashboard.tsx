@@ -44,6 +44,8 @@ import {
   Save,
   RefreshCw,
   CircleDollarSign,
+  Plus,
+  Layers,
 } from "lucide-react";
 import {
   MetricsConfigPanel,
@@ -393,6 +395,122 @@ const METRIC_INSTANCES_KEY = "tradebutler_metric_instances";
 const DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY = "tradebutler_dashboard_locked_column_widths";
 const DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY = "tradebutler_dashboard_locked_slot_assignments";
 const DASHBOARD_LOCKED_PLACEMENTS_KEY = "tradebutler_dashboard_locked_placements";
+
+const DASHBOARD_PROFILES_META_KEY = "tradebutler_dashboard_profiles_meta_v1";
+
+/** localStorage keys snapshotted per named dashboard (active profile is mirrored into these keys while editing). */
+const DASHBOARD_PROFILE_STORAGE_KEYS: readonly string[] = [
+  DASHBOARD_SECTIONS_KEY,
+  DASHBOARD_SECTION_ORDER_KEY,
+  DASHBOARD_DISPLAY_ORDER_KEY,
+  DASHBOARD_LAYOUT_PRESETS_KEY,
+  DASHBOARD_SECTION_SIZES_KEY,
+  OPEN_POSITIONS_DISPLAY_MODE_KEY,
+  OPEN_POSITIONS_REFRESH_INTERVAL_KEY,
+  METRIC_CARDS_ORDER_KEY,
+  METRIC_INSTANCES_KEY,
+  DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY,
+  DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY,
+  DASHBOARD_LOCKED_PLACEMENTS_KEY,
+  DASHBOARD_MAX_COLUMNS_KEY,
+  DASHBOARD_MAX_METRIC_ROWS_KEY,
+  DASHBOARD_LOCKED_ROW_HEIGHT_KEY,
+  DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY,
+  DASHBOARD_METRICS_GRID_GAP_KEY,
+  DASHBOARD_SECTIONS_GRID_GAP_KEY,
+  DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY,
+  DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY,
+  DASHBOARD_PADDING_KEY,
+  DASHBOARD_SPLIT_GRID_KEY,
+  DASHBOARD_SECTIONS_ON_TOP_KEY,
+  COLOR_RANGE_KEY,
+  CURRENT_PRICE_SYNC_ENABLED_KEY,
+  CURRENT_PRICE_SYNC_SECONDS_KEY,
+  "tradebutler_strategy_filter_for_metrics",
+  "tradebutler_dashboard_timeframe",
+  "tradebutler_dashboard_custom_start",
+  "tradebutler_dashboard_custom_end",
+  "tradebutler_news_include_positions",
+  "tradebutler_news_show_sentiment",
+];
+
+type DashboardProfileInfo = { id: string; name: string };
+type DashboardProfilesMetaV1 = { version: 1; profiles: DashboardProfileInfo[]; activeProfileId: string };
+
+function dashboardProfileSnapKey(profileId: string): string {
+  return `tradebutler_dashboard_profile_snap_v1_${profileId}`;
+}
+
+function readDashboardProfilesMeta(): DashboardProfilesMetaV1 | null {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_PROFILES_META_KEY);
+    if (!raw) return null;
+    const m = JSON.parse(raw) as DashboardProfilesMetaV1;
+    if (!m || m.version !== 1 || !Array.isArray(m.profiles) || typeof m.activeProfileId !== "string") return null;
+    return m;
+  } catch {
+    return null;
+  }
+}
+
+function writeDashboardProfilesMeta(meta: DashboardProfilesMetaV1): void {
+  localStorage.setItem(DASHBOARD_PROFILES_META_KEY, JSON.stringify(meta));
+}
+
+function collectDashboardProfileSnapshot(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of DASHBOARD_PROFILE_STORAGE_KEYS) {
+    out[key] = localStorage.getItem(key) ?? "";
+  }
+  return out;
+}
+
+function applyDashboardProfileSnapshot(data: Record<string, string | undefined>): void {
+  for (const key of DASHBOARD_PROFILE_STORAGE_KEYS) {
+    const v = data[key];
+    if (v !== undefined && v !== null && v !== "") {
+      localStorage.setItem(key, v);
+    } else {
+      localStorage.removeItem(key);
+    }
+  }
+}
+
+function saveDashboardProfileSnapshot(profileId: string): void {
+  localStorage.setItem(dashboardProfileSnapKey(profileId), JSON.stringify(collectDashboardProfileSnapshot()));
+}
+
+function loadDashboardProfileSnapshot(profileId: string): Record<string, string> | null {
+  try {
+    const raw = localStorage.getItem(dashboardProfileSnapKey(profileId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    return typeof parsed === "object" && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Apply active profile into root keys before Dashboard reads localStorage. */
+function ensureDashboardProfilesBootstrapped(): void {
+  let meta = readDashboardProfilesMeta();
+  if (!meta) {
+    const snap = collectDashboardProfileSnapshot();
+    const initial: DashboardProfilesMetaV1 = {
+      version: 1,
+      profiles: [{ id: "default", name: "Main" }],
+      activeProfileId: "default",
+    };
+    writeDashboardProfilesMeta(initial);
+    localStorage.setItem(dashboardProfileSnapKey("default"), JSON.stringify(snap));
+    return;
+  }
+  const blob = loadDashboardProfileSnapshot(meta.activeProfileId);
+  if (blob && Object.keys(blob).length > 0) {
+    applyDashboardProfileSnapshot(blob);
+  }
+}
+
 const MAX_POSITION_CHART_COLUMN_SPAN = 24;
 const MAX_ROW_SPAN = 32;
 const MIN_COLUMN_FR = 0.2;
@@ -2617,6 +2735,9 @@ if (typeof window !== 'undefined') {
 }
 
 export default function Dashboard() {
+  if (typeof window !== "undefined") {
+    ensureDashboardProfilesBootstrapped();
+  }
   const metricsConfigHook = useMetricsConfig();
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [topSymbols, setTopSymbols] = useState<TopSymbol[]>([]);
@@ -2906,6 +3027,14 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [showMetricsConfig, setShowMetricsConfig] = useState(false);
   const [configKey, setConfigKey] = useState(0); // Force re-render when config changes
+  const [dashboardProfiles, setDashboardProfiles] = useState<DashboardProfileInfo[]>(() => {
+    if (typeof window === "undefined") return [{ id: "default", name: "Main" }];
+    return readDashboardProfilesMeta()?.profiles ?? [{ id: "default", name: "Main" }];
+  });
+  const [activeDashboardProfileId, setActiveDashboardProfileId] = useState(() => {
+    if (typeof window === "undefined") return "default";
+    return readDashboardProfilesMeta()?.activeProfileId ?? "default";
+  });
   const [currentPriceSync, setCurrentPriceSync] = useState(readDashboardCurrentPriceSync);
   const [currentPriceSyncTick, setCurrentPriceSyncTick] = useState(0);
   const layoutLocked = true;
@@ -3477,6 +3606,200 @@ export default function Dashboard() {
   const [showPositionGroupModal, setShowPositionGroupModal] = useState(false);
   const [_selectedPositionGroupId, setSelectedPositionGroupId] = useState<number | null>(null);
   const [selectedPositionGroup, setSelectedPositionGroup] = useState<any>(null);
+
+  const hydrateDashboardUiFromLocalStorage = useCallback(() => {
+    try {
+      const disp = localStorage.getItem(DASHBOARD_DISPLAY_ORDER_KEY);
+      if (disp) {
+        try {
+          const parsed = JSON.parse(disp);
+          setMergedDisplayOrder(Array.isArray(parsed) ? parsed : null);
+        } catch {
+          setMergedDisplayOrder(null);
+        }
+      } else setMergedDisplayOrder(null);
+
+      const presets = localStorage.getItem(DASHBOARD_LAYOUT_PRESETS_KEY);
+      if (presets) {
+        try {
+          const parsed = JSON.parse(presets);
+          setLayoutPresets(Array.isArray(parsed) ? parsed : []);
+        } catch {
+          setLayoutPresets([]);
+        }
+      } else setLayoutPresets([]);
+
+      setLockedGridColumns(
+        Math.max(2, Math.min(10, parseInt(localStorage.getItem(DASHBOARD_MAX_COLUMNS_KEY) || String(DEFAULT_LAYOUT.maxColumns), 10)))
+      );
+
+      const cw = localStorage.getItem(DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY);
+      if (cw) {
+        try {
+          const arr = JSON.parse(cw);
+          if (Array.isArray(arr) && arr.every((n: unknown) => typeof n === "number" && n >= MIN_COLUMN_FR)) {
+            setLockedColumnWidths(arr);
+          } else setLockedColumnWidths([]);
+        } catch {
+          setLockedColumnWidths([]);
+        }
+      } else setLockedColumnWidths([]);
+
+      const slots = localStorage.getItem(DASHBOARD_LOCKED_SLOT_ASSIGNMENTS_KEY);
+      if (slots) {
+        try {
+          const parsed = JSON.parse(slots);
+          setLockedSlotAssignments(Array.isArray(parsed) ? parsed : null);
+        } catch {
+          setLockedSlotAssignments(null);
+        }
+      } else setLockedSlotAssignments(null);
+
+      const plc = localStorage.getItem(DASHBOARD_LOCKED_PLACEMENTS_KEY);
+      if (plc) {
+        try {
+          const parsed = JSON.parse(plc);
+          setLockedPlacements(Array.isArray(parsed) ? parsed : null);
+        } catch {
+          setLockedPlacements(null);
+        }
+      } else setLockedPlacements(null);
+
+      const sizes = localStorage.getItem(DASHBOARD_SECTION_SIZES_KEY);
+      if (sizes) {
+        try {
+          const parsed = JSON.parse(sizes) as SectionSizes;
+          const allIds: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
+          const out: SectionSizes = {} as SectionSizes;
+          allIds.forEach((id) => {
+            const s = parsed[id];
+            if (s && typeof s === "object") {
+              const col = s.columnSpan != null ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, s.columnSpan)) : undefined;
+              const h = s.height != null ? Math.min(800, Math.max(200, s.height)) : undefined;
+              const rs = s.rowSpan != null ? Math.min(MAX_ROW_SPAN, Math.max(1, s.rowSpan)) : undefined;
+              out[id] = { columnSpan: col, height: h, rowSpan: rs };
+            }
+          });
+          setSectionSizes(out);
+        } catch {
+          setSectionSizes({} as SectionSizes);
+        }
+      } else setSectionSizes({} as SectionSizes);
+
+      const sf = localStorage.getItem("tradebutler_strategy_filter_for_metrics");
+      if (sf) {
+        try {
+          setStrategyFilterForMetrics(JSON.parse(sf));
+        } catch {
+          setStrategyFilterForMetrics({});
+        }
+      } else setStrategyFilterForMetrics({});
+
+      const opm = localStorage.getItem(OPEN_POSITIONS_DISPLAY_MODE_KEY);
+      setOpenPositionsDisplayMode(opm === "compact" || opm === "card" ? opm : "card");
+
+      const opri = localStorage.getItem(OPEN_POSITIONS_REFRESH_INTERVAL_KEY);
+      if (opri) {
+        const parsed = parseInt(opri, 10);
+        setOpenPositionsRefreshInterval(
+          !Number.isNaN(parsed) && [0, 1, 2, 3, 5, 10, 15, 30, 60].includes(parsed) ? parsed : 0
+        );
+      } else setOpenPositionsRefreshInterval(0);
+
+      const tf = localStorage.getItem("tradebutler_dashboard_timeframe");
+      setTimeframe(((tf as Timeframe) || "all") as Timeframe);
+      setCustomStartDate(localStorage.getItem("tradebutler_dashboard_custom_start") || "");
+      setCustomEndDate(localStorage.getItem("tradebutler_dashboard_custom_end") || "");
+
+      const nIncl = localStorage.getItem(NEWS_INCLUDE_POSITIONS_KEY);
+      setNewsIncludePositions(nIncl ? JSON.parse(nIncl) : true);
+      const nSent = localStorage.getItem(NEWS_SHOW_SENTIMENT_KEY);
+      setNewsShowSentiment(nSent ? JSON.parse(nSent) : true);
+    } catch (e) {
+      console.error("hydrateDashboardUiFromLocalStorage", e);
+    }
+  }, []);
+
+  const switchDashboardProfile = useCallback(
+    (newId: string) => {
+      if (newId === activeDashboardProfileId) return;
+      saveDashboardProfileSnapshot(activeDashboardProfileId);
+      const blob = loadDashboardProfileSnapshot(newId);
+      if (!blob || Object.keys(blob).length === 0) return;
+      applyDashboardProfileSnapshot(blob);
+      const meta = readDashboardProfilesMeta();
+      if (meta) {
+        writeDashboardProfilesMeta({ ...meta, activeProfileId: newId });
+      }
+      setActiveDashboardProfileId(newId);
+      hydrateDashboardUiFromLocalStorage();
+      setConfigKey((k) => k + 1);
+    },
+    [activeDashboardProfileId, hydrateDashboardUiFromLocalStorage]
+  );
+
+  const duplicateDashboardProfile = useCallback(() => {
+    saveDashboardProfileSnapshot(activeDashboardProfileId);
+    const snap = collectDashboardProfileSnapshot();
+    const id = `d_${Date.now().toString(36)}`;
+    const name = `Dashboard ${dashboardProfiles.length + 1}`;
+    localStorage.setItem(dashboardProfileSnapKey(id), JSON.stringify(snap));
+    const meta = readDashboardProfilesMeta();
+    if (!meta) return;
+    const next: DashboardProfilesMetaV1 = {
+      ...meta,
+      profiles: [...meta.profiles, { id, name }],
+      activeProfileId: id,
+    };
+    writeDashboardProfilesMeta(next);
+    setDashboardProfiles(next.profiles);
+    setActiveDashboardProfileId(id);
+    setConfigKey((k) => k + 1);
+  }, [activeDashboardProfileId, dashboardProfiles.length]);
+
+  const renameActiveDashboardProfile = useCallback(() => {
+    const cur = dashboardProfiles.find((p) => p.id === activeDashboardProfileId);
+    if (!cur) return;
+    const name = window.prompt("Dashboard name", cur.name);
+    if (name == null || !name.trim()) return;
+    const meta = readDashboardProfilesMeta();
+    if (!meta) return;
+    const next = {
+      ...meta,
+      profiles: meta.profiles.map((p) => (p.id === activeDashboardProfileId ? { ...p, name: name.trim() } : p)),
+    };
+    writeDashboardProfilesMeta(next);
+    setDashboardProfiles(next.profiles);
+  }, [activeDashboardProfileId, dashboardProfiles]);
+
+  const deleteDashboardProfile = useCallback(() => {
+    if (dashboardProfiles.length <= 1) return;
+    const cur = dashboardProfiles.find((p) => p.id === activeDashboardProfileId);
+    if (!cur) return;
+    if (!window.confirm(`Delete dashboard "${cur.name}"? This cannot be undone.`)) return;
+    localStorage.removeItem(dashboardProfileSnapKey(activeDashboardProfileId));
+    const meta = readDashboardProfilesMeta();
+    if (!meta) return;
+    const remaining = meta.profiles.filter((p) => p.id !== activeDashboardProfileId);
+    const nextActive = remaining[0].id;
+    const blob = loadDashboardProfileSnapshot(nextActive);
+    if (blob) applyDashboardProfileSnapshot(blob);
+    writeDashboardProfilesMeta({ ...meta, profiles: remaining, activeProfileId: nextActive });
+    setDashboardProfiles(remaining);
+    setActiveDashboardProfileId(nextActive);
+    hydrateDashboardUiFromLocalStorage();
+    setConfigKey((k) => k + 1);
+  }, [activeDashboardProfileId, dashboardProfiles, hydrateDashboardUiFromLocalStorage]);
+
+  useEffect(() => {
+    const sync = () => saveDashboardProfileSnapshot(activeDashboardProfileId);
+    window.addEventListener("beforeunload", sync);
+    const tid = window.setInterval(sync, 45000);
+    return () => {
+      window.removeEventListener("beforeunload", sync);
+      window.clearInterval(tid);
+    };
+  }, [activeDashboardProfileId]);
 
   // Close settings menus when clicking outside or scrolling
   useEffect(() => {
@@ -4317,6 +4640,84 @@ export default function Dashboard() {
           >
             <h1 style={{ fontSize: "32px", fontWeight: "bold" }}>Dashboard</h1>
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "0 8px 0 0", borderRight: "1px solid var(--border-color)", marginRight: "2px" }}>
+                <Layers size={16} color="var(--text-secondary)" style={{ flexShrink: 0 }} aria-hidden />
+                <span style={{ fontSize: "12px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>View:</span>
+                <select
+                  value={activeDashboardProfileId}
+                  onChange={(e) => switchDashboardProfile(e.target.value)}
+                  title="Saved dashboard layouts"
+                  style={{
+                    padding: "6px 10px",
+                    fontSize: "13px",
+                    background: "var(--bg-secondary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    minWidth: "120px",
+                    maxWidth: "200px",
+                  }}
+                >
+                  {dashboardProfiles.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={duplicateDashboardProfile}
+                  title="Copy current dashboard as a new saved view"
+                  style={{
+                    background: "var(--bg-secondary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    padding: "6px 8px",
+                    cursor: "pointer",
+                    color: "var(--text-primary)",
+                    display: "flex",
+                    alignItems: "center",
+                  }}
+                >
+                  <Plus size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={renameActiveDashboardProfile}
+                  title="Rename this dashboard"
+                  style={{
+                    background: "var(--bg-secondary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    padding: "6px 8px",
+                    cursor: "pointer",
+                    color: "var(--text-primary)",
+                    fontSize: "12px",
+                  }}
+                >
+                  Rename
+                </button>
+                <button
+                  type="button"
+                  onClick={deleteDashboardProfile}
+                  disabled={dashboardProfiles.length <= 1}
+                  title={dashboardProfiles.length <= 1 ? "Keep at least one dashboard" : "Delete this dashboard"}
+                  style={{
+                    background: "var(--bg-secondary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "6px",
+                    padding: "6px 8px",
+                    cursor: dashboardProfiles.length <= 1 ? "not-allowed" : "pointer",
+                    color: dashboardProfiles.length <= 1 ? "var(--text-secondary)" : "var(--loss)",
+                    display: "flex",
+                    alignItems: "center",
+                    opacity: dashboardProfiles.length <= 1 ? 0.45 : 1,
+                  }}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
               <div style={{ display: "flex", alignItems: "center", gap: "4px", padding: "0 4px" }}>
                 <span style={{ fontSize: "12px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>Columns:</span>
                 {[2, 3, 4, 5, 6, 8, 10].map((n) => (
