@@ -439,6 +439,29 @@ function readDashboardCurrentPriceSync(): { enabled: boolean; seconds: number } 
   return { enabled, seconds };
 }
 
+type CurrentPriceVsOpenKind = "up" | "down" | "flat" | "unknown";
+
+function currentPriceVsOpenKind(price: number, dayOpen: number | null): CurrentPriceVsOpenKind {
+  if (!Number.isFinite(price) || price <= 0) return "unknown";
+  if (dayOpen == null || !Number.isFinite(dayOpen) || dayOpen <= 0) return "unknown";
+  const pC = Math.round(price * 100);
+  const oC = Math.round(dayOpen * 100);
+  if (pC === oC) return "flat";
+  return pC > oC ? "up" : "down";
+}
+
+/** Green above open, red below, accent when flat (cent-rounded) or open unknown. */
+function currentPriceVsOpenColor(price: number, dayOpen: number | null): string {
+  switch (currentPriceVsOpenKind(price, dayOpen)) {
+    case "up":
+      return "var(--profit)";
+    case "down":
+      return "var(--loss)";
+    default:
+      return "var(--accent)";
+  }
+}
+
 function useCurrentPriceQuote(
   metric: { id: string; quoteSymbol?: string; quoteRefreshSeconds?: number },
   setMetricInstances: React.Dispatch<React.SetStateAction<MetricInstance[]>>,
@@ -459,6 +482,7 @@ function useCurrentPriceQuote(
   }, [persistedSymbol, metric.id]);
 
   const [price, setPrice] = useState<number | null>(null);
+  const [dayOpen, setDayOpen] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastAt, setLastAt] = useState<Date | null>(null);
@@ -485,22 +509,32 @@ function useCurrentPriceQuote(
     if (dataMode === "sandbox") {
       setError("Quotes are unavailable in demo mode");
       setPrice(null);
+      setDayOpen(null);
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      const quote = await invoke<{ current_price: number | null }>("fetch_stock_quote", { symbol: sym });
+      const quote = await invoke<{
+        current_price: number | null;
+        regular_market_open?: number | null;
+      }>("fetch_stock_quote", { symbol: sym });
       const p = quote.current_price;
+      const o = quote.regular_market_open;
+      const openNum =
+        o != null && Number.isFinite(o) && o > 0 ? o : null;
       if (p != null && Number.isFinite(p) && p > 0) {
         setPrice(p);
+        setDayOpen(openNum);
         setLastAt(new Date());
       } else {
         setPrice(null);
+        setDayOpen(null);
         setError("No price returned");
       }
     } catch (e) {
       setPrice(null);
+      setDayOpen(null);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
@@ -531,6 +565,7 @@ function useCurrentPriceQuote(
     patchSymbol,
     fetchOnce,
     price,
+    dayOpen,
     loading,
     error,
     lastAt,
@@ -543,6 +578,7 @@ function CurrentPriceMetricRow({
   dataMode,
   fillLockedGridCell,
   refreshActionRef,
+  onVsOpenVisual,
   children,
 }: {
   metric: { id: string; quoteSymbol?: string; quoteRefreshSeconds?: number };
@@ -551,13 +587,12 @@ function CurrentPriceMetricRow({
   fillLockedGridCell: boolean;
   /** Wired to the refresh icon beside the gear */
   refreshActionRef: React.MutableRefObject<(() => void) | null>;
+  /** Drives metric card icon (trend arrows) to match price vs day open */
+  onVsOpenVisual?: (v: { kind: CurrentPriceVsOpenKind; tint: string }) => void;
   children: React.ReactNode;
 }) {
-  const { symbolDraft, setSymbolDraft, patchSymbol, fetchOnce, price, loading, error, lastAt } = useCurrentPriceQuote(
-    metric,
-    setMetricInstances,
-    dataMode
-  );
+  const { symbolDraft, setSymbolDraft, patchSymbol, fetchOnce, price, dayOpen, loading, error, lastAt } =
+    useCurrentPriceQuote(metric, setMetricInstances, dataMode);
 
   const [symbolFocused, setSymbolFocused] = useState(false);
 
@@ -570,12 +605,26 @@ function CurrentPriceMetricRow({
     };
   }, [fetchOnce, refreshActionRef]);
 
+  useEffect(() => {
+    if (!onVsOpenVisual) return;
+    if (price != null && !error) {
+      onVsOpenVisual({
+        kind: currentPriceVsOpenKind(price, dayOpen),
+        tint: currentPriceVsOpenColor(price, dayOpen),
+      });
+    } else {
+      onVsOpenVisual({ kind: "unknown", tint: "var(--accent)" });
+    }
+  }, [price, dayOpen, error, onVsOpenVisual]);
+
   /** Fixed px row so input + text share one metrics box (avoids ~0.5px drift from UA input padding vs span). */
   const quoteFontSize = 22;
   const quoteRowPx = 30;
   const quoteFontSizeCss = `${quoteFontSize}px`;
   const quoteRowPxCss = `${quoteRowPx}px`;
-  const quoteUnderlineShadow = `inset 0 -2px 0 0 ${symbolFocused ? "var(--accent)" : "transparent"}`;
+  const quoteTint =
+    price != null && !error ? currentPriceVsOpenColor(price, dayOpen) : "var(--accent)";
+  const quoteUnderlineShadow = `inset 0 -2px 0 0 ${symbolFocused ? quoteTint : "transparent"}`;
   const quotePlaceholderUnderline = "inset 0 -2px 0 0 transparent";
 
   return (
@@ -629,14 +678,14 @@ function CurrentPriceMetricRow({
             backgroundColor: "transparent",
             border: "none",
             borderRadius: 0,
-            color: "var(--accent)",
+            color: quoteTint,
             fontWeight: "bold",
             fontSize: quoteFontSizeCss,
             lineHeight: quoteRowPxCss,
             fontVariantNumeric: "tabular-nums",
             fontFamily: "inherit",
             textAlign: "left",
-            caretColor: "var(--accent)",
+            caretColor: quoteTint,
             outline: "none",
             boxShadow: quoteUnderlineShadow,
             WebkitAppearance: "none" as React.CSSProperties["WebkitAppearance"],
@@ -661,7 +710,7 @@ function CurrentPriceMetricRow({
             fontSize: quoteFontSizeCss,
             fontWeight: "bold",
             lineHeight: quoteRowPxCss,
-            color: "var(--accent)",
+            color: quoteTint,
             margin: 0,
             textAlign: "center",
             maxWidth: "100%",
@@ -1169,6 +1218,10 @@ function SortableMetricCard({
   const moveInLockedGridRef = useContext(MoveInLockedGridContext);
   const currentPriceSyncCtx = useContext(CurrentPriceSyncContext);
   const currentPriceRefreshRef = useRef<(() => void) | null>(null);
+  const [currentPriceVsOpenVisual, setCurrentPriceVsOpenVisual] = useState<{
+    kind: CurrentPriceVsOpenKind;
+    tint: string;
+  } | null>(null);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -1926,17 +1979,27 @@ function SortableMetricCard({
           width: "48px",
           height: "48px",
           borderRadius: "8px",
-          backgroundColor: `${color}20`,
+          backgroundColor: `${baseMetricId === "current_price" && currentPriceVsOpenVisual ? currentPriceVsOpenVisual.tint : color}20`,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          color: color,
+          color: baseMetricId === "current_price" && currentPriceVsOpenVisual ? currentPriceVsOpenVisual.tint : color,
           flexShrink: 0,
           pointerEvents: "none",
           ...(fillLockedGridCell ? { alignSelf: "center" } : {}),
         }}
       >
-        <Icon size={24} />
+        {baseMetricId === "current_price" ? (
+          currentPriceVsOpenVisual?.kind === "up" ? (
+            <TrendingUp size={24} />
+          ) : currentPriceVsOpenVisual?.kind === "down" ? (
+            <TrendingDown size={24} />
+          ) : (
+            <CircleDollarSign size={24} />
+          )
+        ) : (
+          <Icon size={24} />
+        )}
       </div>
       {(metric as any).baseMetricId === "current_price" ? (
         <CurrentPriceMetricRow
@@ -1945,6 +2008,7 @@ function SortableMetricCard({
           dataMode={dataMode}
           fillLockedGridCell={fillLockedGridCell}
           refreshActionRef={currentPriceRefreshRef}
+          onVsOpenVisual={setCurrentPriceVsOpenVisual}
         >
           <p
             style={{

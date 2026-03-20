@@ -4483,6 +4483,8 @@ pub async fn fetch_chart_data(symbol: String, period1: i64, period2: i64, interv
 pub struct StockQuote {
     pub symbol: String,
     pub current_price: Option<f64>,
+    /// Regular session open (Yahoo `regularMarketOpen`); used for vs-open coloring in UI.
+    pub regular_market_open: Option<f64>,
     pub dividend_yield: Option<f64>,
     pub dividend_rate: Option<f64>,
     pub dividend_frequency: Option<String>,
@@ -4530,6 +4532,25 @@ pub async fn fetch_stock_quote(symbol: String) -> Result<StockQuote, String> {
     let current_price = meta.get("regularMarketPrice")
         .and_then(|p| p.as_f64())
         .or_else(|| meta.get("previousClose").and_then(|p| p.as_f64()));
+
+    // Day/session open: Yahoo often omits meta.regularMarketOpen; use first OHLC open bar as fallback.
+    let open_from_meta = meta
+        .get("regularMarketOpen")
+        .and_then(|p| p.as_f64())
+        .filter(|&o| o.is_finite() && o > 0.0);
+    let open_from_quote = result
+        .get("indicators")
+        .and_then(|i| i.get("quote"))
+        .and_then(|q| q.as_array())
+        .and_then(|quotes| quotes.first())
+        .and_then(|quote| quote.get("open"))
+        .and_then(|o| o.as_array())
+        .and_then(|arr| {
+            arr.iter()
+                .rev()
+                .find_map(|v| v.as_f64().filter(|&x| x.is_finite() && x > 0.0))
+        });
+    let regular_market_open = open_from_meta.or(open_from_quote);
     
     // Try to get dividend data from various fields
     let dividend_yield = meta.get("dividendYield")
@@ -4558,6 +4579,7 @@ pub async fn fetch_stock_quote(symbol: String) -> Result<StockQuote, String> {
     Ok(StockQuote {
         symbol: symbol.to_uppercase(),
         current_price,
+        regular_market_open,
         dividend_yield,
         dividend_rate,
         dividend_frequency,
