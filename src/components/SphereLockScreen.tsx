@@ -247,7 +247,9 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
       if (settings.waveEnabled) waveRef.current += settings.waveSpeed;
 
       const dotColor = hexToRgb(settings.dotColor);
-      const lineColor = hexToRgb(settings.lineColor);
+      const lineColorRgb = hexToRgb(settings.lineColor);
+      const orbitingLineColorRgb = hexToRgb(settings.orbitingSpheresLineColor);
+      const mainLineRgb = settings.linesMatchDotColor ? dotColor : lineColorRgb;
 
       const mainProjected = updateAndProjectSphereLayer(
         dotsRef.current,
@@ -263,7 +265,7 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
           {
             projected: mainProjected,
             connectionDistance: settings.connectionDistance,
-            lineRgb: lineColor,
+            lineRgb: mainLineRgb,
             wireframeRings: settings.rings,
             wireframeDotsPerRing: settings.dotsPerRing,
             showConnections: settings.showConnections,
@@ -286,6 +288,7 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
             const orbColor = settings.orbitingSpheresSameColor
               ? dotColor
               : hexToRgb(settings.orbitingSpheresColor);
+            const orbLineRgb = settings.linesMatchDotColor ? orbColor : orbitingLineColorRgb;
             layers.push({
               projected: updateAndProjectSphereLayer(
                 orbitingDotsRef.current[i],
@@ -296,7 +299,7 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
                 projectionParams
               ),
               connectionDistance: settings.connectionDistance,
-              lineRgb: lineColor,
+              lineRgb: orbLineRgb,
               wireframeRings: settings.orbitingSpheresRings,
               wireframeDotsPerRing: settings.orbitingSpheresDotsPerRing,
               showConnections: settings.showConnections,
@@ -400,7 +403,7 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
         ctx,
         mainProjected,
         settings,
-        lineColor,
+        mainLineRgb,
         centerX,
         centerY,
         0,
@@ -418,7 +421,7 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
           ctx,
           mainProjected,
           settings,
-          lineColor,
+          mainLineRgb,
           centerX,
           centerY,
           0,
@@ -430,7 +433,7 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
       }
 
       if (settings.multipleSpheresEnabled) {
-        const orbitingColor = settings.orbitingSpheresSameColor
+          const orbitingColor = settings.orbitingSpheresSameColor
           ? dotColor
           : hexToRgb(settings.orbitingSpheresColor);
         for (let i = 0; i < orbitingDotsRef.current.length; i++) {
@@ -448,11 +451,12 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
             orbitingColor,
             projectionParams
           );
+          const orbLineRgb = settings.linesMatchDotColor ? orbitingColor : orbitingLineColorRgb;
           drawSphereLayerOnCanvas(
             ctx,
             orbProj,
             settings,
-            lineColor,
+            orbLineRgb,
             centerX,
             centerY,
             offsetX,

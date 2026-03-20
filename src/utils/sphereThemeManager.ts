@@ -9,6 +9,10 @@ export interface SphereThemeSettings {
   // Colors
   dotColor: string;
   lineColor: string;
+  /** When true, connection/wireframe lines use each layer’s dot color instead of Line Color. */
+  linesMatchDotColor: boolean;
+  /** WebGL only: normal alpha blending for lines instead of additive (less blown-out overlaps). */
+  lineBlendSoft: boolean;
   backgroundColor: string;
   gradientEnabled: boolean;
   gradientColorFront: string;
@@ -57,6 +61,8 @@ export interface SphereThemeSettings {
   orbitingSpheresScale: number;
   orbitingSpheresDistance: number;
   orbitingSpheresColor: string;
+  /** Line/wireframe color for orbiting spheres (ignored when Lines match dot color). */
+  orbitingSpheresLineColor: string;
   orbitingSpheresSameColor: boolean;
   orbitingSpheresRings: number;
   orbitingSpheresDotsPerRing: number;
@@ -83,6 +89,8 @@ const defaultSettings: SphereThemeSettings = {
   // Colors
   dotColor: "#3b82f6",
   lineColor: "#3b82f6",
+  linesMatchDotColor: false,
+  lineBlendSoft: false,
   backgroundColor: "#050510",
   gradientEnabled: false,
   gradientColorFront: "#3b82f6",
@@ -131,6 +139,7 @@ const defaultSettings: SphereThemeSettings = {
   orbitingSpheresScale: 0.3,
   orbitingSpheresDistance: 1.5,
   orbitingSpheresColor: "#8b5cf6",
+  orbitingSpheresLineColor: "#3b82f6",
   orbitingSpheresSameColor: false,
   orbitingSpheresRings: 6,
   orbitingSpheresDotsPerRing: 12,
@@ -158,8 +167,12 @@ export function getSphereThemeSettings(): SphereThemeSettings {
   const stored = localStorage.getItem(SPHERE_THEME_KEY);
   if (stored) {
     try {
-      const parsed = JSON.parse(stored);
-      return { ...defaultSettings, ...parsed };
+      const parsed = JSON.parse(stored) as Record<string, unknown>;
+      const merged = { ...defaultSettings, ...parsed } as SphereThemeSettings;
+      if (!Object.prototype.hasOwnProperty.call(parsed, "orbitingSpheresLineColor")) {
+        merged.orbitingSpheresLineColor = merged.lineColor;
+      }
+      return merged;
     } catch (e) {
       console.error("Error parsing sphere theme settings:", e);
     }

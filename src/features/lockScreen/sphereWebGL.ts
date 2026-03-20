@@ -210,6 +210,9 @@ export function createSphereWebGLApi(mount: HTMLElement, onContextLost: () => vo
       lineVertCount = 0;
 
       const { stars, starTwinkle, time, settings } = input;
+      lineMat.blending = settings.lineBlendSoft
+        ? THREE.NormalBlending
+        : THREE.AdditiveBlending;
 
       for (const star of stars) {
         let opacity = star.opacity;
