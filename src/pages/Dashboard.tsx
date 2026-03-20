@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, useRef, useMemo, createContext, useContext } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, useMemo, useCallback, createContext, useContext } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
@@ -43,8 +43,29 @@ import {
   ListOrdered,
   Save,
   RefreshCw,
+  CircleDollarSign,
 } from "lucide-react";
-import { MetricsConfigPanel, useMetricsConfig, DASHBOARD_MAX_METRIC_ROWS_KEY, DASHBOARD_MAX_COLUMNS_KEY, DASHBOARD_LOCKED_ROW_HEIGHT_KEY, DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY, DASHBOARD_METRICS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_GAP_KEY, DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY, DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY, DASHBOARD_PADDING_KEY, DASHBOARD_SPLIT_GRID_KEY, DASHBOARD_SECTIONS_ON_TOP_KEY, DEFAULT_LAYOUT, DEFAULT_COLOR_RANGE, COLOR_RANGE_KEY } from "../components/MetricsConfig";
+import {
+  MetricsConfigPanel,
+  useMetricsConfig,
+  DASHBOARD_MAX_METRIC_ROWS_KEY,
+  DASHBOARD_MAX_COLUMNS_KEY,
+  DASHBOARD_LOCKED_ROW_HEIGHT_KEY,
+  DASHBOARD_METRICS_TO_SECTIONS_GAP_KEY,
+  DASHBOARD_METRICS_GRID_GAP_KEY,
+  DASHBOARD_SECTIONS_GRID_GAP_KEY,
+  DASHBOARD_SECTIONS_GRID_MIN_WIDTH_KEY,
+  DASHBOARD_SECTIONS_GRID_MARGIN_BOTTOM_KEY,
+  DASHBOARD_PADDING_KEY,
+  DASHBOARD_SPLIT_GRID_KEY,
+  DASHBOARD_SECTIONS_ON_TOP_KEY,
+  DEFAULT_LAYOUT,
+  DEFAULT_COLOR_RANGE,
+  COLOR_RANGE_KEY,
+  CURRENT_PRICE_SYNC_ENABLED_KEY,
+  CURRENT_PRICE_SYNC_SECONDS_KEY,
+  CURRENT_PRICE_SYNC_INTERVALS,
+} from "../components/MetricsConfig";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { format } from "date-fns";
 import {
@@ -213,6 +234,7 @@ const metricIcons: Record<string, any> = {
   strategy_consecutive_losses: TrendingDown,
   average_holding_time_seconds: Clock,
   position_size_chart: BarChart3,
+  current_price: CircleDollarSign,
 };
 
 const formatMetricValue = (id: string, value: number, metrics: Metrics | null): string => {
@@ -304,6 +326,9 @@ const formatHoldingTime = (seconds: number): string => {
 };
 
 const getMetricColor = (id: string, value: number, colorRange?: { min: number; max: number }): string => {
+  if (id === "current_price") {
+    return "var(--accent)";
+  }
   // Get color range from localStorage if not provided
   if (!colorRange) {
     const saved = localStorage.getItem("tradebutler_color_range");
@@ -398,6 +423,271 @@ interface MetricInstance {
   cardHeight?: number;              // Card height in px (default 100)
   cardColumnSpan?: number;          // Grid column span when in grid layout (1–MAX_POSITION_CHART_COLUMN_SPAN)
   cardRowSpan?: number;             // Grid row span when locked (1–MAX_ROW_SPAN)
+  /** Live quote metric: symbol to poll (e.g. SPY). */
+  quoteSymbol?: string;
+  /** Live quote metric: refresh interval in seconds; 0 = manual refresh only. */
+  quoteRefreshSeconds?: number;
+}
+
+type CurrentPriceSyncContextValue = { enabled: boolean; seconds: number; tick: number };
+const CurrentPriceSyncContext = createContext<CurrentPriceSyncContextValue | null>(null);
+
+function readDashboardCurrentPriceSync(): { enabled: boolean; seconds: number } {
+  const enabled = localStorage.getItem(CURRENT_PRICE_SYNC_ENABLED_KEY) === "true";
+  const raw = parseInt(localStorage.getItem(CURRENT_PRICE_SYNC_SECONDS_KEY) || "30", 10);
+  const seconds = (CURRENT_PRICE_SYNC_INTERVALS as readonly number[]).includes(raw) ? raw : 30;
+  return { enabled, seconds };
+}
+
+function useCurrentPriceQuote(
+  metric: { id: string; quoteSymbol?: string; quoteRefreshSeconds?: number },
+  setMetricInstances: React.Dispatch<React.SetStateAction<MetricInstance[]>>,
+  dataMode: DataMode,
+) {
+  const syncCtx = useContext(CurrentPriceSyncContext);
+  const syncEnabled = syncCtx?.enabled ?? false;
+
+  const persistedSymbol = (metric.quoteSymbol ?? "SPY").trim().toUpperCase() || "SPY";
+  const refreshSec =
+    typeof metric.quoteRefreshSeconds === "number" && !Number.isNaN(metric.quoteRefreshSeconds)
+      ? metric.quoteRefreshSeconds
+      : 30;
+
+  const [symbolDraft, setSymbolDraft] = useState(persistedSymbol);
+  useEffect(() => {
+    setSymbolDraft(persistedSymbol);
+  }, [persistedSymbol, metric.id]);
+
+  const [price, setPrice] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastAt, setLastAt] = useState<Date | null>(null);
+
+  const patchSymbol = useCallback(
+    (symbol: string) => {
+      setMetricInstances((prev) => {
+        const updated = prev.map((inst) =>
+          inst.instanceId === metric.id ? { ...inst, quoteSymbol: symbol } : inst
+        );
+        localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+        return updated;
+      });
+    },
+    [metric.id, setMetricInstances]
+  );
+
+  const fetchOnce = useCallback(async () => {
+    const sym = persistedSymbol;
+    if (!sym) {
+      setError("Enter a symbol");
+      return;
+    }
+    if (dataMode === "sandbox") {
+      setError("Quotes are unavailable in demo mode");
+      setPrice(null);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const quote = await invoke<{ current_price: number | null }>("fetch_stock_quote", { symbol: sym });
+      const p = quote.current_price;
+      if (p != null && Number.isFinite(p) && p > 0) {
+        setPrice(p);
+        setLastAt(new Date());
+      } else {
+        setPrice(null);
+        setError("No price returned");
+      }
+    } catch (e) {
+      setPrice(null);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [persistedSymbol, dataMode]);
+
+  useEffect(() => {
+    void fetchOnce();
+  }, [metric.id, persistedSymbol, fetchOnce]);
+
+  useEffect(() => {
+    if (syncEnabled) return;
+    if (refreshSec <= 0) return;
+    const timerId = window.setInterval(() => void fetchOnce(), refreshSec * 1000);
+    return () => window.clearInterval(timerId);
+  }, [refreshSec, fetchOnce, syncEnabled]);
+
+  useEffect(() => {
+    if (!syncEnabled || !syncCtx) return;
+    if (syncCtx.seconds < 1) return;
+    if (syncCtx.tick === 0) return;
+    void fetchOnce();
+  }, [syncEnabled, syncCtx?.tick, syncCtx?.seconds, fetchOnce]);
+
+  return {
+    symbolDraft,
+    setSymbolDraft,
+    patchSymbol,
+    fetchOnce,
+    price,
+    loading,
+    error,
+    lastAt,
+  };
+}
+
+function CurrentPriceMetricRow({
+  metric,
+  setMetricInstances,
+  dataMode,
+  fillLockedGridCell,
+  refreshActionRef,
+  children,
+}: {
+  metric: { id: string; quoteSymbol?: string; quoteRefreshSeconds?: number };
+  setMetricInstances: React.Dispatch<React.SetStateAction<MetricInstance[]>>;
+  dataMode: DataMode;
+  fillLockedGridCell: boolean;
+  /** Wired to the refresh icon beside the gear */
+  refreshActionRef: React.MutableRefObject<(() => void) | null>;
+  children: React.ReactNode;
+}) {
+  const { symbolDraft, setSymbolDraft, patchSymbol, fetchOnce, price, loading, error, lastAt } = useCurrentPriceQuote(
+    metric,
+    setMetricInstances,
+    dataMode
+  );
+
+  const [symbolFocused, setSymbolFocused] = useState(false);
+
+  useEffect(() => {
+    refreshActionRef.current = () => {
+      void fetchOnce();
+    };
+    return () => {
+      refreshActionRef.current = null;
+    };
+  }, [fetchOnce, refreshActionRef]);
+
+  /** Fixed px row so input + text share one metrics box (avoids ~0.5px drift from UA input padding vs span). */
+  const quoteFontSize = 22;
+  const quoteRowPx = 30;
+  const quoteFontSizeCss = `${quoteFontSize}px`;
+  const quoteRowPxCss = `${quoteRowPx}px`;
+  const quoteUnderlineShadow = `inset 0 -2px 0 0 ${symbolFocused ? "var(--accent)" : "transparent"}`;
+  const quotePlaceholderUnderline = "inset 0 -2px 0 0 transparent";
+
+  return (
+    <div
+      style={{
+        flex: 1,
+        minWidth: 0,
+        minHeight: fillLockedGridCell ? 0 : undefined,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "stretch",
+        justifyContent: "center",
+        gap: "6px",
+        overflow: "hidden",
+        pointerEvents: "auto",
+      }}
+    >
+      <div style={{ textAlign: "center", maxWidth: "100%" }}>{children}</div>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "10px",
+          minWidth: 0,
+        }}
+      >
+        <input
+          type="text"
+          aria-label="Symbol"
+          title="Click to edit symbol"
+          value={symbolDraft}
+          size={Math.max(3, symbolDraft.length || 1)}
+          onChange={(e) => setSymbolDraft(e.target.value.toUpperCase())}
+          onFocus={() => setSymbolFocused(true)}
+          onBlur={() => {
+            setSymbolFocused(false);
+            const v = symbolDraft.trim().toUpperCase() || "SPY";
+            setSymbolDraft(v);
+            patchSymbol(v);
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          spellCheck={false}
+          style={{
+            margin: 0,
+            minWidth: "2.5ch",
+            width: "auto",
+            height: quoteRowPxCss,
+            backgroundColor: "transparent",
+            border: "none",
+            borderRadius: 0,
+            color: "var(--accent)",
+            fontWeight: "bold",
+            fontSize: quoteFontSizeCss,
+            lineHeight: quoteRowPxCss,
+            fontVariantNumeric: "tabular-nums",
+            fontFamily: "inherit",
+            textAlign: "left",
+            caretColor: "var(--accent)",
+            outline: "none",
+            boxShadow: quoteUnderlineShadow,
+            WebkitAppearance: "none" as React.CSSProperties["WebkitAppearance"],
+            appearance: "none",
+            cursor: "text",
+            boxSizing: "border-box",
+            flexShrink: 0,
+            paddingTop: 0,
+            paddingBottom: 0,
+            paddingLeft: 2,
+            paddingRight: 2,
+          }}
+        />
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            height: quoteRowPxCss,
+            minWidth: 0,
+            flex: "1 1 0%",
+            fontSize: quoteFontSizeCss,
+            fontWeight: "bold",
+            lineHeight: quoteRowPxCss,
+            color: "var(--accent)",
+            margin: 0,
+            textAlign: "center",
+            maxWidth: "100%",
+            fontVariantNumeric: "tabular-nums",
+            fontFamily: "inherit",
+            boxShadow: quotePlaceholderUnderline,
+            boxSizing: "border-box",
+            paddingTop: 0,
+            paddingBottom: 0,
+            paddingLeft: 2,
+            paddingRight: 2,
+          }}
+        >
+          {loading && price == null ? "…" : price != null ? `$${formatWithCommas(price, { decimals: 2 })}` : "—"}
+        </span>
+      </div>
+      {error && (
+        <p style={{ fontSize: "10px", color: "var(--loss)", margin: 0, lineHeight: 1.3, textAlign: "center", maxWidth: "100%" }}>{error}</p>
+      )}
+      {lastAt && !error && (
+        <p style={{ fontSize: "10px", color: "var(--text-secondary)", margin: 0, textAlign: "center", maxWidth: "100%" }}>
+          Updated {format(lastAt, "HH:mm:ss")}
+        </p>
+      )}
+    </div>
+  );
 }
 
 interface DashboardSections {
@@ -744,6 +1034,10 @@ const metricDescriptions: Record<string, { description: string; calculation: str
     description: "Step chart of position size over time for a selected open position.",
     calculation: "Running sum of quantity (BUY +, SELL -) by trade timestamp for the chosen position."
   },
+  current_price: {
+    description: "Live last price for a symbol you choose, refreshed on an interval or manually.",
+    calculation: "Fetched from your quote provider via fetch_stock_quote (same source as other quote features)."
+  },
   strategy_win_rate: {
     description: "The win rate for trades assigned to strategies (excluding unassigned trades).",
     calculation: "Strategy winning trades ÷ (Strategy winning trades + Strategy losing trades) × 100%"
@@ -873,6 +1167,8 @@ function SortableMetricCard({
   } = useSortable({ id });
 
   const moveInLockedGridRef = useContext(MoveInLockedGridContext);
+  const currentPriceSyncCtx = useContext(CurrentPriceSyncContext);
+  const currentPriceRefreshRef = useRef<(() => void) | null>(null);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -1463,9 +1759,12 @@ function SortableMetricCard({
     );
   }
 
-  const cardHeight = Math.min(400, Math.max(80, (metric as MetricInstance).cardHeight ?? 100));
+  const rowHeightForCard = typeof lockedRowHeight === "number" && lockedRowHeight > 0 ? lockedRowHeight : 100;
+  const defaultCardH = baseMetricId === "current_price" ? rowHeightForCard : 100;
+  const cardHeight = Math.min(400, Math.max(80, (metric as MetricInstance).cardHeight ?? defaultCardH));
   const cardWidth = (metric as MetricInstance).cardWidth;
   const cardColumnSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as MetricInstance).cardColumnSpan ?? 1));
+  const fillLockedGridCell = layoutLocked && baseMetricId === "current_price";
 
   const handleCardResizeVertical = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1592,9 +1891,9 @@ function SortableMetricCard({
         backgroundColor: "var(--bg-secondary)",
         border: "1px solid var(--border-color)",
         borderRadius: "8px",
-        padding: "20px",
+        padding: fillLockedGridCell ? "8px 12px" : "20px",
         display: "flex",
-        alignItems: "center",
+        alignItems: fillLockedGridCell ? "stretch" : "center",
         gap: "16px",
         cursor: isDragging ? "grabbing" : "grab",
         userSelect: "none",
@@ -1613,11 +1912,13 @@ function SortableMetricCard({
               minWidth: cardWidth ?? 280,
               maxWidth: cardWidth ? 1200 : undefined,
             }),
-        height: `${cardHeight}px`,
+        ...(fillLockedGridCell
+          ? { height: "100%", minHeight: 0, boxSizing: "border-box" as const }
+          : { height: `${cardHeight}px` }),
         ...style,
       }}
     >
-      <div {...attributes} {...listeners} style={{ cursor: "grab", flexShrink: 0 }}>
+      <div {...attributes} {...listeners} style={{ cursor: "grab", flexShrink: 0, ...(fillLockedGridCell ? { alignSelf: "center" } : {}) }}>
         <GripVertical size={16} color="var(--text-secondary)" />
       </div>
       <div
@@ -1632,14 +1933,44 @@ function SortableMetricCard({
           color: color,
           flexShrink: 0,
           pointerEvents: "none",
+          ...(fillLockedGridCell ? { alignSelf: "center" } : {}),
         }}
       >
         <Icon size={24} />
       </div>
+      {(metric as any).baseMetricId === "current_price" ? (
+        <CurrentPriceMetricRow
+          metric={metric}
+          setMetricInstances={setMetricInstances}
+          dataMode={dataMode}
+          fillLockedGridCell={fillLockedGridCell}
+          refreshActionRef={currentPriceRefreshRef}
+        >
+          <p
+            style={{
+              fontSize: "14px",
+              color: "var(--text-secondary)",
+              marginBottom: "4px",
+            }}
+          >
+            {(() => {
+              const selectedStrategyId = strategyFilterForMetrics[metric.id];
+              if (selectedStrategyId !== null && selectedStrategyId !== undefined) {
+                const strategy = strategies.find((s) => s.id === selectedStrategyId);
+                if (strategy) {
+                  return `${metric.label} (${strategy.name})`;
+                }
+              }
+              return metric.label;
+            })()}
+          </p>
+        </CurrentPriceMetricRow>
+      ) : (
       <div 
         style={{ 
           flex: 1, 
           minWidth: 0,
+          minHeight: fillLockedGridCell ? 0 : undefined,
           overflow: "hidden",
           pointerEvents: ((metric as any).baseMetricId === "best_day" || (metric as any).baseMetricId === "worst_day" || (metric as any).baseMetricId === "largest_win" || (metric as any).baseMetricId === "largest_loss") ? "auto" : "none",
           cursor: ((metric as any).baseMetricId === "best_day" || (metric as any).baseMetricId === "worst_day" || (metric as any).baseMetricId === "largest_win" || (metric as any).baseMetricId === "largest_loss") ? "pointer" : "default",
@@ -1714,22 +2045,62 @@ function SortableMetricCard({
             return metric.label;
           })()}
         </p>
-        <p
-          title={formatMetricValue((metric as any).baseMetricId || metric.id, value, metrics)}
-          style={{
-            fontSize: "24px",
-            fontWeight: "bold",
-            color: color,
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {formatMetricValue((metric as any).baseMetricId || metric.id, value, metrics)}
-        </p>
+          <p
+            title={formatMetricValue((metric as any).baseMetricId || metric.id, value, metrics)}
+            style={{
+              fontSize: "24px",
+              fontWeight: "bold",
+              color: color,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {formatMetricValue((metric as any).baseMetricId || metric.id, value, metrics)}
+          </p>
       </div>
-      <div style={{ position: "relative", flexShrink: 0 }}>
+      )}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          flexShrink: 0,
+          gap: "2px",
+          ...(fillLockedGridCell ? { alignSelf: "center" } : {}),
+        }}
+      >
+        {(metric as any).baseMetricId === "current_price" && (
+          <button
+            type="button"
+            title="Refresh quote"
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              currentPriceRefreshRef.current?.();
+            }}
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+            }}
+            style={{
+              background: "transparent",
+              border: "none",
+              padding: "4px",
+              cursor: "pointer",
+              color: "var(--text-secondary)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: "4px",
+              pointerEvents: "auto",
+            }}
+          >
+            <RefreshCw size={16} />
+          </button>
+        )}
+        <div style={{ position: "relative" }}>
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -1821,6 +2192,58 @@ function SortableMetricCard({
                   >
                     <strong>Calculation:</strong> {metricDescriptions[(metric as any).baseMetricId || metric.id].calculation}
                   </div>
+                </div>
+              )}
+              {(metric as any).baseMetricId === "current_price" && (
+                <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--border-color)" }}>
+                  <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>Refresh interval</div>
+                  {currentPriceSyncCtx?.enabled ? (
+                    <div style={{ fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                      Sync is on in Dashboard configure — Current Price cards and Open Positions quotes refresh together every{" "}
+                      {currentPriceSyncCtx.seconds}s.
+                    </div>
+                  ) : (
+                  <select
+                    value={
+                      typeof (metric as MetricInstance).quoteRefreshSeconds === "number" &&
+                      !Number.isNaN((metric as MetricInstance).quoteRefreshSeconds!)
+                        ? (metric as MetricInstance).quoteRefreshSeconds!
+                        : 30
+                    }
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      setMetricInstances((prev) => {
+                        const updated = prev.map((inst) =>
+                          inst.instanceId === metric.id ? { ...inst, quoteRefreshSeconds: v } : inst
+                        );
+                        localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+                        return updated;
+                      });
+                    }}
+                    onClick={(ev) => ev.stopPropagation()}
+                    onMouseDown={(ev) => ev.stopPropagation()}
+                    style={{
+                      width: "100%",
+                      padding: "8px 10px",
+                      backgroundColor: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "6px",
+                      color: "var(--text-primary)",
+                      fontSize: "13px",
+                      cursor: "pointer",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <option value={0}>Manual only</option>
+                    <option value={1}>Every 1s</option>
+                    <option value={5}>Every 5s</option>
+                    <option value={10}>Every 10s</option>
+                    <option value={15}>Every 15s</option>
+                    <option value={30}>Every 30s</option>
+                    <option value={60}>Every 1m</option>
+                    <option value={120}>Every 2m</option>
+                  </select>
+                  )}
                 </div>
               )}
               {layoutLocked && moveInLockedGridRef?.current ? (
@@ -2078,6 +2501,7 @@ function SortableMetricCard({
           </div>,
           document.body
         )}
+        </div>
       </div>
       {/* Resize: right edge (width / column span) - invisible hit area */}
       <div
@@ -2147,7 +2571,7 @@ export default function Dashboard() {
   }, []);
 
   // Fetch current prices for open position symbols (Real/Paper only)
-  const fetchOpenPositionQuotes = async (showLoading = true) => {
+  const fetchOpenPositionQuotes = useCallback(async (showLoading = true) => {
     if (dataMode === "sandbox" || openPositionGroups.length === 0) {
       setOpenPositionQuotes({});
       return;
@@ -2166,7 +2590,7 @@ export default function Dashboard() {
     setOpenPositionQuotes((prev) => ({ ...prev, ...next }));
     setLastQuoteRefresh(new Date());
     if (showLoading) setIsRefreshingQuotes(false);
-  };
+  }, [dataMode, openPositionGroups]);
 
   // Initial fetch and when positions change
   useEffect(() => {
@@ -2174,8 +2598,8 @@ export default function Dashboard() {
       setOpenPositionQuotes({});
       return;
     }
-    fetchOpenPositionQuotes(true);
-  }, [dataMode, openPositionGroups]);
+    void fetchOpenPositionQuotes(true);
+  }, [dataMode, openPositionGroups, fetchOpenPositionQuotes]);
 
   const [strategyFilterForMetrics, setStrategyFilterForMetrics] = useState<Record<string, number | null>>(() => {
     const saved = localStorage.getItem("tradebutler_strategy_filter_for_metrics");
@@ -2264,6 +2688,14 @@ export default function Dashboard() {
       baseMetricId: instance.baseMetricId,
       strategyFilterId: instance.strategyFilterId,
       ...(instance.baseMetricId === "position_size_chart" ? { positionEntryId: (instance as MetricInstance).positionEntryId ?? null } : {}),
+      ...(instance.baseMetricId === "current_price"
+        ? {
+            quoteSymbol: instance.quoteSymbol,
+            quoteRefreshSeconds: instance.quoteRefreshSeconds,
+            cardColumnSpan: (instance as MetricInstance).cardColumnSpan ?? 1,
+            cardRowSpan: (instance as MetricInstance).cardRowSpan ?? 1,
+          }
+        : {}),
     };
     
     const updatedInstances = [...metricInstances, newInstance];
@@ -2350,6 +2782,9 @@ export default function Dashboard() {
       baseMetricId: baseMetricId,
       strategyFilterId: null,
       ...(baseMetricId === "position_size_chart" ? { positionEntryId: null } : {}),
+      ...(baseMetricId === "current_price"
+        ? { quoteSymbol: "SPY", quoteRefreshSeconds: 30, cardColumnSpan: 1, cardRowSpan: 1 }
+        : {}),
     };
     
     const updatedInstances = [...metricInstances, newInstance];
@@ -2407,6 +2842,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [showMetricsConfig, setShowMetricsConfig] = useState(false);
   const [configKey, setConfigKey] = useState(0); // Force re-render when config changes
+  const [currentPriceSync, setCurrentPriceSync] = useState(readDashboardCurrentPriceSync);
+  const [currentPriceSyncTick, setCurrentPriceSyncTick] = useState(0);
   const layoutLocked = true;
   const [expandedRecentTrades, setExpandedRecentTrades] = useState<Set<number>>(new Set());
   const [expandedStrategies, setExpandedStrategies] = useState<Set<number | string>>(new Set());
@@ -2483,17 +2920,34 @@ export default function Dashboard() {
   const [isRefreshingQuotes, setIsRefreshingQuotes] = useState(false);
   const [lastQuoteRefresh, setLastQuoteRefresh] = useState<Date | null>(null);
 
-  // Auto-refresh interval for open position quotes
+  // Auto-refresh interval for open position quotes (minutes; skipped when dashboard quote sync is on)
   useEffect(() => {
     if (dataMode === "sandbox" || openPositionGroups.length === 0 || openPositionsRefreshInterval === 0) {
       return;
     }
+    if (currentPriceSync.enabled) {
+      return;
+    }
     const intervalMs = openPositionsRefreshInterval * 60 * 1000;
     const intervalId = setInterval(() => {
-      fetchOpenPositionQuotes(false);
+      void fetchOpenPositionQuotes(false);
     }, intervalMs);
     return () => clearInterval(intervalId);
-  }, [dataMode, openPositionGroups, openPositionsRefreshInterval]);
+  }, [dataMode, openPositionGroups, openPositionsRefreshInterval, currentPriceSync.enabled, fetchOpenPositionQuotes]);
+
+  // Open Positions: same tick as Current Price sync (shared seconds interval)
+  useEffect(() => {
+    if (!currentPriceSync.enabled) return;
+    if (dataMode === "sandbox" || openPositionGroups.length === 0) return;
+    if (currentPriceSyncTick === 0) return;
+    void fetchOpenPositionQuotes(false);
+  }, [
+    currentPriceSync.enabled,
+    currentPriceSyncTick,
+    dataMode,
+    openPositionGroups.length,
+    fetchOpenPositionQuotes,
+  ]);
 
   const [metricCardOrder, setMetricCardOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem(METRIC_CARDS_ORDER_KEY);
@@ -3137,6 +3591,19 @@ export default function Dashboard() {
     setLockedRowHeight(Math.min(MAX_ROW_HEIGHT_PX, Math.max(MIN_ROW_HEIGHT_PX, Number.isNaN(n) ? 100 : n)));
   }, [configKey]);
 
+  useEffect(() => {
+    setCurrentPriceSync(readDashboardCurrentPriceSync());
+  }, [configKey]);
+
+  useEffect(() => {
+    if (!currentPriceSync.enabled) return;
+    if (currentPriceSync.seconds < 1) return;
+    const id = window.setInterval(() => {
+      setCurrentPriceSyncTick((t) => t + 1);
+    }, currentPriceSync.seconds * 1000);
+    return () => window.clearInterval(id);
+  }, [currentPriceSync.enabled, currentPriceSync.seconds]);
+
   // Sync metric card order when instances change
   useEffect(() => {
     const instanceIds = metricInstances.map(inst => inst.instanceId);
@@ -3190,6 +3657,8 @@ export default function Dashboard() {
           cardHeight: inst.cardHeight ?? undefined,
           cardColumnSpan: inst.cardColumnSpan ?? undefined,
           cardRowSpan: inst.cardRowSpan ?? undefined,
+          quoteSymbol: inst.quoteSymbol,
+          quoteRefreshSeconds: inst.quoteRefreshSeconds,
         };
       })
       .filter((m): m is any => m !== null);
@@ -3738,6 +4207,7 @@ export default function Dashboard() {
     average_loss_pct: metrics?.average_loss_pct || 0,
     largest_win_pct: metrics?.largest_win_pct || 0,
     largest_loss_pct: metrics?.largest_loss_pct || 0,
+    current_price: 0,
   };
 
   const splitGrid = localStorage.getItem(DASHBOARD_SPLIT_GRID_KEY) === "true";
@@ -3764,6 +4234,13 @@ export default function Dashboard() {
   })();
 
   return (
+    <CurrentPriceSyncContext.Provider
+      value={{
+        enabled: currentPriceSync.enabled,
+        seconds: currentPriceSync.seconds,
+        tick: currentPriceSyncTick,
+      }}
+    >
     <MoveInLockedGridContext.Provider value={moveInLockedGridRef}>
     <div style={{ padding: `${dashboardPaddingPx}px` }}>
           <div
@@ -5710,7 +6187,7 @@ export default function Dashboard() {
                             onClick={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
-                              fetchOpenPositionQuotes(true);
+                              void fetchOpenPositionQuotes(true);
                             }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
@@ -5952,6 +6429,12 @@ export default function Dashboard() {
                                   <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                                   <div style={{ padding: "4px 0" }}>
                                     <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>Auto-Refresh Prices</div>
+                                    {currentPriceSync.enabled ? (
+                                      <div style={{ fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                                        Live quotes sync is on in Dashboard configure — open position prices refresh with Current Price cards every{" "}
+                                        {currentPriceSync.seconds}s.
+                                      </div>
+                                    ) : (
                                     <select
                                       value={openPositionsRefreshInterval}
                                       onChange={(e) => {
@@ -5983,6 +6466,7 @@ export default function Dashboard() {
                                       <option value={30} style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}>30 min</option>
                                       <option value={60} style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}>60 min</option>
                                     </select>
+                                    )}
                                     {lastQuoteRefresh && (
                                       <div style={{ fontSize: "10px", color: "var(--text-secondary)", marginTop: "4px" }}>
                                         Last refresh: {format(lastQuoteRefresh, "h:mm:ss a")}
@@ -7122,5 +7606,6 @@ export default function Dashboard() {
         )}
     </div>
     </MoveInLockedGridContext.Provider>
+    </CurrentPriceSyncContext.Provider>
   );
 }

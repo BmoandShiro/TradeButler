@@ -47,10 +47,15 @@ const defaultMetrics: MetricConfig[] = [
   { id: "worst_day", label: "Worst Day", enabled: false, category: "Advanced" },
   { id: "average_holding_time_seconds", label: "Avg Holding Time", enabled: true, category: "Performance" },
   { id: "position_size_chart", label: "Position Size Chart", enabled: false, category: "Charts" },
+  { id: "current_price", label: "Current Price", enabled: false, category: "Market" },
 ];
 
 const STORAGE_KEY = "tradebutler_metrics_config";
 export const COLOR_RANGE_KEY = "tradebutler_color_range";
+/** When enabled, Current Price cards and Open Positions live quotes refresh together on this interval (seconds). */
+export const CURRENT_PRICE_SYNC_ENABLED_KEY = "tradebutler_current_price_sync_enabled";
+export const CURRENT_PRICE_SYNC_SECONDS_KEY = "tradebutler_current_price_sync_seconds";
+export const CURRENT_PRICE_SYNC_INTERVALS = [1, 5, 10, 15, 30, 60, 120] as const;
 const DASHBOARD_SECTIONS_KEY = "tradebutler_dashboard_sections";
 export const DASHBOARD_MAX_METRIC_ROWS_KEY = "tradebutler_dashboard_max_metric_rows";
 export const DASHBOARD_MAX_COLUMNS_KEY = "tradebutler_dashboard_max_columns";
@@ -182,6 +187,92 @@ export function useMetricsConfig() {
     getEnabledMetrics,
     resetToDefaults,
   };
+}
+
+function readCurrentPriceSyncSeconds(): number {
+  const raw = parseInt(localStorage.getItem(CURRENT_PRICE_SYNC_SECONDS_KEY) || "30", 10);
+  return (CURRENT_PRICE_SYNC_INTERVALS as readonly number[]).includes(raw) ? raw : 30;
+}
+
+function formatSyncIntervalLabel(sec: number): string {
+  if (sec === 60) return "Every 1 minute";
+  if (sec === 120) return "Every 2 minutes";
+  if (sec === 1) return "Every 1 second";
+  return `Every ${sec} seconds`;
+}
+
+function CurrentPriceSyncControls({ onConfigChange }: { onConfigChange?: () => void }) {
+  const [syncEnabled, setSyncEnabled] = useState(() => localStorage.getItem(CURRENT_PRICE_SYNC_ENABLED_KEY) === "true");
+  const [syncSeconds, setSyncSeconds] = useState(readCurrentPriceSyncSeconds);
+
+  return (
+    <>
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "12px",
+          cursor: "pointer",
+        }}
+      >
+        <span style={{ color: "var(--text-primary)", fontSize: "14px" }}>
+          Sync live quotes (Current Price + Open Positions)
+        </span>
+        <input
+          type="checkbox"
+          checked={syncEnabled}
+          onChange={(e) => {
+            const v = e.target.checked;
+            localStorage.setItem(CURRENT_PRICE_SYNC_ENABLED_KEY, v ? "true" : "false");
+            setSyncEnabled(v);
+            onConfigChange?.();
+          }}
+          style={{
+            width: "18px",
+            height: "18px",
+            cursor: "pointer",
+            accentColor: "var(--accent)",
+            flexShrink: 0,
+          }}
+        />
+      </label>
+      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+        <label style={{ fontSize: "13px", color: syncEnabled ? "var(--text-secondary)" : "var(--text-secondary)", opacity: syncEnabled ? 1 : 0.5 }}>
+          Shared refresh interval
+        </label>
+        <select
+          value={syncSeconds}
+          disabled={!syncEnabled}
+          onChange={(e) => {
+            const v = parseInt(e.target.value, 10);
+            localStorage.setItem(CURRENT_PRICE_SYNC_SECONDS_KEY, String(v));
+            setSyncSeconds(v);
+            onConfigChange?.();
+          }}
+          style={{
+            padding: "8px 12px",
+            backgroundColor: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "6px",
+            color: "var(--text-primary)",
+            fontSize: "14px",
+            cursor: syncEnabled ? "pointer" : "not-allowed",
+            opacity: syncEnabled ? 1 : 0.55,
+          }}
+        >
+          {CURRENT_PRICE_SYNC_INTERVALS.map((s) => (
+            <option key={s} value={s}>
+              {formatSyncIntervalLabel(s)}
+            </option>
+          ))}
+        </select>
+        <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+          When sync is on, every Current Price card refreshes at the same time on this schedule. Per-card intervals in the gear menu are ignored until sync is turned off.
+        </div>
+      </div>
+    </>
+  );
 }
 
 interface MetricsConfigPanelProps {
@@ -645,6 +736,33 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
                 />
               </label>
             ))}
+          </div>
+        </div>
+
+        {/* Live quotes — synced refresh */}
+        <div style={{ marginBottom: "24px" }}>
+          <h3
+            style={{
+              fontSize: "16px",
+              fontWeight: "600",
+              marginBottom: "12px",
+              color: "var(--text-primary)",
+            }}
+          >
+            Live quotes sync
+          </h3>
+          <div
+            style={{
+              padding: "12px",
+              backgroundColor: "var(--bg-tertiary)",
+              borderRadius: "6px",
+              border: "1px solid var(--border-color)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "10px",
+            }}
+          >
+            <CurrentPriceSyncControls onConfigChange={onConfigChange} />
           </div>
         </div>
 
