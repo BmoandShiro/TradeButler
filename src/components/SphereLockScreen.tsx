@@ -2,163 +2,21 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Unlock, AlertCircle, Trash2 } from "lucide-react";
 import { unlockApp, getPasswordType, deletePassword } from "../utils/passwordManager";
 import { invoke } from "@tauri-apps/api/tauri";
-import { getSphereThemeSettings, SphereShape } from "../utils/sphereThemeManager";
+import { getSphereThemeSettings } from "../utils/sphereThemeManager";
+import { getLockScreenRendererPreference, canUseWebGL2 } from "../utils/lockScreenRenderer";
+import {
+  generateDots,
+  type SphereDot,
+  type Star,
+  type Ripple,
+  type BurstParticle,
+} from "../features/lockScreen/sphereLockTypes";
+import { updateAndProjectSphereLayer } from "../features/lockScreen/sphereProjection";
+import { drawSphereLayerOnCanvas } from "../features/lockScreen/sphereCanvasDraw";
+import { createSphereWebGLApi, type SphereWebGLApi } from "../features/lockScreen/sphereWebGL";
 
 interface SphereLockScreenProps {
   onUnlock: () => void;
-}
-
-interface SphereDot {
-  baseX: number;
-  baseY: number;
-  baseZ: number;
-  x: number;
-  y: number;
-  z: number;
-  vx: number;
-  vy: number;
-  vz: number;
-  radius: number;
-  trail: Array<{ x: number; y: number; z: number }>;
-}
-
-interface Star {
-  x: number;
-  y: number;
-  size: number;
-  opacity: number;
-  twinkleOffset: number;
-}
-
-interface Ripple {
-  x: number;
-  y: number;
-  radius: number;
-  maxRadius: number;
-  opacity: number;
-}
-
-interface Particle {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  life: number;
-  maxLife: number;
-  size: number;
-}
-
-// Generate dots based on shape
-function generateDots(shape: SphereShape, rings: number, dotsPerRing: number, radius: number, dotSize: number, hollow: boolean): SphereDot[] {
-  const dots: SphereDot[] = [];
-  
-  switch (shape) {
-    case "sphere": {
-      const startRing = hollow ? 0 : 0;
-      const endRing = rings;
-      for (let i = startRing; i < endRing; i++) {
-        const phi = Math.PI * (i / (rings - 1));
-        for (let j = 0; j < dotsPerRing; j++) {
-          const theta = (2 * Math.PI * j) / dotsPerRing;
-          const x = Math.sin(phi) * Math.cos(theta);
-          const y = Math.cos(phi);
-          const z = Math.sin(phi) * Math.sin(theta);
-          dots.push({
-            baseX: x, baseY: y, baseZ: z,
-            x: x * radius, y: y * radius, z: z * radius,
-            vx: 0, vy: 0, vz: 0, radius: dotSize, trail: [],
-          });
-        }
-      }
-      break;
-    }
-    case "torus": {
-      const majorRadius = 1;
-      const minorRadius = 0.4;
-      for (let i = 0; i < rings; i++) {
-        const u = (2 * Math.PI * i) / rings;
-        for (let j = 0; j < dotsPerRing; j++) {
-          const v = (2 * Math.PI * j) / dotsPerRing;
-          const x = (majorRadius + minorRadius * Math.cos(v)) * Math.cos(u);
-          const y = minorRadius * Math.sin(v);
-          const z = (majorRadius + minorRadius * Math.cos(v)) * Math.sin(u);
-          dots.push({
-            baseX: x, baseY: y, baseZ: z,
-            x: x * radius, y: y * radius, z: z * radius,
-            vx: 0, vy: 0, vz: 0, radius: dotSize, trail: [],
-          });
-        }
-      }
-      break;
-    }
-    case "cube": {
-      const size = 1;
-      const dotsPerEdge = Math.ceil(Math.cbrt(rings * dotsPerRing / 6));
-      // Generate dots on each face
-      for (let face = 0; face < 6; face++) {
-        for (let i = 0; i < dotsPerEdge; i++) {
-          for (let j = 0; j < dotsPerEdge; j++) {
-            const u = (i / (dotsPerEdge - 1)) * 2 - 1;
-            const v = (j / (dotsPerEdge - 1)) * 2 - 1;
-            let x = 0, y = 0, z = 0;
-            switch (face) {
-              case 0: x = size; y = u; z = v; break;
-              case 1: x = -size; y = u; z = v; break;
-              case 2: x = u; y = size; z = v; break;
-              case 3: x = u; y = -size; z = v; break;
-              case 4: x = u; y = v; z = size; break;
-              case 5: x = u; y = v; z = -size; break;
-            }
-            dots.push({
-              baseX: x, baseY: y, baseZ: z,
-              x: x * radius * 0.7, y: y * radius * 0.7, z: z * radius * 0.7,
-              vx: 0, vy: 0, vz: 0, radius: dotSize, trail: [],
-            });
-          }
-        }
-      }
-      break;
-    }
-    case "helix": {
-      const turns = 3;
-      const totalDots = rings * dotsPerRing;
-      for (let i = 0; i < totalDots; i++) {
-        const t = i / totalDots;
-        const angle = t * turns * 2 * Math.PI;
-        const x = Math.cos(angle) * 0.5;
-        const y = t * 2 - 1;
-        const z = Math.sin(angle) * 0.5;
-        dots.push({
-          baseX: x, baseY: y, baseZ: z,
-          x: x * radius, y: y * radius, z: z * radius,
-          vx: 0, vy: 0, vz: 0, radius: dotSize, trail: [],
-        });
-      }
-      break;
-    }
-    case "doubleHelix": {
-      const turns = 3;
-      const totalDots = (rings * dotsPerRing) / 2;
-      for (let strand = 0; strand < 2; strand++) {
-        const offset = strand * Math.PI;
-        for (let i = 0; i < totalDots; i++) {
-          const t = i / totalDots;
-          const angle = t * turns * 2 * Math.PI + offset;
-          const x = Math.cos(angle) * 0.5;
-          const y = t * 2 - 1;
-          const z = Math.sin(angle) * 0.5;
-          dots.push({
-            baseX: x, baseY: y, baseZ: z,
-            x: x * radius, y: y * radius, z: z * radius,
-            vx: 0, vy: 0, vz: 0, radius: dotSize, trail: [],
-          });
-        }
-      }
-      break;
-    }
-  }
-  
-  return dots;
 }
 
 export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
@@ -171,12 +29,14 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const passwordInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const mountRef = useRef<HTMLDivElement>(null);
+  const backgroundRef = useRef<HTMLDivElement>(null);
   const animationFrameRef = useRef<number>();
   const dotsRef = useRef<SphereDot[]>([]);
   const orbitingDotsRef = useRef<SphereDot[][]>([]);
   const starsRef = useRef<Star[]>([]);
   const ripplesRef = useRef<Ripple[]>([]);
-  const particlesRef = useRef<Particle[]>([]);
+  const particlesRef = useRef<BurstParticle[]>([]);
   const mouseRef = useRef({ x: 0, y: 0, pressed: false });
   const angleRef = useRef({ x: 0, y: 0, z: 0 });
   const pulseRef = useRef(0);
@@ -184,6 +44,9 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
   const settingsRef = useRef(getSphereThemeSettings());
   const scatterRef = useRef(false);
   const explodeRef = useRef(false);
+  const [webglFailed, setWebglFailed] = useState(false);
+  const wantWebgl = getLockScreenRendererPreference() === "webgl" && canUseWebGL2();
+  const useWebgl = wantWebgl && !webglFailed;
   const passwordType = getPasswordType();
 
   // Update settings when they change
@@ -226,18 +89,17 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
       
       // Recreate stars if needed
       if (newSettings.starsEnabled && starsRef.current.length !== newSettings.starCount) {
-        const canvas = canvasRef.current;
-        if (canvas) {
-          starsRef.current = [];
-          for (let i = 0; i < newSettings.starCount; i++) {
-            starsRef.current.push({
-              x: Math.random() * canvas.width,
-              y: Math.random() * canvas.height,
-              size: Math.random() * 2 + 0.5,
-              opacity: Math.random() * 0.5 + 0.3,
-              twinkleOffset: Math.random() * Math.PI * 2,
-            });
-          }
+        const w = canvasRef.current?.width ?? window.innerWidth;
+        const h = canvasRef.current?.height ?? window.innerHeight;
+        starsRef.current = [];
+        for (let i = 0; i < newSettings.starCount; i++) {
+          starsRef.current.push({
+            x: Math.random() * w,
+            y: Math.random() * h,
+            size: Math.random() * 2 + 0.5,
+            opacity: Math.random() * 0.5 + 0.3,
+            twinkleOffset: Math.random() * Math.PI * 2,
+          });
         }
       }
     };
@@ -256,11 +118,10 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
     };
   }, []);
 
-  // Handle click for ripples
-  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handleBackgroundClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const settings = settingsRef.current;
     if (settings.clickRippleEnabled) {
-      const rect = canvasRef.current?.getBoundingClientRect();
+      const rect = backgroundRef.current?.getBoundingClientRect();
       if (rect) {
         ripplesRef.current.push({
           x: e.clientX - rect.left,
@@ -273,116 +134,258 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
     }
   }, []);
 
-  // Initialize animation
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    let webglApi: SphereWebGLApi | null = null;
 
     const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      
-      // Recreate stars on resize
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const c = canvasRef.current;
+      if (c) {
+        c.width = w;
+        c.height = h;
+      }
       const settings = settingsRef.current;
       if (settings.starsEnabled) {
         starsRef.current = [];
         for (let i = 0; i < settings.starCount; i++) {
           starsRef.current.push({
-            x: Math.random() * canvas.width,
-            y: Math.random() * canvas.height,
+            x: Math.random() * w,
+            y: Math.random() * h,
             size: Math.random() * 2 + 0.5,
             opacity: Math.random() * 0.5 + 0.3,
             twinkleOffset: Math.random() * Math.PI * 2,
           });
         }
       }
+      webglApi?.resize(w, h);
     };
+
     resizeCanvas();
     window.addEventListener("resize", resizeCanvas);
 
-    // Create initial dots
-    const settings = settingsRef.current;
-    dotsRef.current = generateDots(
-      settings.shape, settings.rings, settings.dotsPerRing,
-      settings.sphereRadius, settings.dotSize, settings.hollowMode
-    );
-    
-    // Create orbiting spheres
-    if (settings.multipleSpheresEnabled) {
-      orbitingDotsRef.current = [];
-      for (let i = 0; i < settings.additionalSphereCount; i++) {
-        orbitingDotsRef.current.push(generateDots(
-          settings.shape, 
-          settings.orbitingSpheresRings, 
-          settings.orbitingSpheresDotsPerRing,
-          settings.sphereRadius * settings.orbitingSpheresScale, 
-          settings.orbitingSpheresDotSize, 
-          settings.hollowMode
-        ));
-      }
+    if (useWebgl && mountRef.current) {
+      const api = createSphereWebGLApi(mountRef.current, () => setWebglFailed(true));
+      webglApi = api;
+      api.resize(window.innerWidth, window.innerHeight);
     }
-    
-    // Create stars
-    if (settings.starsEnabled) {
-      for (let i = 0; i < settings.starCount; i++) {
-        starsRef.current.push({
-          x: Math.random() * canvas.width,
-          y: Math.random() * canvas.height,
-          size: Math.random() * 2 + 0.5,
-          opacity: Math.random() * 0.5 + 0.3,
-          twinkleOffset: Math.random() * Math.PI * 2,
-        });
+
+    const settingsInit = settingsRef.current;
+    dotsRef.current = generateDots(
+      settingsInit.shape,
+      settingsInit.rings,
+      settingsInit.dotsPerRing,
+      settingsInit.sphereRadius,
+      settingsInit.dotSize,
+      settingsInit.hollowMode
+    );
+
+    if (settingsInit.multipleSpheresEnabled) {
+      orbitingDotsRef.current = [];
+      for (let i = 0; i < settingsInit.additionalSphereCount; i++) {
+        orbitingDotsRef.current.push(
+          generateDots(
+            settingsInit.shape,
+            settingsInit.orbitingSpheresRings,
+            settingsInit.orbitingSpheresDotsPerRing,
+            settingsInit.sphereRadius * settingsInit.orbitingSpheresScale,
+            settingsInit.orbitingSpheresDotSize,
+            settingsInit.hollowMode
+          )
+        );
       }
     }
 
-    // Mouse tracking
     const handleMouseMove = (e: MouseEvent) => {
       mouseRef.current.x = e.clientX;
       mouseRef.current.y = e.clientY;
     };
-    const handleMouseDown = () => { mouseRef.current.pressed = true; };
-    const handleMouseUp = () => { mouseRef.current.pressed = false; };
+    const handleMouseDown = () => {
+      mouseRef.current.pressed = true;
+    };
+    const handleMouseUp = () => {
+      mouseRef.current.pressed = false;
+    };
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mousedown", handleMouseDown);
     window.addEventListener("mouseup", handleMouseUp);
 
-    // Helper functions
     const hexToRgb = (hex: string) => {
       const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
       return result
         ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) }
         : { r: 59, g: 130, b: 246 };
     };
-    
-    const lerpColor = (color1: {r: number, g: number, b: number}, color2: {r: number, g: number, b: number}, t: number) => {
-      return {
-        r: Math.round(color1.r + (color2.r - color1.r) * t),
-        g: Math.round(color1.g + (color2.g - color1.g) * t),
-        b: Math.round(color1.b + (color2.b - color1.b) * t),
-      };
-    };
 
     let time = 0;
 
-    // Animation loop
     const animate = () => {
       const settings = settingsRef.current;
       time += 0.016;
-      
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const centerX = w / 2;
+      const centerY = h / 2;
+
+      const projectionParams = {
+        settings,
+        centerX,
+        centerY,
+        mouse: mouseRef.current,
+        angleRef,
+        pulseRef,
+        waveRef,
+        scatterRef,
+        explodeRef,
+        particlesRef,
+      };
+
+      if (settings.rotateX) angleRef.current.x += settings.rotationSpeed;
+      if (settings.rotateY) angleRef.current.y += settings.rotationSpeed;
+      if (settings.rotateZ) angleRef.current.z += settings.rotationSpeed;
+      if (settings.pulseEnabled) pulseRef.current += settings.pulseSpeed;
+      if (settings.waveEnabled) waveRef.current += settings.waveSpeed;
+
+      const dotColor = hexToRgb(settings.dotColor);
+      const lineColorRgb = hexToRgb(settings.lineColor);
+      const orbitingLineColorRgb = hexToRgb(settings.orbitingSpheresLineColor);
+      const mainLineRgb = settings.linesMatchDotColor ? dotColor : lineColorRgb;
+
+      const mainProjected = updateAndProjectSphereLayer(
+        dotsRef.current,
+        0,
+        0,
+        1,
+        undefined,
+        projectionParams
+      );
+
+      if (webglApi) {
+        const layers = [
+          {
+            projected: mainProjected,
+            connectionDistance: settings.connectionDistance,
+            lineRgb: mainLineRgb,
+            wireframeRings: settings.rings,
+            wireframeDotsPerRing: settings.dotsPerRing,
+            showConnections: settings.showConnections,
+            wireframeMode: settings.wireframeMode,
+            centerX,
+            centerY,
+            offsetX: 0,
+            offsetY: 0,
+          },
+        ];
+
+        if (settings.multipleSpheresEnabled) {
+          for (let i = 0; i < orbitingDotsRef.current.length; i++) {
+            const orbitAngle =
+              time * settings.orbitingSpheresSpeed +
+              (i * 2 * Math.PI) / settings.additionalSphereCount;
+            const orbitRadius = settings.sphereRadius * settings.orbitingSpheresDistance;
+            const offsetX = Math.cos(orbitAngle) * orbitRadius;
+            const offsetY = Math.sin(orbitAngle * 0.5) * orbitRadius * 0.3;
+            const orbColor = settings.orbitingSpheresSameColor
+              ? dotColor
+              : hexToRgb(settings.orbitingSpheresColor);
+            const orbLineRgb = settings.linesMatchDotColor ? orbColor : orbitingLineColorRgb;
+            layers.push({
+              projected: updateAndProjectSphereLayer(
+                orbitingDotsRef.current[i],
+                offsetX,
+                offsetY,
+                settings.orbitingSpheresScale,
+                orbColor,
+                projectionParams
+              ),
+              connectionDistance: settings.connectionDistance,
+              lineRgb: orbLineRgb,
+              wireframeRings: settings.orbitingSpheresRings,
+              wireframeDotsPerRing: settings.orbitingSpheresDotsPerRing,
+              showConnections: settings.showConnections,
+              wireframeMode: settings.wireframeMode,
+              centerX,
+              centerY,
+              offsetX,
+              offsetY,
+            });
+          }
+        }
+
+        if (settings.clickRippleEnabled) {
+          for (let i = ripplesRef.current.length - 1; i >= 0; i--) {
+            const ripple = ripplesRef.current[i];
+            ripple.radius += 5;
+            ripple.opacity -= 0.02;
+            if (ripple.opacity <= 0 || ripple.radius >= ripple.maxRadius) {
+              ripplesRef.current.splice(i, 1);
+              continue;
+            }
+            for (const pd of mainProjected) {
+              const dx = pd.screenX - ripple.x;
+              const dy = pd.screenY - ripple.y;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              if (dist > 0 && Math.abs(dist - ripple.radius) < 30) {
+                const force = ripple.opacity * 0.5;
+                pd.dot.vx += (dx / dist) * force;
+                pd.dot.vy += (dy / dist) * force;
+              }
+            }
+          }
+        }
+
+        if (settings.particleBurstEnabled) {
+          for (let i = particlesRef.current.length - 1; i >= 0; i--) {
+            const p = particlesRef.current[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life -= 0.02;
+            if (p.life <= 0) {
+              particlesRef.current.splice(i, 1);
+            }
+          }
+        }
+
+        webglApi.renderFrame({
+          width: w,
+          height: h,
+          backgroundColor: settings.backgroundColor,
+          stars: starsRef.current,
+          starTwinkle: settings.starTwinkle,
+          time,
+          layers,
+          settings,
+          ripples: [...ripplesRef.current],
+          particles: [...particlesRef.current],
+          dotRgb: dotColor,
+        });
+
+        if (scatterRef.current) {
+          setTimeout(() => {
+            scatterRef.current = false;
+          }, 1000);
+        }
+        if (explodeRef.current) {
+          setTimeout(() => {
+            explodeRef.current = false;
+          }, 500);
+        }
+
+        animationFrameRef.current = requestAnimationFrame(animate);
+        return;
+      }
+
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext("2d");
+      if (!canvas || !ctx) {
+        animationFrameRef.current = requestAnimationFrame(animate);
+        return;
+      }
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      // Background
       ctx.fillStyle = settings.backgroundColor;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      const centerX = canvas.width / 2;
-      const centerY = canvas.height / 2;
-      const mouse = mouseRef.current;
-
-      // Draw stars
       if (settings.starsEnabled) {
         for (const star of starsRef.current) {
           let opacity = star.opacity;
@@ -396,338 +399,93 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
         }
       }
 
-      // Update rotation angles
-      if (settings.rotateX) angleRef.current.x += settings.rotationSpeed;
-      if (settings.rotateY) angleRef.current.y += settings.rotationSpeed;
-      if (settings.rotateZ) angleRef.current.z += settings.rotationSpeed;
-      
-      // Update pulse
-      if (settings.pulseEnabled) {
-        pulseRef.current += settings.pulseSpeed;
-      }
-      
-      // Update wave
-      if (settings.waveEnabled) {
-        waveRef.current += settings.waveSpeed;
-      }
+      drawSphereLayerOnCanvas(
+        ctx,
+        mainProjected,
+        settings,
+        mainLineRgb,
+        centerX,
+        centerY,
+        0,
+        0,
+        settings.rings,
+        settings.dotsPerRing
+      );
 
-      const dotColor = hexToRgb(settings.dotColor);
-      const lineColor = hexToRgb(settings.lineColor);
-      const gradientFront = hexToRgb(settings.gradientColorFront);
-      const gradientBack = hexToRgb(settings.gradientColorBack);
-
-      // Process main sphere dots
-      const processDots = (dots: SphereDot[], offsetX: number, offsetY: number, scale: number, colorOverride?: {r: number, g: number, b: number}) => {
-        const projectedDots: Array<{ 
-          screenX: number; screenY: number; z: number; 
-          opacity: number; size: number; color: {r: number, g: number, b: number};
-          dot: SphereDot;
-        }> = [];
-        
-        const baseColor = colorOverride || dotColor;
-
-        // Pulse scale
-        let pulseScale = 1;
-        if (settings.pulseEnabled) {
-          pulseScale = 1 + Math.sin(pulseRef.current) * settings.pulseIntensity;
-        }
-
-        // Scatter/explode multiplier
-        let scatterMultiplier = 1;
-        if (scatterRef.current) {
-          scatterMultiplier = 3;
-        }
-        if (explodeRef.current) {
-          scatterMultiplier = 5;
-        }
-
-        for (const dot of dots) {
-          // Rotate around all axes
-          let x = dot.baseX;
-          let y = dot.baseY;
-          let z = dot.baseZ;
-          
-          // Y rotation
-          const cosY = Math.cos(angleRef.current.y);
-          const sinY = Math.sin(angleRef.current.y);
-          let newX = x * cosY - z * sinY;
-          let newZ = x * sinY + z * cosY;
-          x = newX;
-          z = newZ;
-          
-          // X rotation
-          if (settings.rotateX) {
-            const cosX = Math.cos(angleRef.current.x);
-            const sinX = Math.sin(angleRef.current.x);
-            const newY = y * cosX - z * sinX;
-            newZ = y * sinX + z * cosX;
-            y = newY;
-            z = newZ;
-          }
-          
-          // Z rotation
-          if (settings.rotateZ) {
-            const cosZ = Math.cos(angleRef.current.z);
-            const sinZ = Math.sin(angleRef.current.z);
-            newX = x * cosZ - y * sinZ;
-            const newY = x * sinZ + y * cosZ;
-            x = newX;
-            y = newY;
-          }
-
-          // Apply wave distortion
-          let waveOffset = 0;
-          if (settings.waveEnabled) {
-            waveOffset = Math.sin(waveRef.current + dot.baseY * 5) * settings.waveAmplitude;
-          }
-
-          // Target position
-          const radius = settings.sphereRadius * scale * pulseScale;
-          const targetX = x * radius + waveOffset;
-          const targetY = y * radius;
-          const targetZ = z * radius;
-
-          // Calculate screen position for mouse interaction
-          const perspective = 1000 / (1000 + targetZ);
-          const screenX = centerX + offsetX + targetX * perspective;
-          const screenY = centerY + offsetY + targetY * perspective;
-
-          // Mouse interaction
-          const dx = screenX - mouse.x;
-          const dy = screenY - mouse.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-          const minDistance = 150;
-
-          if (distance < minDistance && distance > 0) {
-            const force = (minDistance - distance) / minDistance;
-            let direction = settings.reverseMouseEffect ? -1 : 1;
-            
-            // Gravity well - pull when mouse pressed
-            if (settings.gravityWellEnabled && mouse.pressed) {
-              direction = -1;
-            }
-            
-            const pushX = (dx / distance) * force * settings.mouseForce * 50 * direction;
-            const pushY = (dy / distance) * force * settings.mouseForce * 50 * direction;
-            dot.vx += pushX;
-            dot.vy += pushY;
-            
-            // Particle burst
-            if (settings.particleBurstEnabled && Math.random() < 0.1) {
-              particlesRef.current.push({
-                x: screenX,
-                y: screenY,
-                vx: (Math.random() - 0.5) * 4,
-                vy: (Math.random() - 0.5) * 4,
-                life: 1,
-                maxLife: 1,
-                size: Math.random() * 2 + 1,
-              });
-            }
-          }
-
-          // Spring force back to target
-          dot.vx += (targetX - dot.x) * settings.returnForce / scatterMultiplier;
-          dot.vy += (targetY - dot.y) * settings.returnForce / scatterMultiplier;
-          dot.vz += (targetZ - dot.z) * settings.returnForce / scatterMultiplier;
-
-          // Apply velocity
-          dot.x += dot.vx;
-          dot.y += dot.vy;
-          dot.z += dot.vz;
-          dot.vx *= settings.friction;
-          dot.vy *= settings.friction;
-          dot.vz *= settings.friction;
-
-          // Store trail
-          if (settings.trailsEnabled) {
-            dot.trail.unshift({ x: dot.x, y: dot.y, z: dot.z });
-            if (dot.trail.length > settings.trailLength) {
-              dot.trail.pop();
-            }
-          }
-
-          // Project to 2D
-          const dotPerspective = 1000 / (1000 + dot.z);
-          const dotScreenX = centerX + offsetX + dot.x * dotPerspective;
-          const dotScreenY = centerY + offsetY + dot.y * dotPerspective;
-          
-          // Calculate opacity based on depth
-          const normalizedZ = (dot.z + radius) / (radius * 2);
-          let opacity = 0.3 + 0.7 * normalizedZ;
-          
-          // Light source effect
-          if (settings.lightSourceEnabled) {
-            const lightAngle = settings.lightSourceAngle * Math.PI / 180;
-            const lightX = Math.cos(lightAngle);
-            const lightZ = Math.sin(lightAngle);
-            const lightDot = (x * lightX + z * lightZ + 1) / 2;
-            opacity *= 0.3 + 0.7 * lightDot;
-          }
-          
-          const size = settings.dotSize * dotPerspective * 1.5 * scale;
-
-          // Color based on gradient or solid (use colorOverride if provided)
-          let color = baseColor;
-          if (settings.gradientEnabled && !colorOverride) {
-            color = lerpColor(gradientBack, gradientFront, normalizedZ);
-          }
-
-          projectedDots.push({
-            screenX: dotScreenX,
-            screenY: dotScreenY,
-            z: dot.z,
-            opacity,
-            size,
-            color,
-            dot,
-          });
-        }
-
-        // Sort by z-depth
-        projectedDots.sort((a, b) => a.z - b.z);
-
-        // Draw trails
-        if (settings.trailsEnabled) {
-          for (const pd of projectedDots) {
-            const trail = pd.dot.trail;
-            if (trail.length > 1) {
-              ctx.beginPath();
-              for (let i = 0; i < trail.length; i++) {
-                const trailPerspective = 1000 / (1000 + trail[i].z);
-                const tx = centerX + offsetX + trail[i].x * trailPerspective;
-                const ty = centerY + offsetY + trail[i].y * trailPerspective;
-                if (i === 0) {
-                  ctx.moveTo(tx, ty);
-                } else {
-                  ctx.lineTo(tx, ty);
-                }
-              }
-              const trailOpacity = pd.opacity * 0.3 * (1 - projectedDots.indexOf(pd) / projectedDots.length);
-              ctx.strokeStyle = `rgba(${pd.color.r}, ${pd.color.g}, ${pd.color.b}, ${trailOpacity})`;
-              ctx.lineWidth = pd.size * 0.5;
-              ctx.stroke();
-            }
-          }
-        }
-
-        // Draw connections
-        if (settings.showConnections && !settings.wireframeMode) {
-          ctx.lineWidth = 1;
-          for (let i = 0; i < projectedDots.length; i++) {
-            for (let j = i + 1; j < projectedDots.length; j++) {
-              const dx = projectedDots[i].screenX - projectedDots[j].screenX;
-              const dy = projectedDots[i].screenY - projectedDots[j].screenY;
-              const distance = Math.sqrt(dx * dx + dy * dy);
-              if (distance < settings.connectionDistance) {
-                const lineOpacity = (1 - distance / settings.connectionDistance) * 0.15 * Math.min(projectedDots[i].opacity, projectedDots[j].opacity);
-                ctx.beginPath();
-                ctx.strokeStyle = `rgba(${lineColor.r}, ${lineColor.g}, ${lineColor.b}, ${lineOpacity})`;
-                ctx.moveTo(projectedDots[i].screenX, projectedDots[i].screenY);
-                ctx.lineTo(projectedDots[j].screenX, projectedDots[j].screenY);
-                ctx.stroke();
-              }
-            }
-          }
-        }
-
-        // Wireframe mode - connect adjacent dots
-        if (settings.wireframeMode) {
-          ctx.strokeStyle = `rgba(${lineColor.r}, ${lineColor.g}, ${lineColor.b}, 0.5)`;
-          ctx.lineWidth = 1;
-          // Connect dots in rings
-          for (let i = 0; i < settings.rings; i++) {
-            for (let j = 0; j < settings.dotsPerRing; j++) {
-              const idx1 = i * settings.dotsPerRing + j;
-              const idx2 = i * settings.dotsPerRing + ((j + 1) % settings.dotsPerRing);
-              if (idx1 < projectedDots.length && idx2 < projectedDots.length) {
-                ctx.beginPath();
-                ctx.moveTo(projectedDots[idx1].screenX, projectedDots[idx1].screenY);
-                ctx.lineTo(projectedDots[idx2].screenX, projectedDots[idx2].screenY);
-                ctx.stroke();
-              }
-              // Connect to next ring
-              if (i < settings.rings - 1) {
-                const idx3 = (i + 1) * settings.dotsPerRing + j;
-                if (idx3 < projectedDots.length) {
-                  ctx.beginPath();
-                  ctx.moveTo(projectedDots[idx1].screenX, projectedDots[idx1].screenY);
-                  ctx.lineTo(projectedDots[idx3].screenX, projectedDots[idx3].screenY);
-                  ctx.stroke();
-                }
-              }
-            }
-          }
-        }
-
-        // Draw dots
-        for (const pd of projectedDots) {
-          ctx.beginPath();
-          ctx.arc(pd.screenX, pd.screenY, pd.size, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(${pd.color.r}, ${pd.color.g}, ${pd.color.b}, ${pd.opacity})`;
-          ctx.fill();
-          
-          // Glow effect
-          if (settings.glowIntensity > 0) {
-            ctx.beginPath();
-            ctx.arc(pd.screenX, pd.screenY, pd.size * 2, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(${pd.color.r}, ${pd.color.g}, ${pd.color.b}, ${pd.opacity * settings.glowIntensity})`;
-            ctx.fill();
-          }
-        }
-
-        return projectedDots;
-      };
-
-      // Draw main sphere
-      const mainProjected = processDots(dotsRef.current, 0, 0, 1);
-
-      // Draw reflection
       if (settings.reflectionEnabled) {
         ctx.save();
         ctx.globalAlpha = settings.reflectionOpacity;
         ctx.scale(1, -0.3);
         ctx.translate(0, -canvas.height * 2.5);
-        processDots(dotsRef.current, 0, 0, 1);
+        drawSphereLayerOnCanvas(
+          ctx,
+          mainProjected,
+          settings,
+          mainLineRgb,
+          centerX,
+          centerY,
+          0,
+          0,
+          settings.rings,
+          settings.dotsPerRing
+        );
         ctx.restore();
       }
 
-      // Draw orbiting spheres
       if (settings.multipleSpheresEnabled) {
-        const orbitingColor = settings.orbitingSpheresSameColor ? dotColor : hexToRgb(settings.orbitingSpheresColor);
+          const orbitingColor = settings.orbitingSpheresSameColor
+          ? dotColor
+          : hexToRgb(settings.orbitingSpheresColor);
         for (let i = 0; i < orbitingDotsRef.current.length; i++) {
-          const orbitAngle = time * settings.orbitingSpheresSpeed + (i * 2 * Math.PI / settings.additionalSphereCount);
+          const orbitAngle =
+            time * settings.orbitingSpheresSpeed +
+            (i * 2 * Math.PI) / settings.additionalSphereCount;
           const orbitRadius = settings.sphereRadius * settings.orbitingSpheresDistance;
           const offsetX = Math.cos(orbitAngle) * orbitRadius;
           const offsetY = Math.sin(orbitAngle * 0.5) * orbitRadius * 0.3;
-          processDots(orbitingDotsRef.current[i], offsetX, offsetY, settings.orbitingSpheresScale, orbitingColor);
+          const orbProj = updateAndProjectSphereLayer(
+            orbitingDotsRef.current[i],
+            offsetX,
+            offsetY,
+            settings.orbitingSpheresScale,
+            orbitingColor,
+            projectionParams
+          );
+          const orbLineRgb = settings.linesMatchDotColor ? orbitingColor : orbitingLineColorRgb;
+          drawSphereLayerOnCanvas(
+            ctx,
+            orbProj,
+            settings,
+            orbLineRgb,
+            centerX,
+            centerY,
+            offsetX,
+            offsetY,
+            settings.orbitingSpheresRings,
+            settings.orbitingSpheresDotsPerRing
+          );
         }
       }
 
-      // Draw ripples
       if (settings.clickRippleEnabled) {
         for (let i = ripplesRef.current.length - 1; i >= 0; i--) {
           const ripple = ripplesRef.current[i];
           ripple.radius += 5;
           ripple.opacity -= 0.02;
-          
           if (ripple.opacity <= 0 || ripple.radius >= ripple.maxRadius) {
             ripplesRef.current.splice(i, 1);
             continue;
           }
-          
           ctx.beginPath();
           ctx.arc(ripple.x, ripple.y, ripple.radius, 0, Math.PI * 2);
           ctx.strokeStyle = `rgba(${dotColor.r}, ${dotColor.g}, ${dotColor.b}, ${ripple.opacity})`;
           ctx.lineWidth = 2;
           ctx.stroke();
-          
-          // Apply ripple force to nearby dots
           for (const pd of mainProjected) {
             const dx = pd.screenX - ripple.x;
             const dy = pd.screenY - ripple.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
-            if (Math.abs(dist - ripple.radius) < 30) {
+            if (dist > 0 && Math.abs(dist - ripple.radius) < 30) {
               const force = ripple.opacity * 0.5;
               pd.dot.vx += (dx / dist) * force;
               pd.dot.vy += (dy / dist) * force;
@@ -736,19 +494,16 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
         }
       }
 
-      // Draw particles
       if (settings.particleBurstEnabled) {
         for (let i = particlesRef.current.length - 1; i >= 0; i--) {
           const p = particlesRef.current[i];
           p.x += p.vx;
           p.y += p.vy;
           p.life -= 0.02;
-          
           if (p.life <= 0) {
             particlesRef.current.splice(i, 1);
             continue;
           }
-          
           ctx.beginPath();
           ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
           ctx.fillStyle = `rgba(${dotColor.r}, ${dotColor.g}, ${dotColor.b}, ${p.life})`;
@@ -756,12 +511,15 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
         }
       }
 
-      // Decay scatter/explode
       if (scatterRef.current) {
-        setTimeout(() => { scatterRef.current = false; }, 1000);
+        setTimeout(() => {
+          scatterRef.current = false;
+        }, 1000);
       }
       if (explodeRef.current) {
-        setTimeout(() => { explodeRef.current = false; }, 500);
+        setTimeout(() => {
+          explodeRef.current = false;
+        }, 500);
       }
 
       animationFrameRef.current = requestAnimationFrame(animate);
@@ -777,8 +535,9 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
+      webglApi?.dispose();
     };
-  }, []);
+  }, [useWebgl]);
 
   useEffect(() => {
     if (passwordType === "pin" && inputRefs.current[0]) {
@@ -962,20 +721,42 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
         overflow: "hidden",
       }}
     >
-      {/* Sphere Canvas Background */}
-      <canvas
-        ref={canvasRef}
-        onClick={handleCanvasClick}
+      <div
+        ref={backgroundRef}
+        onClick={handleBackgroundClick}
         style={{
           position: "absolute",
           top: 0,
           left: 0,
-          width: "100%",
-          height: "100%",
+          right: 0,
+          bottom: 0,
           zIndex: 0,
           cursor: settingsRef.current.clickRippleEnabled ? "pointer" : "default",
         }}
-      />
+      >
+        <div
+          ref={mountRef}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+          }}
+        />
+        {!useWebgl && (
+          <canvas
+            ref={canvasRef}
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: "100%",
+              height: "100%",
+            }}
+          />
+        )}
+      </div>
 
       {/* Lock Screen Content */}
       <div

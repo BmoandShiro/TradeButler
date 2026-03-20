@@ -32,6 +32,11 @@ import {
   LockScreenStyle 
 } from "../utils/lockScreenManager";
 import {
+  getLockScreenRendererPreference,
+  setLockScreenRendererPreference,
+  type LockScreenRendererMode,
+} from "../utils/lockScreenRenderer";
+import {
   getGalaxyThemeSettings,
   setGalaxyThemeSettings,
   resetGalaxyThemeSettings,
@@ -103,6 +108,9 @@ export default function Settings() {
   const [removeVerification, setRemoveVerification] = useState("");
   const [removePinDigits, setRemovePinDigits] = useState<string[]>(["", "", "", "", "", ""]);
   const [lockScreenStyle, setLockScreenStyle] = useState<LockScreenStyle>(() => getLockScreenStyle());
+  const [lockScreenRenderer, setLockScreenRenderer] = useState<LockScreenRendererMode>(() =>
+    getLockScreenRendererPreference()
+  );
   const [galaxySettings, setGalaxySettings] = useState<GalaxyThemeSettings>(() => getGalaxyThemeSettings());
   const [sphereSettings, setSphereSettings] = useState<SphereThemeSettings>(() => getSphereThemeSettings());
   const newPasswordInputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -1238,6 +1246,69 @@ export default function Settings() {
                     </button>
                   </div>
                 </div>
+                <div style={{ marginTop: "14px" }}>
+                  <label style={{ display: "block", fontSize: "13px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Animated lock screen rendering
+                  </label>
+                  <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "8px", lineHeight: 1.45 }}>
+                    Accelerated (WebGL) uses the GPU for Galaxy, Aurora, Milky Way, and Sphere backgrounds. Falls back to
+                    Classic (2D canvas) if WebGL is unavailable.
+                  </p>
+                  <div
+                    style={{
+                      display: "flex",
+                      backgroundColor: "var(--bg-tertiary)",
+                      borderRadius: "6px",
+                      padding: "2px",
+                      border: "1px solid var(--border-color)",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const mode: LockScreenRendererMode = "webgl";
+                        setLockScreenRenderer(mode);
+                        setLockScreenRendererPreference(mode);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                        border: "none",
+                        backgroundColor: lockScreenRenderer === "webgl" ? "var(--accent)" : "transparent",
+                        color: lockScreenRenderer === "webgl" ? "white" : "var(--text-primary)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      Accelerated (WebGL)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const mode: LockScreenRendererMode = "canvas";
+                        setLockScreenRenderer(mode);
+                        setLockScreenRendererPreference(mode);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "4px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                        border: "none",
+                        backgroundColor: lockScreenRenderer === "canvas" ? "var(--accent)" : "transparent",
+                        color: lockScreenRenderer === "canvas" ? "white" : "var(--text-primary)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      Classic (2D)
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1630,15 +1701,26 @@ export default function Settings() {
                           style={{ width: "100%", height: "32px", cursor: "pointer", border: "none", borderRadius: "4px", backgroundColor: "transparent" }}
                         />
                       </div>
-                      <div>
+                      <div style={{ opacity: sphereSettings.linesMatchDotColor ? 0.45 : 1 }}>
                         <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
                           Line Color
+                          {sphereSettings.linesMatchDotColor && (
+                            <span style={{ fontSize: "11px", marginLeft: "6px", color: "var(--text-tertiary)" }}>(unused)</span>
+                          )}
                         </label>
                         <input
                           type="color"
                           value={sphereSettings.lineColor}
                           onChange={(e) => updateSphereSetting("lineColor", e.target.value)}
-                          style={{ width: "100%", height: "32px", cursor: "pointer", border: "none", borderRadius: "4px", backgroundColor: "transparent" }}
+                          disabled={sphereSettings.linesMatchDotColor}
+                          style={{
+                            width: "100%",
+                            height: "32px",
+                            cursor: sphereSettings.linesMatchDotColor ? "not-allowed" : "pointer",
+                            border: "none",
+                            borderRadius: "4px",
+                            backgroundColor: "transparent",
+                          }}
                         />
                       </div>
                       <div>
@@ -1653,7 +1735,30 @@ export default function Settings() {
                         />
                       </div>
                     </div>
-                    <div style={{ marginTop: "12px" }}>
+                    <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "10px" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={sphereSettings.linesMatchDotColor}
+                          onChange={(e) => updateSphereSetting("linesMatchDotColor", e.target.checked)}
+                          style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                        />
+                        <span>Lines match dot color</span>
+                      </label>
+                      <label style={{ display: "flex", alignItems: "flex-start", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={sphereSettings.lineBlendSoft}
+                          onChange={(e) => updateSphereSetting("lineBlendSoft", e.target.checked)}
+                          style={{ width: "16px", height: "16px", cursor: "pointer", marginTop: "2px" }}
+                        />
+                        <span>
+                          Softer line blend (WebGL)
+                          <span style={{ display: "block", fontSize: "11px", color: "var(--text-secondary)", fontWeight: 400, marginTop: "2px" }}>
+                            Normal alpha instead of additive; less glow where lines overlap.
+                          </span>
+                        </span>
+                      </label>
                       <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
                         <input
                           type="checkbox"
@@ -2035,6 +2140,28 @@ export default function Settings() {
                               />
                             </div>
                           )}
+                          <div style={{ opacity: sphereSettings.linesMatchDotColor ? 0.45 : 1 }}>
+                            <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                              Orbiting Line Color
+                              {sphereSettings.linesMatchDotColor && (
+                                <span style={{ fontSize: "11px", marginLeft: "6px", color: "var(--text-tertiary)" }}>(unused)</span>
+                              )}
+                            </label>
+                            <input
+                              type="color"
+                              value={sphereSettings.orbitingSpheresLineColor}
+                              onChange={(e) => updateSphereSetting("orbitingSpheresLineColor", e.target.value)}
+                              disabled={sphereSettings.linesMatchDotColor}
+                              style={{
+                                width: "100%",
+                                height: "32px",
+                                cursor: sphereSettings.linesMatchDotColor ? "not-allowed" : "pointer",
+                                border: "none",
+                                borderRadius: "4px",
+                                backgroundColor: "transparent",
+                              }}
+                            />
+                          </div>
                         </>
                       )}
                     </div>

@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { Lock, Unlock, AlertCircle, Trash2 } from "lucide-react";
 import { unlockApp, getPasswordType, deletePassword } from "../utils/passwordManager";
 import { invoke } from "@tauri-apps/api/tauri";
+import { getLockScreenRendererPreference, canUseWebGL2 } from "../utils/lockScreenRenderer";
+import { createMilkyWayWebGLApi, type MilkyWayWebGLApi } from "../features/lockScreen/milkyWayWebGL";
 
 interface MilkyWayLockScreenProps {
   onUnlock: () => void;
@@ -27,30 +29,31 @@ export default function MilkyWayLockScreen({ onUnlock }: MilkyWayLockScreenProps
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const passwordInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const mountRef = useRef<HTMLDivElement>(null);
   const animationFrameRef = useRef<number>();
   const starsRef = useRef<Star[]>([]);
-  const mouseRef = useRef({ x: 0, y: 0 });
+  const [webglFailed, setWebglFailed] = useState(false);
+  const wantWebgl = getLockScreenRendererPreference() === "webgl" && canUseWebGL2();
+  const useWebgl = wantWebgl && !webglFailed;
   const passwordType = getPasswordType();
 
-  // Initialize stars
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    let webglApi: MilkyWayWebGLApi | null = null;
+    const STAR_COUNT = 2000;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    // Set canvas size
     const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      // Recreate stars on resize
-      const starCount = 2000;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const c = canvasRef.current;
+      if (c) {
+        c.width = w;
+        c.height = h;
+      }
       const stars: Star[] = [];
-      for (let i = 0; i < starCount; i++) {
+      for (let i = 0; i < STAR_COUNT; i++) {
         stars.push({
-          x: (Math.random() - 0.5) * canvas.width * 2,
-          y: (Math.random() - 0.5) * canvas.height * 2,
+          x: (Math.random() - 0.5) * w * 2,
+          y: (Math.random() - 0.5) * h * 2,
           z: Math.random() * 2000,
           vx: 0,
           vy: 0,
@@ -59,113 +62,105 @@ export default function MilkyWayLockScreen({ onUnlock }: MilkyWayLockScreenProps
         });
       }
       starsRef.current = stars;
+      webglApi?.resize(w, h);
     };
+
     resizeCanvas();
     window.addEventListener("resize", resizeCanvas);
 
-    // Create initial stars
-    const starCount = 2000;
-    const stars: Star[] = [];
-    for (let i = 0; i < starCount; i++) {
-      stars.push({
-        x: (Math.random() - 0.5) * canvas.width * 2,
-        y: (Math.random() - 0.5) * canvas.height * 2,
-        z: Math.random() * 2000,
-        vx: 0,
-        vy: 0,
-        size: Math.random() * 2 + 0.5,
-        brightness: Math.random() * 0.8 + 0.2,
-      });
+    if (useWebgl && mountRef.current) {
+      const api = createMilkyWayWebGLApi(mountRef.current, () => setWebglFailed(true));
+      webglApi = api;
+      api.resize(window.innerWidth, window.innerHeight);
     }
-    starsRef.current = stars;
 
-    // Mouse tracking
-    const handleMouseMove = (e: MouseEvent) => {
-      mouseRef.current = { x: e.clientX, y: e.clientY };
-    };
-    window.addEventListener("mousemove", handleMouseMove);
-
-    // Animation loop
     const animate = () => {
-      ctx.fillStyle = "#000000";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const centerX = w / 2;
+      const centerY = h / 2;
+      const perspective = 500;
       const stars = starsRef.current;
-      const centerX = canvas.width / 2;
-      const centerY = canvas.height / 2;
+      const gpuStars: { x2d: number; y2d: number; size: number; brightness: number }[] = [];
 
-      // Update and draw stars
       for (let i = 0; i < stars.length; i++) {
         const star = stars[i];
-
-        // Move star forward (toward viewer)
         star.z -= 2;
-
-        // Reset star if it's too close
         if (star.z <= 0) {
           star.z = 2000;
-          star.x = (Math.random() - 0.5) * canvas.width * 2;
-          star.y = (Math.random() - 0.5) * canvas.height * 2;
+          star.x = (Math.random() - 0.5) * w * 2;
+          star.y = (Math.random() - 0.5) * h * 2;
         }
-
-        // Calculate 2D position from 3D
-        const perspective = 500;
         const scale = perspective / (perspective + star.z);
         const x2d = centerX + star.x * scale;
         const y2d = centerY + star.y * scale;
-
-        // Calculate size and brightness based on distance
         const size = star.size * scale;
         const brightness = star.brightness * scale;
-
-        // Draw star
-        ctx.beginPath();
-        ctx.arc(x2d, y2d, size, 0, Math.PI * 2);
-        
-        // Star glow effect
-        const starGradient = ctx.createRadialGradient(x2d, y2d, 0, x2d, y2d, size * 3);
-        starGradient.addColorStop(0, `rgba(255, 255, 255, ${brightness})`);
-        starGradient.addColorStop(0.5, `rgba(255, 255, 255, ${brightness * 0.5})`);
-        starGradient.addColorStop(1, `rgba(255, 255, 255, 0)`);
-        ctx.fillStyle = starGradient;
-        ctx.fill();
-
-        // Draw star trail for fast-moving stars
-        if (scale > 0.3) {
-          const prevX = centerX + star.x * (perspective / (perspective + star.z + 10));
-          const prevY = centerY + star.y * (perspective / (perspective + star.z + 10));
-          ctx.beginPath();
-          ctx.moveTo(prevX, prevY);
-          ctx.lineTo(x2d, y2d);
-          ctx.strokeStyle = `rgba(255, 255, 255, ${brightness * 0.3})`;
-          ctx.lineWidth = size * 0.5;
-          ctx.stroke();
-        }
+        gpuStars.push({ x2d, y2d, size, brightness });
       }
 
-      // Draw nebula clouds (colored regions)
-      const nebulaCount = 3;
-      for (let n = 0; n < nebulaCount; n++) {
-        const nebulaX = (canvas.width / nebulaCount) * (n + 0.5);
-        const nebulaY = centerY + (Math.sin(Date.now() * 0.0001 + n) * 100);
-        const nebulaGradient = ctx.createRadialGradient(nebulaX, nebulaY, 0, nebulaX, nebulaY, 300);
-        
-        if (n === 0) {
-          // Purple nebula
-          nebulaGradient.addColorStop(0, "rgba(138, 43, 226, 0.15)");
-          nebulaGradient.addColorStop(1, "rgba(138, 43, 226, 0)");
-        } else if (n === 1) {
-          // Blue nebula
-          nebulaGradient.addColorStop(0, "rgba(0, 191, 255, 0.12)");
-          nebulaGradient.addColorStop(1, "rgba(0, 191, 255, 0)");
-        } else {
-          // Pink nebula
-          nebulaGradient.addColorStop(0, "rgba(255, 20, 147, 0.1)");
-          nebulaGradient.addColorStop(1, "rgba(255, 20, 147, 0)");
-        }
-        
-        ctx.fillStyle = nebulaGradient;
+      if (webglApi) {
+        webglApi.renderFrame({
+          width: w,
+          height: h,
+          stars: gpuStars,
+          timeMs: performance.now(),
+        });
+        animationFrameRef.current = requestAnimationFrame(animate);
+        return;
+      }
+
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext("2d");
+      if (canvas && ctx) {
+        ctx.fillStyle = "#000000";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
+        const centerXC = canvas.width / 2;
+        const centerYC = canvas.height / 2;
+        const nebulaCount = 3;
+        for (let n = 0; n < nebulaCount; n++) {
+          const nebulaX = (canvas.width / nebulaCount) * (n + 0.5);
+          const nebulaY = centerYC + Math.sin(Date.now() * 0.0001 + n) * 100;
+          const nebulaGradient = ctx.createRadialGradient(nebulaX, nebulaY, 0, nebulaX, nebulaY, 300);
+          if (n === 0) {
+            nebulaGradient.addColorStop(0, "rgba(138, 43, 226, 0.15)");
+            nebulaGradient.addColorStop(1, "rgba(138, 43, 226, 0)");
+          } else if (n === 1) {
+            nebulaGradient.addColorStop(0, "rgba(0, 191, 255, 0.12)");
+            nebulaGradient.addColorStop(1, "rgba(0, 191, 255, 0)");
+          } else {
+            nebulaGradient.addColorStop(0, "rgba(255, 20, 147, 0.1)");
+            nebulaGradient.addColorStop(1, "rgba(255, 20, 147, 0)");
+          }
+          ctx.fillStyle = nebulaGradient;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        for (let i = 0; i < stars.length; i++) {
+          const star = stars[i];
+          const scale = perspective / (perspective + star.z);
+          const x2d = centerXC + star.x * scale;
+          const y2d = centerYC + star.y * scale;
+          const size = star.size * scale;
+          const brightness = star.brightness * scale;
+          ctx.beginPath();
+          ctx.arc(x2d, y2d, size, 0, Math.PI * 2);
+          const starGradient = ctx.createRadialGradient(x2d, y2d, 0, x2d, y2d, size * 3);
+          starGradient.addColorStop(0, `rgba(255, 255, 255, ${brightness})`);
+          starGradient.addColorStop(0.5, `rgba(255, 255, 255, ${brightness * 0.5})`);
+          starGradient.addColorStop(1, `rgba(255, 255, 255, 0)`);
+          ctx.fillStyle = starGradient;
+          ctx.fill();
+          if (scale > 0.3) {
+            const prevX = centerXC + star.x * (perspective / (perspective + star.z + 10));
+            const prevY = centerYC + star.y * (perspective / (perspective + star.z + 10));
+            ctx.beginPath();
+            ctx.moveTo(prevX, prevY);
+            ctx.lineTo(x2d, y2d);
+            ctx.strokeStyle = `rgba(255, 255, 255, ${brightness * 0.3})`;
+            ctx.lineWidth = size * 0.5;
+            ctx.stroke();
+          }
+        }
       }
 
       animationFrameRef.current = requestAnimationFrame(animate);
@@ -175,12 +170,12 @@ export default function MilkyWayLockScreen({ onUnlock }: MilkyWayLockScreenProps
 
     return () => {
       window.removeEventListener("resize", resizeCanvas);
-      window.removeEventListener("mousemove", handleMouseMove);
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
+      webglApi?.dispose();
     };
-  }, []);
+  }, [useWebgl]);
 
   useEffect(() => {
     // Focus first input on mount
@@ -334,18 +329,30 @@ export default function MilkyWayLockScreen({ onUnlock }: MilkyWayLockScreenProps
         overflow: "hidden",
       }}
     >
-      {/* Milky Way Canvas Background */}
-      <canvas
-        ref={canvasRef}
+      <div
+        ref={mountRef}
         style={{
           position: "absolute",
           top: 0,
           left: 0,
-          width: "100%",
-          height: "100%",
+          right: 0,
+          bottom: 0,
           zIndex: 0,
         }}
       />
+      {!useWebgl && (
+        <canvas
+          ref={canvasRef}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            zIndex: 0,
+          }}
+        />
+      )}
 
       {/* Lock Screen Content */}
       <div

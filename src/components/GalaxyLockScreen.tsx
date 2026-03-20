@@ -3,17 +3,21 @@ import { Lock, Unlock, AlertCircle, Trash2 } from "lucide-react";
 import { unlockApp, getPasswordType, deletePassword } from "../utils/passwordManager";
 import { invoke } from "@tauri-apps/api/tauri";
 import { getGalaxyThemeSettings } from "../utils/galaxyThemeManager";
+import {
+  getLockScreenRendererPreference,
+  canUseWebGL2,
+} from "../utils/lockScreenRenderer";
+import { forEachNeighborPairWithinDistance } from "../utils/spatialGrid2d";
+import {
+  createGalaxyParticles,
+  stepGalaxyParticles,
+  hexToRgb,
+  type GalaxyParticle,
+} from "../features/lockScreen/galaxyPhysics";
+import { createGalaxyWebGLApi, type GalaxyWebGLApi } from "../features/lockScreen/galaxyWebGL";
 
 interface GalaxyLockScreenProps {
   onUnlock: () => void;
-}
-
-interface Particle {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  radius: number;
 }
 
 export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
@@ -26,32 +30,27 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const passwordInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const mountRef = useRef<HTMLDivElement>(null);
   const animationFrameRef = useRef<number>();
-  const particlesRef = useRef<Particle[]>([]);
+  const particlesRef = useRef<GalaxyParticle[]>([]);
   const mouseRef = useRef({ x: 0, y: 0 });
   const settingsRef = useRef(getGalaxyThemeSettings());
+  const [webglFailed, setWebglFailed] = useState(false);
+  const wantWebgl =
+    getLockScreenRendererPreference() === "webgl" && canUseWebGL2();
+  const useWebgl = wantWebgl && !webglFailed;
   const passwordType = getPasswordType();
 
   // Update settings when they change
   useEffect(() => {
     settingsRef.current = getGalaxyThemeSettings();
-    // Recreate particles if count changed
-    const canvas = canvasRef.current;
-    if (canvas && particlesRef.current.length > 0) {
+    const w = canvasRef.current?.width ?? window.innerWidth;
+    const h = canvasRef.current?.height ?? window.innerHeight;
+    if (particlesRef.current.length > 0) {
       const settings = settingsRef.current;
       const currentCount = particlesRef.current.length;
       if (currentCount !== settings.particleCount) {
-        const particles: Particle[] = [];
-        for (let i = 0; i < settings.particleCount; i++) {
-          particles.push({
-            x: Math.random() * canvas.width,
-            y: Math.random() * canvas.height,
-            vx: (Math.random() - 0.5) * 0.5,
-            vy: (Math.random() - 0.5) * 0.5,
-            radius: Math.random() * (settings.particleSize.max - settings.particleSize.min) + settings.particleSize.min,
-          });
-        }
-        particlesRef.current = particles;
+        particlesRef.current = createGalaxyParticles(settings, w, h);
       }
     }
   }, []);
@@ -63,20 +62,10 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
       const oldSettings = settingsRef.current;
       settingsRef.current = newSettings;
       
-      // Recreate particles if count changed
-      const canvas = canvasRef.current;
-      if (canvas && oldSettings.particleCount !== newSettings.particleCount) {
-        const particles: Particle[] = [];
-        for (let i = 0; i < newSettings.particleCount; i++) {
-          particles.push({
-            x: Math.random() * canvas.width,
-            y: Math.random() * canvas.height,
-            vx: (Math.random() - 0.5) * 0.5,
-            vy: (Math.random() - 0.5) * 0.5,
-            radius: Math.random() * (newSettings.particleSize.max - newSettings.particleSize.min) + newSettings.particleSize.min,
-          });
-        }
-        particlesRef.current = particles;
+      const w = canvasRef.current?.width ?? window.innerWidth;
+      const h = canvasRef.current?.height ?? window.innerHeight;
+      if (oldSettings.particleCount !== newSettings.particleCount) {
+        particlesRef.current = createGalaxyParticles(newSettings, w, h);
       }
     };
     window.addEventListener("storage", handleStorageChange);
@@ -87,20 +76,10 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
       if (JSON.stringify(newSettings) !== JSON.stringify(oldSettings)) {
         settingsRef.current = newSettings;
         
-        // Recreate particles if count changed
-        const canvas = canvasRef.current;
-        if (canvas && oldSettings.particleCount !== newSettings.particleCount) {
-          const particles: Particle[] = [];
-          for (let i = 0; i < newSettings.particleCount; i++) {
-            particles.push({
-              x: Math.random() * canvas.width,
-              y: Math.random() * canvas.height,
-              vx: (Math.random() - 0.5) * 0.5,
-              vy: (Math.random() - 0.5) * 0.5,
-              radius: Math.random() * (newSettings.particleSize.max - newSettings.particleSize.min) + newSettings.particleSize.min,
-            });
-          }
-          particlesRef.current = particles;
+        const w = canvasRef.current?.width ?? window.innerWidth;
+        const h = canvasRef.current?.height ?? window.innerHeight;
+        if (oldSettings.particleCount !== newSettings.particleCount) {
+          particlesRef.current = createGalaxyParticles(newSettings, w, h);
         }
       }
     }, 100);
@@ -110,206 +89,85 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
     };
   }, []);
 
-  // Initialize particles
+  // Galaxy simulation + WebGL or 2D draw
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const ctx = !useWebgl && canvas ? canvas.getContext("2d") : null;
+    let webglApi: GalaxyWebGLApi | null = null;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    // Set canvas size
     const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      // Recreate particles on resize
-      const settings = settingsRef.current;
-      const particles: Particle[] = [];
-      for (let i = 0; i < settings.particleCount; i++) {
-        particles.push({
-          x: Math.random() * canvas.width,
-          y: Math.random() * canvas.height,
-          vx: (Math.random() - 0.5) * 0.5,
-          vy: (Math.random() - 0.5) * 0.5,
-          radius: Math.random() * (settings.particleSize.max - settings.particleSize.min) + settings.particleSize.min,
-        });
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      if (canvas) {
+        canvas.width = w;
+        canvas.height = h;
       }
-      particlesRef.current = particles;
+      const settings = settingsRef.current;
+      particlesRef.current = createGalaxyParticles(settings, w, h);
+      webglApi?.resize(w, h);
     };
+
     resizeCanvas();
     window.addEventListener("resize", resizeCanvas);
 
-    // Create initial particles
-    const settings = settingsRef.current;
-    const particles: Particle[] = [];
-    for (let i = 0; i < settings.particleCount; i++) {
-      particles.push({
-        x: Math.random() * canvas.width,
-        y: Math.random() * canvas.height,
-        vx: (Math.random() - 0.5) * 0.5,
-        vy: (Math.random() - 0.5) * 0.5,
-        radius: Math.random() * (settings.particleSize.max - settings.particleSize.min) + settings.particleSize.min,
-      });
+    if (useWebgl && mountRef.current) {
+      const api = createGalaxyWebGLApi(mountRef.current, () => setWebglFailed(true));
+      webglApi = api;
+      api.resize(window.innerWidth, window.innerHeight);
     }
-    particlesRef.current = particles;
 
-    // Mouse tracking
     const handleMouseMove = (e: MouseEvent) => {
       mouseRef.current = { x: e.clientX, y: e.clientY };
     };
     window.addEventListener("mousemove", handleMouseMove);
 
-    // Helper function to convert hex to rgba
-    const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
-      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-      return result
-        ? {
-            r: parseInt(result[1], 16),
-            g: parseInt(result[2], 16),
-            b: parseInt(result[3], 16),
-          }
-        : { r: 100, g: 150, b: 255 };
-    };
+    let xsBuf = new Float32Array(1024);
+    let ysBuf = new Float32Array(1024);
 
-    // Animation loop
     const animate = () => {
       const settings = settingsRef.current;
-      const particleColor = hexToRgb(settings.particleColor);
-      const lineColor = hexToRgb(settings.lineColor);
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = settings.backgroundColor;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
+      const w = window.innerWidth;
+      const h = window.innerHeight;
       const particles = particlesRef.current;
-      const mouse = mouseRef.current;
+      stepGalaxyParticles(particles, settings, mouseRef.current, w, h);
 
-      // Calculate center of lock screen modal (approximate center of screen)
-      const centerX = canvas.width / 2;
-      const centerY = canvas.height / 2;
+      if (webglApi) {
+        webglApi.renderFrame(particles, settings);
+      } else if (ctx && canvas) {
+        const particleColor = hexToRgb(settings.particleColor);
+        const lineColor = hexToRgb(settings.lineColor);
 
-      // Update and draw particles
-      for (let i = 0; i < particles.length; i++) {
-        const p = particles[i];
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = settings.backgroundColor;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Orbital motion around center
-        if (settings.orbitAroundCenter) {
-          const dxToCenter = p.x - centerX;
-          const dyToCenter = p.y - centerY;
-          const distanceToCenter = Math.sqrt(dxToCenter * dxToCenter + dyToCenter * dyToCenter);
-          
-          if (distanceToCenter > 0) {
-            // Calculate angle from center to particle
-            const angleToCenter = Math.atan2(dyToCenter, dxToCenter);
-            // Apply tangential force (perpendicular to radius) for orbital motion
-            const tangentialAngle = angleToCenter + Math.PI / 2; // 90 degrees from radius
-            const orbitalForce = settings.orbitSpeed * 0.01; // Slow orbital motion
-            p.vx += Math.cos(tangentialAngle) * orbitalForce;
-            p.vy += Math.sin(tangentialAngle) * orbitalForce;
-            
-            // Optional: slight centripetal force to maintain orbit radius
-            const centripetalForce = (distanceToCenter - settings.orbitRadius) * settings.orbitGravity; // Pull towards ideal radius
-            p.vx -= Math.cos(angleToCenter) * centripetalForce;
-            p.vy -= Math.sin(angleToCenter) * centripetalForce;
-          }
+        for (let i = 0; i < particles.length; i++) {
+          const p = particles[i];
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${particleColor.r}, ${particleColor.g}, ${particleColor.b}, ${0.6 + p.shade * 0.4})`;
+          ctx.fill();
         }
 
-        // Calculate distance from mouse
-        const dx = p.x - mouse.x;
-        const dy = p.y - mouse.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        const minDistance = 100;
-
-        // Apply mouse force (push away or pull towards)
-        if (distance < minDistance) {
-          const force = (minDistance - distance) / minDistance;
-          const angle = Math.atan2(dy, dx);
-          const forceMultiplier = settings.reverseGravity ? -1 : 1;
-          p.vx += Math.cos(angle) * force * settings.mouseForce * forceMultiplier;
-          p.vy += Math.sin(angle) * force * settings.mouseForce * forceMultiplier;
+        const n = particles.length;
+        if (n > xsBuf.length) {
+          xsBuf = new Float32Array(n + 256);
+          ysBuf = new Float32Array(n + 256);
         }
-
-        // Particle collisions (bounce off each other)
-        if (settings.particleCollisions) {
-          for (let j = i + 1; j < particles.length; j++) {
-            const p2 = particles[j];
-            const dx = p.x - p2.x;
-            const dy = p.y - p2.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            const minDist = p.radius + p2.radius;
-
-            if (distance < minDist && distance > 0) {
-              // Calculate collision angle
-              const angle = Math.atan2(dy, dx);
-              const sin = Math.sin(angle);
-              const cos = Math.cos(angle);
-
-              // Rotate velocities to collision frame
-              const vx1 = p.vx * cos + p.vy * sin;
-              const vy1 = p.vy * cos - p.vx * sin;
-              const vx2 = p2.vx * cos + p2.vy * sin;
-              const vy2 = p2.vy * cos - p2.vx * sin;
-
-              // Swap velocities (elastic collision with equal mass)
-              const swappedVx1 = vx2;
-              const swappedVx2 = vx1;
-
-              // Rotate back to world frame
-              p.vx = swappedVx1 * cos - vy1 * sin;
-              p.vy = vy1 * cos + swappedVx1 * sin;
-              p2.vx = swappedVx2 * cos - vy2 * sin;
-              p2.vy = vy2 * cos + swappedVx2 * sin;
-
-              // Separate particles to prevent overlap
-              const overlap = minDist - distance;
-              const separationX = (dx / distance) * overlap * 0.5;
-              const separationY = (dy / distance) * overlap * 0.5;
-              p.x += separationX;
-              p.y += separationY;
-              p2.x -= separationX;
-              p2.y -= separationY;
-            }
-          }
+        for (let i = 0; i < n; i++) {
+          xsBuf[i] = particles[i].x;
+          ysBuf[i] = particles[i].y;
         }
-
-        // Update position
-        p.x += p.vx;
-        p.y += p.vy;
-
-        // Boundary wrapping
-        if (p.x < 0) p.x = canvas.width;
-        if (p.x > canvas.width) p.x = 0;
-        if (p.y < 0) p.y = canvas.height;
-        if (p.y > canvas.height) p.y = 0;
-
-        // Apply friction
-        p.vx *= settings.friction;
-        p.vy *= settings.friction;
-
-        // Draw particle
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${particleColor.r}, ${particleColor.g}, ${particleColor.b}, ${0.6 + Math.random() * 0.4})`;
-        ctx.fill();
-      }
-
-      // Draw connections between nearby particles
-      for (let i = 0; i < particles.length; i++) {
-        for (let j = i + 1; j < particles.length; j++) {
-          const dx = particles[i].x - particles[j].x;
-          const dy = particles[i].y - particles[j].y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-
-          if (distance < settings.connectionDistance) {
-            const opacity = 1 - distance / settings.connectionDistance;
-            ctx.beginPath();
-            ctx.moveTo(particles[i].x, particles[i].y);
-            ctx.lineTo(particles[j].x, particles[j].y);
-            ctx.strokeStyle = `rgba(${lineColor.r}, ${lineColor.g}, ${lineColor.b}, ${opacity * 0.3})`;
-            ctx.lineWidth = 1;
-            ctx.stroke();
-          }
-        }
+        const cd = settings.connectionDistance;
+        forEachNeighborPairWithinDistance(xsBuf, ysBuf, n, cd, (i, j, distance) => {
+          const opacity = 1 - distance / cd;
+          ctx.beginPath();
+          ctx.moveTo(particles[i].x, particles[i].y);
+          ctx.lineTo(particles[j].x, particles[j].y);
+          ctx.strokeStyle = `rgba(${lineColor.r}, ${lineColor.g}, ${lineColor.b}, ${opacity * 0.3})`;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        });
       }
 
       animationFrameRef.current = requestAnimationFrame(animate);
@@ -323,8 +181,9 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
+      webglApi?.dispose();
     };
-  }, []);
+  }, [useWebgl]);
 
   useEffect(() => {
     // Focus first input on mount
@@ -478,18 +337,30 @@ export default function GalaxyLockScreen({ onUnlock }: GalaxyLockScreenProps) {
         overflow: "hidden",
       }}
     >
-      {/* Galaxy Canvas Background */}
-      <canvas
-        ref={canvasRef}
+      <div
+        ref={mountRef}
         style={{
           position: "absolute",
           top: 0,
           left: 0,
-          width: "100%",
-          height: "100%",
+          right: 0,
+          bottom: 0,
           zIndex: 0,
         }}
       />
+      {!useWebgl && (
+        <canvas
+          ref={canvasRef}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            zIndex: 0,
+          }}
+        />
+      )}
 
       {/* Lock Screen Content */}
       <div
