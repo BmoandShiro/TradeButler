@@ -1,16 +1,25 @@
+import { useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Calculator, DollarSign, BarChart3, TrendingUp } from "lucide-react";
+import { Calculator, DollarSign, BarChart3, TrendingUp, Grid3X3 } from "lucide-react";
 import AverageDownCalculator from "./AverageDownCalculator";
 import DividendCalculator from "./DividendCalculator";
 import BasicFinancials from "./BasicFinancials";
 import IpoCalendar from "./IpoCalendar";
+import GridLadderTool from "./GridLadderTool";
 
-type ToolTab = "average-down" | "dividend" | "basic-financials" | "ipo-calendar";
+type ToolTab = "average-down" | "dividend" | "basic-financials" | "ipo-calendar" | "grid-ladder";
+const TOOLS_LAST_CALC_KEY = "tradebutler_tools_last_calc";
 
 export default function Tools() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const calc = (searchParams.get("calc") || "average-down") as ToolTab;
-  const validCalc = ["average-down", "dividend", "basic-financials", "ipo-calendar"].includes(calc) ? calc : "average-down";
+  const calcFromUrl = searchParams.get("calc");
+  const calcFromStorage = !calcFromUrl
+    ? localStorage.getItem(TOOLS_LAST_CALC_KEY)
+    : null;
+  const calc = (calcFromUrl || calcFromStorage || "average-down") as ToolTab;
+  const validCalc = ["average-down", "dividend", "basic-financials", "ipo-calendar", "grid-ladder"].includes(calc)
+    ? calc
+    : "average-down";
 
   const setCalc = (value: ToolTab) => {
     // Preserve symbol parameter when switching to basic-financials
@@ -23,6 +32,10 @@ export default function Tools() {
       setSearchParams({ calc: value });
     }
   };
+
+  useEffect(() => {
+    localStorage.setItem(TOOLS_LAST_CALC_KEY, validCalc);
+  }, [validCalc]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -117,12 +130,36 @@ export default function Tools() {
           <TrendingUp size={18} />
           IPO Calendar
         </button>
+        <button
+          type="button"
+          onClick={() => setCalc("grid-ladder")}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            padding: "10px 16px",
+            borderRadius: "8px",
+            border: validCalc === "grid-ladder" ? "1px solid var(--accent)" : "1px solid var(--border-color)",
+            backgroundColor:
+              validCalc === "grid-ladder"
+                ? "color-mix(in srgb, var(--accent) 14%, transparent)"
+                : "var(--bg-secondary)",
+            color: validCalc === "grid-ladder" ? "var(--accent)" : "var(--text-secondary)",
+            fontSize: "14px",
+            fontWeight: "600",
+            cursor: "pointer",
+          }}
+        >
+          <Grid3X3 size={18} />
+          Grid Ladder
+        </button>
       </div>
       <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
         {validCalc === "average-down" && <AverageDownCalculator />}
         {validCalc === "dividend" && <DividendCalculator />}
         {validCalc === "basic-financials" && <BasicFinancials />}
         {validCalc === "ipo-calendar" && <IpoCalendar />}
+        {validCalc === "grid-ladder" && <GridLadderTool />}
       </div>
     </div>
   );
