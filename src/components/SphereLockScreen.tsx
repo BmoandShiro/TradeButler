@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Unlock, AlertCircle, Trash2 } from "lucide-react";
+import { Lock, Unlock, AlertCircle, Trash2 } from "lucide-react";
 import { unlockApp, getPasswordType, deletePassword } from "../utils/passwordManager";
 import { invoke } from "@tauri-apps/api/tauri";
-import { getSphereThemeSettings } from "../utils/sphereThemeManager";
+import { getSphereMainDotAccentHex, getSphereThemeSettings } from "../utils/sphereThemeManager";
 import { getLockScreenRendererPreference, canUseWebGL2 } from "../utils/lockScreenRenderer";
 import {
   generateDots,
@@ -17,6 +17,13 @@ import { createSphereWebGLApi, type SphereWebGLApi } from "../features/lockScree
 
 interface SphereLockScreenProps {
   onUnlock: () => void;
+}
+
+function sphereDotHexToRgb(hex: string): { r: number; g: number; b: number } {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex.trim());
+  return result
+    ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) }
+    : { r: 59, g: 130, b: 246 };
 }
 
 export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
@@ -42,6 +49,9 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
   const pulseRef = useRef(0);
   const waveRef = useRef(0);
   const settingsRef = useRef(getSphereThemeSettings());
+  const [modalDotColor, setModalDotColor] = useState(() =>
+    getSphereMainDotAccentHex(getSphereThemeSettings())
+  );
   const scatterRef = useRef(false);
   const explodeRef = useRef(false);
   const [webglFailed, setWebglFailed] = useState(false);
@@ -60,7 +70,8 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
       const newSettings = getSphereThemeSettings();
       const oldSettings = settingsRef.current;
       settingsRef.current = newSettings;
-      
+      setModalDotColor(getSphereMainDotAccentHex(newSettings));
+
       // Recreate dots if structure changed
       if (oldSettings.rings !== newSettings.rings || 
           oldSettings.dotsPerRing !== newSettings.dotsPerRing ||
@@ -705,6 +716,9 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
     }
   };
 
+  const lockRgb = sphereDotHexToRgb(modalDotColor);
+  const { r: lockR, g: lockG, b: lockB } = lockRgb;
+
   return (
     <div
       style={{
@@ -779,24 +793,16 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
               width: "80px",
               height: "80px",
               margin: "0 auto 20px",
-              backgroundColor: "rgba(59, 130, 246, 0.15)",
+              backgroundColor: `rgba(${lockR}, ${lockG}, ${lockB}, 0.2)`,
               borderRadius: "50%",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              border: "2px solid rgba(59, 130, 246, 0.3)",
-              boxShadow: "0 0 30px rgba(59, 130, 246, 0.2)",
+              border: `2px solid rgba(${lockR}, ${lockG}, ${lockB}, 0.55)`,
+              boxShadow: `0 0 24px rgba(${lockR}, ${lockG}, ${lockB}, 0.22)`,
             }}
           >
-            <div
-              style={{
-                width: "40px",
-                height: "40px",
-                borderRadius: "50%",
-                background: "radial-gradient(circle at 30% 30%, var(--accent), transparent 70%)",
-                boxShadow: "0 0 20px var(--accent)",
-              }}
-            />
+            <Lock size={40} color={modalDotColor} />
           </div>
           <h1 style={{ fontSize: "24px", fontWeight: "bold", marginBottom: "8px", color: "#e0e0e0" }}>
             TradeButler Locked

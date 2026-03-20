@@ -160,6 +160,35 @@ const defaultSettings: SphereThemeSettings = {
   explodeOnUnlock: false,
 };
 
+function sphereHexToRgb(hex: string): { r: number; g: number; b: number } {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex.trim());
+  return result
+    ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) }
+    : { r: 59, g: 130, b: 246 };
+}
+
+function sphereRgbToHex({ r, g, b }: { r: number; g: number; b: number }): string {
+  const c = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
+
+/**
+ * Hex color that matches how the main sphere dots are drawn: `dotColor`, or (when depth gradient is on)
+ * the midpoint between `gradientColorBack` and `gradientColorFront` — same blend axis as `sphereProjection`.
+ */
+export function getSphereMainDotAccentHex(settings: SphereThemeSettings): string {
+  if (!settings.gradientEnabled) {
+    return settings.dotColor;
+  }
+  const back = sphereHexToRgb(settings.gradientColorBack);
+  const front = sphereHexToRgb(settings.gradientColorFront);
+  return sphereRgbToHex({
+    r: (back.r + front.r) / 2,
+    g: (back.g + front.g) / 2,
+    b: (back.b + front.b) / 2,
+  });
+}
+
 /**
  * Get current sphere theme settings
  */
