@@ -4,6 +4,13 @@ import { useNavigate } from "react-router-dom";
 import { X, ExternalLink, Bell, BellOff, Newspaper } from "lucide-react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
+import {
+  NEWS_NOTIFICATIONS_ENABLED_KEY,
+  NEWS_NOTIFICATION_INTERVAL_KEY,
+  NEWS_LAST_SEEN_IDS_KEY,
+  NEWS_SETTINGS_CHANGED_EVENT,
+  emitNewsSettingsChanged,
+} from "../utils/newsManager";
 
 interface NewsItem {
   id: string;
@@ -19,9 +26,6 @@ interface OpenPositionGroup {
   final_quantity: number;
 }
 
-const NEWS_NOTIFICATIONS_ENABLED_KEY = "tradebutler_news_notifications_enabled";
-const NEWS_LAST_SEEN_IDS_KEY = "tradebutler_news_last_seen_ids";
-const NEWS_NOTIFICATION_CHECK_INTERVAL_KEY = "tradebutler_news_notification_interval";
 const NEWS_WATCHED_SYMBOLS_KEY = "tradebutler_news_watched_symbols";
 const NEWS_INCLUDE_POSITIONS_KEY = "tradebutler_news_include_positions";
 
@@ -39,7 +43,7 @@ export default function NewsNotification({ maxNotifications = 3, autoDismissMs =
     return saved ? JSON.parse(saved) : true;
   });
   const [checkInterval, setCheckInterval] = useState(() => {
-    const saved = localStorage.getItem(NEWS_NOTIFICATION_CHECK_INTERVAL_KEY);
+    const saved = localStorage.getItem(NEWS_NOTIFICATION_INTERVAL_KEY);
     return saved ? parseInt(saved, 10) : 5; // Default 5 minutes
   });
   const [showSettings, setShowSettings] = useState(false);
@@ -62,11 +66,24 @@ export default function NewsNotification({ maxNotifications = 3, autoDismissMs =
   // Save settings
   useEffect(() => {
     localStorage.setItem(NEWS_NOTIFICATIONS_ENABLED_KEY, JSON.stringify(isEnabled));
+    emitNewsSettingsChanged();
   }, [isEnabled]);
 
   useEffect(() => {
-    localStorage.setItem(NEWS_NOTIFICATION_CHECK_INTERVAL_KEY, checkInterval.toString());
+    localStorage.setItem(NEWS_NOTIFICATION_INTERVAL_KEY, checkInterval.toString());
+    emitNewsSettingsChanged();
   }, [checkInterval]);
+
+  useEffect(() => {
+    const syncFromStorage = () => {
+      const en = localStorage.getItem(NEWS_NOTIFICATIONS_ENABLED_KEY);
+      setIsEnabled(en ? JSON.parse(en) : true);
+      const iv = localStorage.getItem(NEWS_NOTIFICATION_INTERVAL_KEY);
+      setCheckInterval(iv ? parseInt(iv, 10) : 5);
+    };
+    window.addEventListener(NEWS_SETTINGS_CHANGED_EVENT, syncFromStorage);
+    return () => window.removeEventListener(NEWS_SETTINGS_CHANGED_EVENT, syncFromStorage);
+  }, []);
 
   useEffect(() => {
     return subscribeToDataMode(setDataMode);
@@ -186,11 +203,6 @@ export default function NewsNotification({ maxNotifications = 3, autoDismissMs =
       return dateStr;
     }
   };
-
-  // Don't render anything if notifications are disabled and there are no current notifications
-  if (!isEnabled && notifications.length === 0) {
-    return null;
-  }
 
   return (
     <>

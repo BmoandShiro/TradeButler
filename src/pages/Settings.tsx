@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, Lock, Eye, EyeOff, ChevronDown, ChevronRight, Key, ExternalLink, Loader2 } from "lucide-react";
+import { Settings as SettingsIcon, Download, RefreshCw, CheckCircle, XCircle, AlertCircle, Palette, RotateCcw, Save, Trash2, Edit2, Lock, Eye, EyeOff, ChevronDown, ChevronRight, Key, ExternalLink, Loader2, Bell } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { save } from "@tauri-apps/api/dialog";
 import { createPortal } from "react-dom";
@@ -54,6 +54,11 @@ import {
 import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import type { DataMode } from "../utils/dataMode";
 import { getFinnhubApiKey, setFinnhubApiKey, removeFinnhubApiKey, hasFinnhubApiKey } from "../utils/finnhubManager";
+import {
+  loadNewsSettings,
+  saveNewsSettings,
+  NEWS_SETTINGS_CHANGED_EVENT,
+} from "../utils/newsManager";
 
 interface VersionInfo {
   current: string;
@@ -129,6 +134,19 @@ export default function Settings() {
   const [showFinnhubApiKey, setShowFinnhubApiKey] = useState(false);
   const [finnhubTestStatus, setFinnhubTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [finnhubTestError, setFinnhubTestError] = useState<string | null>(null);
+
+  const [newsNotifEnabled, setNewsNotifEnabled] = useState(() => loadNewsSettings().notificationsEnabled);
+  const [newsNotifInterval, setNewsNotifInterval] = useState(() => loadNewsSettings().notificationIntervalMinutes);
+
+  useEffect(() => {
+    const sync = () => {
+      const s = loadNewsSettings();
+      setNewsNotifEnabled(s.notificationsEnabled);
+      setNewsNotifInterval(s.notificationIntervalMinutes);
+    };
+    window.addEventListener(NEWS_SETTINGS_CHANGED_EVENT, sync);
+    return () => window.removeEventListener(NEWS_SETTINGS_CHANGED_EVENT, sync);
+  }, []);
 
   const handleClearAllData = () => {
     setShowClearDataModal(true);
@@ -3300,6 +3318,102 @@ export default function Settings() {
                   <strong>Installation Type:</strong> {versionInfo.is_installer ? "Installer" : "Portable"}
                 </div>
               </div>
+            </div>
+          )}
+        </div>
+
+        {/* News desktop notifications */}
+        <div
+          style={{
+            backgroundColor: "var(--bg-secondary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "12px",
+            padding: "24px",
+            marginBottom: "24px",
+          }}
+        >
+          <h2
+            style={{
+              fontSize: "20px",
+              fontWeight: "600",
+              color: "var(--text-primary)",
+              marginBottom: "16px",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            <Bell size={20} />
+            News notifications
+          </h2>
+          <p
+            style={{
+              fontSize: "14px",
+              color: "var(--text-secondary)",
+              marginBottom: "16px",
+              lineHeight: "1.6",
+            }}
+          >
+            Desktop alerts for new articles on your watched symbols and open positions (not in demo mode). The bell in the
+            bottom-right corner opens the same options; if you turned notifications off there, you can re-enable them here.
+          </p>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+              cursor: "pointer",
+              marginBottom: "16px",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={newsNotifEnabled}
+              onChange={(e) => {
+                const v = e.target.checked;
+                setNewsNotifEnabled(v);
+                saveNewsSettings({ notificationsEnabled: v });
+              }}
+              style={{ width: "18px", height: "18px", cursor: "pointer", accentColor: "var(--accent)" }}
+            />
+            <span style={{ fontSize: "14px", color: "var(--text-primary)" }}>Enable news notifications</span>
+          </label>
+          {newsNotifEnabled && (
+            <div style={{ maxWidth: "320px" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: "13px",
+                  color: "var(--text-secondary)",
+                  marginBottom: "8px",
+                }}
+              >
+                How often to check for new articles
+              </label>
+              <select
+                value={newsNotifInterval}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10);
+                  setNewsNotifInterval(n);
+                  saveNewsSettings({ notificationIntervalMinutes: n });
+                }}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border-color)",
+                  backgroundColor: "var(--bg-primary)",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  cursor: "pointer",
+                }}
+              >
+                <option value={1}>Every 1 minute</option>
+                <option value={5}>Every 5 minutes</option>
+                <option value={15}>Every 15 minutes</option>
+                <option value={30}>Every 30 minutes</option>
+                <option value={60}>Every hour</option>
+              </select>
             </div>
           )}
         </div>

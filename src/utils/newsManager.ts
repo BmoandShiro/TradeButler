@@ -11,6 +11,14 @@ export const NEWS_NOTIFICATION_INTERVAL_KEY = "tradebutler_news_notification_int
 export const NEWS_LAST_SEEN_IDS_KEY = "tradebutler_news_last_seen_ids";
 export const NEWS_LAST_FETCH_KEY = "tradebutler_news_last_fetch";
 
+/** Fired when notification prefs change so NewsNotification FAB and Settings stay in sync. */
+export const NEWS_SETTINGS_CHANGED_EVENT = "tradebutler-news-settings-changed";
+
+export function emitNewsSettingsChanged(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(NEWS_SETTINGS_CHANGED_EVENT));
+}
+
 // Calendar settings keys
 export const CALENDAR_SHOW_EARNINGS_KEY = "tradebutler_calendar_show_earnings";
 export const CALENDAR_SHOW_DIVIDENDS_KEY = "tradebutler_calendar_show_dividends";
@@ -59,6 +67,7 @@ export function loadNewsSettings(): NewsSettings {
 
 // Save news settings to localStorage
 export function saveNewsSettings(settings: Partial<NewsSettings>): void {
+  let notify = false;
   if (settings.watchedSymbols !== undefined) {
     saveWatchedSymbols(settings.watchedSymbols);
   }
@@ -70,9 +79,14 @@ export function saveNewsSettings(settings: Partial<NewsSettings>): void {
   }
   if (settings.notificationsEnabled !== undefined) {
     localStorage.setItem(NEWS_NOTIFICATIONS_ENABLED_KEY, JSON.stringify(settings.notificationsEnabled));
+    notify = true;
   }
   if (settings.notificationIntervalMinutes !== undefined) {
     localStorage.setItem(NEWS_NOTIFICATION_INTERVAL_KEY, settings.notificationIntervalMinutes.toString());
+    notify = true;
+  }
+  if (notify) {
+    emitNewsSettingsChanged();
   }
 }
 
