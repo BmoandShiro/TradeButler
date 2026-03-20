@@ -34,7 +34,7 @@ import MilkyWayLockScreen from "./MilkyWayLockScreen";
 import SphereLockScreen from "./SphereLockScreen";
 import GalaxyBackground from "./GalaxyBackground";
 import NewsNotification from "./NewsNotification";
-import { isLocked, hasPassword, lockApp, resolveLockStateForSessionStart } from "../utils/passwordManager";
+import { hasPassword, lockApp, resolveLockStateForSessionStart } from "../utils/passwordManager";
 import { getLockScreenStyle } from "../utils/lockScreenManager";
 import { getGalaxyThemeSettings } from "../utils/galaxyThemeManager";
 import { applyGalaxyBackgroundStyles } from "../utils/galaxyBackgroundStyles";

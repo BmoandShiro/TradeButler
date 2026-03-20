@@ -7,6 +7,7 @@ import {
   GridFutureSellMode,
   GridFutureState,
   GridFutureSlot,
+  GridFutureSummary,
 } from "./gridTypes";
 
 interface GridFutureViewProps {
@@ -165,7 +166,7 @@ export function GridFutureView({
 
   // Hooks must run every render — do not early-return before useMemo/useEffect below.
   const buyLots = selectedCycle ? (state.buyLots ?? []) : [];
-  const summary = selectedCycle ? (state.summary ?? {}) : {};
+  const summary = (selectedCycle ? (state.summary ?? {}) : {}) as GridFutureSummary;
   const { capital, grid, position, freeShareTargets } = summary;
   const slots = selectedCycle ? (state.slots ?? []) : [];
   const matchEvents = selectedCycle ? (state.matchEvents ?? []) : [];
