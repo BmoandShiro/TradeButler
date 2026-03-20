@@ -48,9 +48,9 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
     technical: boolean;
     candles: boolean;
   }>({
-    indicators: true,
-    technical: true,
-    candles: true,
+    indicators: false,
+    technical: false,
+    candles: false,
   });
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => {
     try {
@@ -213,6 +213,7 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
   const visibleFiltered = useMemo(() => filtered.filter(passesBiasFilter), [filtered, showBullish, showBearish]);
   const visibleTechnicalPatterns = useMemo(() => technicalPatterns.filter(passesBiasFilter), [technicalPatterns, showBullish, showBearish]);
   const visibleCandlestickPatterns = useMemo(() => candlestickPatterns.filter(passesBiasFilter), [candlestickPatterns, showBullish, showBearish]);
+  const noSectionSelected = !activeSections.indicators && !activeSections.technical && !activeSections.candles;
 
   const prebuiltThumbnails = useMemo(() => {
     if (!showEdit) return [];
@@ -670,7 +671,7 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
 
       {view === "all" ? (
         <>
-          {activeSections.indicators && (
+          {(noSectionSelected || activeSections.indicators) && (
             <div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
                 <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
@@ -681,7 +682,7 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
             </div>
           )}
 
-          {activeSections.technical && (
+          {(noSectionSelected || activeSections.technical) && (
             <div style={{ marginTop: "18px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
                 <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
@@ -692,7 +693,7 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
             </div>
           )}
 
-          {activeSections.candles && (
+          {(noSectionSelected || activeSections.candles) && (
             <div style={{ marginTop: "18px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
                 <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>

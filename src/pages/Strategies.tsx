@@ -708,6 +708,213 @@ function SortableChecklistItem({
   );
 }
 
+/** Single draggable rule row with inline edit (multiline), similar to checklist items. */
+function SortableRuleRow({
+  id: itemId,
+  text,
+  isEditingThis,
+  editingText,
+  onEditingTextChange,
+  onStartEdit,
+  onSaveEdit,
+  onCancelEdit,
+  onRemove,
+  canEdit,
+}: {
+  id: string;
+  text: string;
+  isEditingThis: boolean;
+  editingText: string;
+  onEditingTextChange: (v: string) => void;
+  onStartEdit: () => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
+  onRemove: () => void;
+  canEdit: boolean;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: itemId, disabled: !canEdit || isEditingThis });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.65 : 1,
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 10,
+        padding: "10px 12px",
+        border: "1px solid var(--border-color)",
+        background: "var(--bg-tertiary)",
+        borderRadius: 10,
+      }}
+    >
+      {canEdit && (
+        <div
+          {...attributes}
+          {...listeners}
+          style={{
+            paddingTop: 2,
+            paddingLeft: 2,
+            cursor: isDragging ? "grabbing" : isEditingThis ? "default" : "grab",
+            color: "var(--text-secondary)",
+          }}
+          title="Drag to reorder"
+        >
+          <GripVertical size={16} />
+        </div>
+      )}
+
+      {isEditingThis ? (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
+          <textarea
+            value={editingText}
+            onChange={(e) => onEditingTextChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                onCancelEdit();
+              }
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                e.preventDefault();
+                onSaveEdit();
+              }
+            }}
+            rows={Math.min(12, Math.max(3, editingText.split("\n").length + 1))}
+            autoFocus
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              background: "var(--bg-primary)",
+              border: "1px solid var(--accent)",
+              borderRadius: 8,
+              color: "var(--text-primary)",
+              fontSize: 13,
+              lineHeight: 1.35,
+              outline: "none",
+              resize: "vertical",
+              fontFamily: "inherit",
+            }}
+          />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={onSaveEdit}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: "none",
+                background: "var(--accent)",
+                color: "white",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={onCancelEdit}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-secondary)",
+                color: "var(--text-primary)",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 650,
+              }}
+            >
+              Cancel
+            </button>
+            <span style={{ fontSize: 11, color: "var(--text-secondary)", alignSelf: "center" }}>
+              Ctrl+Enter to save · Esc to cancel
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div
+          style={{
+            flex: 1,
+            fontSize: 13,
+            color: "var(--text-primary)",
+            fontWeight: 550,
+            lineHeight: 1.35,
+            whiteSpace: "pre-wrap",
+            cursor: canEdit ? "text" : "default",
+            minWidth: 0,
+          }}
+          onClick={canEdit ? onStartEdit : undefined}
+          title={canEdit ? "Click to edit" : undefined}
+        >
+          {text}
+        </div>
+      )}
+
+      {canEdit && !isEditingThis && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onStartEdit();
+            }}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-secondary)",
+              color: "var(--text-primary)",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 650,
+              height: 30,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+            }}
+            title="Edit rule"
+          >
+            <Edit2 size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-secondary)",
+              color: "var(--danger)",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 650,
+              height: 30,
+            }}
+            title="Remove"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** @internal Reserved for optional sortable list UI */
 export function SortableStrategyItemUnused({
   strategy,
@@ -1820,6 +2027,9 @@ export default function Strategies() {
   const [takeProfitRuleTexts, setTakeProfitRuleTexts] = useState<string[]>([]);
   const [customRuleSets, setCustomRuleSets] = useState<StrategyCustomRuleSet[]>([]);
   const [ruleDraftText, setRuleDraftText] = useState<string>("");
+  /** Index of rule row being edited (Entry / Take Profit / active custom set). */
+  const [editingRuleIndex, setEditingRuleIndex] = useState<number | null>(null);
+  const [editingRuleText, setEditingRuleText] = useState<string>("");
   const [indicatorSearch, setIndicatorSearch] = useState("");
   const [indicatorDropdownOpen, setIndicatorDropdownOpen] = useState(false);
   const [presetModal, setPresetModal] = useState<null | "add" | number>(null);
@@ -2824,7 +3034,7 @@ export default function Strategies() {
       }
       
       // Default checklist types - always include these even if empty
-      const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+      const defaultTypes = ["daily_analysis", "entry", "take_profit"];
       const checklistMap = new Map<string, ChecklistItem[]>();
       const customTypesSet = new Set<string>();
       
@@ -2833,6 +3043,16 @@ export default function Strategies() {
       // Initialize default types
       for (const type of defaultTypes) {
         checklistMap.set(type, []);
+      }
+
+      // Mantra used to be a default checklist type. If an existing strategy was ordered/titled with it,
+      // keep it visible even if it currently has no checklist items by registering it as an empty custom type.
+      const strategyChecklistOrder = checklistTypeOrder.get(strategyId) ?? [];
+      const strategyHasMantraTitle = checklistTitles.get(strategyId)?.has("daily_mantra") ?? false;
+      const shouldIncludeMantra = strategyChecklistOrder.includes("daily_mantra") || strategyHasMantraTitle;
+      if (shouldIncludeMantra && !checklistMap.has("daily_mantra")) {
+        checklistMap.set("daily_mantra", []);
+        customTypesSet.add("daily_mantra");
       }
       
       // Group items by type (exclude placeholder items from display, but ensure their type is registered).
@@ -2902,7 +3122,6 @@ export default function Strategies() {
       // Fallback to default structure
       const checklistMap = new Map<string, ChecklistItem[]>();
       checklistMap.set("daily_analysis", []);
-      checklistMap.set("daily_mantra", []);
       checklistMap.set("entry", []);
       checklistMap.set("take_profit", []);
       setChecklists((prev) => {
@@ -3176,10 +3395,10 @@ export default function Strategies() {
   };
 
   const deleteChecklistType = async (strategyId: number, type: string) => {
-    const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+    const defaultTypes = ["daily_analysis", "entry", "take_profit"];
     if (defaultTypes.includes(type) || type === "survey") {
       if (type === "survey") return; // Post-Trade Survey is not deletable
-      alert("Cannot delete default checklist types (Analysis, Mantra, Entry, or Take Profit)");
+      alert("Cannot delete default checklist types (Analysis, Entry, or Take Profit)");
       return;
     }
 
@@ -4163,7 +4382,7 @@ export default function Strategies() {
         }
 
         // Third pass: Persist empty custom checklist types with a placeholder item so they display when viewing
-        const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+        const defaultTypes = ["daily_analysis", "entry", "take_profit"];
         for (const [type, items] of tempChecklists.entries()) {
           if (defaultTypes.includes(type) || type === "survey") continue;
           if (items.length > 0) continue;
@@ -4321,6 +4540,8 @@ export default function Strategies() {
     setActiveRulesPanel("entry");
     setActiveCustomRuleSetId(null);
     setRuleDraftText("");
+    setEditingRuleIndex(null);
+    setEditingRuleText("");
     setIndicatorSearch("");
   };
 
@@ -4491,7 +4712,7 @@ export default function Strategies() {
     }
     
     // Third pass: Persist empty custom checklist types with a placeholder item so they display when viewing
-    const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+    const defaultTypes = ["daily_analysis", "entry", "take_profit"];
     for (const [type, items] of editingChecklist.entries()) {
       if (defaultTypes.includes(type) || type === "survey") continue;
       if (items.length > 0) continue;
@@ -4579,7 +4800,7 @@ export default function Strategies() {
         
         // Update custom checklist types based on what's in editingChecklists
         const editingChecklist = editingChecklists.get(selectedStrategyData.id)!;
-        const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+        const defaultTypes = ["daily_analysis", "entry", "take_profit"];
         const customTypesSet = new Set<string>();
         for (const type of editingChecklist.keys()) {
           // Exclude "survey" from being treated as a custom type - it has its own tab
@@ -6311,7 +6532,7 @@ export default function Strategies() {
                 };
 
                 // Ordered checklist types: use saved order if any, else default first then custom. Allows custom above Analysis/Mantra/Entry/Take Profit.
-                const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+                const defaultTypes = ["daily_analysis", "entry", "take_profit"];
                 const tempCustomTypes = isCreating 
                   ? Array.from(new Set(Array.from(tempChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")))
                   : isEditing && selectedStrategy && editingChecklists.has(selectedStrategy)
@@ -6606,7 +6827,35 @@ export default function Strategies() {
                   if (!isCreating && strategyId > 0) saveStrategyCustomRuleSets(dataMode, strategyId, nextSets);
                 };
 
+                const cancelEditingRule = () => {
+                  setEditingRuleIndex(null);
+                  setEditingRuleText("");
+                };
+
+                const saveEditedRule = () => {
+                  if (editingRuleIndex === null) return;
+                  const t = editingRuleText.trim();
+                  if (!t) {
+                    cancelEditingRule();
+                    return;
+                  }
+                  const next = [...selectedRules];
+                  next[editingRuleIndex] = t;
+                  saveSelectedRules(next);
+                  cancelEditingRule();
+                };
+
+                const startEditingRule = (idx: number) => {
+                  setEditingRuleIndex(idx);
+                  setEditingRuleText(selectedRules[idx] ?? "");
+                };
+
                 const removeAt = (idx: number) => {
+                  if (editingRuleIndex === idx) {
+                    cancelEditingRule();
+                  } else if (editingRuleIndex !== null && idx < editingRuleIndex) {
+                    setEditingRuleIndex(editingRuleIndex - 1);
+                  }
                   const next = selectedRules.filter((_, i) => i !== idx);
                   saveSelectedRules(next);
                 };
@@ -6618,6 +6867,7 @@ export default function Strategies() {
                 };
 
                 const handleRuleDragEnd = (event: DragEndEvent) => {
+                  cancelEditingRule();
                   const { active, over } = event;
                   if (!over) return;
                   const oldIndex = Number(String(active.id));
@@ -6642,6 +6892,7 @@ export default function Strategies() {
                       <button
                         type="button"
                         onClick={() => {
+                          cancelEditingRule();
                           setActiveRulesPanel("entry");
                           setActiveCustomRuleSetId(null);
                         }}
@@ -6661,6 +6912,7 @@ export default function Strategies() {
                       <button
                         type="button"
                         onClick={() => {
+                          cancelEditingRule();
                           setActiveRulesPanel("takeProfit");
                           setActiveCustomRuleSetId(null);
                         }}
@@ -6683,6 +6935,7 @@ export default function Strategies() {
                           key={s.id}
                           type="button"
                           onClick={() => {
+                            cancelEditingRule();
                             setActiveRulesPanel("customSet");
                             setActiveCustomRuleSetId(s.id);
                           }}
@@ -6706,6 +6959,7 @@ export default function Strategies() {
                         <button
                           type="button"
                           onClick={() => {
+                            cancelEditingRule();
                             const name = window.prompt("Custom rule set name:");
                             const title = (name ?? "").trim();
                             if (!title) return;
@@ -6755,82 +7009,21 @@ export default function Strategies() {
                               <DndContext sensors={sensors} onDragEnd={handleRuleDragEnd}>
                                 <SortableContext items={sortableRuleItemIds} strategy={verticalListSortingStrategy}>
                                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                                    {selectedRules.map((ruleText, idx) => {
-                                      const SortableRuleRow = ({ id: itemId, text, itemIdx }: { id: string; text: string; itemIdx: number }) => {
-                                        const {
-                                          attributes,
-                                          listeners,
-                                          setNodeRef,
-                                          transform,
-                                          transition,
-                                          isDragging,
-                                        } = useSortable({ id: itemId });
-
-                                        return (
-                                          <div
-                                            ref={setNodeRef}
-                                            style={{
-                                              transform: CSS.Transform.toString(transform),
-                                              transition,
-                                              opacity: isDragging ? 0.65 : 1,
-                                              display: "flex",
-                                              alignItems: "flex-start",
-                                              gap: 10,
-                                              padding: "10px 12px",
-                                              border: "1px solid var(--border-color)",
-                                              background: "var(--bg-tertiary)",
-                                              borderRadius: 10,
-                                            }}
-                                          >
-                                            <div
-                                              {...attributes}
-                                              {...listeners}
-                                              style={{
-                                                paddingTop: 2,
-                                                paddingLeft: 2,
-                                                cursor: isDragging ? "grabbing" : "grab",
-                                                color: "var(--text-secondary)",
-                                              }}
-                                              title="Drag to reorder"
-                                            >
-                                              <GripVertical size={16} />
-                                            </div>
-
-                                            <div style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", fontWeight: 550, lineHeight: 1.35, whiteSpace: "pre-wrap" }}>
-                                              {text}
-                                            </div>
-
-                                            <button
-                                              type="button"
-                                              onClick={() => removeAt(itemIdx)}
-                                              style={{
-                                                padding: "6px 10px",
-                                                borderRadius: 8,
-                                                border: "1px solid var(--border-color)",
-                                                background: "var(--bg-secondary)",
-                                                color: "var(--danger)",
-                                                cursor: "pointer",
-                                                fontSize: 12,
-                                                fontWeight: 650,
-                                                height: 30,
-                                              }}
-                                              title="Remove"
-                                            >
-                                              ✕
-                                            </button>
-                                          </div>
-                                        );
-                                      };
-
-                                      return (
-                                        <SortableRuleRow
-                                          key={sortableRuleItemIds[idx]}
-                                          id={sortableRuleItemIds[idx]}
-                                          text={ruleText}
-                                          itemIdx={idx}
-                                        />
-                                      );
-                                    })}
+                                    {selectedRules.map((ruleText, idx) => (
+                                      <SortableRuleRow
+                                        key={sortableRuleItemIds[idx]}
+                                        id={sortableRuleItemIds[idx]}
+                                        text={ruleText}
+                                        isEditingThis={editingRuleIndex === idx}
+                                        editingText={editingRuleText}
+                                        onEditingTextChange={setEditingRuleText}
+                                        onStartEdit={() => startEditingRule(idx)}
+                                        onSaveEdit={saveEditedRule}
+                                        onCancelEdit={cancelEditingRule}
+                                        onRemove={() => removeAt(idx)}
+                                        canEdit={canEditRules}
+                                      />
+                                    ))}
                                   </div>
                                 </SortableContext>
                               </DndContext>
@@ -9371,7 +9564,7 @@ export default function Strategies() {
                 if (e.key === "Enter" && newChecklistName.trim()) {
                   const typeName = newChecklistName.trim().toLowerCase().replace(/\s+/g, '_');
                   const virtualId = isCreating ? -1 : (selectedStrategy ?? 0);
-                  const defaultTypesList = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+                  const defaultTypesList = ["daily_analysis", "entry", "take_profit"];
                   const currentMapForOrder = isCreating ? tempChecklists : (editingChecklists.get(selectedStrategy!) ?? checklists.get(selectedStrategy!) ?? new Map<string, ChecklistItem[]>());
                   const existingCustom = Array.from(currentMapForOrder.keys()).filter((t: string) => !defaultTypesList.includes(t) && t !== "survey");
                   const currentOrder = checklistTypeOrder.get(virtualId) ?? [...defaultTypesList, ...existingCustom];
@@ -9472,7 +9665,7 @@ export default function Strategies() {
                   if (newChecklistName.trim()) {
                     const typeName = newChecklistName.trim().toLowerCase().replace(/\s+/g, '_');
                     const virtualId = isCreating ? -1 : (selectedStrategy ?? 0);
-                    const defaultTypesList = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+                    const defaultTypesList = ["daily_analysis", "entry", "take_profit"];
                     const currentMapForOrder = isCreating ? tempChecklists : (editingChecklists.get(selectedStrategy!) ?? checklists.get(selectedStrategy!) ?? new Map<string, ChecklistItem[]>());
                     const existingCustom = Array.from(currentMapForOrder.keys()).filter((t: string) => !defaultTypesList.includes(t) && t !== "survey");
                     const currentOrder = checklistTypeOrder.get(virtualId) ?? [...defaultTypesList, ...existingCustom];

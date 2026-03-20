@@ -319,7 +319,6 @@ export type JournalSectionId =
 const CORE_SECTION_ORDER: JournalSectionId[] = [
   "analysis_checklist",
   "emotional_state_before",
-  "mantra_checklist",
   "implementation",
   "entry_checklist",
   "emotional_state_during",
@@ -476,7 +475,8 @@ export default function Journal() {
       try {
         const parsed = JSON.parse(raw) as string[];
         if (Array.isArray(parsed) && parsed.length > 0) {
-                        const valid = parsed.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:") || id.startsWith("custom_rules:")));
+                        const normalized = parsed.map((id) => (id === "mantra_checklist" ? "custom:daily_mantra" : id));
+                        const valid = normalized.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:") || id.startsWith("custom_rules:")));
           const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
           return [...valid, ...missing];
         }
@@ -3041,7 +3041,7 @@ export default function Journal() {
   const currentChecklists = entryFormData.strategy_id ? strategyChecklists.get(entryFormData.strategy_id) : null;
   // Trades that belong to this journal entry only (for Associate modal). When editing, use tradesFormData (set from loaded trades in handleEdit) so we always show the correct 7; when viewing, use selectedTrades.
   const entryTradesForAssociation = selectedEntry && !isEditing ? selectedTrades : tradesFormData;
-  const defaultTypes = ["daily_analysis", "daily_mantra", "entry", "take_profit"];
+  const defaultTypes = ["daily_analysis", "entry", "take_profit"];
   const customTypes = currentChecklists 
     ? Array.from(currentChecklists.keys()).filter(t => !defaultTypes.includes(t) && t !== "survey")
     : [];
@@ -3209,20 +3209,29 @@ export default function Journal() {
 
     return (
       <div style={{ marginTop: 14, position: "relative" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
-          <div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap",
+            marginBottom: 8,
+          }}
+        >
+          <div style={{ flex: "1 1 240px", minWidth: 0 }}>
             <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
               Patterns
             </div>
             <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>Select which patterns are present in this trade.</div>
           </div>
 
-          <div style={{ width: "100%", flex: 1, minWidth: 0, display: "flex", justifyContent: "flex-end" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minWidth: 0, flex: "1 1 200px" }}>
             <button
               type="button"
               disabled={!canEdit && selectedIds.length === 0}
               onClick={() => setOpen((v) => !v)}
-                style={{
+              style={{
                 padding: "8px 12px",
                 borderRadius: 999,
                 border: `1px solid var(--border-color)`,
@@ -3233,11 +3242,41 @@ export default function Journal() {
                 fontWeight: 700,
                 width: 220,
                 maxWidth: "100%",
+                flexShrink: 0,
               }}
               title="Select patterns"
             >
               {selectedIds.length > 0 ? `${selectedIds.length} selected` : "Choose patterns"}
             </button>
+            {selectedIds.length > 0 && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                {selectedIds.map((id) => {
+                  const ind = idToInd.get(id);
+                  if (!ind) return null;
+                  return (
+                    <span
+                      key={id}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        border: `1px solid ${hexToRgba(ind.accentColor ?? "#F59E0B", 0.55)}`,
+                        background: hexToRgba(ind.accentColor ?? "#F59E0B", 0.18),
+                        color: ind.accentColor ?? "#F59E0B",
+                        fontSize: 12,
+                        fontWeight: 800,
+                        maxWidth: "100%",
+                      }}
+                      title={ind.name}
+                    >
+                      {ind.abbreviation}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
@@ -3408,36 +3447,6 @@ export default function Journal() {
             </div>
           </div>
         )}
-
-        {selectedIds.length > 0 && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {selectedIds.map((id) => {
-              const ind = idToInd.get(id);
-              if (!ind) return null;
-              return (
-                <span
-                  key={id}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "6px 10px",
-                    borderRadius: 999,
-                    border: `1px solid ${hexToRgba(ind.accentColor ?? "#F59E0B", 0.55)}`,
-                    background: hexToRgba(ind.accentColor ?? "#F59E0B", 0.18),
-                    color: ind.accentColor ?? "#F59E0B",
-                    fontSize: 12,
-                    fontWeight: 800,
-                    maxWidth: "100%",
-                  }}
-                  title={ind.name}
-                >
-                  {ind.abbreviation}
-                </span>
-              );
-            })}
-          </div>
-        )}
       </div>
     );
   };
@@ -3502,31 +3511,6 @@ export default function Journal() {
             Signals ({phaseLabel})
           </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "8px" }}>
-                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                  {timeframeOptions.map((tf) => {
-                    const active = globalSelectedTfs.includes(tf);
-                    return (
-                      <button
-                        key={tf}
-                        type="button"
-                        onClick={() => toggleTf(tf)}
-                        style={{
-                          padding: "6px 10px",
-                          borderRadius: "999px",
-                          border: "1px solid var(--border-color)",
-                          background: active ? "var(--accent)" : "var(--bg-tertiary)",
-                          color: active ? "white" : "var(--text-primary)",
-                          cursor: "pointer",
-                          fontSize: "12px",
-                          fontWeight: 650,
-                        }}
-                      >
-                        {tf}
-                      </button>
-                    );
-                  })}
-                </div>
-
                 <div style={{ position: "relative" }}>
                   <button
                     type="button"
@@ -3641,8 +3625,39 @@ export default function Journal() {
           canEdit={canEditIndicators}
         />
 
-        <div style={{ marginTop: 14, fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-          Indicators
+        <div style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "nowrap" }}>
+          <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              Indicators
+            </div>
+            <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
+              Select one or more timeframes to enter indicator values (optional).
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end", flex: "0 0 auto" }}>
+            {timeframeOptions.map((tf) => {
+              const active = globalSelectedTfs.includes(tf);
+              return (
+                <button
+                  key={tf}
+                  type="button"
+                  onClick={() => toggleTf(tf)}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: "999px",
+                    border: "1px solid var(--border-color)",
+                    background: active ? "var(--accent)" : "var(--bg-tertiary)",
+                    color: active ? "white" : "var(--text-primary)",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    fontWeight: 650,
+                  }}
+                >
+                  {tf}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {visibleIndicators.length === 0 ? (
@@ -3650,9 +3665,7 @@ export default function Journal() {
             No indicators match the selected pattern filters.
           </div>
         ) : !hasAnyIndicatorTfs ? (
-          <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
-            Select one or more timeframes to enter indicator values (optional).
-          </div>
+          null
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {visibleIndicators.map((ind) => {
@@ -3675,7 +3688,7 @@ export default function Journal() {
                     display: "grid",
                     gridTemplateColumns: `minmax(220px, 1fr) repeat(${colTfs.length}, minmax(110px, 140px))`,
                     gap: "10px",
-                    alignItems: "stretch",
+                    alignItems: isTfIndicator ? "center" : "stretch",
                   }}
                 >
                   <div
@@ -3712,7 +3725,10 @@ export default function Journal() {
                   </div>
                   {colTfs.map((tf) =>
                     isTfIndicator ? (
-                      <div key={`${entryId}:${tradeIndex}:${phase}:${ind.id}:${tf}`} style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "stretch" }}>
+                      <div
+                        key={`${entryId}:${tradeIndex}:${phase}:${ind.id}:${tf}`}
+                        style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "stretch", width: "100%" }}
+                      >
                         <button
                           type="button"
                           onClick={() => toggleIndicatorTf(ind.id, tf)}
@@ -3762,6 +3778,7 @@ export default function Journal() {
                                   });
                                 }
                                 setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, next);
+                                setJournalSignalInputsTick((t) => t + 1);
                               }}
                               style={{ width: "16px", height: "16px" }}
                             />
@@ -3810,7 +3827,10 @@ export default function Journal() {
                                 type="checkbox"
                                 checked={loadJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
                                 disabled={!canEditIndicators}
-                                onChange={(e) => setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.checked)}
+                                onChange={(e) => {
+                                  setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.checked);
+                                  setJournalSignalInputsTick((t) => t + 1);
+                                }}
                                 style={{ width: "16px", height: "16px" }}
                               />
                               Divergence
@@ -3839,7 +3859,10 @@ export default function Journal() {
                                       type="checkbox"
                                       checked={checked}
                                       disabled={!canEditIndicators}
-                                      onChange={(e) => setJournalIndicatorOtherSignal(dataMode, entryId, tradeIndex, phase, ind.id, label, e.target.checked)}
+                                      onChange={(e) => {
+                                        setJournalIndicatorOtherSignal(dataMode, entryId, tradeIndex, phase, ind.id, label, e.target.checked);
+                                        setJournalSignalInputsTick((t) => t + 1);
+                                      }}
                                       style={{ width: 16, height: 16 }}
                                     />
                                     {label}
@@ -4090,6 +4113,8 @@ export default function Journal() {
     entry: false,
     exit: false,
   });
+  /** Bumped when divergence / other-signal prefs change in localStorage so controlled checkboxes re-render. */
+  const [, setJournalSignalInputsTick] = useState(0);
   const [indicatorSignalGroupFilterByPhase, setIndicatorSignalGroupFilterByPhase] = useState<
     Record<IndicatorPhase, { technical: boolean; candlestick: boolean }>
   >({
@@ -5201,6 +5226,7 @@ export default function Journal() {
                                         padding: "10px 12px",
                                         background: "var(--bg-tertiary)",
                                         border: "1px solid var(--border-color)",
+                                        borderLeft: "3px solid var(--accent)",
                                         borderRadius: 8,
                                         color: "var(--text-primary)",
                                         fontSize: 13,
@@ -5244,6 +5270,7 @@ export default function Journal() {
                                         padding: "10px 12px",
                                         background: "var(--bg-tertiary)",
                                         border: "1px solid var(--border-color)",
+                                        borderLeft: "3px solid var(--accent)",
                                         borderRadius: 8,
                                         color: "var(--text-primary)",
                                         fontSize: 13,
@@ -5282,6 +5309,7 @@ export default function Journal() {
                                       padding: "10px 12px",
                                       background: "var(--bg-tertiary)",
                                       border: "1px solid var(--border-color)",
+                                      borderLeft: "3px solid var(--accent)",
                                       borderRadius: 8,
                                       color: "var(--text-primary)",
                                       fontSize: 13,
@@ -8421,7 +8449,8 @@ export default function Journal() {
                       if (raw) {
                         const parsed = JSON.parse(raw) as string[];
                         if (Array.isArray(parsed) && parsed.length > 0) {
-                          const valid = parsed.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:")));
+                          const normalized = parsed.map((id) => (id === "mantra_checklist" ? "custom:daily_mantra" : id));
+                          const valid = normalized.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:")));
                           const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
                           setJournalSectionOrder([...valid, ...missing]);
                         }
