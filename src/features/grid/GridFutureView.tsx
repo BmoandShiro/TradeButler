@@ -163,20 +163,13 @@ export function GridFutureView({
     };
   }, [resizing]);
 
-  if (!selectedCycle) {
-    return (
-      <div style={{ padding: "16px", color: "var(--text-secondary)" }}>
-        Select a cycle to open Future view planning.
-      </div>
-    );
-  }
-
-  const buyLots = state.buyLots ?? [];
-  const summary = state.summary ?? {};
+  // Hooks must run every render — do not early-return before useMemo/useEffect below.
+  const buyLots = selectedCycle ? (state.buyLots ?? []) : [];
+  const summary = selectedCycle ? (state.summary ?? {}) : {};
   const { capital, grid, position, freeShareTargets } = summary;
-  const slots = state.slots ?? [];
-  const matchEvents = state.matchEvents ?? [];
-  const openFragments = state.openFragments ?? [];
+  const slots = selectedCycle ? (state.slots ?? []) : [];
+  const matchEvents = selectedCycle ? (state.matchEvents ?? []) : [];
+  const openFragments = selectedCycle ? (state.openFragments ?? []) : [];
   const matchEventsBySlot = useMemo(() => {
     const bySlot = new Map<string, typeof matchEvents>();
     matchEvents.forEach((m) => {
@@ -262,6 +255,14 @@ export function GridFutureView({
 
     return [...sellRows, ...buyRows].sort((a, b) => b.orderPrice - a.orderPrice);
   }, [slots, buyLots, showUnfilledBuys, hideProceedsCompleteSellRows, settings, capitalPerLevel]);
+
+  if (!selectedCycle) {
+    return (
+      <div style={{ padding: "16px", color: "var(--text-secondary)" }}>
+        Select a cycle to open Future view planning.
+      </div>
+    );
+  }
 
   const toggleSlotExpanded = (rowKey: string) => {
     setExpandedSlotIds((prev) => {
