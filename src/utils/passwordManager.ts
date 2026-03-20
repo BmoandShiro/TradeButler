@@ -7,6 +7,7 @@ const PASSWORD_STORAGE_KEY = "tradebutler_password_hash";
 const PASSWORD_SALT_KEY = "tradebutler_password_salt";
 const PASSWORD_TYPE_KEY = "tradebutler_password_type"; // "pin" or "password"
 const IS_LOCKED_KEY = "tradebutler_is_locked";
+const LOCK_ON_STARTUP_KEY = "tradebutler_lock_on_startup";
 
 // PBKDF2 configuration
 const PBKDF2_ITERATIONS = 100000; // OWASP recommends 600,000+ for 2023, but 100k is good balance
@@ -157,6 +158,34 @@ export function deletePassword(): void {
   localStorage.removeItem(PASSWORD_SALT_KEY);
   localStorage.removeItem(PASSWORD_TYPE_KEY);
   localStorage.removeItem(IS_LOCKED_KEY);
+  localStorage.removeItem(LOCK_ON_STARTUP_KEY);
+}
+
+/**
+ * When true (and a password/PIN is set), each app launch starts locked even if you unlocked before closing.
+ */
+export function getLockOnStartup(): boolean {
+  return localStorage.getItem(LOCK_ON_STARTUP_KEY) === "true";
+}
+
+export function setLockOnStartup(enabled: boolean): void {
+  if (enabled) {
+    localStorage.setItem(LOCK_ON_STARTUP_KEY, "true");
+  } else {
+    localStorage.removeItem(LOCK_ON_STARTUP_KEY);
+  }
+}
+
+/**
+ * Apply startup lock preference and return whether the UI should show the lock screen.
+ * Call once when the shell mounts so "lock on startup" wins over a stale unlocked session.
+ */
+export function resolveLockStateForSessionStart(): boolean {
+  if (getLockOnStartup() && hasPassword()) {
+    setLocked(true);
+    return true;
+  }
+  return isLocked();
 }
 
 /**

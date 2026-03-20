@@ -33,7 +33,7 @@ import MilkyWayLockScreen from "./MilkyWayLockScreen";
 import SphereLockScreen from "./SphereLockScreen";
 import GalaxyBackground from "./GalaxyBackground";
 import NewsNotification from "./NewsNotification";
-import { isLocked, hasPassword, lockApp } from "../utils/passwordManager";
+import { isLocked, hasPassword, lockApp, resolveLockStateForSessionStart } from "../utils/passwordManager";
 import { getLockScreenStyle } from "../utils/lockScreenManager";
 import { getGalaxyThemeSettings } from "../utils/galaxyThemeManager";
 import { applyGalaxyBackgroundStyles } from "../utils/galaxyBackgroundStyles";
@@ -67,7 +67,7 @@ export default function Layout({ children }: LayoutProps) {
   const [addTradeError, setAddTradeError] = useState<string | null>(null);
   const [pendingCsvImport, setPendingCsvImport] = useState<{ contents: string; markAsPaper: boolean } | null>(null);
   const [isImportingCsv, setIsImportingCsv] = useState(false);
-  const [isAppLocked, setIsAppLocked] = useState(() => isLocked());
+  const [isAppLocked, setIsAppLocked] = useState(() => resolveLockStateForSessionStart());
   const [useGalaxyBackground, setUseGalaxyBackground] = useState(() => {
     const settings = getGalaxyThemeSettings();
     console.log("Initial galaxy background state:", settings.useAsBackground, settings);
@@ -111,8 +111,8 @@ export default function Layout({ children }: LayoutProps) {
       }
     });
     
-    // Check lock state on mount
-    setIsAppLocked(isLocked());
+    // Check lock state on mount (respects "lock on startup" preference)
+    setIsAppLocked(resolveLockStateForSessionStart());
     
     // Check galaxy background setting
     const initialSettings = getGalaxyThemeSettings();

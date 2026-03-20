@@ -24,7 +24,9 @@ import {
   getPasswordType, 
   setPassword, 
   deletePassword,
-  verifyPassword
+  verifyPassword,
+  getLockOnStartup,
+  setLockOnStartup,
 } from "../utils/passwordManager";
 import { 
   getLockScreenStyle, 
@@ -107,6 +109,7 @@ export default function Settings() {
   const [_showRemovePin, _setShowRemovePin] = useState(false);
   const [removeVerification, setRemoveVerification] = useState("");
   const [removePinDigits, setRemovePinDigits] = useState<string[]>(["", "", "", "", "", ""]);
+  const [lockOnStartup, setLockOnStartupState] = useState(() => getLockOnStartup());
   const [lockScreenStyle, setLockScreenStyle] = useState<LockScreenStyle>(() => getLockScreenStyle());
   const [lockScreenRenderer, setLockScreenRenderer] = useState<LockScreenRendererMode>(() =>
     getLockScreenRendererPreference()
@@ -550,6 +553,7 @@ export default function Settings() {
     }
     
     deletePassword();
+    setLockOnStartupState(false);
     setPasswordSuccess("Password removed successfully!");
     setShowRemoveConfirm(false);
     setRemoveVerification("");
@@ -2335,6 +2339,38 @@ export default function Settings() {
               </span>
             </div>
           )}
+
+          <div style={{ marginBottom: "20px" }}>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "10px",
+                fontSize: "14px",
+                color: hasPassword() ? "var(--text-primary)" : "var(--text-secondary)",
+                cursor: hasPassword() ? "pointer" : "not-allowed",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={hasPassword() && lockOnStartup}
+                disabled={!hasPassword()}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  setLockOnStartup(on);
+                  setLockOnStartupState(on);
+                }}
+                style={{ width: "18px", height: "18px", marginTop: "2px", cursor: hasPassword() ? "pointer" : "not-allowed", flexShrink: 0 }}
+              />
+              <span>
+                Start locked when app opens
+                <span style={{ display: "block", fontSize: "12px", color: "var(--text-secondary)", fontWeight: 400, marginTop: "4px", lineHeight: 1.45 }}>
+                  Each launch shows the lock screen until you unlock, even if you closed the app while unlocked.
+                  {!hasPassword() && " Set a PIN or password above to enable this."}
+                </span>
+              </span>
+            </label>
+          </div>
 
           {/* Password Type Toggle */}
           <div style={{ marginBottom: "20px" }}>
