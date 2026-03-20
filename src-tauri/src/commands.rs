@@ -5363,6 +5363,28 @@ pub fn delete_strategy_checklist_item(id: i64) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn delete_strategy_checklist_type(strategy_id: i64, checklist_type: String) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+
+    // Delete all checklist rows (including any placeholder row used to persist empty custom types).
+    conn.execute(
+        "DELETE FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = ?2",
+        params![strategy_id, checklist_type],
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Also remove any section description so deleted custom sections don't reappear.
+    conn.execute(
+        "DELETE FROM strategy_checklist_section_descriptions WHERE strategy_id = ?1 AND checklist_type = ?2",
+        params![strategy_id, checklist_type],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 /// Removes duplicate checklist rows.
 ///
 /// Edits can sometimes create a new row instead of updating the existing one. When that happens,

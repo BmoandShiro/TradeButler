@@ -3420,6 +3420,16 @@ export default function Strategies() {
 
     // If editing, use editingChecklists instead of deleting directly
     if (isEditing) {
+      // Persist deletion immediately so placeholder-only custom types don't reappear on reload.
+      if (dataMode !== "sandbox" && strategyId !== -1) {
+        try {
+          await invoke("delete_strategy_checklist_type", { strategyId, checklistType: type });
+        } catch (e) {
+          console.error("Error deleting checklist type:", e);
+          alert("Failed to delete checklist: " + e);
+          return;
+        }
+      }
       // Initialize editingChecklists if it doesn't have this strategy yet
       let currentChecklist: Map<string, ChecklistItem[]>;
       if (editingChecklists.has(strategyId)) {
@@ -3451,6 +3461,27 @@ export default function Strategies() {
       const history = checklistEditHistory.get(strategyId) || [];
       const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
       setChecklistEditHistory(new Map(checklistEditHistory.set(strategyId, newHistory)));
+
+      // Update custom type/title/description UI state too.
+      const customTypesSet = new Set(customChecklistTypes.get(strategyId) || []);
+      customTypesSet.delete(type);
+      setCustomChecklistTypes(new Map(customChecklistTypes.set(strategyId, customTypesSet)));
+
+      setChecklistTitles((prev) => {
+        const next = new Map(prev);
+        const titles = next.get(strategyId) ? new Map(next.get(strategyId)) : new Map<string, string>();
+        titles.delete(type);
+        next.set(strategyId, titles);
+        return next;
+      });
+
+      setChecklistSectionDescriptions((prev) => {
+        const next = new Map(prev);
+        const mapForStrategy = new Map(next.get(strategyId) || []);
+        mapForStrategy.delete(type);
+        next.set(strategyId, mapForStrategy);
+        return next;
+      });
       
       // Clear the input field for this type
       setNewChecklistItem(prev => {
@@ -3462,15 +3493,11 @@ export default function Strategies() {
     }
 
     try {
-      const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
-      const items = currentChecklist.get(type) || [];
-      
-      // Delete all items in this checklist type
-      for (const item of items) {
-        if (item.id) {
-          await invoke("delete_strategy_checklist_item", { id: item.id });
-        }
+      if (dataMode !== "sandbox" && strategyId !== -1) {
+        await invoke("delete_strategy_checklist_type", { strategyId, checklistType: type });
       }
+
+      const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
 
       // Remove the checklist type from state
       const updatedChecklist = new Map(currentChecklist);
@@ -3481,6 +3508,22 @@ export default function Strategies() {
       const customTypesSet = new Set(customChecklistTypes.get(strategyId) || []);
       customTypesSet.delete(type);
       setCustomChecklistTypes(new Map(customChecklistTypes.set(strategyId, customTypesSet)));
+
+      // Clear any custom title/description state so it doesn't linger in UI.
+      setChecklistTitles((prev) => {
+        const next = new Map(prev);
+        const titles = next.get(strategyId) ? new Map(next.get(strategyId)) : new Map<string, string>();
+        titles.delete(type);
+        next.set(strategyId, titles);
+        return next;
+      });
+      setChecklistSectionDescriptions((prev) => {
+        const next = new Map(prev);
+        const mapForStrategy = new Map(next.get(strategyId) || []);
+        mapForStrategy.delete(type);
+        next.set(strategyId, mapForStrategy);
+        return next;
+      });
 
       // Clear the input field for this type
       setNewChecklistItem(prev => {

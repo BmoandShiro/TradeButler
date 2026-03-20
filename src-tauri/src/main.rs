@@ -79,6 +79,7 @@ fn main() {
             commands::save_strategy_checklist_item,
             commands::save_strategy_checklist_section_description,
             commands::delete_strategy_checklist_item,
+            commands::delete_strategy_checklist_type,
             commands::remove_duplicate_checklist_items,
             commands::group_checklist_items,
             commands::ungroup_checklist_items,
