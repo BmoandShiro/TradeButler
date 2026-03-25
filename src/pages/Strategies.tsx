@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, Dispatch, SetStateAction } from "re
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
-import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard, BarChart2 } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Activity, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard, BarChart2 } from "lucide-react";
 import { format } from "date-fns";
 import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
 import { BRUSH_MIN_POINTS, CHART_BAR_FILL_OPACITY } from "../utils/chartDataSampling";
@@ -70,6 +70,7 @@ import {
   saveStrategyCustomRuleSets,
   type StrategyCustomRuleSet,
 } from "../utils/indicatorsStore";
+import { useNavigate } from "react-router-dom";
 import { ColorPicker } from "../components/ColorPicker";
 import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
@@ -133,7 +134,7 @@ interface PairedTrade {
   strategy_id: number | null;
 }
 
-type TabType = "notes" | "trades" | "checklists" | "survey" | "surveys" | "rules";
+type TabType = "notes" | "signals" | "trades" | "checklists" | "survey" | "surveys" | "rules";
 
 interface ChecklistItem {
   id: number;
@@ -1890,6 +1891,7 @@ function ChecklistSection({
 }
 
 export default function Strategies() {
+  const navigate = useNavigate();
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [loading, setLoading] = useState(true);
@@ -1915,6 +1917,8 @@ export default function Strategies() {
     const saved = localStorage.getItem('strategies_active_tab');
     return (saved as TabType) || "notes";
   });
+
+  const [signalsQuery, setSignalsQuery] = useState("");
   const [isMaximized, setIsMaximized] = useState(false);
   
   // Refs for scroll containers
@@ -2032,6 +2036,8 @@ export default function Strategies() {
   const [editingRuleText, setEditingRuleText] = useState<string>("");
   const [indicatorSearch, setIndicatorSearch] = useState("");
   const [indicatorDropdownOpen, setIndicatorDropdownOpen] = useState(false);
+  /** Narrow the strategy signal picker list (matches Signals page groupings). */
+  const [signalSelectorKindFilter, setSignalSelectorKindFilter] = useState<"all" | "indicator" | "technical" | "candlestick">("all");
   const [presetModal, setPresetModal] = useState<null | "add" | number>(null);
   const [presetForm, setPresetForm] = useState<{ name: string; formula_expression: string }>({ name: "", formula_expression: "" });
   /** When true, preset modal was opened from Add/Edit metric; after saving new preset we select it in the metric form. */
@@ -4586,6 +4592,7 @@ export default function Strategies() {
     setEditingRuleIndex(null);
     setEditingRuleText("");
     setIndicatorSearch("");
+    setSignalSelectorKindFilter("all");
   };
 
   const handleEditClick = () => {
@@ -4643,6 +4650,7 @@ export default function Strategies() {
       setActiveCustomRuleSetId(null);
       setIndicatorDropdownOpen(false);
       setIndicatorSearch("");
+      setSignalSelectorKindFilter("all");
     }
   };
 
@@ -5757,6 +5765,7 @@ export default function Strategies() {
             >
               {[
                 { id: "notes" as TabType, label: "Details", icon: FileText },
+                { id: "signals" as TabType, label: "Signals", icon: Activity },
                 { id: "trades" as TabType, label: "Trades", icon: TrendingUp },
                 { id: "checklists" as TabType, label: "Checklists", icon: ListChecks },
                 { id: "rules" as TabType, label: "Rules", icon: ListChecks },
@@ -5836,269 +5845,7 @@ export default function Strategies() {
                       Strategy Details
                     </h3>
                   </div>
-                  {!(isEditing || isCreating) && selectedStrategyData && strategyIndicatorIds.length > 0 && (
-                    <div style={{ marginBottom: "16px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "10px", padding: "14px" }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
-                        <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                          Indicators for this strategy
-                        </div>
-                        <a href="#/signals" style={{ color: "var(--accent)", fontSize: "13px", fontWeight: 650, textDecoration: "none" }}>
-                          Open Signals page
-                        </a>
-                      </div>
-                      {(() => {
-                        const all = loadIndicators();
-                        const selected = all.filter((i) => strategyIndicatorIds.includes(i.id));
-                        if (selected.length === 0) return null;
-                        return (
-                          <div style={{ marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                            {selected.map((i) => (
-                              <span
-                                key={i.id}
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: "8px",
-                                  padding: "6px 10px",
-                                  borderRadius: "999px",
-                                  border: "1px solid var(--border-color)",
-                                  background: "var(--bg-tertiary)",
-                                  color: "var(--text-primary)",
-                                  cursor: "default",
-                                  fontSize: "12px",
-                                  fontWeight: 650,
-                                }}
-                              >
-                                <span
-                                  style={{
-                                    fontSize: "11px",
-                                    fontWeight: 800,
-                                    padding: "2px 7px",
-                                    borderRadius: "999px",
-                                    background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
-                                    border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
-                                    color: i.accentColor ?? "#F59E0B",
-                                  }}
-                                >
-                                  {i.abbreviation}
-                                </span>
-                                <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
-                              </span>
-                            ))}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
-                  {(isEditing || isCreating) && (
-                    <div style={{ marginBottom: "16px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "10px", padding: "14px" }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
-                        <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                          Indicators for this strategy
-                        </div>
-                        <a href="#/signals" style={{ color: "var(--accent)", fontSize: "13px", fontWeight: 650, textDecoration: "none" }}>
-                          Open Signals page
-                        </a>
-                      </div>
-
-                      <div style={{ display: "flex", gap: "14px", alignItems: "center", flexWrap: "wrap", marginBottom: "10px" }}>
-                        <span style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
-                          Entry/Take Profit rules are configured in the Rules tab.
-                        </span>
-                      </div>
-
-                      <div style={{ position: "relative" }}>
-                        <button
-                          type="button"
-                          onClick={() => setIndicatorDropdownOpen((o) => !o)}
-                          style={{
-                            width: "100%",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            gap: "10px",
-                            padding: "10px 12px",
-                            background: "var(--bg-tertiary)",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: "10px",
-                            color: "var(--text-primary)",
-                            cursor: "pointer",
-                            fontSize: "13px",
-                            fontWeight: 650,
-                          }}
-                        >
-                          <span style={{ color: "var(--text-secondary)", fontWeight: 600 }}>
-                            {strategyIndicatorIds.length > 0 ? `${strategyIndicatorIds.length} selected` : "Select indicators..."}
-                          </span>
-                          <span style={{ opacity: 0.8 }}>▾</span>
-                        </button>
-
-                        {indicatorDropdownOpen && (
-                          <div
-                            style={{
-                              position: "absolute",
-                              top: "100%",
-                              left: 0,
-                              right: 0,
-                              marginTop: "8px",
-                              background: "var(--bg-primary)",
-                              border: "1px solid var(--border-color)",
-                              borderRadius: "12px",
-                              boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
-                              zIndex: 50,
-                              padding: "12px",
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <input
-                              value={indicatorSearch}
-                              onChange={(e) => setIndicatorSearch(e.target.value)}
-                              placeholder="Search indicators..."
-                              style={{
-                                width: "100%",
-                                padding: "10px 12px",
-                                background: "var(--bg-secondary)",
-                                border: "1px solid var(--border-color)",
-                                borderRadius: "10px",
-                                color: "var(--text-primary)",
-                                outline: "none",
-                                marginBottom: "10px",
-                              }}
-                              autoFocus
-                            />
-                            <div style={{ maxHeight: "220px", overflow: "auto", display: "flex", flexDirection: "column", gap: "8px" }}>
-                              {(() => {
-                                const all = loadIndicators();
-                                const q = indicatorSearch.trim().toLowerCase();
-                                const shown = q ? all.filter((i) => `${i.name} ${i.abbreviation}`.toLowerCase().includes(q)) : all;
-                                if (shown.length === 0) {
-                                  return <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>No indicators found.</div>;
-                                }
-                                const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
-                                return shown.map((i) => {
-                                  const checked = strategyIndicatorIds.includes(i.id);
-                                  return (
-                                    <label key={i.id} style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
-                                      <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        onChange={(e) => {
-                                          const next = e.target.checked
-                                            ? [...strategyIndicatorIds, i.id]
-                                            : strategyIndicatorIds.filter((id) => id !== i.id);
-                                          setStrategyIndicatorIds(next);
-                                          if (!isCreating && strategyId > 0) {
-                                            saveStrategyIndicatorIds(dataMode, strategyId, next);
-                                          }
-                                        }}
-                                        style={{ width: "16px", height: "16px", cursor: "pointer" }}
-                                      />
-                                      <span style={{ color: "var(--text-primary)", fontSize: "13px", fontWeight: 650 }}>
-                                        {i.name}
-                                      </span>
-                                      <span
-                                        style={{
-                                          marginLeft: "auto",
-                                          fontSize: "11px",
-                                          fontWeight: 800,
-                                          padding: "3px 7px",
-                                          borderRadius: "8px",
-                                          background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
-                                          border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
-                                          color: i.accentColor ?? "#F59E0B",
-                                        }}
-                                      >
-                                        {i.abbreviation}
-                                      </span>
-                                    </label>
-                                  );
-                                });
-                              })()}
-                            </div>
-                            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "10px" }}>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setIndicatorSearch("");
-                                  setIndicatorDropdownOpen(false);
-                                }}
-                                style={{
-                                  border: "1px solid var(--border-color)",
-                                  background: "var(--bg-secondary)",
-                                  color: "var(--text-primary)",
-                                  borderRadius: "10px",
-                                  padding: "8px 12px",
-                                  cursor: "pointer",
-                                  fontWeight: 650,
-                                  fontSize: "13px",
-                                }}
-                              >
-                                Done
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {(() => {
-                        const all = loadIndicators();
-                        const selected = all.filter((i) => strategyIndicatorIds.includes(i.id));
-                        if (selected.length === 0) return null;
-                        const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
-                        return (
-                          <div style={{ marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                            {selected.map((i) => (
-                              <button
-                                type="button"
-                                key={i.id}
-                                onClick={() => {
-                                  const next = strategyIndicatorIds.filter((id) => id !== i.id);
-                                  setStrategyIndicatorIds(next);
-                                  if (!isCreating && strategyId > 0) saveStrategyIndicatorIds(dataMode, strategyId, next);
-                                }}
-                                title="Remove"
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: "8px",
-                                  padding: "6px 10px",
-                                  borderRadius: "999px",
-                                  border: "1px solid var(--border-color)",
-                                  background: "var(--bg-tertiary)",
-                                  color: "var(--text-primary)",
-                                  cursor: "pointer",
-                                  fontSize: "12px",
-                                  fontWeight: 650,
-                                }}
-                              >
-                                <span
-                                  style={{
-                                    fontSize: "11px",
-                                    fontWeight: 800,
-                                    padding: "2px 7px",
-                                    borderRadius: "999px",
-                                    background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
-                                    border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
-                                    color: i.accentColor ?? "#F59E0B",
-                                  }}
-                                >
-                                  {i.abbreviation}
-                                </span>
-                                <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
-                                <span style={{ color: "var(--text-secondary)", fontWeight: 900 }}>×</span>
-                              </button>
-                            ))}
-                          </div>
-                        );
-                      })()}
-
-                      {isCreating && (
-                        <div style={{ marginTop: "10px", color: "var(--text-secondary)", fontSize: "12px" }}>
-                          Indicator associations will be saved after the strategy is created.
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  {/* (Signals selection moved to Signals tab) */}
                   <div style={{ 
                     flex: 1, 
                     display: "flex", 
@@ -6118,6 +5865,430 @@ export default function Strategies() {
                     />
                   </div>
                 </div>
+                </div>
+              )}
+
+              {activeTab === "signals" && (selectedStrategy !== null || isCreating) && (
+                <div style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                  <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+                    <div>
+                      <h3 style={{ margin: 0, fontSize: "20px", fontWeight: 650, color: "var(--text-primary)" }}>Signals</h3>
+                      <p style={{ margin: "6px 0 0", fontSize: "13px", color: "var(--text-secondary)" }}>
+                        Your strategy’s signals, grouped by type. Browse descriptions and open the full library if needed.
+                      </p>
+                    </div>
+                    <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                      <input
+                        value={signalsQuery}
+                        onChange={(e) => setSignalsQuery(e.target.value)}
+                        placeholder="Search signals..."
+                        style={{
+                          width: "260px",
+                          maxWidth: "70vw",
+                          padding: "9px 12px",
+                          background: "var(--bg-tertiary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "10px",
+                          color: "var(--text-primary)",
+                          fontSize: "13px",
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => navigate("/signals")}
+                        style={{
+                          padding: "9px 12px",
+                          background: "transparent",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "10px",
+                          color: "var(--text-primary)",
+                          cursor: "pointer",
+                          fontSize: "13px",
+                          fontWeight: 650,
+                        }}
+                      >
+                        Open full library
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "12px", padding: "14px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", marginBottom: "10px" }}>
+                      <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                        Select signals for this strategy
+                      </div>
+                      {isCreating && (
+                        <div style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
+                          Saved after strategy is created
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={{ position: "relative" }}>
+                      <button
+                        type="button"
+                        onClick={() => setIndicatorDropdownOpen((o) => !o)}
+                        style={{
+                          width: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: "10px",
+                          padding: "10px 12px",
+                          background: "var(--bg-tertiary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "10px",
+                          color: "var(--text-primary)",
+                          cursor: "pointer",
+                          fontSize: "13px",
+                          fontWeight: 650,
+                        }}
+                      >
+                        <span style={{ color: "var(--text-secondary)", fontWeight: 600 }}>
+                          {strategyIndicatorIds.length > 0 ? `${strategyIndicatorIds.length} selected` : "Select signals..."}
+                        </span>
+                        <span style={{ opacity: 0.8 }}>▾</span>
+                      </button>
+
+                      {indicatorDropdownOpen && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: "100%",
+                            left: 0,
+                            right: 0,
+                            marginTop: "8px",
+                            background: "var(--bg-primary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "12px",
+                            boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
+                            zIndex: 50,
+                            padding: "12px",
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "10px" }}>
+                            {(
+                              [
+                                { id: "all" as const, label: "All" },
+                                { id: "indicator" as const, label: "Indicators" },
+                                { id: "technical" as const, label: "TA patterns" },
+                                { id: "candlestick" as const, label: "Candlestick" },
+                              ] as const
+                            ).map((opt) => {
+                              const active = signalSelectorKindFilter === opt.id;
+                              return (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  onClick={() => setSignalSelectorKindFilter(opt.id)}
+                                  style={{
+                                    padding: "5px 10px",
+                                    borderRadius: "999px",
+                                    border: `1px solid ${active ? "var(--accent)" : "var(--border-color)"}`,
+                                    background: active ? "rgba(124, 58, 237, 0.18)" : "var(--bg-tertiary)",
+                                    color: active ? "var(--accent)" : "var(--text-secondary)",
+                                    fontSize: "11px",
+                                    fontWeight: 650,
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  {opt.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <input
+                            value={indicatorSearch}
+                            onChange={(e) => setIndicatorSearch(e.target.value)}
+                            placeholder="Search signals..."
+                            style={{
+                              width: "100%",
+                              padding: "10px 12px",
+                              background: "var(--bg-secondary)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "10px",
+                              color: "var(--text-primary)",
+                              outline: "none",
+                              marginBottom: "10px",
+                            }}
+                            autoFocus
+                          />
+                          <div style={{ maxHeight: "260px", overflow: "auto", display: "flex", flexDirection: "column", gap: "8px" }}>
+                            {(() => {
+                              const all = loadIndicators();
+                              let base = all;
+                              if (signalSelectorKindFilter === "indicator") {
+                                base = base.filter((i) => i.category !== "Pattern");
+                              } else if (signalSelectorKindFilter === "technical") {
+                                base = base.filter((i) => i.category === "Pattern" && i.signalGroup === "TechnicalPattern");
+                              } else if (signalSelectorKindFilter === "candlestick") {
+                                base = base.filter((i) => i.category === "Pattern" && i.signalGroup === "Candlestick");
+                              }
+                              const q = indicatorSearch.trim().toLowerCase();
+                              const shown = q ? base.filter((i) => `${i.name} ${i.abbreviation} ${i.description}`.toLowerCase().includes(q)) : base;
+                              if (shown.length === 0) {
+                                return (
+                                  <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
+                                    {q
+                                      ? "No signals match your search."
+                                      : signalSelectorKindFilter === "all"
+                                        ? "No signals available."
+                                        : "No signals in this category."}
+                                  </div>
+                                );
+                              }
+                              const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+                              return shown.map((i) => {
+                                const checked = strategyIndicatorIds.includes(i.id);
+                                const kindLabel =
+                                  i.category === "Pattern"
+                                    ? (i.signalGroup === "Candlestick" ? "Candlestick" : "Technical")
+                                    : "Indicator";
+                                return (
+                                  <label key={i.id} style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={(e) => {
+                                        const next = e.target.checked
+                                          ? [...strategyIndicatorIds, i.id]
+                                          : strategyIndicatorIds.filter((id) => id !== i.id);
+                                        setStrategyIndicatorIds(next);
+                                        if (!isCreating && strategyId > 0) {
+                                          saveStrategyIndicatorIds(dataMode, strategyId, next);
+                                        }
+                                      }}
+                                      style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                                    />
+                                    <span style={{ color: "var(--text-primary)", fontSize: "13px", fontWeight: 650 }}>
+                                      {i.name}
+                                    </span>
+                                    <span style={{ marginLeft: "auto", display: "inline-flex", gap: "6px", alignItems: "center" }}>
+                                      <span style={{ fontSize: "11px", color: "var(--text-secondary)", fontWeight: 700 }}>{kindLabel}</span>
+                                      <span
+                                        style={{
+                                          fontSize: "11px",
+                                          fontWeight: 800,
+                                          padding: "3px 7px",
+                                          borderRadius: "8px",
+                                          background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
+                                          border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
+                                          color: i.accentColor ?? "#F59E0B",
+                                        }}
+                                      >
+                                        {i.abbreviation}
+                                      </span>
+                                    </span>
+                                  </label>
+                                );
+                              });
+                            })()}
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "10px" }}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIndicatorSearch("");
+                                setSignalSelectorKindFilter("all");
+                                setIndicatorDropdownOpen(false);
+                              }}
+                              style={{
+                                border: "1px solid var(--border-color)",
+                                background: "var(--bg-secondary)",
+                                color: "var(--text-primary)",
+                                borderRadius: "10px",
+                                padding: "8px 12px",
+                                cursor: "pointer",
+                                fontWeight: 650,
+                                fontSize: "13px",
+                              }}
+                            >
+                              Done
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {(() => {
+                      const all = loadIndicators();
+                      const selected = all.filter((i) => strategyIndicatorIds.includes(i.id));
+                      if (selected.length === 0) return null;
+                      const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+                      return (
+                        <div style={{ marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                          {selected.map((i) => (
+                            <button
+                              type="button"
+                              key={i.id}
+                              onClick={() => {
+                                const next = strategyIndicatorIds.filter((id) => id !== i.id);
+                                setStrategyIndicatorIds(next);
+                                if (!isCreating && strategyId > 0) saveStrategyIndicatorIds(dataMode, strategyId, next);
+                              }}
+                              title="Remove"
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "8px",
+                                padding: "6px 10px",
+                                borderRadius: "999px",
+                                border: "1px solid var(--border-color)",
+                                background: "var(--bg-tertiary)",
+                                color: "var(--text-primary)",
+                                cursor: "pointer",
+                                fontSize: "12px",
+                                fontWeight: 650,
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontSize: "11px",
+                                  fontWeight: 800,
+                                  padding: "2px 7px",
+                                  borderRadius: "999px",
+                                  background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
+                                  border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
+                                  color: i.accentColor ?? "#F59E0B",
+                                }}
+                              >
+                                {i.abbreviation}
+                              </span>
+                              <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
+                              <span style={{ color: "var(--text-secondary)", fontWeight: 900 }}>×</span>
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {(() => {
+                    const all = loadIndicators();
+                    const selectedIdSet = new Set(strategyIndicatorIds);
+                    const q = signalsQuery.trim().toLowerCase();
+                    const selected = all.filter((i) => selectedIdSet.has(i.id));
+                    const matchesQuery = (i: { name?: string; abbreviation?: string; description?: string }) =>
+                      !q || `${i.name ?? ""} ${i.abbreviation ?? ""} ${i.description ?? ""}`.toLowerCase().includes(q);
+
+                    const indicators = selected
+                      .filter((i) => i.category !== "Pattern")
+                      .filter(matchesQuery)
+                      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+                    const technical = selected
+                      .filter((i) => i.category === "Pattern" && i.signalGroup === "TechnicalPattern")
+                      .filter(matchesQuery)
+                      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+                    const candles = selected
+                      .filter((i) => i.category === "Pattern" && i.signalGroup === "Candlestick")
+                      .filter(matchesQuery)
+                      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+
+                    const renderGallery = (items: Array<{ id: string; name: string; abbreviation: string; description: string; accentColor?: string; exampleImage?: string }>) => {
+                      if (items.length === 0) {
+                        return (
+                          <div style={{ padding: "14px", borderRadius: "10px", border: "1px dashed var(--border-color)", color: "var(--text-secondary)", fontSize: "13px" }}>
+                            No signals in this section.
+                          </div>
+                        );
+                      }
+                      return (
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "repeat(auto-fill, minmax(260px, 320px))",
+                            gap: "12px",
+                            justifyContent: "start",
+                          }}
+                        >
+                          {items.map((i) => (
+                            <div
+                              key={i.id}
+                              style={{
+                                background: "var(--bg-secondary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "12px",
+                                overflow: "hidden",
+                                display: "flex",
+                                flexDirection: "column",
+                                minHeight: "140px",
+                                maxWidth: "320px",
+                                width: "100%",
+                              }}
+                            >
+                              <div style={{ padding: "12px 12px 10px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+                                  <span
+                                    style={{
+                                      fontSize: "11px",
+                                      fontWeight: 800,
+                                      padding: "3px 8px",
+                                      borderRadius: "999px",
+                                      background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
+                                      border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
+                                      color: i.accentColor ?? "#F59E0B",
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    {i.abbreviation}
+                                  </span>
+                                  <div style={{ minWidth: 0 }}>
+                                    <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                      {i.name}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                              {i.exampleImage ? (
+                                <div style={{ padding: "0 12px 10px" }}>
+                                  <img src={i.exampleImage} alt="" style={{ width: "100%", height: "120px", objectFit: "cover", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.06)" }} />
+                                </div>
+                              ) : null}
+                              <div style={{ padding: "0 12px 14px", color: "var(--text-secondary)", fontSize: "13px", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
+                                {i.description || "No description."}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    };
+
+                    const hasAny = indicators.length + technical.length + candles.length > 0;
+
+                    return (
+                      <>
+                        {!hasAny && (
+                          <div style={{ padding: "14px", borderRadius: "12px", border: "1px dashed var(--border-color)", color: "var(--text-secondary)", fontSize: "13px" }}>
+                            No signals are selected for this strategy yet. Add some in Details, or open the full library.
+                          </div>
+                        )}
+
+                        <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+                          <div>
+                            <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "10px" }}>
+                              Indicators
+                            </div>
+                            {renderGallery(indicators)}
+                          </div>
+
+                          <div>
+                            <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "10px" }}>
+                              Technical Analysis Patterns
+                            </div>
+                            {renderGallery(technical)}
+                          </div>
+
+                          <div>
+                            <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "10px" }}>
+                              Candlestick Patterns
+                            </div>
+                            {renderGallery(candles)}
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
 
