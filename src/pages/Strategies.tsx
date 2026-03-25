@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, Dispatch, SetStateAction } from "react";
+import { ChecklistItemCaption } from "../components/ChecklistItemCaption";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
@@ -158,6 +159,7 @@ interface ChecklistItemMetricByOutcomeRow {
   times_checked_good: number;
   times_checked_bad: number;
   times_not_checked_bad: number;
+  description?: string | null;
 }
 
 /** Placeholder item text used to persist empty custom checklist types. Filtered out when displaying. */
@@ -674,9 +676,10 @@ function SortableChecklistItem({
           }}
         />
       ) : (
-        <div 
-          style={{ 
-            flex: 1, 
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
             fontSize: isGroup ? "15px" : "14px",
             fontWeight: isGroup ? "600" : "400",
             color: isSelected ? "white" : "var(--text-primary)",
@@ -685,7 +688,17 @@ function SortableChecklistItem({
           onClick={isEditing ? onEdit : undefined}
           title={isEditing ? "Click to edit" : undefined}
         >
-          {item.item_text}
+          <ChecklistItemCaption
+            fillRow={false}
+            title={item.item_text}
+            description={item.description}
+            titleStyle={{
+              fontSize: isGroup ? "15px" : "14px",
+              fontWeight: isGroup ? "600" : "400",
+              color: isSelected ? "white" : "var(--text-primary)",
+            }}
+            descriptionStyle={isSelected ? { color: "rgba(255,255,255,0.85)" } : undefined}
+          />
         </div>
       )}
       {isEditing && !isEditingText && (
@@ -1644,8 +1657,8 @@ function ChecklistSection({
                     }}
                   >
                     <Folder size={18} style={{ color: "var(--accent)", flexShrink: 0 }} />
-                    <div style={{ flex: 1, fontSize: "15px", fontWeight: "600", color: "var(--text-primary)" }}>
-                      {item.item_text}
+                    <div style={{ flex: 1, minWidth: 0, fontSize: "15px", fontWeight: "600", color: "var(--text-primary)" }}>
+                      <ChecklistItemCaption fillRow={false} title={item.item_text} description={item.description} titleStyle={{ fontSize: "15px", fontWeight: "600", color: "var(--text-primary)" }} />
                     </div>
                   </div>
                   {children.length > 0 && (
@@ -1682,8 +1695,8 @@ function ChecklistSection({
                             }}
                           >
                             <ChevronRight size={14} style={{ color: "var(--text-secondary)", opacity: 0.5 }} />
-                            <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
-                              {child.item_text}
+                            <div style={{ flex: 1, minWidth: 0, fontSize: "14px", color: "var(--text-primary)" }}>
+                              <ChecklistItemCaption fillRow={false} title={child.item_text} description={child.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
                             </div>
                           </div>
                         </div>
@@ -1708,8 +1721,8 @@ function ChecklistSection({
                     marginBottom: "8px",
                   }}
                 >
-                  <div style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)" }}>
-                    {item.item_text}
+                  <div style={{ flex: 1, minWidth: 0, fontSize: "14px", color: "var(--text-primary)" }}>
+                    <ChecklistItemCaption fillRow={false} title={item.item_text} description={item.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
                   </div>
                 </div>
               );
@@ -1775,7 +1788,7 @@ function ChecklistSection({
                   >
                     <option value="" disabled>Move to Group...</option>
                     {availableGroups.map((group) => (
-                      <option key={group.id} value={group.id}>
+                      <option key={group.id} value={group.id} title={group.description?.trim() || undefined}>
                         Move to: {group.item_text}
                       </option>
                     ))}
@@ -1945,7 +1958,7 @@ export default function Strategies() {
   const [overviewFilterDropdownOpen, setOverviewFilterDropdownOpen] = useState(false);
   const overviewFilterDropdownRef = useRef<HTMLDivElement>(null);
   /** Custom metrics with values per strategy, loaded when overview is visible. */
-  const [overviewChecklistItemMetricsByStrategy, setOverviewChecklistItemMetricsByStrategy] = useState<Map<number, Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>>(new Map());
+  const [overviewChecklistItemMetricsByStrategy, setOverviewChecklistItemMetricsByStrategy] = useState<Map<number, Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string; description?: string | null }>>>(new Map());
   const [overviewCustomMetricsByStrategy, setOverviewCustomMetricsByStrategy] = useState<Map<number, Array<{
     id: number; name: string; description: string | null; formula_type: string; computed_value: number | null; color_scale?: string | null;
   }>>>(new Map());
@@ -2007,7 +2020,7 @@ export default function Strategies() {
     duplicates: number;
     errors: number;
   } | null>(null);
-  const [customSurveyMetrics, setCustomSurveyMetrics] = useState<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null }>>([]);
+  const [customSurveyMetrics, setCustomSurveyMetrics] = useState<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null; description?: string | null }>>([]);
   /** Outcome-based insight items for the selected strategy (used on Surveys tab for Survey Insights). */
   const [selectedStrategySurveyInsightItems, setSelectedStrategySurveyInsightItems] = useState<ChecklistItemMetricByOutcomeRow[]>([]);
   const [customSurveyMetricDefinitions, setCustomSurveyMetricDefinitions] = useState<Array<{
@@ -2045,7 +2058,7 @@ export default function Strategies() {
   const [surveyMetricModal, setSurveyMetricModal] = useState<null | "add" | number>(null);
   const [colorPresetDropdownOpen, setColorPresetDropdownOpen] = useState(false);
   /** Checklist/survey item metrics: when checked, avg performance (R → % → price). */
-  const [checklistItemMetrics, setChecklistItemMetrics] = useState<Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>([]);
+  const [checklistItemMetrics, setChecklistItemMetrics] = useState<Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string; description?: string | null }>>([]);
   /** Strategy IDs for which the overview Checklist & survey item metrics table is expanded. */
   const [overviewItemMetricsExpandedStrategyIds, setOverviewItemMetricsExpandedStrategyIds] = useState<Set<number>>(new Set());
   const [surveyMetricForm, setSurveyMetricForm] = useState<{
@@ -2574,10 +2587,10 @@ export default function Strategies() {
         setChecklistItemMetrics(itemMetrics);
       } else {
         Promise.all([
-          invoke<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null }>>("get_custom_survey_metrics", { strategyId: selectedStrategy }),
+          invoke<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null; description?: string | null }>>("get_custom_survey_metrics", { strategyId: selectedStrategy }),
           invoke<Array<{ id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null; color_scale: string | null }>>("get_strategy_survey_metrics_with_values", { strategyId: selectedStrategy }),
           invoke<Array<{ id: number; strategy_id: number; name: string; formula_type: string; formula_expression?: string | null; display_order: number }>>("get_strategy_calculation_presets", { strategyId: selectedStrategy }),
-          invoke<Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>("get_strategy_checklist_item_metrics", { strategyId: selectedStrategy }),
+          invoke<Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string; description?: string | null }>>("get_strategy_checklist_item_metrics", { strategyId: selectedStrategy }),
         ])
           .then(([raw, defs, presets, itemMetrics]) => {
             setCustomSurveyMetrics(raw);
@@ -2610,7 +2623,7 @@ export default function Strategies() {
     }
     const load = async () => {
       const next = new Map<number, Array<{ id: number; name: string; description: string | null; formula_type: string; computed_value: number | null; color_scale?: string | null }>>();
-      const nextItemMetrics = new Map<number, Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>();
+      const nextItemMetrics = new Map<number, Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string; description?: string | null }>>();
       const byOutcome: Array<{ strategyId: number; strategyName: string; items: ChecklistItemMetricByOutcomeRow[] }> = [];
       if (dataMode === "sandbox") {
         for (const s of strategies) {
@@ -2632,7 +2645,7 @@ export default function Strategies() {
         try {
           const [defs, itemMetrics, outcomeItems] = await Promise.all([
             invoke<Array<{ id: number; name: string; description: string | null; formula_type: string; computed_value: number | null; color_scale: string | null }>>("get_strategy_survey_metrics_with_values", { strategyId: s.id }),
-            invoke<Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string }>>("get_strategy_checklist_item_metrics", { strategyId: s.id }),
+            invoke<Array<{ checklist_item_id: number; item_text: string; checklist_type: string; times_checked: number; avg_performance: number | null; performance_kind: string; description?: string | null }>>("get_strategy_checklist_item_metrics", { strategyId: s.id }),
             invoke<ChecklistItemMetricByOutcomeRow[]>("get_strategy_checklist_item_metrics_by_outcome", { strategyId: s.id }).catch(() => []),
           ]);
           if (defs.length > 0) next.set(s.id, defs);
@@ -7580,7 +7593,7 @@ export default function Strategies() {
                                           try {
                                             await invoke("delete_strategy_survey_metric", { id: mId });
                                             const [rawData, defs] = await Promise.all([
-                                              invoke<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null }>>("get_custom_survey_metrics", { strategyId: selectedStrategy! }),
+                                              invoke<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null; description?: string | null }>>("get_custom_survey_metrics", { strategyId: selectedStrategy! }),
                                               invoke<Array<{ id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null; color_scale: string | null }>>("get_strategy_survey_metrics_with_values", { strategyId: selectedStrategy! }),
                                             ]);
                                             setCustomSurveyMetrics(rawData);
@@ -7699,7 +7712,9 @@ export default function Strategies() {
                                           return (
                                             <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
                                               <td style={{ padding: "8px", color: "var(--text-secondary)" }}>{meta.title}</td>
-                                              <td style={{ padding: "8px", color: "var(--text-primary)" }}>{row.item_text}</td>
+                                              <td style={{ padding: "8px", color: "var(--text-primary)", maxWidth: "280px" }}>
+                                                <ChecklistItemCaption fillRow={false} title={row.item_text} description={row.description} titleStyle={{ color: "var(--text-primary)" }} />
+                                              </td>
                                               <td style={{ padding: "8px", textAlign: "right", color: "var(--text-primary)" }}>{row.times_checked}</td>
                                               <td
                                                 style={{
@@ -7738,7 +7753,9 @@ export default function Strategies() {
                                           return (
                                             <tr key={row.checklist_item_id} style={{ borderBottom: "1px solid var(--border-color)" }}>
                                               <td style={{ padding: "8px", color: "var(--text-secondary)" }}>{meta.title}</td>
-                                              <td style={{ padding: "8px", color: "var(--text-primary)" }}>{row.item_text}</td>
+                                              <td style={{ padding: "8px", color: "var(--text-primary)", maxWidth: "280px" }}>
+                                                <ChecklistItemCaption fillRow={false} title={row.item_text} description={row.description} titleStyle={{ color: "var(--text-primary)" }} />
+                                              </td>
                                               <td style={{ padding: "8px", textAlign: "right", color: "var(--text-primary)" }}>{row.times_checked}</td>
                                               <td
                                                 style={{
@@ -8015,7 +8032,14 @@ export default function Strategies() {
                                           }));
                                         }}
                                       />
-                                      <span style={{ color: "var(--text-primary)" }}>{item.item_text === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : item.item_text}</span>
+                                      <span style={{ color: "var(--text-primary)", flex: 1, minWidth: 0 }}>
+                                        <ChecklistItemCaption
+                                          fillRow={false}
+                                          title={item.item_text === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : item.item_text}
+                                          description={item.description}
+                                          titleStyle={{ color: "var(--text-primary)" }}
+                                        />
+                                      </span>
                                     </label>
                                   ))
                                 )}
@@ -8071,7 +8095,7 @@ export default function Strategies() {
                                       colorScale,
                                     });
                                     const [raw, defs] = await Promise.all([
-                                      invoke<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null }>>("get_custom_survey_metrics", { strategyId: selectedStrategy }),
+                                      invoke<Array<{ checklist_item_id: number; item_text: string; response_count: number; avg_value: number | null; description?: string | null }>>("get_custom_survey_metrics", { strategyId: selectedStrategy }),
                                       invoke<Array<{ id: number; strategy_id: number; name: string; description: string | null; formula_type: string; item_ids: string; display_order: number; computed_value: number | null; color_scale: string | null }>>("get_strategy_survey_metrics_with_values", { strategyId: selectedStrategy }),
                                     ]);
                                     setCustomSurveyMetrics(raw);
@@ -8348,9 +8372,14 @@ export default function Strategies() {
                                 fontSize: "13px",
                               }}
                             >
-                              <span style={{ color: "var(--text-primary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.item_text === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "" : m.item_text}>
-                                {m.item_text === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : m.item_text}
-                              </span>
+                              <div style={{ color: "var(--text-primary)", flex: 1, minWidth: 0 }}>
+                                <ChecklistItemCaption
+                                  fillRow={false}
+                                  title={m.item_text === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : m.item_text}
+                                  description={m.description}
+                                  titleStyle={{ color: "var(--text-primary)" }}
+                                />
+                              </div>
                               <span style={{ color: "var(--text-secondary)", marginLeft: "12px" }}>
                                 {m.response_count} response{m.response_count !== 1 ? "s" : ""}
                                 {m.avg_value != null ? ` · avg ${Number(m.avg_value).toFixed(1)}` : ""}
@@ -8369,16 +8398,16 @@ export default function Strategies() {
                         insightByType.get(type)!.push(row);
                       });
                       const isSurveyType = (display: string) => display.toLowerCase().startsWith("survey");
-                      const winningSurvey: Array<{ checklistTypeDisplay: string; topItemText: string; good: number; key: string }> = [];
-                      const losingSurvey: Array<{ checklistTypeDisplay: string; topItemText: string; bad: number; key: string }> = [];
+                      const winningSurvey: Array<{ checklistTypeDisplay: string; topItemText: string; topItemDescription?: string | null; good: number; key: string }> = [];
+                      const losingSurvey: Array<{ checklistTypeDisplay: string; topItemText: string; topItemDescription?: string | null; bad: number; key: string }> = [];
                       insightByType.forEach((rows, type) => {
                         if (!isSurveyType(type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "))) return;
                         const typeDisplay = type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
                         // Collect all survey items; we'll take top 4 per category below
                         const winningRows = rows.filter((r) => (r.times_checked_good ?? 0) > 0).sort((a, b) => (b.times_checked_good ?? 0) - (a.times_checked_good ?? 0));
-                        winningRows.forEach((r) => winningSurvey.push({ checklistTypeDisplay: typeDisplay, topItemText: (r.item_text || `Item ${r.checklist_item_id}`).trim(), good: r.times_checked_good ?? 0, key: `win-${r.checklist_item_id}` }));
+                        winningRows.forEach((r) => winningSurvey.push({ checklistTypeDisplay: typeDisplay, topItemText: (r.item_text || `Item ${r.checklist_item_id}`).trim(), topItemDescription: r.description?.trim() || null, good: r.times_checked_good ?? 0, key: `win-${r.checklist_item_id}` }));
                         const losingRows = rows.filter((r) => (r.times_not_checked_bad ?? 0) > 0).sort((a, b) => (b.times_not_checked_bad ?? 0) - (a.times_not_checked_bad ?? 0));
-                        losingRows.forEach((r) => losingSurvey.push({ checklistTypeDisplay: typeDisplay, topItemText: (r.item_text || `Item ${r.checklist_item_id}`).trim(), bad: r.times_not_checked_bad ?? 0, key: `lose-${r.checklist_item_id}` }));
+                        losingRows.forEach((r) => losingSurvey.push({ checklistTypeDisplay: typeDisplay, topItemText: (r.item_text || `Item ${r.checklist_item_id}`).trim(), topItemDescription: r.description?.trim() || null, bad: r.times_not_checked_bad ?? 0, key: `lose-${r.checklist_item_id}` }));
                       });
                       const displayWinningSurvey = [...winningSurvey].sort((a, b) => b.good - a.good).slice(0, 4);
                       const displayLosingSurvey = [...losingSurvey].sort((a, b) => b.bad - a.bad).slice(0, 4);
@@ -8397,10 +8426,10 @@ export default function Strategies() {
                               <div>
                                 <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--success, #22c55e)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>These values were good for winning trades</div>
                                 <div style={{ display: "grid", gap: "6px" }}>
-                                  {displayWinningSurvey.slice(0, 4).map(({ checklistTypeDisplay, topItemText, good, key }) => (
+                                  {displayWinningSurvey.slice(0, 4).map(({ checklistTypeDisplay, topItemText, topItemDescription, good, key }) => (
                                     <div key={key} style={{ padding: "6px 8px", borderRadius: "4px", backgroundColor: "var(--bg-tertiary)", borderLeft: "3px solid var(--success, #22c55e)", minHeight: "44px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
                                       <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
-                                      <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
+                                      <ChecklistItemCaption fillRow={false} title={topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText} description={topItemDescription} titleStyle={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }} />
                                       <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({good} trades)</span>
                                     </div>
                                   ))}
@@ -8411,10 +8440,10 @@ export default function Strategies() {
                               <div>
                                 <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--danger, #ef4444)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>These values were bad for losing trades</div>
                                 <div style={{ display: "grid", gap: "6px" }}>
-                                  {displayLosingSurvey.slice(0, 4).map(({ checklistTypeDisplay, topItemText, bad, key }) => (
+                                  {displayLosingSurvey.slice(0, 4).map(({ checklistTypeDisplay, topItemText, topItemDescription, bad, key }) => (
                                     <div key={key} style={{ padding: "6px 8px", borderRadius: "4px", backgroundColor: "var(--bg-tertiary)", borderLeft: "3px solid var(--danger, #ef4444)", minHeight: "44px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
                                       <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
-                                      <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
+                                      <ChecklistItemCaption fillRow={false} title={topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText} description={topItemDescription} titleStyle={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }} />
                                       <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({bad} losing)</span>
                                     </div>
                                   ))}
@@ -8879,21 +8908,21 @@ export default function Strategies() {
                           if (!insightByType.has(type)) insightByType.set(type, []);
                           insightByType.get(type)!.push(row);
                         });
-                        const winningPerType: Array<{ checklistTypeDisplay: string; topItemText: string; good: number }> = [];
-                        const notClickedLosingPerType: Array<{ checklistTypeDisplay: string; topItemText: string; bad: number }> = [];
+                        const winningPerType: Array<{ checklistTypeDisplay: string; topItemText: string; topItemDescription?: string | null; good: number }> = [];
+                        const notClickedLosingPerType: Array<{ checklistTypeDisplay: string; topItemText: string; topItemDescription?: string | null; bad: number }> = [];
                         insightByType.forEach((rows, type) => {
                           const typeDisplay = type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
                           const surveyType = isSurveyType(typeDisplay);
                           if (surveyType) {
                             const winningRows = rows.filter((r) => (r.times_checked_good ?? 0) > 0).sort((a, b) => (b.times_checked_good ?? 0) - (a.times_checked_good ?? 0));
-                            winningRows.forEach((r) => winningPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (r.item_text || `Item ${r.checklist_item_id}`).trim(), good: r.times_checked_good ?? 0 }));
+                            winningRows.forEach((r) => winningPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (r.item_text || `Item ${r.checklist_item_id}`).trim(), topItemDescription: r.description?.trim() || null, good: r.times_checked_good ?? 0 }));
                             const losingRows = rows.filter((r) => (r.times_not_checked_bad ?? 0) > 0).sort((a, b) => (b.times_not_checked_bad ?? 0) - (a.times_not_checked_bad ?? 0));
-                            losingRows.forEach((r) => notClickedLosingPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (r.item_text || `Item ${r.checklist_item_id}`).trim(), bad: r.times_not_checked_bad ?? 0 }));
+                            losingRows.forEach((r) => notClickedLosingPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (r.item_text || `Item ${r.checklist_item_id}`).trim(), topItemDescription: r.description?.trim() || null, bad: r.times_not_checked_bad ?? 0 }));
                           } else {
                             const topWinning = rows.reduce((best, r) => ((r.times_checked_good ?? 0) > (best.times_checked_good ?? 0) ? r : best), rows[0]);
-                            if (topWinning && (topWinning.times_checked_good ?? 0) > 0) winningPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (topWinning.item_text || `Item ${topWinning.checklist_item_id}`).trim(), good: topWinning.times_checked_good ?? 0 });
+                            if (topWinning && (topWinning.times_checked_good ?? 0) > 0) winningPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (topWinning.item_text || `Item ${topWinning.checklist_item_id}`).trim(), topItemDescription: topWinning.description?.trim() || null, good: topWinning.times_checked_good ?? 0 });
                             const topNotClicked = rows.reduce((best, r) => ((r.times_not_checked_bad ?? 0) > (best.times_not_checked_bad ?? 0) ? r : best), rows[0]);
-                            if (topNotClicked && (topNotClicked.times_not_checked_bad ?? 0) > 0) notClickedLosingPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (topNotClicked.item_text || `Item ${topNotClicked.checklist_item_id}`).trim(), bad: topNotClicked.times_not_checked_bad ?? 0 });
+                            if (topNotClicked && (topNotClicked.times_not_checked_bad ?? 0) > 0) notClickedLosingPerType.push({ checklistTypeDisplay: typeDisplay, topItemText: (topNotClicked.item_text || `Item ${topNotClicked.checklist_item_id}`).trim(), topItemDescription: topNotClicked.description?.trim() || null, bad: topNotClicked.times_not_checked_bad ?? 0 });
                           }
                         });
                         const winningChecklist = winningPerType.filter((x) => !isSurveyType(x.checklistTypeDisplay));
@@ -9077,8 +9106,8 @@ export default function Strategies() {
                                                 <td style={{ padding: "6px", color: "var(--text-secondary)" }}>
                                                   {meta.title}
                                                 </td>
-                                                <td style={{ padding: "6px", color: "var(--text-primary)" }}>
-                                                  {row.item_text}
+                                                <td style={{ padding: "6px", color: "var(--text-primary)", maxWidth: "240px" }}>
+                                                  <ChecklistItemCaption fillRow={false} title={row.item_text} description={row.description} titleStyle={{ color: "var(--text-primary)", fontSize: "12px" }} descriptionStyle={{ fontSize: "11px" }} />
                                                 </td>
                                                 <td
                                                   style={{
@@ -9180,8 +9209,8 @@ export default function Strategies() {
                                                 <td style={{ padding: "6px", color: "var(--text-secondary)" }}>
                                                   {meta.title}
                                                 </td>
-                                                <td style={{ padding: "6px", color: "var(--text-primary)" }}>
-                                                  {row.item_text}
+                                                <td style={{ padding: "6px", color: "var(--text-primary)", maxWidth: "240px" }}>
+                                                  <ChecklistItemCaption fillRow={false} title={row.item_text} description={row.description} titleStyle={{ color: "var(--text-primary)", fontSize: "12px" }} descriptionStyle={{ fontSize: "11px" }} />
                                                 </td>
                                                 <td
                                                   style={{
@@ -9412,7 +9441,7 @@ export default function Strategies() {
                                           Winning trades (checklist)
                                         </div>
                                         <div style={{ display: "grid", gap: "6px" }}>
-                                          {displayWinningChecklist.slice(0, 4).map(({ checklistTypeDisplay, topItemText, good }, idx) => (
+                                          {displayWinningChecklist.slice(0, 4).map(({ checklistTypeDisplay, topItemText, topItemDescription, good }, idx) => (
                                             <div
                                               key={`win-c-${s.id}-${idx}-${topItemText}`}
                                               style={{
@@ -9427,7 +9456,7 @@ export default function Strategies() {
                                               }}
                                             >
                                               <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
-                                              <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
+                                              <ChecklistItemCaption fillRow={false} title={topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText} description={topItemDescription} titleStyle={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }} />
                                               <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({good} trades)</span>
                                             </div>
                                           ))}
@@ -9440,7 +9469,7 @@ export default function Strategies() {
                                           Often skipped in losing trades (checklist)
                                         </div>
                                         <div style={{ display: "grid", gap: "6px" }}>
-                                          {displayLosingChecklist.slice(0, 4).map(({ checklistTypeDisplay, topItemText, bad }, idx) => (
+                                          {displayLosingChecklist.slice(0, 4).map(({ checklistTypeDisplay, topItemText, topItemDescription, bad }, idx) => (
                                             <div
                                               key={`lose-c-${s.id}-${idx}-${topItemText}`}
                                               style={{
@@ -9455,7 +9484,7 @@ export default function Strategies() {
                                               }}
                                             >
                                               <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{checklistTypeDisplay}</span>
-                                              <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText}</span>
+                                              <ChecklistItemCaption fillRow={false} title={topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : topItemText} description={topItemDescription} titleStyle={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }} />
                                               <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({bad} losing)</span>
                                             </div>
                                           ))}
@@ -9476,7 +9505,7 @@ export default function Strategies() {
                                               style={{ padding: "6px 8px", borderRadius: "4px", backgroundColor: "var(--bg-tertiary)", borderLeft: "3px solid var(--success, #22c55e)", minHeight: "44px", display: "flex", flexDirection: "column", justifyContent: "center" }}
                                             >
                                               <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{row.checklistTypeDisplay}</span>
-                                              <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{row.topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : row.topItemText}</span>
+                                              <ChecklistItemCaption fillRow={false} title={row.topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : row.topItemText} description={row.topItemDescription} titleStyle={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }} />
                                               <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({row.good} trades)</span>
                                             </div>
                                           ))}
@@ -9495,7 +9524,7 @@ export default function Strategies() {
                                               style={{ padding: "6px 8px", borderRadius: "4px", backgroundColor: "var(--bg-tertiary)", borderLeft: "3px solid var(--danger, #ef4444)", minHeight: "44px", display: "flex", flexDirection: "column", justifyContent: "center" }}
                                             >
                                               <span style={{ fontSize: "10px", color: "var(--text-secondary)", display: "block", marginBottom: "2px" }}>{row.checklistTypeDisplay}</span>
-                                              <span style={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }}>{row.topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : row.topItemText}</span>
+                                              <ChecklistItemCaption fillRow={false} title={row.topItemText === EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER ? "—" : row.topItemText} description={row.topItemDescription} titleStyle={{ fontSize: "12px", color: "var(--text-primary)", fontWeight: "500" }} />
                                               <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px" }}>({row.bad} losing)</span>
                                             </div>
                                           ))}

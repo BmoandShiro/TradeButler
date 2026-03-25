@@ -3692,6 +3692,7 @@ pub struct ChecklistItemMetricRow {
     pub times_checked: i64,
     pub avg_performance: Option<f64>,
     pub performance_kind: String,
+    pub description: Option<String>,
 }
 
 #[tauri::command]
@@ -3703,15 +3704,44 @@ pub fn get_strategy_checklist_item_metrics(strategy_id: i64) -> Result<Vec<Check
         [],
         |row| row.get::<_, i64>(0),
     ).unwrap_or(0) > 0;
-    let items: Vec<(i64, String, String)> = conn.prepare(
-        "SELECT id, item_text, checklist_type FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id"
-    ).map_err(|e| e.to_string())?
-        .query_map(params![strategy_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+    let has_item_description = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='description'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+    let items: Vec<(i64, String, String, Option<String>)> = if has_item_description {
+        conn.prepare(
+            "SELECT id, item_text, checklist_type, description FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id",
+        )
+        .map_err(|e| e.to_string())?
+        .query_map(params![strategy_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get::<_, Option<String>>(3).ok().flatten(),
+            ))
+        })
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
-        .collect();
+        .collect()
+    } else {
+        conn.prepare(
+            "SELECT id, item_text, checklist_type FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id",
+        )
+        .map_err(|e| e.to_string())?
+        .query_map(params![strategy_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, None))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect()
+    };
     let mut out = Vec::new();
-    for (item_id, item_text, checklist_type) in items {
+    for (item_id, item_text, checklist_type, description) in items {
         let sql = if has_jt_ids {
             "SELECT jcr.journal_entry_id, jcr.journal_trade_ids FROM journal_checklist_responses jcr
              INNER JOIN journal_entries je ON je.id = jcr.journal_entry_id AND je.strategy_id = ?1
@@ -3775,6 +3805,7 @@ pub fn get_strategy_checklist_item_metrics(strategy_id: i64) -> Result<Vec<Check
             times_checked,
             avg_performance,
             performance_kind,
+            description,
         });
     }
     Ok(out)
@@ -3789,6 +3820,7 @@ pub struct ChecklistItemMetricByOutcomeRow {
     pub times_checked_bad: i64,
     /// Count of losing journal entries (avg trade performance <= 0) where this checklist item was not checked.
     pub times_not_checked_bad: i64,
+    pub description: Option<String>,
 }
 
 #[tauri::command]
@@ -3810,27 +3842,77 @@ pub fn get_strategy_checklist_item_metrics_by_outcome(strategy_id: i64) -> Resul
         [],
         |row| row.get::<_, i64>(0),
     ).unwrap_or(0) > 0;
-    let items: Vec<(i64, String, String, Option<bool>)> = if has_high_is_good {
-        conn.prepare(
-            "SELECT id, item_text, checklist_type, high_is_good FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id"
-        ).map_err(|e| e.to_string())?
-            .query_map(params![strategy_id], |row| Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get::<_, Option<i64>>(3).ok().flatten().map(|v| v != 0),
-            )))
+    let has_item_description = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='description'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+    let items: Vec<(i64, String, String, Option<bool>, Option<String>)> = match (has_high_is_good, has_item_description) {
+        (true, true) => conn
+            .prepare(
+                "SELECT id, item_text, checklist_type, high_is_good, description FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id",
+            )
+            .map_err(|e| e.to_string())?
+            .query_map(params![strategy_id], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get::<_, Option<i64>>(3).ok().flatten().map(|v| v != 0),
+                    row.get::<_, Option<String>>(4).ok().flatten(),
+                ))
+            })
             .map_err(|e| e.to_string())?
             .filter_map(|r| r.ok())
-            .collect()
-    } else {
-        conn.prepare(
-            "SELECT id, item_text, checklist_type FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id"
-        ).map_err(|e| e.to_string())?
-            .query_map(params![strategy_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, None)))
+            .collect(),
+        (true, false) => conn
+            .prepare(
+                "SELECT id, item_text, checklist_type, high_is_good FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id",
+            )
+            .map_err(|e| e.to_string())?
+            .query_map(params![strategy_id], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get::<_, Option<i64>>(3).ok().flatten().map(|v| v != 0),
+                    None,
+                ))
+            })
             .map_err(|e| e.to_string())?
             .filter_map(|r| r.ok())
-            .collect()
+            .collect(),
+        (false, true) => conn
+            .prepare(
+                "SELECT id, item_text, checklist_type, description FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id",
+            )
+            .map_err(|e| e.to_string())?
+            .query_map(params![strategy_id], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    None,
+                    row.get::<_, Option<String>>(3).ok().flatten(),
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect(),
+        (false, false) => conn
+            .prepare(
+                "SELECT id, item_text, checklist_type FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY checklist_type, item_order, id",
+            )
+            .map_err(|e| e.to_string())?
+            .query_map(params![strategy_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, None, None))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect(),
     };
     // Journal entry IDs for this strategy that are "losing" (avg trade performance <= 0).
     let losing_entry_ids: std::collections::HashSet<i64> = {
@@ -3870,7 +3952,7 @@ pub fn get_strategy_checklist_item_metrics_by_outcome(strategy_id: i64) -> Resul
         losing
     };
     let mut out = Vec::new();
-    for (item_id, item_text, checklist_type, high_is_good) in items {
+    for (item_id, item_text, checklist_type, high_is_good, description) in items {
         let is_survey_value_based = checklist_type == "survey" && high_is_good.is_some() && has_response_value;
         let (times_good, times_bad, times_not_checked_bad) = if is_survey_value_based {
             let high_ok = high_is_good.unwrap_or(true);
@@ -3989,6 +4071,7 @@ pub fn get_strategy_checklist_item_metrics_by_outcome(strategy_id: i64) -> Resul
             times_checked_good: times_good,
             times_checked_bad: times_bad,
             times_not_checked_bad,
+            description,
         });
     }
     Ok(out)
@@ -4864,6 +4947,7 @@ pub struct CustomSurveyMetric {
     pub item_text: String,
     pub response_count: i64,
     pub avg_value: Option<f64>,
+    pub description: Option<String>,
 }
 
 #[tauri::command]
@@ -4877,27 +4961,54 @@ pub fn get_custom_survey_metrics(strategy_id: i64) -> Result<Vec<CustomSurveyMet
         |row| row.get::<_, i64>(0),
     ).map(|c| c > 0).unwrap_or(false);
 
+    let has_item_description = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='description'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
     if !has_response_value {
-        let mut stmt = conn
-            .prepare("SELECT id, item_text FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = 'survey' ORDER BY item_order ASC, id ASC")
-            .map_err(|e| e.to_string())?;
+        let sql = if has_item_description {
+            "SELECT id, item_text, description FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = 'survey' ORDER BY item_order ASC, id ASC"
+        } else {
+            "SELECT id, item_text FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = 'survey' ORDER BY item_order ASC, id ASC"
+        };
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
         let rows = stmt.query_map(params![strategy_id], |row| {
             Ok(CustomSurveyMetric {
                 checklist_item_id: row.get(0)?,
                 item_text: row.get(1)?,
                 response_count: 0,
                 avg_value: None,
+                description: if has_item_description {
+                    row.get::<_, Option<String>>(2).ok().flatten()
+                } else {
+                    None
+                },
             })
         }).map_err(|e| e.to_string())?;
         return Ok(rows.filter_map(|r| r.ok()).collect());
     }
 
-    let sql = "SELECT sc.id, sc.item_text,
+    let sql = if has_item_description {
+        "SELECT sc.id, sc.item_text,
+        (SELECT COUNT(*) FROM journal_checklist_responses jcr WHERE jcr.checklist_item_id = sc.id AND jcr.response_value IS NOT NULL) AS response_count,
+        (SELECT AVG(jcr.response_value) FROM journal_checklist_responses jcr WHERE jcr.checklist_item_id = sc.id AND jcr.response_value IS NOT NULL) AS avg_value,
+        sc.description
+        FROM strategy_checklists sc
+        WHERE sc.strategy_id = ?1 AND sc.checklist_type = 'survey'
+        ORDER BY sc.item_order ASC, sc.id ASC"
+    } else {
+        "SELECT sc.id, sc.item_text,
         (SELECT COUNT(*) FROM journal_checklist_responses jcr WHERE jcr.checklist_item_id = sc.id AND jcr.response_value IS NOT NULL) AS response_count,
         (SELECT AVG(jcr.response_value) FROM journal_checklist_responses jcr WHERE jcr.checklist_item_id = sc.id AND jcr.response_value IS NOT NULL) AS avg_value
         FROM strategy_checklists sc
         WHERE sc.strategy_id = ?1 AND sc.checklist_type = 'survey'
-        ORDER BY sc.item_order ASC, sc.id ASC";
+        ORDER BY sc.item_order ASC, sc.id ASC"
+    };
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let rows = stmt.query_map(params![strategy_id], |row| {
         Ok(CustomSurveyMetric {
@@ -4905,6 +5016,11 @@ pub fn get_custom_survey_metrics(strategy_id: i64) -> Result<Vec<CustomSurveyMet
             item_text: row.get(1)?,
             response_count: row.get(2)?,
             avg_value: row.get(3).ok().flatten(),
+            description: if has_item_description {
+                row.get::<_, Option<String>>(4).ok().flatten()
+            } else {
+                None
+            },
         })
     }).map_err(|e| e.to_string())?;
     Ok(rows.filter_map(|r| r.ok()).collect())

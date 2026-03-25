@@ -23,6 +23,7 @@ import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/T
 import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
 import { getSurveyScoreColor, getSurveyScoreBgRgba } from "../utils/intensityColor";
 import RichTextEditor from "../components/RichTextEditor";
+import { ChecklistItemCaption } from "../components/ChecklistItemCaption";
 import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
@@ -148,6 +149,7 @@ interface ChecklistItem {
   item_order: number;
   checklist_type: string;
   parent_id: number | null;
+  description?: string | null;
 }
 
 interface JournalChecklistResponse {
@@ -748,6 +750,8 @@ export default function Journal() {
 
   // Checklist state (per trade, but checklists come from strategy)
   const [strategyChecklists, setStrategyChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
+  /** Section-level blurbs from `get_strategy_checklist_section_descriptions` (same as Strategies checklist description field). */
+  const [strategyChecklistSectionDescriptions, setStrategyChecklistSectionDescriptions] = useState<Map<number, Map<string, string>>>(new Map());
   const [checklistResponses, setChecklistResponses] = useState<Map<number, Map<number, boolean>>>(new Map()); // trade_index -> checklist_item_id -> is_checked
   const [surveyScores, setSurveyScores] = useState<Map<number, Map<number, number>>>(new Map()); // trade_index -> checklist_item_id -> 1-10 (for survey type items)
   // Entry-level (Analysis & Mantra): associated with whole journal by default, optionally with specific trades
@@ -1195,9 +1199,10 @@ export default function Journal() {
       loadStrategyChecklists(entryFormData.strategy_id);
     } else {
       setStrategyChecklists(new Map());
+      setStrategyChecklistSectionDescriptions(new Map());
       setChecklistResponses(new Map());
     }
-  }, [entryFormData.strategy_id]);
+  }, [entryFormData.strategy_id, dataMode]);
 
   useEffect(() => {
     if (!entryFormData.strategy_id) {
@@ -1666,10 +1671,24 @@ export default function Journal() {
 
   const loadStrategyChecklists = async (strategyId: number) => {
     try {
-      const allItems = await invoke<ChecklistItem[]>("get_strategy_checklist", {
-        strategyId: strategyId,
-        checklistType: null,
-      });
+      const [allItems, sectionDescRows] = await Promise.all([
+        invoke<ChecklistItem[]>("get_strategy_checklist", {
+          strategyId: strategyId,
+          checklistType: null,
+        }),
+        dataMode !== "sandbox"
+          ? invoke<Array<{ checklist_type: string; description: string | null }>>("get_strategy_checklist_section_descriptions", {
+              strategyId: strategyId,
+            }).catch(() => [] as Array<{ checklist_type: string; description: string | null }>)
+          : Promise.resolve([] as Array<{ checklist_type: string; description: string | null }>),
+      ]);
+
+      const sectionDescMap = new Map<string, string>();
+      for (const row of sectionDescRows) {
+        const d = row.description?.trim();
+        if (d) sectionDescMap.set(row.checklist_type, d);
+      }
+      setStrategyChecklistSectionDescriptions(new Map([[strategyId, sectionDescMap]]));
 
       // Group by checklist_type
       const grouped = new Map<string, ChecklistItem[]>();
@@ -3519,6 +3538,9 @@ export default function Journal() {
     [journalEmotionalStates, currentTrade?.id]
   );
   const currentChecklists = entryFormData.strategy_id ? strategyChecklists.get(entryFormData.strategy_id) : null;
+  const currentChecklistSectionDescriptions = entryFormData.strategy_id
+    ? strategyChecklistSectionDescriptions.get(entryFormData.strategy_id)
+    : undefined;
   // Trades that belong to this journal entry only (for Associate modal). When editing, use tradesFormData (set from loaded trades in handleEdit) so we always show the correct 7; when viewing, use selectedTrades.
   const entryTradesForAssociation = selectedEntry && !isEditing ? selectedTrades : tradesFormData;
   const defaultTypes = ["daily_analysis", "entry", "take_profit"];
@@ -3583,7 +3605,17 @@ export default function Journal() {
     if (!entryFormData.strategy_id || !currentChecklists) return <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load checklists.</p>;
     const rawItems = currentChecklists.get(type) || [];
     const items = rawItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
-    if (items.length === 0) return <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No items for this checklist.</p>;
+    const sectionBlurb = currentChecklistSectionDescriptions?.get(type)?.trim();
+    if (items.length === 0) {
+      return (
+        <div style={{ marginBottom: "4px" }}>
+          {sectionBlurb ? (
+            <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "12px", lineHeight: 1.4 }}>{sectionBlurb}</div>
+          ) : null}
+          <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No items for this checklist.</p>
+        </div>
+      );
+    }
     const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(type);
     const responses = isEntryLevel ? entryLevelChecklistResponses : (checklistResponses.get(activeTradeIndex) || new Map());
     const getChecked = (id: number) => responses.get(id) || false;
@@ -3595,15 +3627,22 @@ export default function Journal() {
     groupedItems.forEach(item => { if (item.parent_id) { const parentId = item.parent_id; if (!itemsByParent.has(parentId)) itemsByParent.set(parentId, []); itemsByParent.get(parentId)!.push(item); } });
     return (
       <div style={{ marginBottom: "4px" }}>
+        {sectionBlurb ? (
+          <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "12px", lineHeight: 1.4 }}>{sectionBlurb}</div>
+        ) : null}
         {groups.map((group) => {
           const children = itemsByParent.get(group.id) || [];
           return (
             <div key={group.id} style={{ marginBottom: "12px" }}>
-              <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px", fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>{group.item_text}</div>
+              <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px" }}>
+                <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }} />
+              </div>
               {children.map((child) => (
                 <div key={child.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 12px", marginLeft: "16px", marginBottom: "2px" }}>
                   <input type="checkbox" checked={getChecked(child.id)} onChange={() => onToggle(child.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
-                  <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }} onClick={() => onToggle(child.id)}>{child.item_text}</label>
+                  <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", cursor: "pointer", display: "flex", minWidth: 0 }} onClick={() => onToggle(child.id)}>
+                    <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }} />
+                  </label>
                   {isEntryLevel && entryTradesForAssociation.length > 1 && (
                     <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                       <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{!(checklistTradeAssociations.get(child.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(child.id)!.length} trade(s)`}</span>
@@ -3618,7 +3657,9 @@ export default function Journal() {
         {regularItems.map((item) => (
           <div key={item.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 12px", marginBottom: "2px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
             <input type="checkbox" checked={getChecked(item.id)} onChange={() => onToggle(item.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
-            <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }} onClick={() => onToggle(item.id)}>{item.item_text}</label>
+            <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", cursor: "pointer", display: "flex", minWidth: 0 }} onClick={() => onToggle(item.id)}>
+              <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }} />
+            </label>
             {isEntryLevel && entryTradesForAssociation.length > 1 && (
               <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                 <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{!(checklistTradeAssociations.get(item.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(item.id)!.length} trade(s)`}</span>
@@ -3636,7 +3677,15 @@ export default function Journal() {
     if (!currentChecklists) return null;
     const rawItems = currentChecklists.get(type) || [];
     const items = rawItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
-    if (items.length === 0) return null;
+    const sectionBlurb = currentChecklistSectionDescriptions?.get(type)?.trim();
+    if (items.length === 0) {
+      if (!sectionBlurb) return null;
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+          <div style={{ fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.4 }}>{sectionBlurb}</div>
+        </div>
+      );
+    }
 
     const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(type);
     const isSurveyType = type === "survey";
@@ -3658,17 +3707,22 @@ export default function Journal() {
 
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+        {sectionBlurb ? (
+          <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "4px", lineHeight: 1.4 }}>{sectionBlurb}</div>
+        ) : null}
         {groups.map((group) => {
           const children = itemsByParent.get(group.id) || [];
           return (
             <div key={group.id} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-              <div style={{ padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 6, fontWeight: 600, color: "var(--text-primary)", fontSize: 13 }}>
-                {group.item_text}
+              <div style={{ padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 6 }}>
+                <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: 600, color: "var(--text-primary)", fontSize: 13 }} />
               </div>
               {children.map((child) => (
                 <div key={child.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", marginLeft: 16 }}>
                   <input type="checkbox" checked={getChecked(child.id)} disabled style={{ cursor: "default", width: 16, height: 16 }} />
-                  <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)" }}>{child.item_text}</label>
+                  <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
+                    <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: 13, color: "var(--text-primary)" }} />
+                  </label>
                   {isSurveyType && (
                     <span
                       style={{
@@ -3695,7 +3749,9 @@ export default function Journal() {
         {regularItems.map((item) => (
           <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px" }}>
             <input type="checkbox" checked={getChecked(item.id)} disabled style={{ cursor: "default", width: 16, height: 16 }} />
-            <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)" }}>{item.item_text}</label>
+            <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
+              <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: 13, color: "var(--text-primary)" }} />
+            </label>
             {isSurveyType && (
               <span
                 style={{
@@ -6169,12 +6225,16 @@ export default function Journal() {
                                   const children = itemsByParent.get(group.id) || [];
                                   return (
                                     <div key={group.id} style={{ marginBottom: "12px" }}>
-                                      <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px", fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>{group.item_text}</div>
+                                      <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px" }}>
+                                        <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }} />
+                                      </div>
                                       {children.map((child) => {
                                         const score = surveyScores.get(activeTradeIndex)?.get(child.id);
                                         return (
                                           <div key={child.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginLeft: "16px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
-                                            <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{child.item_text}</label>
+                                            <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
+                                              <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)" }} />
+                                            </label>
                                             <div style={{ display: "flex", gap: "4px" }}>
                                               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
                                                 <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(child.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(child.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
@@ -6190,7 +6250,9 @@ export default function Journal() {
                                   const score = surveyScores.get(activeTradeIndex)?.get(item.id);
                                   return (
                                     <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
-                                      <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{item.item_text}</label>
+                                      <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
+                                        <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)" }} />
+                                      </label>
                                       <div style={{ display: "flex", gap: "4px" }}>
                                         {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
                                           <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(item.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(item.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
@@ -7767,13 +7829,15 @@ export default function Journal() {
                                     const children = itemsByParent.get(group.id) || [];
                                     return (
                                       <div key={group.id} style={{ marginBottom: "16px" }}>
-                                        <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "8px", fontWeight: "600", color: "var(--text-primary)" }}>
-                                          {group.item_text}
+                                        <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "8px" }}>
+                                          <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "15px" }} />
                                         </div>
                                         {children.map((child) => (
                                           <div key={child.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", marginLeft: "20px", marginBottom: "4px" }}>
                                             <input type="checkbox" checked={getChecked(child.id)} onChange={() => onToggle(child.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
-                                            <label style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)", cursor: "pointer" }} onClick={() => onToggle(child.id)}>{child.item_text}</label>
+                                            <label style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)", cursor: "pointer", display: "flex", minWidth: 0 }} onClick={() => onToggle(child.id)}>
+                                              <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)", cursor: "pointer" }} />
+                                            </label>
                                             {isEntryLevel && entryTradesForAssociation.length > 1 && (
                                               <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                                                 <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
@@ -7792,7 +7856,9 @@ export default function Journal() {
                                   {regularItems.map((item) => (
                                     <div key={item.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                                       <input type="checkbox" checked={getChecked(item.id)} onChange={() => onToggle(item.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
-                                      <label style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)", cursor: "pointer" }} onClick={() => onToggle(item.id)}>{item.item_text}</label>
+                                      <label style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)", cursor: "pointer", display: "flex", minWidth: 0 }} onClick={() => onToggle(item.id)}>
+                                        <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)", cursor: "pointer" }} />
+                                      </label>
                                       {isEntryLevel && entryTradesForAssociation.length > 1 && (
                                         <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                                           <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
@@ -7924,11 +7990,9 @@ export default function Journal() {
                                             border: "1px solid var(--border-color)",
                                             borderRadius: "6px",
                                             marginBottom: "8px",
-                                            fontWeight: "600",
-                                            color: "var(--text-primary)",
                                           }}
                                         >
-                                          {group.item_text}
+                                          <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "15px" }} />
                                         </div>
                                         {children.map((child) => {
                                           const score = surveyScores.get(activeTradeIndex)?.get(child.id);
@@ -7952,9 +8016,11 @@ export default function Journal() {
                                                   flex: 1,
                                                   fontSize: "14px",
                                                   color: "var(--text-primary)",
+                                                  display: "flex",
+                                                  minWidth: 0,
                                                 }}
                                               >
-                                                {child.item_text}
+                                                <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
                                               </label>
                                               <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
                                                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
@@ -8016,9 +8082,11 @@ export default function Journal() {
                                             flex: 1,
                                             fontSize: "14px",
                                             color: "var(--text-primary)",
+                                            display: "flex",
+                                            minWidth: 0,
                                           }}
                                         >
-                                          {item.item_text}
+                                          <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
                                         </label>
                                         <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
                                           {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (

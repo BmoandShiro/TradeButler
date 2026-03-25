@@ -637,6 +637,7 @@ export function getSandboxStrategyChecklistItemMetrics(strategyId: number) {
       times_checked,
       avg_performance: 1.2 + (i.id % 3) * 0.5,
       performance_kind: "r_multiple",
+      description: (i as { description?: string | null }).description ?? null,
     };
   });
 }
@@ -657,6 +658,7 @@ export function getSandboxStrategyChecklistItemMetricsByOutcome(strategyId: numb
       times_checked_good: good,
       times_checked_bad: bad,
       times_not_checked_bad: notCheckedBad,
+      description: (i as { description?: string | null }).description ?? null,
     };
   });
 }
@@ -668,5 +670,6 @@ export function getSandboxCustomSurveyMetrics(strategyId: number) {
     item_text: i.item_text,
     response_count: 24 + (i.id % 10),
     avg_value: 3 + (i.id % 3) * 0.5,
+    description: (i as { description?: string | null }).description ?? null,
   }));
 }

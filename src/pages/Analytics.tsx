@@ -138,6 +138,7 @@ interface ChecklistItemMetricRow {
   times_checked: number;
   avg_performance: number | null;
   performance_kind: string;
+  description?: string | null;
 }
 
 interface ChecklistItemMetricByOutcomeRow {
@@ -147,6 +148,7 @@ interface ChecklistItemMetricByOutcomeRow {
   times_checked_good: number;
   times_checked_bad: number;
   times_not_checked_bad: number;
+  description?: string | null;
 }
 
 const STRATEGY_CHART_MARGIN = { top: 8, right: 8, left: 0, bottom: 48 };
