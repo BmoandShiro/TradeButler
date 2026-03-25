@@ -43,6 +43,7 @@ import {
   getSandboxEmotionalStates,
   getSandboxEmotionalStatesForJournal,
   getSandboxEmotionSurveys,
+  addSandboxEmotionalState,
   addSandboxJournalEntryToEmotionalStates,
   removeSandboxJournalEntryFromEmotionalStates,
   linkSandboxEmotionalStatesToJournal,
@@ -164,6 +165,8 @@ const ENTRY_LEVEL_CHECKLIST_TYPES: string[] = [];
 
 /** Hidden placeholder used in the DB for empty custom checklist types; never show to users. */
 const EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER = "__empty_custom_checklist_placeholder__";
+/** Hidden placeholder emotion so surveys can be saved without selecting chips. */
+const SURVEY_ONLY_EMOTION = "__survey_only__";
 
   /** Emotional state from Emotions (linked to journal entry/implementation) */
 interface JournalEmotionalState {
@@ -274,30 +277,36 @@ function pickLatestSurveyForGroup(surveys: JournalEmotionSurvey[], groupStateIds
   });
 }
 
-/** Flatten journal survey responses to the payload shape used by add/update_emotion_survey. */
-function buildEmotionSurveyFieldsFromResponses(sr: Record<string, number>) {
+/** Map responses to the camelCase invoke payload expected by Tauri command args. */
+function buildEmotionSurveyInvokeArgs(sr: Record<string, number>) {
   return {
-    before_calm_clear: sr.before_calm_clear ?? 6,
-    before_urgency_pressure: sr.before_urgency_pressure ?? 6,
-    before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6,
-    before_fomo: sr.before_fomo ?? 6,
-    before_recovering_loss: sr.before_recovering_loss ?? 6,
-    before_patient_detached: sr.before_patient_detached ?? 6,
-    before_trust_process: sr.before_trust_process ?? 6,
-    before_emotional_state: sr.before_emotional_state ?? 6,
-    during_stable: sr.during_stable ?? 6,
-    during_tension_stress: sr.during_tension_stress ?? 6,
-    during_tempted_interfere: sr.during_tempted_interfere ?? 6,
-    during_need_control: sr.during_need_control ?? 6,
-    during_fear_loss: sr.during_fear_loss ?? 6,
-    during_excitement_greed: sr.during_excitement_greed ?? 6,
-    during_mentally_present: sr.during_mentally_present ?? 6,
-    after_accept_outcome: sr.after_accept_outcome ?? 6,
-    after_emotional_reaction: sr.after_emotional_reaction ?? 6,
-    after_confidence_affected: sr.after_confidence_affected ?? 6,
-    after_tempted_another_trade: sr.after_tempted_another_trade ?? 6,
-    after_proud_discipline: sr.after_proud_discipline ?? 6,
+    beforeCalmClear: sr.before_calm_clear ?? 6,
+    beforeUrgencyPressure: sr.before_urgency_pressure ?? 6,
+    beforeConfidenceVsValidation: sr.before_confidence_vs_validation ?? 6,
+    beforeFomo: sr.before_fomo ?? 6,
+    beforeRecoveringLoss: sr.before_recovering_loss ?? 6,
+    beforePatientDetached: sr.before_patient_detached ?? 6,
+    beforeTrustProcess: sr.before_trust_process ?? 6,
+    beforeEmotionalState: sr.before_emotional_state ?? 6,
+    duringStable: sr.during_stable ?? 6,
+    duringTensionStress: sr.during_tension_stress ?? 6,
+    duringTemptedInterfere: sr.during_tempted_interfere ?? 6,
+    duringNeedControl: sr.during_need_control ?? 6,
+    duringFearLoss: sr.during_fear_loss ?? 6,
+    duringExcitementGreed: sr.during_excitement_greed ?? 6,
+    duringMentallyPresent: sr.during_mentally_present ?? 6,
+    afterAcceptOutcome: sr.after_accept_outcome ?? 6,
+    afterEmotionalReaction: sr.after_emotional_reaction ?? 6,
+    afterConfidenceAffected: sr.after_confidence_affected ?? 6,
+    afterTemptedAnotherTrade: sr.after_tempted_another_trade ?? 6,
+    afterProudDiscipline: sr.after_proud_discipline ?? 6,
   };
+}
+
+function surveyHasNonDefaultResponses(sr: Record<string, number>): boolean {
+  return Object.values(JOURNAL_SURVEY_QUESTIONS)
+    .flat()
+    .some((q) => (sr[q.key] ?? 6) !== 6);
 }
 
 function emotionalStateGroupKey(picked: JournalEmotionalState[]): string {
@@ -391,14 +400,11 @@ async function syncEmotionalStateFormEditsAfterJournalSave(
     }
 
     const sr = form.surveyResponses;
-    const surveyHasNonDefault = Object.values(JOURNAL_SURVEY_QUESTIONS)
-      .flat()
-      .some((q) => (sr[q.key] ?? 6) !== 6);
+    const surveyHasNonDefault = surveyHasNonDefaultResponses(sr);
     const shouldPersistSurvey =
       surveyHasNonDefault || Object.keys(sr).length > 0;
     if (!shouldPersistSurvey) continue;
 
-    const fields = buildEmotionSurveyFieldsFromResponses(sr);
     const canonicalStateId = picked[0].id;
     const pickedIds = picked.map((s) => s.id).filter((id): id is number => id != null);
 
@@ -407,12 +413,12 @@ async function syncEmotionalStateFormEditsAfterJournalSave(
       upsertSandboxEmotionSurveyFromResponses(canonicalStateId, sr, nowSync);
     } else {
       for (const sid of pickedIds) {
-        await invoke("delete_emotion_survey_for_state", { emotional_state_id: sid });
+        await invoke("delete_emotion_survey_for_state", { emotionalStateId: sid });
       }
       await invoke("add_emotion_survey", {
-        emotional_state_id: canonicalStateId,
+        emotionalStateId: canonicalStateId,
         timestamp: nowSync,
-        ...fields,
+        ...buildEmotionSurveyInvokeArgs(sr),
       });
     }
   }
@@ -2644,6 +2650,99 @@ export default function Journal() {
               id: td.id ?? sortedLoaded[i]?.id ?? null,
             }));
             const tradeIdsForSync = sortedLoaded.map((t) => t.id);
+
+            // Persist in-journal emotional state + survey sliders into sandbox store so view mode reflects edits.
+            // Mirrors the real-mode "Persist emotional states" logic below.
+            try {
+              const toPersist: Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string; surveyResponses?: Record<string, number> }> = [...pendingEmotionalStates];
+              const hasFormContent = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 || (newEmotionalStateForm.notes || "").trim() !== "";
+              if (showAddEmotionalStateForm && hasFormContent) {
+                if (newEmotionalStateLinkScope === "entry") {
+                  toPersist.push({ tradeIndex: -1, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes, surveyResponses: { ...newEmotionalStateSurveyResponses } });
+                } else {
+                  for (const i of newEmotionalStateTradeIndices) {
+                    toPersist.push({ tradeIndex: i, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes, surveyResponses: { ...newEmotionalStateSurveyResponses } });
+                  }
+                }
+              }
+
+              if (toPersist.length > 0) {
+                const entryId = selectedEntry.id;
+                const allStatesForEntry = getSandboxEmotionalStatesForJournal(entryId) as unknown as JournalEmotionalState[];
+                const now = new Date().toISOString();
+
+                const deleteGroup = (group: JournalEmotionalState[]) => {
+                  const ids = group.map((s) => s.id).filter((id): id is number => id != null);
+                  if (ids.length > 0) deleteSandboxEmotionSurveysForStateIds(ids);
+                  for (const s of group) {
+                    if (s.id != null) deleteSandboxEmotionalState(s.id);
+                  }
+                };
+
+                for (const pending of toPersist) {
+                  let firstStateId: number | null = null;
+                  if (pending.tradeIndex === -1) {
+                    const entryLevel = allStatesForEntry.filter((s) => s.journal_trade_id == null);
+                    const groups = groupEmotionalStatesByTimestamp(entryLevel);
+                    for (const g of groups) deleteGroup(g);
+                    for (const emotion of Object.keys(pending.selectedEmotions)) {
+                      const stateId = addSandboxEmotionalState({
+                        timestamp: now,
+                        emotion,
+                        intensity: pending.selectedEmotions[emotion],
+                        notes: pending.notes || null,
+                        trade_id: null,
+                        journal_entry_id: entryId,
+                        journal_trade_id: null,
+                        journal_entry_ids: JSON.stringify([entryId]),
+                      });
+                      if (firstStateId === null) firstStateId = stateId;
+                    }
+                  } else {
+                    const journalTradeId = tradeIdsForSync[pending.tradeIndex];
+                    if (journalTradeId != null) {
+                      const forTrade = allStatesForEntry.filter((s) => s.journal_trade_id === journalTradeId);
+                      const groups = groupEmotionalStatesByTimestamp(forTrade);
+                      for (const g of groups) deleteGroup(g);
+                      for (const emotion of Object.keys(pending.selectedEmotions)) {
+                        const stateId = addSandboxEmotionalState({
+                          timestamp: now,
+                          emotion,
+                          intensity: pending.selectedEmotions[emotion],
+                          notes: pending.notes || null,
+                          trade_id: null,
+                          journal_entry_id: entryId,
+                          journal_trade_id: journalTradeId,
+                          journal_entry_ids: JSON.stringify([entryId]),
+                        });
+                        if (firstStateId === null) firstStateId = stateId;
+                      }
+                    }
+                  }
+
+                  const sr = pending.surveyResponses ?? {};
+                  const shouldSaveSurvey =
+                    firstStateId != null &&
+                    Object.values(JOURNAL_SURVEY_QUESTIONS)
+                      .flat()
+                      .some((q) => (sr[q.key] ?? 6) !== 6);
+                  if (shouldSaveSurvey && firstStateId != null) {
+                    upsertSandboxEmotionSurveyFromResponses(firstStateId, sr, now);
+                  }
+                }
+
+                // Refresh in-memory view of states after persistence.
+                setJournalEmotionalStates(getSandboxEmotionalStatesForJournal(entryId) as unknown as JournalEmotionalState[]);
+                setShowAddEmotionalStateForm(false);
+                setPendingEmotionalStates([]);
+                setNewEmotionalStateForm({ selectedEmotions: {}, notes: "", surveyResponses: {} });
+                setNewEmotionalStateLinkScope("entry");
+                setNewEmotionalStateTradeIndices([]);
+              }
+            } catch (e) {
+              console.error("Failed to persist emotional states (sandbox):", e);
+            }
+
             await syncEmotionalStateFormEditsAfterJournalSave(
               true,
               selectedEntry.id,
@@ -2803,7 +2902,13 @@ export default function Journal() {
 
       // Persist emotional states: pending list + any form-in-progress (one state per trade or one for entire entry)
       const toPersist: Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string; surveyResponses?: Record<string, number> }> = [...pendingEmotionalStates];
-      const hasFormContent = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 || (newEmotionalStateForm.notes || "").trim() !== "";
+      const hasSurveyEdits =
+        surveyHasNonDefaultResponses(newEmotionalStateSurveyResponses) ||
+        Object.keys(newEmotionalStateSurveyResponses || {}).length > 0;
+      const hasFormContent =
+        Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 ||
+        (newEmotionalStateForm.notes || "").trim() !== "" ||
+        hasSurveyEdits;
       if (showAddEmotionalStateForm && hasFormContent) {
         if (newEmotionalStateLinkScope === "entry") {
           toPersist.push({ tradeIndex: -1, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes, surveyResponses: { ...newEmotionalStateSurveyResponses } });
@@ -2822,15 +2927,22 @@ export default function Journal() {
       for (const pending of toPersist) {
         try {
           let firstStateId: number | null = null;
+          const sr = pending.surveyResponses ?? {};
+          const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 6) !== 6);
+          const emotionsToPersist = Object.keys(pending.selectedEmotions);
+          const effectiveEmotions =
+            emotionsToPersist.length > 0
+              ? emotionsToPersist
+              : (shouldSaveSurvey ? [SURVEY_ONLY_EMOTION] : []);
           if (pending.tradeIndex === -1) {
             const entryLevel = allStatesForEntry.filter((s) => s.journal_trade_id == null);
             const groups = groupEmotionalStatesByTimestamp(entryLevel);
             for (const g of groups) await deleteGroup(g);
-            for (const emotion of Object.keys(pending.selectedEmotions)) {
+            for (const emotion of effectiveEmotions) {
               const stateId = await invoke<number>("add_emotional_state", {
                 timestamp: now,
                 emotion,
-                intensity: pending.selectedEmotions[emotion],
+                intensity: emotion === SURVEY_ONLY_EMOTION ? 0 : pending.selectedEmotions[emotion],
                 notes: pending.notes || null,
                 tradeId: null,
                 journalEntryId: entryId,
@@ -2845,11 +2957,11 @@ export default function Journal() {
               const forTrade = allStatesForEntry.filter((s) => s.journal_trade_id === journalTradeId);
               const groups = groupEmotionalStatesByTimestamp(forTrade);
               for (const g of groups) await deleteGroup(g);
-              for (const emotion of Object.keys(pending.selectedEmotions)) {
+              for (const emotion of effectiveEmotions) {
                 const stateId = await invoke<number>("add_emotional_state", {
                   timestamp: now,
                   emotion,
-                  intensity: pending.selectedEmotions[emotion],
+                  intensity: emotion === SURVEY_ONLY_EMOTION ? 0 : pending.selectedEmotions[emotion],
                   notes: pending.notes || null,
                   tradeId: null,
                   journalEntryId: entryId,
@@ -2860,33 +2972,12 @@ export default function Journal() {
               }
             }
           }
-          const sr = pending.surveyResponses ?? {};
-          const shouldSaveSurvey = firstStateId != null && Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 6) !== 6);
           if (shouldSaveSurvey && firstStateId != null) {
             try {
               await invoke("add_emotion_survey", {
-                emotional_state_id: firstStateId,
+                emotionalStateId: firstStateId,
                 timestamp: now,
-                before_calm_clear: sr.before_calm_clear ?? 6,
-                before_urgency_pressure: sr.before_urgency_pressure ?? 6,
-                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6,
-                before_fomo: sr.before_fomo ?? 6,
-                before_recovering_loss: sr.before_recovering_loss ?? 6,
-                before_patient_detached: sr.before_patient_detached ?? 6,
-                before_trust_process: sr.before_trust_process ?? 6,
-                before_emotional_state: sr.before_emotional_state ?? 6,
-                during_stable: sr.during_stable ?? 6,
-                during_tension_stress: sr.during_tension_stress ?? 6,
-                during_tempted_interfere: sr.during_tempted_interfere ?? 6,
-                during_need_control: sr.during_need_control ?? 6,
-                during_fear_loss: sr.during_fear_loss ?? 6,
-                during_excitement_greed: sr.during_excitement_greed ?? 6,
-                during_mentally_present: sr.during_mentally_present ?? 6,
-                after_accept_outcome: sr.after_accept_outcome ?? 6,
-                after_emotional_reaction: sr.after_emotional_reaction ?? 6,
-                after_confidence_affected: sr.after_confidence_affected ?? 6,
-                after_tempted_another_trade: sr.after_tempted_another_trade ?? 6,
-                after_proud_discipline: sr.after_proud_discipline ?? 6,
+                ...buildEmotionSurveyInvokeArgs(sr),
               });
             } catch (e) {
               console.error(e);
@@ -5286,7 +5377,7 @@ export default function Journal() {
                                                   0 = not present - 10 = extremely strong. Rate how strongly you feel each emotion; values are used for trends and insights over time.
                                                 </p>
                                                 <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "14px" }}>
-                                                  {group.map((s) => (
+                                                  {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => (
                                                     <span
                                                       key={`emo-chip-${s.id}`}
                                                       style={{
@@ -6179,7 +6270,7 @@ export default function Journal() {
                                       const stateIds = group.map((s) => s.id);
                                       return (
                                         <li key={first.timestamp} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "6px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
-                                          <span style={{ fontSize: "12px", color: "var(--text-primary)" }}>{format(new Date(first.timestamp), "MMM d, HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}</span>
+                                          <span style={{ fontSize: "12px", color: "var(--text-primary)" }}>{format(new Date(first.timestamp), "MMM d, HH:mm")} · {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}</span>
                                           <button type="button" onClick={() => setEntryFormData((prev) => { const next = (prev.linked_emotional_state_ids ?? []).filter((id) => !stateIds.includes(id)); const scopes = { ...(prev.linked_emotional_state_link_scopes ?? {}) }; stateIds.forEach((id) => delete scopes[id]); return { ...prev, linked_emotional_state_ids: next, linked_emotional_state_link_scopes: scopes }; })} style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", cursor: "pointer" }}>Remove</button>
                                         </li>
                                       );
@@ -6202,7 +6293,7 @@ export default function Journal() {
                                           const first = group[0];
                                           return (
                                             <button key={first.timestamp} type="button" onClick={() => { setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: [...(prev.linked_emotional_state_ids ?? []), first.id], linked_emotional_state_link_scopes: { ...(prev.linked_emotional_state_link_scopes ?? {}), [first.id]: scope } })); setJournalLinksStateDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "8px 12px", textAlign: "left", fontSize: "12px", color: "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer" }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
-                                              {format(new Date(first.timestamp), "MMM d, HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
+                                              {format(new Date(first.timestamp), "MMM d, HH:mm")} · {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                             </button>
                                           );
                                         })}
@@ -6533,9 +6624,16 @@ export default function Journal() {
                             <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>Notes for this emotional state.</p>
                             <RichTextEditor value={newEmotionalStateForm.notes} onChange={(content: string) => setNewEmotionalStateForm((f) => ({ ...f, notes: content }))} placeholder="Notes..." readOnly={false} />
                             {showAddEmotionalStateForm && (
-                              <button type="button" disabled={Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 || (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0)} onClick={async () => {
+                              <button type="button" disabled={(
+                                Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 &&
+                                !surveyHasNonDefaultResponses(newEmotionalStateSurveyResponses) &&
+                                Object.keys(newEmotionalStateSurveyResponses || {}).length === 0 &&
+                                !(newEmotionalStateForm.notes || "").trim()
+                              ) || (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0)} onClick={async () => {
                                 const hasAny = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0;
-                                if (!hasAny || (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0)) return;
+                                const hasSurveyEdits = surveyHasNonDefaultResponses(newEmotionalStateSurveyResponses) || Object.keys(newEmotionalStateSurveyResponses || {}).length > 0;
+                                const hasNotes = !!(newEmotionalStateForm.notes || "").trim();
+                                if ((!hasAny && !hasSurveyEdits && !hasNotes) || (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0)) return;
                                 const entryId = selectedEntry?.id;
                                 const savedEntry = entryId != null;
                                 if (savedEntry) {
@@ -6545,12 +6643,14 @@ export default function Journal() {
                                     const allStates = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
                                     const deleteGroup = async (group: JournalEmotionalState[]) => { for (const s of group) await invoke("delete_emotional_state", { id: s.id }); };
                                     let firstStateId: number | null = null;
+                                    const effectiveEmotions =
+                                      hasAny ? Object.keys(newEmotionalStateForm.selectedEmotions) : (hasSurveyEdits ? [SURVEY_ONLY_EMOTION] : []);
                                     if (newEmotionalStateLinkScope === "entry") {
                                       const entryLevel = allStates.filter((s) => s.journal_trade_id == null);
                                       const groups = groupEmotionalStatesByTimestamp(entryLevel);
                                       for (const g of groups) await deleteGroup(g);
-                                      for (const emotion of Object.keys(newEmotionalStateForm.selectedEmotions)) {
-                                        const stateId = await invoke<number>("add_emotional_state", { timestamp: now, emotion, intensity: newEmotionalStateForm.selectedEmotions[emotion], notes: newEmotionalStateForm.notes || null, tradeId: null, journalEntryId: entryId, journalTradeId: null, isPaper: dataMode === "paper" });
+                                      for (const emotion of effectiveEmotions) {
+                                        const stateId = await invoke<number>("add_emotional_state", { timestamp: now, emotion, intensity: emotion === SURVEY_ONLY_EMOTION ? 0 : newEmotionalStateForm.selectedEmotions[emotion], notes: newEmotionalStateForm.notes || null, tradeId: null, journalEntryId: entryId, journalTradeId: null, isPaper: dataMode === "paper" });
                                         if (firstStateId === null) firstStateId = stateId;
                                       }
                                     } else {
@@ -6561,8 +6661,8 @@ export default function Journal() {
                                         const forTrade = allStates.filter((s) => s.journal_trade_id === jtId);
                                         const groups = groupEmotionalStatesByTimestamp(forTrade);
                                         for (const g of groups) await deleteGroup(g);
-                                        for (const emotion of Object.keys(newEmotionalStateForm.selectedEmotions)) {
-                                          const stateId = await invoke<number>("add_emotional_state", { timestamp: now, emotion, intensity: newEmotionalStateForm.selectedEmotions[emotion], notes: newEmotionalStateForm.notes || null, tradeId: null, journalEntryId: entryId, journalTradeId: jtId, isPaper: dataMode === "paper" });
+                                        for (const emotion of effectiveEmotions) {
+                                          const stateId = await invoke<number>("add_emotional_state", { timestamp: now, emotion, intensity: emotion === SURVEY_ONLY_EMOTION ? 0 : newEmotionalStateForm.selectedEmotions[emotion], notes: newEmotionalStateForm.notes || null, tradeId: null, journalEntryId: entryId, journalTradeId: jtId, isPaper: dataMode === "paper" });
                                           if (firstStateId === null) firstStateId = stateId;
                                         }
                                       }
@@ -6571,7 +6671,7 @@ export default function Journal() {
                                     const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 6) !== 6);
                                     if (shouldSaveSurvey && firstStateId != null) {
                                       try {
-                                        await invoke("add_emotion_survey", { emotional_state_id: firstStateId, timestamp: now, before_calm_clear: sr.before_calm_clear ?? 6, before_urgency_pressure: sr.before_urgency_pressure ?? 6, before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6, before_fomo: sr.before_fomo ?? 6, before_recovering_loss: sr.before_recovering_loss ?? 6, before_patient_detached: sr.before_patient_detached ?? 6, before_trust_process: sr.before_trust_process ?? 6, before_emotional_state: sr.before_emotional_state ?? 6, during_stable: sr.during_stable ?? 6, during_tension_stress: sr.during_tension_stress ?? 6, during_tempted_interfere: sr.during_tempted_interfere ?? 6, during_need_control: sr.during_need_control ?? 6, during_fear_loss: sr.during_fear_loss ?? 6, during_excitement_greed: sr.during_excitement_greed ?? 6, during_mentally_present: sr.during_mentally_present ?? 6, after_accept_outcome: sr.after_accept_outcome ?? 6, after_emotional_reaction: sr.after_emotional_reaction ?? 6, after_confidence_affected: sr.after_confidence_affected ?? 6, after_tempted_another_trade: sr.after_tempted_another_trade ?? 6, after_proud_discipline: sr.after_proud_discipline ?? 6 });
+                                        await invoke("add_emotion_survey", { emotionalStateId: firstStateId, timestamp: now, ...buildEmotionSurveyInvokeArgs(sr) });
                                       } catch (err) { console.error("Failed to save emotion survey:", err); }
                                     }
                                     const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
@@ -6598,7 +6698,7 @@ export default function Journal() {
                                   setNewEmotionalStateTradeIndices([]);
                                   setShowAddEmotionalStateForm(false);
                                 }
-                              }} style={{ marginTop: "12px", padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ? "not-allowed" : "pointer", fontSize: "13px", fontWeight: "600", opacity: Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ? 0.6 : 1 }}>Add emotional state to entry</button>
+                              }} style={{ marginTop: "12px", padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "13px", fontWeight: "600" }}>Add emotional state to entry</button>
                             )}
                           </div>
                         )}
@@ -6808,7 +6908,7 @@ export default function Journal() {
                                     return first ? (
                                       <li key={first.timestamp} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
                                         <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>
-                                          {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group!.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
+                                          {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group!.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                         </span>
                                         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                                           <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--accent)", padding: "2px 6px", backgroundColor: "var(--bg-hover)", borderRadius: "4px" }}>Will link on save</span>
@@ -6835,7 +6935,7 @@ export default function Journal() {
                                         const first = group[0];
                                         return (
                                           <button key={first.timestamp} type="button" onClick={() => { setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: [...(prev.linked_emotional_state_ids ?? []), first.id], linked_emotional_state_link_scopes: { ...(prev.linked_emotional_state_link_scopes ?? {}), [first.id]: scope } })); setJournalLinksStateDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "10px 12px", textAlign: "left", fontSize: "13px", color: "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer" }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
-                                            {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
+                                            {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                           </button>
                                         );
                                       })}
@@ -6952,7 +7052,7 @@ export default function Journal() {
                                     return (
                                       <li key={first.timestamp} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
                                         <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>
-                                          {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
+                                          {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                         </span>
                                         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                           <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--accent)", padding: "2px 6px", backgroundColor: "var(--bg-hover)", borderRadius: "4px" }} title={scopeLabelLinks}>Linked · {scopeLabelLinks}</span>
@@ -7026,7 +7126,7 @@ export default function Journal() {
                                             onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }}
                                             onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
                                           >
-                                            {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
+                                            {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                           </button>
                                         );
                                       })}
@@ -7225,7 +7325,7 @@ export default function Journal() {
                                   >
                                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", flexWrap: "wrap", gap: "8px" }}>
                                       <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
-                                        {group.map((s) => (
+                                        {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => (
                                           <span key={s.id} style={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>
                                             {s.emotion} {s.intensity}/10
                                           </span>
@@ -7394,28 +7494,9 @@ export default function Journal() {
                                           if (shouldSaveSurvey && firstStateId != null) {
                                             try {
                                               await invoke("add_emotion_survey", {
-                                                emotional_state_id: firstStateId,
+                                                emotionalStateId: firstStateId,
                                                 timestamp: now,
-                                                before_calm_clear: sr.before_calm_clear ?? 6,
-                                                before_urgency_pressure: sr.before_urgency_pressure ?? 6,
-                                                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6,
-                                                before_fomo: sr.before_fomo ?? 6,
-                                                before_recovering_loss: sr.before_recovering_loss ?? 6,
-                                                before_patient_detached: sr.before_patient_detached ?? 6,
-                                                before_trust_process: sr.before_trust_process ?? 6,
-                                                before_emotional_state: sr.before_emotional_state ?? 6,
-                                                during_stable: sr.during_stable ?? 6,
-                                                during_tension_stress: sr.during_tension_stress ?? 6,
-                                                during_tempted_interfere: sr.during_tempted_interfere ?? 6,
-                                                during_need_control: sr.during_need_control ?? 6,
-                                                during_fear_loss: sr.during_fear_loss ?? 6,
-                                                during_excitement_greed: sr.during_excitement_greed ?? 6,
-                                                during_mentally_present: sr.during_mentally_present ?? 6,
-                                                after_accept_outcome: sr.after_accept_outcome ?? 6,
-                                                after_emotional_reaction: sr.after_emotional_reaction ?? 6,
-                                                after_confidence_affected: sr.after_confidence_affected ?? 6,
-                                                after_tempted_another_trade: sr.after_tempted_another_trade ?? 6,
-                                                after_proud_discipline: sr.after_proud_discipline ?? 6,
+                                                ...buildEmotionSurveyInvokeArgs(sr),
                                               });
                                             } catch (err) {
                                               console.error("Failed to save emotion survey:", err);
