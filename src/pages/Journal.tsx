@@ -48,6 +48,9 @@ import {
   linkSandboxEmotionalStatesToJournal,
   deleteSandboxEmotionalState,
   loadSandboxState,
+  updateSandboxEmotionalState,
+  deleteSandboxEmotionSurveysForStateIds,
+  upsertSandboxEmotionSurveyFromResponses,
 } from "../utils/sandboxStore";
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -260,6 +263,161 @@ function groupEmotionalStatesByTimestamp(states: JournalEmotionalState[]): Journ
   );
 }
 
+/** If multiple survey rows exist for chips in one group, use the newest (save/re-pin can leave duplicates). */
+function pickLatestSurveyForGroup(surveys: JournalEmotionSurvey[], groupStateIds: Set<number>): JournalEmotionSurvey | undefined {
+  const matching = surveys.filter((s) => groupStateIds.has(s.emotional_state_id));
+  if (matching.length === 0) return undefined;
+  return matching.reduce((a, b) => {
+    const ta = new Date(a.timestamp).getTime();
+    const tb = new Date(b.timestamp).getTime();
+    return tb >= ta ? b : a;
+  });
+}
+
+/** Flatten journal survey responses to the payload shape used by add/update_emotion_survey. */
+function buildEmotionSurveyFieldsFromResponses(sr: Record<string, number>) {
+  return {
+    before_calm_clear: sr.before_calm_clear ?? 6,
+    before_urgency_pressure: sr.before_urgency_pressure ?? 6,
+    before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6,
+    before_fomo: sr.before_fomo ?? 6,
+    before_recovering_loss: sr.before_recovering_loss ?? 6,
+    before_patient_detached: sr.before_patient_detached ?? 6,
+    before_trust_process: sr.before_trust_process ?? 6,
+    before_emotional_state: sr.before_emotional_state ?? 6,
+    during_stable: sr.during_stable ?? 6,
+    during_tension_stress: sr.during_tension_stress ?? 6,
+    during_tempted_interfere: sr.during_tempted_interfere ?? 6,
+    during_need_control: sr.during_need_control ?? 6,
+    during_fear_loss: sr.during_fear_loss ?? 6,
+    during_excitement_greed: sr.during_excitement_greed ?? 6,
+    during_mentally_present: sr.during_mentally_present ?? 6,
+    after_accept_outcome: sr.after_accept_outcome ?? 6,
+    after_emotional_reaction: sr.after_emotional_reaction ?? 6,
+    after_confidence_affected: sr.after_confidence_affected ?? 6,
+    after_tempted_another_trade: sr.after_tempted_another_trade ?? 6,
+    after_proud_discipline: sr.after_proud_discipline ?? 6,
+  };
+}
+
+function emotionalStateGroupKey(picked: JournalEmotionalState[]): string {
+  return picked
+    .map((s) => s.id)
+    .sort((a, b) => a - b)
+    .join(",");
+}
+
+function pickEmotionalGroupForTradeIndex(
+  tradeIndex: number,
+  tradesFormData: Array<{ id: number | null }>,
+  tradeIdsInOrder: number[],
+  freshStates: JournalEmotionalState[],
+  entryLevelGroup: JournalEmotionalState[] | undefined
+): JournalEmotionalState[] | null {
+  const t = tradesFormData[tradeIndex];
+  const journalTradeId = t.id ?? tradeIdsInOrder[tradeIndex] ?? null;
+  const tradeGroups = groupEmotionalStatesByTimestamp(
+    freshStates.filter((s) => journalTradeId != null && s.journal_trade_id === journalTradeId)
+  );
+  const picked = tradeGroups[0] ?? entryLevelGroup;
+  if (!picked || picked.length === 0) return null;
+  return picked;
+}
+
+/** Persist emotional state form edits (intensities + before/during/after survey sliders) for already-linked journal entries. */
+async function syncEmotionalStateFormEditsAfterJournalSave(
+  useSandbox: boolean,
+  entryId: number,
+  tradesFormData: Array<{ id: number | null }>,
+  tradeIdsInOrder: number[],
+  emotionalStateFormByTrade: Map<number, { selectedEmotions: Record<string, number>; notes: string; surveyResponses: Record<string, number> }>,
+  paperArgs: { paperOnly?: boolean },
+  activeTradeIndex: number
+): Promise<void> {
+  const nowSync = new Date().toISOString();
+  let freshStates: JournalEmotionalState[];
+  if (useSandbox) {
+    freshStates = getSandboxEmotionalStatesForJournal(entryId) as unknown as JournalEmotionalState[];
+  } else {
+    freshStates = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId, ...paperArgs });
+  }
+  const entryLevelGroups = groupEmotionalStatesByTimestamp(freshStates.filter((s) => s.journal_trade_id == null));
+  const entryLevelGroup = entryLevelGroups[0];
+
+  const activePicked = pickEmotionalGroupForTradeIndex(
+    activeTradeIndex,
+    tradesFormData,
+    tradeIdsInOrder,
+    freshStates,
+    entryLevelGroup
+  );
+  const activeGroupKey = activePicked ? emotionalStateGroupKey(activePicked) : null;
+
+  const syncedGroupKeys = new Set<string>();
+
+  for (let tradeIndex = 0; tradeIndex < tradesFormData.length; tradeIndex++) {
+    const picked = pickEmotionalGroupForTradeIndex(tradeIndex, tradesFormData, tradeIdsInOrder, freshStates, entryLevelGroup);
+    if (!picked) continue;
+    const gk = emotionalStateGroupKey(picked);
+    if (syncedGroupKeys.has(gk)) continue;
+    syncedGroupKeys.add(gk);
+
+    const formTradeIndex =
+      activeGroupKey != null && gk === activeGroupKey ? activeTradeIndex : tradeIndex;
+    let form = emotionalStateFormByTrade.get(formTradeIndex);
+    if (!form && formTradeIndex !== tradeIndex) form = emotionalStateFormByTrade.get(tradeIndex);
+    if (!form) continue;
+
+    const byEmotion = new Map(picked.map((s) => [s.emotion, s]));
+    for (const [emotion, intensity] of Object.entries(form.selectedEmotions)) {
+      const st = byEmotion.get(emotion);
+      if (!st?.id) continue;
+      if (useSandbox) {
+        updateSandboxEmotionalState(st.id, {
+          emotion,
+          intensity,
+          notes: form.notes || null,
+        });
+      } else {
+        await invoke("update_emotional_state", {
+          id: st.id,
+          emotion,
+          intensity,
+          notes: form.notes || null,
+          journalEntryId: st.journal_entry_id ?? entryId,
+          journalTradeId: st.journal_trade_id ?? null,
+        });
+      }
+    }
+
+    const sr = form.surveyResponses;
+    const surveyHasNonDefault = Object.values(JOURNAL_SURVEY_QUESTIONS)
+      .flat()
+      .some((q) => (sr[q.key] ?? 6) !== 6);
+    const shouldPersistSurvey =
+      surveyHasNonDefault || Object.keys(sr).length > 0;
+    if (!shouldPersistSurvey) continue;
+
+    const fields = buildEmotionSurveyFieldsFromResponses(sr);
+    const canonicalStateId = picked[0].id;
+    const pickedIds = picked.map((s) => s.id).filter((id): id is number => id != null);
+
+    if (useSandbox) {
+      deleteSandboxEmotionSurveysForStateIds(pickedIds);
+      upsertSandboxEmotionSurveyFromResponses(canonicalStateId, sr, nowSync);
+    } else {
+      for (const sid of pickedIds) {
+        await invoke("delete_emotion_survey_for_state", { emotional_state_id: sid });
+      }
+      await invoke("add_emotion_survey", {
+        emotional_state_id: canonicalStateId,
+        timestamp: nowSync,
+        ...fields,
+      });
+    }
+  }
+}
+
 /** Emotional state IDs that are linked to the given real trade (trade_id or trade_ids JSON). */
 function getEmotionalStateIdsForRealTrade(tradeId: number, states: JournalEmotionalState[]): number[] {
   const ids: number[] = [];
@@ -461,8 +619,14 @@ export default function Journal() {
   const [allJournalTrades, setAllJournalTrades] = useState<JournalTrade[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const isCreatingRef = useRef(isCreating);
+  const isEditingRef = useRef(isEditing);
+  useEffect(() => { isCreatingRef.current = isCreating; }, [isCreating]);
+  useEffect(() => { isEditingRef.current = isEditing; }, [isEditing]);
   const [activeTradeIndex, setActiveTradeIndex] = useState(0);
   const [activeTab, setActiveTab] = useState<TabType>("trade");
+  const selectedEntryIdRef = useRef<number | null>(null);
+  useEffect(() => { selectedEntryIdRef.current = selectedEntry?.id ?? null; }, [selectedEntry?.id]);
   // After a successful manual save, suppress background autosaves that could re-enter edit mode
   const [justSaved, setJustSaved] = useState(false);
   const justSavedRef = useRef(justSaved);
@@ -596,6 +760,10 @@ export default function Journal() {
   const [showAddEmotionalStateForm, setShowAddEmotionalStateForm] = useState(false);
   const DEFAULT_EMOTIONAL_STATE_FORM = useMemo(() => ({ selectedEmotions: {} as Record<string, number>, notes: "", surveyResponses: {} as Record<string, number> }), []);
   const [emotionalStateFormByTrade, setEmotionalStateFormByTrade] = useState<Map<number, { selectedEmotions: Record<string, number>; notes: string; surveyResponses: Record<string, number> }>>(new Map());
+  const emotionalStateFormByTradeRef = useRef(emotionalStateFormByTrade);
+  useEffect(() => {
+    emotionalStateFormByTradeRef.current = emotionalStateFormByTrade;
+  }, [emotionalStateFormByTrade]);
   const newEmotionalStateForm = useMemo(
     () => emotionalStateFormByTrade.get(activeTradeIndex) ?? DEFAULT_EMOTIONAL_STATE_FORM,
     [emotionalStateFormByTrade, activeTradeIndex, DEFAULT_EMOTIONAL_STATE_FORM]
@@ -772,9 +940,14 @@ export default function Journal() {
   const sectionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const leftPanelScrollRef = useRef<HTMLDivElement>(null);
   const isManualSaveInProgressRef = useRef(false);
+  /** When true, skip persisting draft (prevents effect cleanup from re-writing the old journal after clearWorkInProgress). */
+  const suppressWorkInProgressSaveRef = useRef(false);
+  /** Incremented when starting a new load or "+ Add Entry" so in-flight `loadEntry` cannot overwrite a fresh create form. */
+  const journalLoadTokenRef = useRef(0);
 
   // Save work-in-progress to localStorage
   const saveWorkInProgress = () => {
+    if (suppressWorkInProgressSaveRef.current) return;
     if (isCreating || isEditing) {
       const workInProgress = {
         entryFormData,
@@ -1129,7 +1302,7 @@ export default function Journal() {
           }
           return;
         }
-        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+        const paperArgs = { paperOnly: dataMode === "paper" };
         const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
           journalEntryId: selectedEntry.id,
           journalTradeId: jtId ?? undefined,
@@ -1190,7 +1363,7 @@ export default function Journal() {
           if (!cancelled) setViewEntryEmotionalStates(states);
           return;
         }
-        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+        const paperArgs = { paperOnly: dataMode === "paper" };
         const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
           journalEntryId: selectedEntry.id,
           ...paperArgs,
@@ -1247,7 +1420,7 @@ export default function Journal() {
           })));
           return;
         }
-        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+        const paperArgs = { paperOnly: dataMode === "paper" };
         const [states, trades] = await Promise.all([
           invoke<JournalEmotionalState[]>("get_emotional_states", paperArgs),
           invoke<{ id: number; symbol: string; side: string; timestamp: string; quantity: number; price: number }[]>("get_trades", paperArgs),
@@ -1375,14 +1548,17 @@ export default function Journal() {
     }
   };
 
-  const loadTrades = async (entryId: number): Promise<JournalTrade[]> => {
+  const loadTrades = async (entryId: number, opts?: { loadToken?: number }): Promise<JournalTrade[]> => {
+    const t = opts?.loadToken;
     try {
       if (dataMode === "sandbox") {
         const trades = getSandboxJournalTrades(entryId) as unknown as JournalTrade[];
+        if (t !== undefined && t !== journalLoadTokenRef.current) return trades;
         setSelectedTrades(trades);
         return trades;
       }
       const trades = await invoke<JournalTrade[]>("get_journal_trades", { journalEntryId: entryId });
+      if (t !== undefined && t !== journalLoadTokenRef.current) return trades;
       setSelectedTrades(trades);
       return trades;
     } catch (error) {
@@ -1391,14 +1567,17 @@ export default function Journal() {
     }
   };
 
-  const loadLinkedPairs = async (entryId: number) => {
+  const loadLinkedPairs = async (entryId: number, opts?: { loadToken?: number }) => {
+    const t = opts?.loadToken;
     try {
       if (dataMode === "sandbox") {
         const pairs = getSandboxJournalEntryPairsAsPairedTrades(entryId) as unknown as PairedTrade[];
+        if (t !== undefined && t !== journalLoadTokenRef.current) return;
         setLinkedPairs(pairs);
         return;
       }
       const pairs = await invoke<PairedTrade[]>("get_journal_entry_pairs", { journalEntryId: entryId });
+      if (t !== undefined && t !== journalLoadTokenRef.current) return;
       setLinkedPairs(pairs);
     } catch (error) {
       console.error("Error loading linked pairs:", error);
@@ -1452,7 +1631,7 @@ export default function Journal() {
       end.setDate(end.getDate() + 1);
       const startDate = start.toISOString();
       const endDate = end.toISOString();
-      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+      const paperArgs = { paperOnly: dataMode === "paper" };
       const groups = await invoke<Array<{ entry_trade: { id: number }; position_trades: Array<{ id?: number; symbol: string; side: string; quantity: number; price: number; timestamp: string; order_type?: string; status?: string; fees?: number | null; notes?: string | null; strategy_id?: number | null }> }>>("get_position_groups", { pairing_method: "FIFO", startDate, endDate, ...paperArgs });
       const group = groups.find(
         (g) =>
@@ -1589,13 +1768,29 @@ export default function Journal() {
   };
 
   const handleCreateNew = () => {
+    journalLoadTokenRef.current += 1;
+    setPendingRestoreEntryId(null);
+    suppressWorkInProgressSaveRef.current = true;
     clearWorkInProgress(); // Clear any old work in progress
     setIsCreating(true);
     setIsEditing(false);
     setSelectedEntry(null);
+    setJustSaved(false);
+    setEditHistory([]);
+    setOriginalEntryData(null);
+    setEmotionalStateFormByTrade(new Map());
+    setShowAddEmotionalStateForm(false);
+    setPendingEmotionalStates([]);
+    setNewEmotionalStateLinkScope("entry");
+    setNewEmotionalStateTradeIndices([]);
     setPendingLinkedPairs([]);
     localStorage.removeItem(`journal_selected_entry_id_${dataMode}`);
     setSelectedTrades([]);
+    setJournalEmotionalStates([]);
+    setViewEntryEmotionalStates([]);
+    setViewEntrySurveys([]);
+    setViewFocusedTradeIndex(0);
+    setSurveyScores(new Map());
     setJournalTradeActualTradeIds(new Map());
     setLinkActualTradesModalJournalTradeId(null);
     setPendingEmotionalStates([]);
@@ -1639,10 +1834,42 @@ export default function Journal() {
     setChecklistTradeAssociations(new Map());
     setLinkedPairs([]);
     tabScrollPositions.current.clear();
+    setTradeAssociationModalItemId(null);
+    setShowLinkPairsModal(false);
+    // Defer until after React runs effect cleanups (draft save) so suppress stays true for that save.
+    setTimeout(() => {
+      suppressWorkInProgressSaveRef.current = false;
+      if (journalScrollContainerRef.current) journalScrollContainerRef.current.scrollTop = 0;
+    }, 0);
+
+    // Defensive: if any in-flight async task re-applies the prior entry's trades after "+ Add Entry",
+    // force-reset the trade tabs/symbol row again as long as we're still creating a new entry.
+    setTimeout(() => {
+      if (!isCreatingRef.current) return;
+      if (isEditingRef.current) return;
+      if (selectedEntryIdRef.current != null) return;
+      setTradesFormData([{
+        id: null,
+        symbol: "",
+        position: "",
+        timeframe: "",
+        entry_type: "",
+        exit_type: "",
+        trade: "",
+        what_went_well: "",
+        what_could_be_improved: "",
+        emotional_state: "",
+        notes: "",
+        outcome: "None",
+        trade_order: 0,
+      }]);
+      setActiveTradeIndex(0);
+    }, 150);
   };
 
   const handleEdit = async () => {
     if (selectedEntry) {
+      const editLoadToken = ++journalLoadTokenRef.current;
       setIsEditing(true);
       setIsCreating(false);
       setJustSaved(false);
@@ -1664,19 +1891,21 @@ export default function Journal() {
         linked_emotional_state_ids: [], // synced when Links/Emotional State tab loads journalEmotionalStates
         linked_emotional_state_link_scopes: {},
       });
-      const loadedTrades = await loadTrades(selectedEntry.id);
-      await loadTrades(selectedEntry.id);
-      await loadLinkedPairs(selectedEntry.id);
+      const loadedTrades = await loadTrades(selectedEntry.id, { loadToken: editLoadToken });
+      if (editLoadToken !== journalLoadTokenRef.current) return;
+      await loadLinkedPairs(selectedEntry.id, { loadToken: editLoadToken });
+      if (editLoadToken !== journalLoadTokenRef.current) return;
       if (selectedEntry.strategy_id) {
         await loadStrategyChecklists(selectedEntry.strategy_id);
+        if (editLoadToken !== journalLoadTokenRef.current) return;
         await loadChecklistResponses(selectedEntry.id, selectedEntry.strategy_id, loadedTrades);
+        if (editLoadToken !== journalLoadTokenRef.current) return;
       }
       try {
         if (dataMode === "sandbox") {
           const states = getSandboxEmotionalStatesForJournal(selectedEntry.id) as unknown as JournalEmotionalState[];
           const allSurveys = getSandboxEmotionSurveys() as unknown as JournalEmotionSurvey[];
-          const surveysByStateId = new Map<number, JournalEmotionSurvey>();
-          for (const sv of allSurveys) surveysByStateId.set(sv.emotional_state_id, sv);
+          if (editLoadToken !== journalLoadTokenRef.current) return;
           setJournalEmotionalStates(states);
           const entryLevelGroups = groupEmotionalStatesByTimestamp(states.filter((s) => s.journal_trade_id == null));
           const entryLevelGroup = entryLevelGroups[0];
@@ -1689,7 +1918,7 @@ export default function Journal() {
             picked.forEach((s) => {
               selectedEmotions[s.emotion] = s.intensity;
             });
-            const survey = picked.map((s) => surveysByStateId.get(s.id)).find((sv): sv is JournalEmotionSurvey => sv != null);
+            const survey = pickLatestSurveyForGroup(allSurveys, new Set(picked.map((s) => s.id)));
             const surveyResponses: Record<string, number> = {};
             if (survey) {
               for (const q of [...JOURNAL_SURVEY_QUESTIONS.before, ...JOURNAL_SURVEY_QUESTIONS.during, ...JOURNAL_SURVEY_QUESTIONS.after]) {
@@ -1706,13 +1935,12 @@ export default function Journal() {
           setEmotionalStateFormByTrade(nextForms);
           setShowAddEmotionalStateForm(nextForms.size > 0);
         } else {
-          const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+          const paperArgs = { paperOnly: dataMode === "paper" };
           const [states, allSurveys] = await Promise.all([
             invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry.id, ...paperArgs }),
             invoke<JournalEmotionSurvey[]>("get_all_emotion_surveys"),
           ]);
-          const surveysByStateId = new Map<number, JournalEmotionSurvey>();
-          for (const sv of allSurveys) surveysByStateId.set(sv.emotional_state_id, sv);
+          if (editLoadToken !== journalLoadTokenRef.current) return;
           setJournalEmotionalStates(states);
           const entryLevelGroups = groupEmotionalStatesByTimestamp(states.filter((s) => s.journal_trade_id == null));
           const entryLevelGroup = entryLevelGroups[0];
@@ -1725,7 +1953,7 @@ export default function Journal() {
             picked.forEach((s) => {
               selectedEmotions[s.emotion] = s.intensity;
             });
-            const survey = picked.map((s) => surveysByStateId.get(s.id)).find((sv): sv is JournalEmotionSurvey => sv != null);
+            const survey = pickLatestSurveyForGroup(allSurveys, new Set(picked.map((s) => s.id)));
             const surveyResponses: Record<string, number> = {};
             if (survey) {
               for (const q of [...JOURNAL_SURVEY_QUESTIONS.before, ...JOURNAL_SURVEY_QUESTIONS.during, ...JOURNAL_SURVEY_QUESTIONS.after]) {
@@ -1743,9 +1971,12 @@ export default function Journal() {
           setShowAddEmotionalStateForm(nextForms.size > 0);
         }
       } catch {
+        if (editLoadToken !== journalLoadTokenRef.current) return;
         setEmotionalStateFormByTrade(new Map());
       }
-      
+
+      if (editLoadToken !== journalLoadTokenRef.current) return;
+
       // Convert trades to form data (use loadedTrades, not selectedTrades - state updates are async)
       const tradesData: Array<{
         id: number | null;
@@ -1795,6 +2026,11 @@ export default function Journal() {
         });
       }
       
+      // Re-check token immediately before applying state.
+      // The token can change while we're doing synchronous mapping/push work,
+      // and we want "+ Add Entry" to always win.
+      if (editLoadToken !== journalLoadTokenRef.current) return;
+      
       setTradesFormData(tradesData);
       setActiveTradeIndex(0);
       setActiveTab("trade");
@@ -1803,6 +2039,7 @@ export default function Journal() {
       const assocMap = new Map<number, number[]>();
       for (const jt of loadedTrades) {
         if (jt.id != null) {
+          if (editLoadToken !== journalLoadTokenRef.current) return;
           try {
             const ids = await invoke<number[]>("get_journal_trade_actual_trade_ids", { journalTradeId: jt.id });
             assocMap.set(jt.id, ids);
@@ -1811,8 +2048,9 @@ export default function Journal() {
           }
         }
       }
+      if (editLoadToken !== journalLoadTokenRef.current) return;
       setJournalTradeActualTradeIds(assocMap);
-      
+
       // Store initial state for undo
       const initialState = {
         entry: {
@@ -1886,7 +2124,7 @@ export default function Journal() {
           }
           const jtId = tradesFormData[activeTradeIndex]?.id ?? null;
           if (selectedEntry?.id != null) {
-            const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+            const paperArgs = { paperOnly: dataMode === "paper" };
             const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
               journalEntryId: selectedEntry.id,
               journalTradeId: jtId ?? undefined,
@@ -2378,12 +2616,8 @@ export default function Journal() {
         return;
       }
 
-      // In real/paper mode, close the editor immediately for existing entries.
-      // (Closing later can feel broken if the server work for checklist/emotional states is slow.)
-      if (dataMode !== "sandbox" && selectedEntry && !wasCreatingAtStart) {
-        setIsCreating(false);
-        setIsEditing(false);
-      }
+      // Capture emotional state + survey sliders before any await/setState so save cannot lose in-progress edits.
+      const emotionalStateSnapshotForSave = new Map(emotionalStateFormByTradeRef.current);
 
       if (dataMode === "sandbox") {
         // Keep sandbox save path lightweight but align UX with real-mode save:
@@ -2402,8 +2636,26 @@ export default function Journal() {
         await autoSave({ isManualSave: true });
 
         if (selectedEntry) {
-          await loadTrades(selectedEntry.id);
+          const loadedTradesList = await loadTrades(selectedEntry.id);
           await loadLinkedPairs(selectedEntry.id);
+          try {
+            const sortedLoaded = [...loadedTradesList].sort((a, b) => (a.trade_order ?? 0) - (b.trade_order ?? 0));
+            const tradesForSync = tradesFormData.map((td, i) => ({
+              id: td.id ?? sortedLoaded[i]?.id ?? null,
+            }));
+            const tradeIdsForSync = sortedLoaded.map((t) => t.id);
+            await syncEmotionalStateFormEditsAfterJournalSave(
+              true,
+              selectedEntry.id,
+              tradesForSync,
+              tradeIdsForSync,
+              emotionalStateSnapshotForSave,
+              {},
+              activeTradeIndex
+            );
+          } catch (e) {
+            console.error("Failed to sync emotional state form edits (sandbox):", e);
+          }
         }
 
         // Close the edit UI as soon as core sandbox persistence finishes.
@@ -2549,16 +2801,6 @@ export default function Journal() {
         }
       }
 
-      // Exit edit UI immediately after core journal/trade + checklist persistence.
-      // Emotional-state and other follow-up saves can take longer, and the user
-      // expects the journal edit panel to close right away (like demo mode).
-      setIsCreating(false);
-      setIsEditing(false);
-      setEditHistory([]);
-      setOriginalEntryData(null);
-      setJustSaved(true);
-      clearWorkInProgress();
-
       // Persist emotional states: pending list + any form-in-progress (one state per trade or one for entire entry)
       const toPersist: Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string; surveyResponses?: Record<string, number> }> = [...pendingEmotionalStates];
       const hasFormContent = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 || (newEmotionalStateForm.notes || "").trim() !== "";
@@ -2571,7 +2813,7 @@ export default function Journal() {
           }
         }
       }
-      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+      const paperArgs = { paperOnly: dataMode === "paper" };
       const allStatesForEntry = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId, ...paperArgs });
       const deleteGroup = async (group: JournalEmotionalState[]) => {
         for (const s of group) await invoke("delete_emotional_state", { id: s.id });
@@ -2654,6 +2896,30 @@ export default function Journal() {
           console.error(e);
         }
       }
+
+      try {
+        await syncEmotionalStateFormEditsAfterJournalSave(
+          false,
+          entryId,
+          tradesFormData,
+          tradeIdsInOrder,
+          emotionalStateSnapshotForSave,
+          paperArgs,
+          activeTradeIndex
+        );
+      } catch (e) {
+        console.error("Failed to sync emotional state form edits:", e);
+      }
+
+      // Exit edit UI only after emotional state + survey rows are persisted so view-mode effects
+      // (get_emotional_states_for_journal) do not load stale data before sync finishes.
+      setIsCreating(false);
+      setIsEditing(false);
+      setEditHistory([]);
+      setOriginalEntryData(null);
+      setJustSaved(true);
+      clearWorkInProgress();
+
       if (toPersist.length > 0) {
         setShowAddEmotionalStateForm(false);
         setNewEmotionalStateForm({ selectedEmotions: {}, notes: "", surveyResponses: {} });
@@ -2757,10 +3023,12 @@ export default function Journal() {
   };
 
   const loadEntry = async (id: number, options?: { skipTradesFormDataSync?: boolean; restoredTradesCount?: number; openTradeId?: number }) => {
+    const token = ++journalLoadTokenRef.current;
     try {
       if (dataMode === "sandbox") {
         const entry = getSandboxJournalEntry(id) as unknown as JournalEntry | null;
         if (!entry) return;
+        if (token !== journalLoadTokenRef.current) return;
         setSelectedEntry(entry);
         let linkedTradeIds: number[] = [];
         if (entry.linked_trade_ids) {
@@ -2771,12 +3039,14 @@ export default function Journal() {
         }
         setEntryFormData((prev) => ({ ...prev, date: entry.date, title: entry.title, strategy_id: entry.strategy_id, linked_trade_ids: linkedTradeIds }));
         localStorage.setItem(`journal_selected_entry_id_${dataMode}`, id.toString());
-        const loadedTrades = await loadTrades(id);
+        const loadedTrades = await loadTrades(id, { loadToken: token });
+        if (token !== journalLoadTokenRef.current) return;
         if (options?.openTradeId != null && loadedTrades.length > 0) {
           const idx = loadedTrades.findIndex((t) => t.id === options.openTradeId);
           if (idx >= 0) setActiveTradeIndex(idx);
         }
-        await loadLinkedPairs(id);
+        await loadLinkedPairs(id, { loadToken: token });
+        if (token !== journalLoadTokenRef.current) return;
         const shouldSyncTrades = !options?.skipTradesFormDataSync || (options?.restoredTradesCount != null && loadedTrades.length < options.restoredTradesCount);
         if (shouldSyncTrades) {
           setTradesFormData(loadedTrades.map((t, i) => ({
@@ -2798,6 +3068,7 @@ export default function Journal() {
         return;
       }
       const entry = await invoke<JournalEntry>("get_journal_entry", { id });
+      if (token !== journalLoadTokenRef.current) return;
       setSelectedEntry(entry);
       let linkedTradeIds: number[] = [];
       if (entry.linked_trade_ids) {
@@ -2817,7 +3088,8 @@ export default function Journal() {
       }));
       // Save selected entry ID to localStorage (per mode)
       localStorage.setItem(`journal_selected_entry_id_${dataMode}`, id.toString());
-      const loadedTrades = await loadTrades(id);
+      const loadedTrades = await loadTrades(id, { loadToken: token });
+      if (token !== journalLoadTokenRef.current) return;
       if (options?.openTradeId != null && loadedTrades.length > 0) {
         const idx = loadedTrades.findIndex((t) => t.id === options.openTradeId);
         if (idx >= 0) setActiveTradeIndex(idx);
@@ -2868,19 +3140,23 @@ export default function Journal() {
             trade_order: 0,
           });
         }
+        if (token !== journalLoadTokenRef.current) return;
         setTradesFormData(tradesData);
         setActiveTradeIndex(0);
       }
-      await loadTrades(id);
-      await loadLinkedPairs(id);
+      await loadLinkedPairs(id, { loadToken: token });
+      if (token !== journalLoadTokenRef.current) return;
       if (entry.strategy_id) {
         await loadStrategyChecklists(entry.strategy_id);
+        if (token !== journalLoadTokenRef.current) return;
         await loadChecklistResponses(id, entry.strategy_id);
+        if (token !== journalLoadTokenRef.current) return;
       }
-      
+
       // Restore scroll positions after entry is loaded (entry-specific)
       // Use multiple attempts to ensure DOM is ready
       const restoreScroll = (attempt = 0) => {
+        if (token !== journalLoadTokenRef.current) return;
         const storageKey = `journal_entry_${id}`;
         const scrollState = restoreAllScrollPositions(storageKey);
         // Restore tab scroll positions to the ref
@@ -2911,7 +3187,7 @@ export default function Journal() {
           setTimeout(() => restoreScroll(attempt + 1), 100);
         }
       };
-      
+
       setTimeout(() => restoreScroll(), 200);
     } catch (error) {
       console.error("Error loading entry:", error);
@@ -4985,7 +5261,7 @@ export default function Journal() {
                                           const isCardFocused = targetTradeIndex === (viewFocusedTradeIndex ?? 0);
                                           const notes = first.notes;
                                           const groupStateIds = new Set(group.map((s) => s.id));
-                                          const survey = viewEntrySurveys.find((s) => groupStateIds.has(s.emotional_state_id));
+                                          const survey = pickLatestSurveyForGroup(viewEntrySurveys, groupStateIds);
                                           return (
                                             <div
                                               key={first.timestamp}
@@ -6265,7 +6541,7 @@ export default function Journal() {
                                 if (savedEntry) {
                                   try {
                                     const now = new Date().toISOString();
-                                    const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+                                    const paperArgs = { paperOnly: dataMode === "paper" };
                                     const allStates = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
                                     const deleteGroup = async (group: JournalEmotionalState[]) => { for (const s of group) await invoke("delete_emotional_state", { id: s.id }); };
                                     let firstStateId: number | null = null;
@@ -6685,7 +6961,7 @@ export default function Journal() {
                                             onClick={async () => {
                                               try {
                                                 await invoke("remove_journal_entry_from_emotional_states", { journalEntryId: selectedEntry!.id, emotionalStateIds: group.map((s) => s.id) });
-                                                const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+                                                const paperArgs = { paperOnly: dataMode === "paper" };
                                                 const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id, ...paperArgs });
                                                 setJournalEmotionalStates(states);
                                                 const groups = groupEmotionalStatesByTimestamp(states);
@@ -6731,7 +7007,7 @@ export default function Journal() {
                                                 await invoke("add_journal_entry_to_emotional_states", { journalEntryId: selectedEntry!.id, emotionalStateIds: ids });
                                                 const jtId = linkExistingEmotionalStateScope === "entry" ? null : (linkExistingEmotionalStateTradeIndex != null ? tradesFormData[linkExistingEmotionalStateTradeIndex]?.id ?? null : null);
                                                 await invoke("link_emotional_states_to_journal", { emotionalStateIds: ids, journalEntryId: selectedEntry!.id, journalTradeId: jtId ?? undefined });
-                                                const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+                                                const paperArgs = { paperOnly: dataMode === "paper" };
                                                 const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id, ...paperArgs });
                                                 setJournalEmotionalStates(states);
                                                 const grps = groupEmotionalStatesByTimestamp(states);
@@ -7065,7 +7341,7 @@ export default function Journal() {
                                       if (savedEntry) {
                                         try {
                                           const now = new Date().toISOString();
-                                          const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+                                          const paperArgs = { paperOnly: dataMode === "paper" };
                                           const allStates = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
                                           const deleteGroup = async (group: JournalEmotionalState[]) => {
                                             for (const s of group) {

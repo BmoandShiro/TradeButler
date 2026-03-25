@@ -2151,9 +2151,10 @@ fn emotional_states_paper_clause(conn: &rusqlite::Connection, paper_only: Option
     if !has_is_paper {
         return String::new();
     }
+    // NULL is_paper (legacy rows) = live; paper trades are explicitly is_paper = 1
     match paper_only {
-        Some(true) => " WHERE is_paper = 1".to_string(),
-        Some(false) | None => " WHERE is_paper = 0".to_string(),
+        Some(true) => " WHERE COALESCE(is_paper, 0) = 1".to_string(),
+        Some(false) | None => " WHERE COALESCE(is_paper, 0) = 0".to_string(),
     }
 }
 
@@ -2272,8 +2273,8 @@ pub fn get_emotional_states_for_journal(
     ).unwrap_or(0) > 0;
     let and_paper = if has_is_paper {
         match paper_only {
-            Some(true) => " AND is_paper = 1",
-            Some(false) | None => " AND is_paper = 0",
+            Some(true) => " AND COALESCE(is_paper, 0) = 1",
+            Some(false) | None => " AND COALESCE(is_paper, 0) = 0",
         }
     } else {
         ""
@@ -2496,6 +2497,93 @@ pub fn add_emotion_survey(
     ).map_err(|e| e.to_string())?;
     
     Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+pub fn update_emotion_survey(
+    emotional_state_id: i64,
+    timestamp: String,
+    before_calm_clear: i32,
+    before_urgency_pressure: i32,
+    before_confidence_vs_validation: i32,
+    before_fomo: i32,
+    before_recovering_loss: i32,
+    before_patient_detached: i32,
+    before_trust_process: i32,
+    before_emotional_state: i32,
+    during_stable: i32,
+    during_tension_stress: i32,
+    during_tempted_interfere: i32,
+    during_need_control: i32,
+    during_fear_loss: i32,
+    during_excitement_greed: i32,
+    during_mentally_present: i32,
+    after_accept_outcome: i32,
+    after_emotional_reaction: i32,
+    after_confidence_affected: i32,
+    after_tempted_another_trade: i32,
+    after_proud_discipline: i32,
+) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+
+    let n = conn
+        .execute(
+            "UPDATE emotion_surveys SET timestamp = ?2,
+            before_calm_clear = ?3, before_urgency_pressure = ?4, before_confidence_vs_validation = ?5,
+            before_fomo = ?6, before_recovering_loss = ?7, before_patient_detached = ?8,
+            before_trust_process = ?9, before_emotional_state = ?10,
+            during_stable = ?11, during_tension_stress = ?12, during_tempted_interfere = ?13,
+            during_need_control = ?14, during_fear_loss = ?15, during_excitement_greed = ?16,
+            during_mentally_present = ?17,
+            after_accept_outcome = ?18, after_emotional_reaction = ?19, after_confidence_affected = ?20,
+            after_tempted_another_trade = ?21, after_proud_discipline = ?22
+            WHERE emotional_state_id = ?1",
+            params![
+                emotional_state_id,
+                timestamp,
+                before_calm_clear,
+                before_urgency_pressure,
+                before_confidence_vs_validation,
+                before_fomo,
+                before_recovering_loss,
+                before_patient_detached,
+                before_trust_process,
+                before_emotional_state,
+                during_stable,
+                during_tension_stress,
+                during_tempted_interfere,
+                during_need_control,
+                during_fear_loss,
+                during_excitement_greed,
+                during_mentally_present,
+                after_accept_outcome,
+                after_emotional_reaction,
+                after_confidence_affected,
+                after_tempted_another_trade,
+                after_proud_discipline,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+    if n == 0 {
+        return Err("No emotion survey row found for this emotional state".to_string());
+    }
+
+    Ok(())
+}
+
+/// Removes all survey rows for this emotional state (handles duplicates / re-pinning to another chip id).
+#[tauri::command]
+pub fn delete_emotion_survey_for_state(emotional_state_id: i64) -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM emotion_surveys WHERE emotional_state_id = ?1",
+        params![emotional_state_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2874,9 +2962,8 @@ pub fn get_journal_entries(paper_only: Option<bool>) -> Result<Vec<JournalEntry>
 
     let paper_filter = if has_is_paper {
         match paper_only {
-            Some(true) => " WHERE is_paper = 1",
-            Some(false) => " WHERE is_paper = 0",
-            None => " WHERE is_paper = 0",
+            Some(true) => " WHERE COALESCE(is_paper, 0) = 1",
+            Some(false) | None => " WHERE COALESCE(is_paper, 0) = 0",
         }
     } else {
         ""
