@@ -38,6 +38,135 @@ const JOURNAL_INDICATOR_VALUES_KEY = "tradebutler_journal_indicator_values_v1";
 const JOURNAL_INDICATOR_DIVERGENCE_KEY = "tradebutler_journal_indicator_divergence_v1";
 const JOURNAL_INDICATOR_OTHER_SIGNALS_KEY = "tradebutler_journal_indicator_other_signals_v1";
 const JOURNAL_TRADE_PATTERN_INDICATOR_IDS_KEY = "tradebutler_journal_trade_pattern_indicator_ids_v1";
+const JOURNAL_INDICATOR_MA_FLAGS_KEY = "tradebutler_journal_indicator_ma_flags_v1";
+
+// Default moving average lengths shown for EMA/MA signals when no user config exists yet.
+const DEFAULT_MOVING_AVERAGE_LENGTHS = [50, 100, 200, 500];
+
+const EMA_DEFAULT_LENGTHS_CONFIG_KEY = "tradebutler_ema_default_lengths_config_v1";
+const MA_DEFAULT_LENGTHS_CONFIG_KEY = "tradebutler_ma_default_lengths_config_v1";
+
+// Legacy shared CSV key (pre per-indicator config + pre enabled/disabled support).
+const LEGACY_MOVING_AVERAGE_DEFAULT_LENGTHS_KEY = "tradebutler_ma_default_lengths_v1";
+
+function parsePositiveNumberCsv(csv: string): number[] {
+  const parts = csv
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const out: number[] = [];
+  const seen = new Set<number>();
+  for (const p of parts) {
+    const n = Number(p);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    // Keep integers for cleaner labels / consistent charting.
+    const asInt = Math.trunc(n);
+    if (asInt <= 0) continue;
+    if (seen.has(asInt)) continue;
+    seen.add(asInt);
+    out.push(asInt);
+  }
+  return out;
+}
+
+function parsePositiveNumberCsvPreserveOrder(csv: string): number[] {
+  const parts = csv
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const out: number[] = [];
+  for (const p of parts) {
+    const n = Number(p);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    const asInt = Math.trunc(n);
+    if (asInt <= 0) continue;
+    out.push(asInt);
+  }
+  return out;
+}
+
+export type MovingAverageLengthConfigItem = { len: number; enabled: boolean };
+
+function dedupePositiveIntPreserveOrder(nums: number[]): number[] {
+  const out: number[] = [];
+  const seen = new Set<number>();
+  for (const n of nums) {
+    if (!Number.isFinite(n) || n <= 0) continue;
+    const asInt = Math.trunc(n);
+    if (asInt <= 0) continue;
+    if (seen.has(asInt)) continue;
+    seen.add(asInt);
+    out.push(asInt);
+  }
+  return out;
+}
+
+function parseLegacyCsvLengths(raw: string | null): number[] | null {
+  if (!raw || !raw.trim()) return null;
+  const nums = parsePositiveNumberCsv(raw);
+  return nums.length ? dedupePositiveIntPreserveOrder(nums) : null;
+}
+
+function parseMovingAverageConfigJson(raw: string | null): MovingAverageLengthConfigItem[] | null {
+  if (!raw || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+
+    const out: MovingAverageLengthConfigItem[] = [];
+    const seen = new Set<number>();
+    for (const item of parsed) {
+      const len =
+        typeof item === "number"
+          ? item
+          : item && typeof item === "object" && "len" in item
+            ? (item as any).len
+            : typeof item === "string"
+              ? Number(item)
+              : null;
+      const asNum = typeof len === "number" ? len : Number(len);
+      if (!Number.isFinite(asNum) || Number.isNaN(asNum)) continue;
+      const asInt = Math.trunc(asNum);
+      if (asInt <= 0) continue;
+      if (seen.has(asInt)) continue;
+      seen.add(asInt);
+      const enabled =
+        typeof item === "object" && item !== null && "enabled" in (item as any) ? Boolean((item as any).enabled) : true;
+      out.push({ len: asInt, enabled });
+    }
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadMovingAverageLengthsConfig(indicatorId: "ema" | "ma"): MovingAverageLengthConfigItem[] {
+  const key = indicatorId === "ema" ? EMA_DEFAULT_LENGTHS_CONFIG_KEY : MA_DEFAULT_LENGTHS_CONFIG_KEY;
+  if (typeof window !== "undefined") {
+    try {
+      const raw = window.localStorage.getItem(key);
+      const parsed = parseMovingAverageConfigJson(raw);
+      if (parsed) return parsed;
+
+      // Legacy CSV (shared between ema/ma).
+      const legacyRaw = window.localStorage.getItem(LEGACY_MOVING_AVERAGE_DEFAULT_LENGTHS_KEY);
+      const legacyNums = parseLegacyCsvLengths(legacyRaw);
+      if (legacyNums) return legacyNums.map((n) => ({ len: n, enabled: true }));
+    } catch {
+      /* ignore */
+    }
+  }
+  return DEFAULT_MOVING_AVERAGE_LENGTHS.map((n) => ({ len: n, enabled: true }));
+}
+
+export function loadMovingAverageDefaultLengthsCsv(indicatorId: "ema" | "ma"): string {
+  const cfg = loadMovingAverageLengthsConfig(indicatorId);
+  return cfg.map((c) => c.len).join(",");
+}
+
+export function loadMovingAverageLengthsConfigForIndicator(indicatorId: "ema" | "ma"): MovingAverageLengthConfigItem[] {
+  return loadMovingAverageLengthsConfig(indicatorId);
+}
 
 const BUILTIN_ACCENT_COLORS = ["#7C3AED", "#2563EB", "#0EA5E9", "#10B981", "#F59E0B", "#EF4444", "#EC4899", "#22C55E"];
 const CUSTOM_ACCENT_COLOR = "#F59E0B";
@@ -1560,6 +1689,15 @@ const BUILTIN_INDICATORS: Array<Omit<Indicator, "createdAt">> = [
     code: "// Divergence template (conceptual)\n",
   },
   {
+    id: "harmonics",
+    name: "Harmonic Patterns",
+    abbreviation: "Harm",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Harmonic pattern concept (e.g. Gartley/Bat/Butterfly) and PRZ level mapping.",
+    code: "// Harmonic Patterns template (conceptual)\n",
+  },
+  {
     id: "ascending_triangle",
     name: "Ascending Triangle",
     abbreviation: "AscTri",
@@ -2243,6 +2381,45 @@ export function loadJournalIndicatorValue(
 ): string {
   const data = safeParse<JournalIndicatorValuesMap>(localStorage.getItem(JOURNAL_INDICATOR_VALUES_KEY), {});
   const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}`;
+  const id = indicatorId.toLowerCase();
+  if (id === "ema" || id === "ma") {
+    const cfg = loadMovingAverageLengthsConfig(id);
+    const defaultsParts = cfg.map((c) => String(c.len));
+
+    const stored = data[key];
+    const storedNums =
+      typeof stored === "string" && stored.trim().length > 0 ? parsePositiveNumberCsvPreserveOrder(stored) : [];
+
+    const mergedParts = defaultsParts.map((d, i) => {
+      // If a length is disabled, force it back to its default value
+      // (and therefore hide it in the Journal without requiring user input).
+      if (!cfg[i]?.enabled) return d;
+      return storedNums[i] != null ? String(storedNums[i]) : d;
+    });
+
+    return mergedParts.join(",");
+  }
+
+  const stored = data[key];
+  if (typeof stored === "string" && stored.trim().length > 0) return stored;
+
+  return "";
+}
+
+/**
+ * Loads the exact stored indicator value (no EMA/MA default fallback).
+ * Used for UI cases where we want inputs to start blank unless the user typed something.
+ */
+export function loadJournalIndicatorValueRaw(
+  mode: DataMode,
+  entryId: number,
+  tradeIndex: number,
+  phase: IndicatorPhase,
+  indicatorId: string,
+  timeframe: string
+): string {
+  const data = safeParse<JournalIndicatorValuesMap>(localStorage.getItem(JOURNAL_INDICATOR_VALUES_KEY), {});
+  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}`;
   return data[key] ?? "";
 }
 
@@ -2294,6 +2471,58 @@ export function loadJournalIndicatorDivergence(
   const data = safeParse<JournalIndicatorDivergenceMap>(localStorage.getItem(JOURNAL_INDICATOR_DIVERGENCE_KEY), {});
   const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}`;
   return !!data[key];
+}
+
+export type JournalIndicatorMaFlags = { crossing: boolean; coiling: boolean };
+
+type JournalIndicatorMaFlagsMap = Record<string, JournalIndicatorMaFlags>;
+
+export function loadJournalIndicatorMaFlags(
+  mode: DataMode,
+  entryId: number,
+  tradeIndex: number,
+  phase: IndicatorPhase,
+  indicatorId: string,
+  timeframe: string
+): JournalIndicatorMaFlags {
+  const data = safeParse<JournalIndicatorMaFlagsMap>(localStorage.getItem(JOURNAL_INDICATOR_MA_FLAGS_KEY), {});
+  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}`;
+  const stored = data[key];
+  if (stored && typeof stored === "object") {
+    return { crossing: !!(stored as any).crossing, coiling: !!(stored as any).coiling };
+  }
+
+  // Back-compat: older builds stored global per-indicator flags (not per timeframe).
+  try {
+    const legacyKey = `tradebutler_${indicatorId}_crossing_coiling_flags_v1`;
+    const raw = typeof window !== "undefined" ? window.localStorage.getItem(legacyKey) : null;
+    if (!raw) return { crossing: false, coiling: false };
+    const parsed = JSON.parse(raw);
+    const crossing = Boolean(parsed?.crossing) || Boolean(parsed?.bullishCross) || Boolean(parsed?.bearishCross);
+    return { crossing, coiling: Boolean(parsed?.coiling) };
+  } catch {
+    return { crossing: false, coiling: false };
+  }
+}
+
+export function setJournalIndicatorMaFlags(
+  mode: DataMode,
+  entryId: number,
+  tradeIndex: number,
+  phase: IndicatorPhase,
+  indicatorId: string,
+  timeframe: string,
+  flags: JournalIndicatorMaFlags
+) {
+  const data = safeParse<JournalIndicatorMaFlagsMap>(localStorage.getItem(JOURNAL_INDICATOR_MA_FLAGS_KEY), {});
+  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}`;
+  const clean: JournalIndicatorMaFlags = { crossing: !!flags.crossing, coiling: !!flags.coiling };
+  if (!clean.crossing && !clean.coiling) {
+    delete data[key];
+  } else {
+    data[key] = clean;
+  }
+  localStorage.setItem(JOURNAL_INDICATOR_MA_FLAGS_KEY, JSON.stringify(data));
 }
 
 export function setJournalIndicatorDivergence(

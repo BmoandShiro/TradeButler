@@ -37,6 +37,42 @@ function hexToRgba(hex: string, alpha: number): string {
 
 export default function IndicatorsPage({ view = "signals" }: { view?: SignalsView }) {
   const FAVORITES_KEY = "tradebutler_favorite_indicators_v1";
+  const EMA_DEFAULT_LENGTHS_CONFIG_KEY = "tradebutler_ema_default_lengths_config_v1";
+  const MA_DEFAULT_LENGTHS_CONFIG_KEY = "tradebutler_ma_default_lengths_config_v1";
+  const LEGACY_MOVING_AVERAGE_DEFAULT_LENGTHS_KEY = "tradebutler_ma_default_lengths_v1";
+  const MA_DEFAULT_LENGTHS_FALLBACK = ["50", "100", "200", "500"];
+
+  type LengthChip = { len: string; enabled: boolean };
+  type MovingAverageFlags = { bullishCross: boolean; bearishCross: boolean; coiling: boolean };
+
+  const parseLengthsCsv = (csv: string): string[] => {
+    const parts = csv
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const p of parts) {
+      const n = Number(p);
+      if (!Number.isFinite(n) || n <= 0) continue;
+      const asInt = String(Math.trunc(n));
+      if (asInt === "0") continue;
+      if (seen.has(asInt)) continue;
+      seen.add(asInt);
+      out.push(asInt);
+    }
+    return out.length ? out : MA_DEFAULT_LENGTHS_FALLBACK;
+  };
+
+  const normalizeLengthValue = (raw: string): string | null => {
+    const t = raw.trim();
+    if (!t) return null;
+    const n = Number(t);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const asInt = Math.trunc(n);
+    if (asInt <= 0) return null;
+    return String(asInt);
+  };
 
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all"); // "all" | "custom" | "Momentum" | ...
@@ -99,6 +135,105 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
   const [editThumbSource, setEditThumbSource] = useState<"upload" | "preset">("preset");
   const [editThumbPresetId, setEditThumbPresetId] = useState<string>("rsi");
   const [showThumbGallery, setShowThumbGallery] = useState(false);
+
+  const [maDefaultLengths, setMaDefaultLengths] = useState<LengthChip[]>(
+    MA_DEFAULT_LENGTHS_FALLBACK.map((len) => ({ len, enabled: true }))
+  );
+  const [maFlags, setMaFlags] = useState<MovingAverageFlags>({
+    bullishCross: false,
+    bearishCross: false,
+    coiling: false,
+  });
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+
+  const [maAddDraft, setMaAddDraft] = useState<string>("");
+  const [maIsAdding, setMaIsAdding] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!selected || (selected.id !== "ema" && selected.id !== "ma")) return;
+    if (typeof window === "undefined") return;
+
+    const indicatorId = selected.id as "ema" | "ma";
+    const cfgKey = indicatorId === "ema" ? EMA_DEFAULT_LENGTHS_CONFIG_KEY : MA_DEFAULT_LENGTHS_CONFIG_KEY;
+    const legacyRaw = window.localStorage.getItem(LEGACY_MOVING_AVERAGE_DEFAULT_LENGTHS_KEY);
+
+    // Load configured chips (enabled/disabled).
+    const rawCfg = window.localStorage.getItem(cfgKey);
+    let nextChips: LengthChip[] | null = null;
+    if (rawCfg && rawCfg.trim()) {
+      try {
+        const parsed = JSON.parse(rawCfg);
+        if (Array.isArray(parsed)) {
+          nextChips = parsed
+            .map((x) => {
+              if (typeof x === "number") return { len: String(x), enabled: true };
+              if (typeof x === "string") return { len: x, enabled: true };
+              if (x && typeof x === "object" && "len" in x) {
+                const len = (x as any).len;
+                const enabled = "enabled" in (x as any) ? Boolean((x as any).enabled) : true;
+                return len != null ? { len: String(len), enabled } : null;
+              }
+              return null;
+            })
+            .filter(Boolean) as LengthChip[];
+        }
+      } catch {
+        // ignore, will fall back below
+      }
+    }
+
+    if (!nextChips || nextChips.length === 0) {
+      const legacyNums = parseLengthsCsv(legacyRaw ?? "");
+      nextChips = legacyNums.map((len) => ({ len, enabled: true }));
+    }
+
+    // De-dupe by len and preserve order.
+    const seen = new Set<string>();
+    nextChips = nextChips.filter((c) => {
+      if (seen.has(c.len)) return false;
+      seen.add(c.len);
+      return true;
+    });
+
+    setMaDefaultLengths(nextChips ?? MA_DEFAULT_LENGTHS_FALLBACK.map((len) => ({ len, enabled: true })));
+
+    // Load crossing/coiling flags.
+    const flagsKey = `tradebutler_${indicatorId}_crossing_coiling_flags_v1`;
+    const rawFlags = window.localStorage.getItem(flagsKey);
+    if (rawFlags && rawFlags.trim()) {
+      try {
+        const f = JSON.parse(rawFlags);
+        setMaFlags({
+          bullishCross: Boolean(f?.bullishCross),
+          bearishCross: Boolean(f?.bearishCross),
+          coiling: Boolean(f?.coiling),
+        });
+      } catch {
+        setMaFlags({ bullishCross: false, bearishCross: false, coiling: false });
+      }
+    } else {
+      setMaFlags({ bullishCross: false, bearishCross: false, coiling: false });
+    }
+
+    setDragIndex(null);
+    setMaIsAdding(false);
+    setMaAddDraft("");
+  }, [selected?.id]);
+
+  useEffect(() => {
+    if (!selected || (selected.id !== "ema" && selected.id !== "ma")) return;
+    if (typeof window === "undefined") return;
+    const indicatorId = selected.id as "ema" | "ma";
+    const cfgKey = indicatorId === "ema" ? EMA_DEFAULT_LENGTHS_CONFIG_KEY : MA_DEFAULT_LENGTHS_CONFIG_KEY;
+    window.localStorage.setItem(cfgKey, JSON.stringify(maDefaultLengths));
+
+    const flagsKey = `tradebutler_${indicatorId}_crossing_coiling_flags_v1`;
+    window.localStorage.setItem(flagsKey, JSON.stringify(maFlags));
+
+    // Same-window localStorage writes don't emit "storage" events.
+    // Dispatch an app-level signal so Journal can refresh immediately.
+    window.dispatchEvent(new CustomEvent("tradebutler:ma-config-changed"));
+  }, [maDefaultLengths, maFlags, selected?.id]);
 
   const indicators = useMemo(() => loadIndicators(), [showAdd, selected]);
 
@@ -1236,9 +1371,206 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
                     }}
                   />
                 )}
-                <div style={{ color: "var(--text-secondary)", lineHeight: 1.7, fontSize: "14px", whiteSpace: "pre-wrap" }}>
-                  {selected.description || "—"}
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ color: "var(--text-secondary)", lineHeight: 1.7, fontSize: "14px", whiteSpace: "pre-wrap" }}>
+                    {selected.description || "—"}
+                  </div>
+
+                  {selected.kind === "custom" && (selected.otherSignals ?? []).length > 0 && (
+                    <div style={{ border: "1px solid var(--border-color)", borderRadius: 12, overflow: "hidden", background: "var(--bg-secondary)" }}>
+                      <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                        Other signals
+                      </div>
+                      <div style={{ padding: 12, display: "flex", flexWrap: "wrap", gap: 10 }}>
+                        {(selected.otherSignals ?? []).map((sig) => (
+                          <span
+                            key={sig}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              padding: "6px 10px",
+                              borderRadius: 999,
+                              border: "1px solid var(--border-color)",
+                              background: "var(--bg-tertiary)",
+                              color: "var(--text-primary)",
+                              fontSize: 12,
+                              fontWeight: 750,
+                            }}
+                          >
+                            {sig}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
+
+                {(selected.id === "ema" || selected.id === "ma") && (
+                  <div style={{ border: "1px solid var(--border-color)", borderRadius: 12, overflow: "hidden", background: "var(--bg-secondary)" }}>
+                    <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                      {selected.id === "ema" ? "EMA default lengths" : "MA default lengths"}
+                    </div>
+                    <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {maDefaultLengths.map((chip, idx) => (
+                          <div
+                            key={`${chip.len}-${idx}`}
+                            draggable
+                            onDragStart={(e) => {
+                              e.dataTransfer.effectAllowed = "move";
+                              e.dataTransfer.setData("text/plain", String(idx));
+                              setDragIndex(idx);
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              const raw = e.dataTransfer.getData("text/plain");
+                              const from = raw ? Number(raw) : dragIndex;
+                              if (from === null || !Number.isFinite(from) || from === idx) return;
+                              setMaDefaultLengths((prev) => {
+                                const next = [...prev];
+                                const [moved] = next.splice(from, 1);
+                                next.splice(idx, 0, moved);
+                                return next;
+                              });
+                              setDragIndex(null);
+                            }}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 8,
+                              padding: "6px 10px",
+                              borderRadius: 999,
+                              border: `1px solid var(--border-color)`,
+                              background: chip.enabled ? "var(--bg-tertiary)" : "rgba(148,163,184,0.18)",
+                              color: chip.enabled ? "var(--text-primary)" : "var(--text-secondary)",
+                              fontSize: 12,
+                              fontWeight: 800,
+                              userSelect: "none",
+                              cursor: "grab",
+                              opacity: chip.enabled ? 1 : 0.85,
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={chip.enabled}
+                              onChange={(e) => {
+                                const nextEnabled = e.target.checked;
+                                setMaDefaultLengths((prev) => prev.map((x, i) => (i === idx ? { ...x, enabled: nextEnabled } : x)));
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ width: 14, height: 14 }}
+                              title="Show this value in the Journal"
+                            />
+                            <span>{chip.len}</span>
+                            <button
+                              type="button"
+                              onClick={() => setMaDefaultLengths((prev) => prev.filter((_, i) => i !== idx))}
+                              style={{
+                                border: "none",
+                                background: "transparent",
+                                color: "var(--text-secondary)",
+                                cursor: "pointer",
+                                fontSize: 14,
+                                fontWeight: 900,
+                                lineHeight: 1,
+                              }}
+                              title="Remove"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      {!maIsAdding ? (
+                        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                          <button
+                            type="button"
+                            onClick={() => setMaIsAdding(true)}
+                            style={{ border: "1px solid var(--border-color)", background: "var(--bg-tertiary)", color: "var(--text-primary)", borderRadius: 10, padding: "8px 10px", cursor: "pointer", fontWeight: 800, fontSize: 12 }}
+                          >
+                            Add value
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setMaDefaultLengths(MA_DEFAULT_LENGTHS_FALLBACK.map((len) => ({ len, enabled: true })))}
+                            style={{ border: "none", background: "var(--accent)", color: "white", borderRadius: 10, padding: "8px 10px", cursor: "pointer", fontWeight: 800, fontSize: 12 }}
+                          >
+                            Reset
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={maAddDraft}
+                            onChange={(e) => setMaAddDraft(e.target.value)}
+                            placeholder="e.g. 250"
+                            style={{ flex: 1, minWidth: 0, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-primary)", outline: "none", fontSize: 12 }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const normalized = normalizeLengthValue(maAddDraft);
+                              if (!normalized) return;
+                              setMaDefaultLengths((prev) => (prev.some((x) => x.len === normalized) ? prev : [...prev, { len: normalized, enabled: true }]));
+                              setMaAddDraft("");
+                              setMaIsAdding(false);
+                            }}
+                            style={{ border: "none", background: "var(--accent)", color: "white", borderRadius: 10, padding: "10px 12px", cursor: "pointer", fontWeight: 900, fontSize: 12 }}
+                          >
+                            Add
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setMaAddDraft("");
+                              setMaIsAdding(false);
+                            }}
+                            style={{ border: "1px solid var(--border-color)", background: "var(--bg-tertiary)", color: "var(--text-primary)", borderRadius: 10, padding: "10px 12px", cursor: "pointer", fontWeight: 900, fontSize: 12 }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+
+                      <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+                        <div style={{ fontSize: 11, fontWeight: 900, color: "var(--text-secondary)", letterSpacing: "0.02em" }}>Signal conditions</div>
+                        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", color: "var(--text-primary)", fontSize: 12, fontWeight: 650 }}>
+                          <input
+                            type="checkbox"
+                            checked={maFlags.bullishCross}
+                            onChange={(e) => setMaFlags((f) => ({ ...f, bullishCross: e.target.checked }))}
+                            style={{ width: 16, height: 16 }}
+                          />
+                          Bullish crossing
+                        </label>
+                        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", color: "var(--text-primary)", fontSize: 12, fontWeight: 650 }}>
+                          <input
+                            type="checkbox"
+                            checked={maFlags.bearishCross}
+                            onChange={(e) => setMaFlags((f) => ({ ...f, bearishCross: e.target.checked }))}
+                            style={{ width: 16, height: 16 }}
+                          />
+                          Bearish crossing
+                        </label>
+                        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", color: "var(--text-primary)", fontSize: 12, fontWeight: 650 }}>
+                          <input
+                            type="checkbox"
+                            checked={maFlags.coiling}
+                            onChange={(e) => setMaFlags((f) => ({ ...f, coiling: e.target.checked }))}
+                            style={{ width: 16, height: 16 }}
+                          />
+                          Coiling
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <div style={{ border: "1px solid var(--border-color)", borderRadius: "12px", overflow: "hidden", background: "var(--bg-secondary)" }}>
                   <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", fontSize: "12px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     Code

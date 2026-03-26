@@ -71,10 +71,14 @@ import {
   loadStrategyRuleTexts,
   loadStrategyCustomRuleSets,
   loadJournalIndicatorValue,
+  loadJournalIndicatorValueRaw,
+  loadMovingAverageLengthsConfigForIndicator,
   setJournalIndicatorValue,
   migrateJournalIndicatorDraftValues,
   loadJournalIndicatorDivergence,
+  loadJournalIndicatorMaFlags,
   setJournalIndicatorDivergence,
+  setJournalIndicatorMaFlags,
   migrateJournalIndicatorDraftDivergence,
   loadJournalIndicatorOtherSignals,
   setJournalIndicatorOtherSignal,
@@ -161,9 +165,10 @@ interface JournalChecklistResponse {
   response_value?: number | null; // For survey items: 1-10 scale
 }
 
-// All checklist and survey items are scoped per journal trade.
-// Emotional states are the only thing that can be shared at the entry level.
-const ENTRY_LEVEL_CHECKLIST_TYPES: string[] = [];
+// Checklist items in this list are persisted at the *journal entry* level
+// (journal_trade_ids = null), meaning their state is not duplicated per trade.
+// Emotional states are the only thing that can be shared at the entry level besides this.
+const ENTRY_LEVEL_CHECKLIST_TYPES: string[] = ["daily_analysis", "daily_mantra"];
 
 /** Hidden placeholder used in the DB for empty custom checklist types; never show to users. */
 const EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER = "__empty_custom_checklist_placeholder__";
@@ -764,6 +769,9 @@ export default function Journal() {
   const [actualTrades, setActualTrades] = useState<ActualTrade[]>([]); // all actual trades for "Link to actual trades" modal
   const [linkActualTradesModalJournalTradeId, setLinkActualTradesModalJournalTradeId] = useState<number | null>(null);
   const [linkActualTradesSelection, setLinkActualTradesSelection] = useState<number[]>([]); // selection in "Link to actual trades" modal
+  const [linkActualTradesSearchQuery, setLinkActualTradesSearchQuery] = useState("");
+  const [linkActualTradesSortBy, setLinkActualTradesSortBy] = useState<"date" | "symbol" | "side">("date");
+  const [linkActualTradesSortDirection, setLinkActualTradesSortDirection] = useState<"asc" | "desc">("desc");
 
   // Emotional states linked to this journal entry/implementation (same as Emotions page)
   const [journalEmotionalStates, setJournalEmotionalStates] = useState<JournalEmotionalState[]>([]);
@@ -4281,6 +4289,7 @@ export default function Journal() {
                           />
                           Candlesticks
                         </label>
+
                       </div>
 
                       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
@@ -4416,6 +4425,7 @@ export default function Journal() {
                   >
                     {ind.name}
                   </span>
+
                   </div>
                   {colTfs.map((tf) =>
                     isTfIndicator ? (
@@ -4485,33 +4495,231 @@ export default function Journal() {
                         )}
                       </div>
                     ) : (
-                      <div key={`${entryId}:${tradeIndex}:${phase}:${ind.id}:${tf}`} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <div
+                        key={`${entryId}:${tradeIndex}:${phase}:${ind.id}:${tf}`}
+                        style={{ display: "flex", flexDirection: "column", gap: "6px", minWidth: 0, width: "100%" }}
+                      >
                         <div style={{ fontSize: "10px", color: "var(--text-secondary)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", paddingLeft: "2px" }}>
                           {tf}
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                          <input
-                            type="text"
-                            placeholder="Value"
-                            defaultValue={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
-                            onChange={(e) => {
-                              if (!canEditIndicators) return;
-                              setJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.value);
-                            }}
-                            readOnly={!canEditIndicators}
-                            disabled={!canEditIndicators}
-                            spellCheck={false}
-                            style={{
-                              padding: "10px 12px",
-                              background: "var(--bg-tertiary)",
-                              border: "1px solid var(--border-color)",
-                              borderRadius: "10px",
-                              color: "var(--text-primary)",
-                              outline: "none",
-                              flex: "1 1 120px",
-                              minWidth: 0,
-                            }}
-                          />
+                          {(ind.id === "ema" || ind.id === "ma") ? (
+                            (() => {
+                              void maConfigTick; // re-render when EMA/MA config changes
+                              const cfg = loadMovingAverageLengthsConfigForIndicator(ind.id);
+                              const defaults = cfg.map((c) => String(c.len));
+                              const enabledActualIndices = cfg
+                                .map((c, i) => (c.enabled ? i : null))
+                                .filter((x): x is number => x != null);
+
+                              const rawCsv = loadJournalIndicatorValueRaw(dataMode, entryId, tradeIndex, phase, ind.id, tf);
+                              const parts = rawCsv.trim().length ? rawCsv.split(",").map((s) => s.trim()) : [];
+
+                              const shownValueFor = (actualIdx: number) => {
+                                const p = parts[actualIdx] ?? "";
+                                if (!p) return "";
+                                return p === defaults[actualIdx] ? "" : p;
+                              };
+
+                              const setLenAtIndex = (actualIdx: number, next: string) => {
+                                const existingRawCsv = loadJournalIndicatorValueRaw(dataMode, entryId, tradeIndex, phase, ind.id, tf);
+                                const existingParts = existingRawCsv.trim().length ? existingRawCsv.split(",").map((s) => s.trim()) : [];
+
+                                const nextParts = defaults.map((d, i) => (existingParts[i] ? existingParts[i] : d));
+                                const trimmed = next.trim();
+                                nextParts[actualIdx] = trimmed.length ? trimmed : defaults[actualIdx];
+
+                                // Force disabled indices back to defaults so the hidden values are not user-submitted.
+                                for (let i = 0; i < cfg.length; i++) {
+                                  if (!cfg[i]?.enabled) nextParts[i] = defaults[i];
+                                }
+
+                                const isAllDefaults = nextParts.every((p, i) => p === defaults[i]);
+                                setJournalIndicatorValue(
+                                  dataMode,
+                                  entryId,
+                                  tradeIndex,
+                                  phase,
+                                  ind.id,
+                                  tf,
+                                  isAllDefaults ? "" : nextParts.join(",")
+                                );
+                              };
+
+                              return (
+                                <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%", minWidth: 0 }}>
+                                  {/* Lengths: exactly 4 columns per row (50/100/200/500 on one line); extra lengths wrap to the next row */}
+                                  <div
+                                    style={{
+                                      display: "grid",
+                                      gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                                      gap: 4,
+                                      width: "100%",
+                                      boxSizing: "border-box",
+                                    }}
+                                  >
+                                    {enabledActualIndices.map((actualIdx) => {
+                                      const label = defaults[actualIdx];
+                                      return (
+                                        <div
+                                          key={label}
+                                          style={{
+                                            display: "flex",
+                                            flexDirection: "column",
+                                            alignItems: "center",
+                                            gap: 4,
+                                            minWidth: 0,
+                                          }}
+                                        >
+                                          <div
+                                            style={{
+                                              fontSize: 9,
+                                              color: "var(--text-secondary)",
+                                              fontWeight: 800,
+                                              textAlign: "center",
+                                              lineHeight: 1.15,
+                                              userSelect: "none",
+                                              width: "100%",
+                                            }}
+                                          >
+                                            {label}
+                                          </div>
+                                          <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            placeholder=""
+                                            defaultValue={shownValueFor(actualIdx)}
+                                            onChange={(e) => {
+                                              if (!canEditIndicators) return;
+                                              setLenAtIndex(actualIdx, e.target.value);
+                                            }}
+                                            readOnly={!canEditIndicators}
+                                            disabled={!canEditIndicators}
+                                            spellCheck={false}
+                                            style={{
+                                              width: "100%",
+                                              minWidth: 0,
+                                              background: "var(--bg-tertiary)",
+                                              border: "1px solid var(--border-color)",
+                                              borderRadius: "8px",
+                                              color: "var(--text-primary)",
+                                              outline: "none",
+                                              textAlign: "center",
+                                              fontSize: 12,
+                                              padding: "6px 2px",
+                                              height: 30,
+                                              boxSizing: "border-box",
+                                            }}
+                                          />
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {/* Crossing / coiling: one row, two columns — fits standard timeframe column width */}
+                                  {(() => {
+                                    const flags = loadJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf);
+                                    return (
+                                      <div
+                                        style={{
+                                          marginTop: 4,
+                                          borderTop: "1px solid var(--border-color)",
+                                          paddingTop: 6,
+                                          display: "grid",
+                                          gridTemplateColumns: "1fr 1fr",
+                                          columnGap: 6,
+                                          rowGap: 4,
+                                          alignItems: "center",
+                                          width: "100%",
+                                          minWidth: 0,
+                                          boxSizing: "border-box",
+                                        }}
+                                      >
+                                        <label
+                                          style={{
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            justifyContent: "flex-start",
+                                            gap: 5,
+                                            cursor: canEditIndicators ? "pointer" : "default",
+                                            fontSize: 10,
+                                            fontWeight: 650,
+                                            color: "var(--text-secondary)",
+                                            userSelect: "none",
+                                            whiteSpace: "nowrap",
+                                            minWidth: 0,
+                                          }}
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={flags.crossing}
+                                            disabled={!canEditIndicators}
+                                            onChange={(e) => {
+                                              setJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf, { ...flags, crossing: e.target.checked });
+                                              setJournalSignalInputsTick((t) => t + 1);
+                                            }}
+                                            style={{ width: 14, height: 14, flexShrink: 0 }}
+                                          />
+                                          Crossing
+                                        </label>
+
+                                        <label
+                                          style={{
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            justifyContent: "flex-start",
+                                            gap: 5,
+                                            cursor: canEditIndicators ? "pointer" : "default",
+                                            fontSize: 10,
+                                            fontWeight: 650,
+                                            color: "var(--text-secondary)",
+                                            userSelect: "none",
+                                            whiteSpace: "nowrap",
+                                            minWidth: 0,
+                                          }}
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={flags.coiling}
+                                            disabled={!canEditIndicators}
+                                            onChange={(e) => {
+                                              setJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf, { ...flags, coiling: e.target.checked });
+                                              setJournalSignalInputsTick((t) => t + 1);
+                                            }}
+                                            style={{ width: 14, height: 14, flexShrink: 0 }}
+                                          />
+                                          Coiling
+                                        </label>
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              );
+                            })()
+                          ) : (
+                            <input
+                              type="text"
+                              placeholder="Value"
+                              defaultValue={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                              onChange={(e) => {
+                                if (!canEditIndicators) return;
+                                setJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.value);
+                              }}
+                              readOnly={!canEditIndicators}
+                              disabled={!canEditIndicators}
+                              spellCheck={false}
+                              style={{
+                                padding: "10px 12px",
+                                background: "var(--bg-tertiary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "10px",
+                                color: "var(--text-primary)",
+                                outline: "none",
+                                flex: "1 1 120px",
+                                minWidth: 0,
+                              }}
+                            />
+                          )}
 
                           {isMomentum && (
                             <label
@@ -4836,6 +5044,16 @@ export default function Journal() {
     entry: {},
     exit: {},
   });
+
+  // EMA/MA length configs are read from storage at render-time
+  // so changes made in the Signals modal reflect immediately.
+  const [maConfigTick, setMaConfigTick] = useState(0);
+
+  useEffect(() => {
+    const handler = () => setMaConfigTick((t) => t + 1);
+    window.addEventListener("tradebutler:ma-config-changed", handler as EventListener);
+    return () => window.removeEventListener("tradebutler:ma-config-changed", handler as EventListener);
+  }, []);
 
   // Custom-indicator "Other signals" labels are managed on the Indicators page.
 
@@ -9206,55 +9424,195 @@ export default function Journal() {
         >
           <div
             style={{
-              background: "var(--bg-primary)",
-              borderRadius: "8px",
-              padding: "20px",
-              maxWidth: "480px",
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              maxWidth: "560px",
               width: "90%",
               maxHeight: "80vh",
+              overflow: "hidden",
               display: "flex",
               flexDirection: "column",
-              border: "1px solid var(--border-color)",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h4 style={{ margin: "0 0 8px", fontSize: "16px" }}>Link to actual trades</h4>
-            <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>
+            <h4 style={{ margin: "0 0 8px", fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>Link to actual trades</h4>
+            <p style={{ margin: "0 0 16px", fontSize: "13px", color: "var(--text-secondary)" }}>
               Select real trades from your Trades list to associate with this journal trade.
             </p>
-            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", marginBottom: "16px", paddingRight: "4px" }}>
-              {actualTrades.filter((t): t is ActualTrade & { id: number } => t.id != null).map((t) => {
-                const tid = t.id as number;
-                const isSelected = linkActualTradesSelection.includes(tid);
-                return (
-                  <label
-                    key={tid}
-                    style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", flexShrink: 0 }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => {
-                        setLinkActualTradesSelection((prev) =>
-                          prev.includes(tid) ? prev.filter((id) => id !== tid) : [...prev, tid]
-                        );
-                      }}
-                    />
-                    <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>
-                      {t.symbol} {t.side} · {t.quantity} @ ${typeof t.price === "number" ? t.price.toFixed(2) : t.price} · {t.timestamp ? format(new Date(t.timestamp), "MMM d, yyyy HH:mm") : ""}
-                    </span>
-                  </label>
-                );
-              })}
-              {actualTrades.length === 0 && (
-                <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No actual trades in your Trades list. Add trades on the Trades page first.</span>
-              )}
+            <div style={{ position: "relative", marginBottom: "12px", flexShrink: 0 }}>
+              <Search
+                size={18}
+                style={{
+                  position: "absolute",
+                  left: "12px",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  color: "var(--text-secondary)",
+                }}
+              />
+              <input
+                type="text"
+                placeholder="Search by symbol, side, or date..."
+                value={linkActualTradesSearchQuery}
+                onChange={(e) => setLinkActualTradesSearchQuery(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px 10px 40px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  outline: "none",
+                }}
+              />
             </div>
-            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+            <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "12px", flexShrink: 0 }}>
+              <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Sort by:</span>
+              <select
+                value={linkActualTradesSortBy}
+                onChange={(e) => setLinkActualTradesSortBy(e.target.value as "date" | "symbol" | "side")}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "13px",
+                  outline: "none",
+                }}
+              >
+                <option value="date">Date</option>
+                <option value="symbol">Symbol</option>
+                <option value="side">Side</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => setLinkActualTradesSortDirection((d) => (d === "asc" ? "desc" : "asc"))}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "13px",
+                  cursor: "pointer",
+                }}
+              >
+                {linkActualTradesSortBy === "date" && (linkActualTradesSortDirection === "desc" ? "Newest first" : "Oldest first")}
+                {linkActualTradesSortBy === "symbol" && (linkActualTradesSortDirection === "desc" ? "Z → A" : "A → Z")}
+                {linkActualTradesSortBy === "side" && (linkActualTradesSortDirection === "desc" ? "Sell → Buy" : "Buy → Sell")}
+              </button>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", marginBottom: "16px", border: "1px solid var(--border-color)", borderRadius: "8px", backgroundColor: "var(--bg-primary)" }}>
+              {(() => {
+                const validTrades = actualTrades.filter((t): t is ActualTrade & { id: number } => t.id != null);
+                if (validTrades.length === 0) {
+                  return <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No actual trades in your Trades list. Add trades on the Trades page first.</div>;
+                }
+                const q = linkActualTradesSearchQuery.toLowerCase().trim();
+                const filtered = q
+                  ? validTrades.filter((t) => {
+                      const dt = t.timestamp ? format(new Date(t.timestamp), "MMM d, yyyy HH:mm").toLowerCase() : "";
+                      return (
+                        t.symbol.toLowerCase().includes(q) ||
+                        t.side.toLowerCase().includes(q) ||
+                        dt.includes(q)
+                      );
+                    })
+                  : [...validTrades];
+                if (filtered.length === 0) {
+                  return <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No trades match your search.</div>;
+                }
+                const sorted = [...filtered].sort((a, b) => {
+                  let comparison = 0;
+                  if (linkActualTradesSortBy === "date") {
+                    comparison = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+                  } else if (linkActualTradesSortBy === "symbol") {
+                    comparison = a.symbol.localeCompare(b.symbol);
+                  } else {
+                    comparison = a.side.localeCompare(b.side);
+                  }
+                  return linkActualTradesSortDirection === "asc" ? comparison : -comparison;
+                });
+                return (
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
+                        <th style={{ padding: "10px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", width: "40px" }} />
+                        <th style={{ padding: "10px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)" }}>Symbol</th>
+                        <th style={{ padding: "10px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)" }}>Side</th>
+                        <th style={{ padding: "10px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)" }}>Qty @ Price</th>
+                        <th style={{ padding: "10px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)" }}>Timestamp</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sorted.map((t) => {
+                        const tid = t.id as number;
+                        const isSelected = linkActualTradesSelection.includes(tid);
+                        return (
+                          <tr
+                            key={tid}
+                            style={{
+                              borderBottom: "1px solid var(--border-color)",
+                              cursor: "pointer",
+                              backgroundColor: isSelected ? "var(--bg-tertiary)" : "transparent",
+                            }}
+                            onClick={() => {
+                              setLinkActualTradesSelection((prev) =>
+                                prev.includes(tid) ? prev.filter((id) => id !== tid) : [...prev, tid]
+                              );
+                            }}
+                          >
+                            <td style={{ padding: "10px 12px" }}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {
+                                  setLinkActualTradesSelection((prev) =>
+                                    prev.includes(tid) ? prev.filter((id) => id !== tid) : [...prev, tid]
+                                  );
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ cursor: "pointer" }}
+                              />
+                            </td>
+                            <td style={{ padding: "10px 12px", fontSize: "14px", color: "var(--text-primary)" }}>{t.symbol}</td>
+                            <td style={{ padding: "10px 12px", fontSize: "13px", color: "var(--text-secondary)" }}>
+                              <span
+                                style={{
+                                  color:
+                                    (t.side || "").toLowerCase() === "buy"
+                                      ? "var(--success, #22c55e)"
+                                      : "var(--danger, #ef4444)",
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {t.side}
+                              </span>
+                            </td>
+                            <td style={{ padding: "10px 12px", fontSize: "13px", color: "var(--text-primary)", textAlign: "right" }}>
+                              {t.quantity} @ ${typeof t.price === "number" ? t.price.toFixed(2) : t.price}
+                            </td>
+                            <td style={{ padding: "10px 12px", fontSize: "13px", color: "var(--text-secondary)" }}>
+                              {t.timestamp ? format(new Date(t.timestamp), "MMM d, yyyy HH:mm") : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                );
+              })()}
+            </div>
+            <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
               <button
                 type="button"
                 onClick={() => setLinkActualTradesModalJournalTradeId(null)}
-                style={{ padding: "8px 16px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)", cursor: "pointer" }}
+                style={{ padding: "10px 20px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)", cursor: "pointer", fontSize: "14px" }}
               >
                 Cancel
               </button>
@@ -9271,9 +9629,9 @@ export default function Journal() {
                   }
                   setLinkActualTradesModalJournalTradeId(null);
                 }}
-                style={{ padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer" }}
+                style={{ padding: "10px 20px", backgroundColor: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "14px", fontWeight: "500" }}
               >
-                Done
+                Save
               </button>
             </div>
           </div>
