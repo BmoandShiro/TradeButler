@@ -6845,7 +6845,7 @@ export default function Journal() {
                         </div>
                       </div>
                     )}
-                    {activeTab === "trade" && (
+                    {isTabContentMaximized && activeTab === "trade" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("trade", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -6868,7 +6868,7 @@ export default function Journal() {
                         />
                       </div>
                     )}
-                    {activeTab === "what_went_well" && (
+                    {isTabContentMaximized && activeTab === "what_went_well" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("what_went_well", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -6891,7 +6891,7 @@ export default function Journal() {
                         />
                       </div>
                     )}
-                    {activeTab === "what_could_be_improved" && (
+                    {isTabContentMaximized && activeTab === "what_could_be_improved" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("what_could_be_improved", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -6914,7 +6914,7 @@ export default function Journal() {
                         />
                       </div>
                     )}
-                    {activeTab === "links" && (
+                    {isTabContentMaximized && activeTab === "links" && (
                       <div
                         ref={(el) => { tabContentRefs.current.set("links", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -7270,7 +7270,7 @@ export default function Journal() {
                         )}
                       </div>
                     )}
-                    {activeTab === "emotional_state" && (
+                    {isTabContentMaximized && activeTab === "emotional_state" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("emotional_state", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -7751,7 +7751,7 @@ export default function Journal() {
                         )}
                       </div>
                     )}
-                    {activeTab === "notes" && (
+                    {isTabContentMaximized && activeTab === "notes" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("notes", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -7774,7 +7774,7 @@ export default function Journal() {
                         />
                       </div>
                     )}
-                    {activeTab === "checklists" && (
+                    {isTabContentMaximized && activeTab === "checklists" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("checklists", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -7923,7 +7923,7 @@ export default function Journal() {
                         )}
                       </div>
                     )}
-                    {activeTab === "survey" && (
+                    {isTabContentMaximized && activeTab === "survey" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("survey", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
