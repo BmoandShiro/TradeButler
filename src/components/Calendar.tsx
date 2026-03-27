@@ -8,6 +8,7 @@ import type { DataMode } from "../utils/dataMode";
 import { loadSandboxState, getSandboxEmotionalStates } from "../utils/sandboxStore";
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 import { getFinnhubApiKey } from "../utils/finnhubManager";
+import { LoadingSphere } from "./LoadingSphere";
 
 interface DailyPnL {
   date: string;
@@ -854,8 +855,8 @@ export default function Calendar() {
 
   if (loading) {
     return (
-      <div style={{ padding: "28px", textAlign: "center", fontSize: "16px", color: "var(--text-secondary)" }}>
-        Loading calendar...
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", minHeight: "240px", padding: "28px" }}>
+        <LoadingSphere size={100} message="Loading calendar..." />
       </div>
     );
   }

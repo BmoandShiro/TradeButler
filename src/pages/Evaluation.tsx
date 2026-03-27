@@ -11,6 +11,7 @@ import {
   SANDBOX_DISTRIBUTION_CONCENTRATION,
   SANDBOX_TILT_STATS,
 } from "../data/sandboxEvaluation";
+import { LoadingSphere } from "../components/LoadingSphere";
 
 interface WeekdayPerformance {
   weekday: number;
@@ -377,8 +378,17 @@ export default function Evaluation() {
 
   if (loading) {
     return (
-      <div style={{ padding: "40px", textAlign: "center" }}>
-        <p>Loading evaluation metrics...</p>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100%",
+          width: "100%",
+          minHeight: "100vh",
+        }}
+      >
+        <LoadingSphere size={100} message="Loading evaluation metrics..." />
       </div>
     );
   }

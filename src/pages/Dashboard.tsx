@@ -126,6 +126,7 @@ import {
   type DividendDashboardView,
 } from "../utils/dividendTrackerCharts";
 import ViewFinancialsButton from "../components/ViewFinancialsButton";
+import { LoadingSphere } from "../components/LoadingSphere";
 
 interface Metrics {
   total_trades: number;
@@ -5139,8 +5140,17 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div style={{ padding: "40px", textAlign: "center" }}>
-        <p>Loading metrics...</p>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100%",
+          width: "100%",
+          minHeight: "100vh",
+        }}
+      >
+        <LoadingSphere size={100} message="Loading metrics..." />
       </div>
     );
   }
@@ -6942,7 +6952,15 @@ export default function Dashboard() {
                         }}
                       >
                         {isLoading ? (
-                          <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>Loading positions...</p>
+                          <div style={{ display: "flex", justifyContent: "center", padding: "12px 0" }}>
+                            <LoadingSphere
+                              size={56}
+                              message="Loading positions..."
+                              padding={12}
+                              gap={8}
+                              messageFontSize={12}
+                            />
+                          </div>
                         ) : pairs.length === 0 ? (
                           <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>No positions found for this strategy.</p>
                         ) : (() => {

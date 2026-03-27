@@ -25,6 +25,7 @@ import { getSurveyScoreColor, getSurveyScoreBgRgba } from "../utils/intensityCol
 import RichTextEditor from "../components/RichTextEditor";
 import { TradeChart } from "../components/TradeChart";
 import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
+import { LoadingSphere } from "../components/LoadingSphere";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import {
   getSandboxJournalEntries,
@@ -4527,8 +4528,8 @@ export default function Journal() {
         }}
       >
         {pendingRestoreEntryId != null && selectedEntry == null ? (
-          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", fontSize: "14px" }}>
-            Loading journal entry…
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <LoadingSphere size={100} message="Loading journal entry…" />
           </div>
         ) : selectedEntry && !isCreating && !isEditing ? (
           <>
@@ -8477,9 +8478,9 @@ export default function Journal() {
         </div>
         <div ref={leftPanelScrollRef} style={{ flex: 1, overflowY: "auto", padding: "12px" }}>
           {loading ? (
-            <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "20px" }}>
-              Loading...
-            </p>
+            <div style={{ display: "flex", justifyContent: "center", padding: "24px 12px" }}>
+              <LoadingSphere size={80} message="Loading journal..." padding={20} />
+            </div>
           ) : entries.length === 0 ? (
             <div
               style={{

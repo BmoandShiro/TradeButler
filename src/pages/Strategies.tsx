@@ -5,6 +5,7 @@ import { readTextFile } from "@tauri-apps/api/fs";
 import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard, BarChart2 } from "lucide-react";
 import { format } from "date-fns";
 import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
+import { LoadingSphere } from "../components/LoadingSphere";
 import { BRUSH_MIN_POINTS, CHART_BAR_FILL_OPACITY } from "../utils/chartDataSampling";
 /** Margin for overview bar charts; minimal bottom so chart area is maximized. */
 const OVERVIEW_CHART_MARGIN = { top: 5, right: 5, left: 5, bottom: 10 };
@@ -5224,8 +5225,17 @@ export default function Strategies() {
 
   if (loading) {
     return (
-      <div style={{ padding: "40px", textAlign: "center" }}>
-        <p>Loading strategies...</p>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100%",
+          width: "100%",
+          minHeight: "100vh",
+        }}
+      >
+        <LoadingSphere size={100} message="Loading strategies..." />
       </div>
     );
   }
@@ -6347,9 +6357,9 @@ export default function Strategies() {
                         </div>
                       </div>
                       {isLoadingPairs ? (
-                    <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "40px" }}>
-                      Loading trades...
-                    </p>
+                    <div style={{ display: "flex", justifyContent: "center", padding: "32px 16px" }}>
+                      <LoadingSphere size={72} message="Loading trades..." padding={16} />
+                    </div>
                   ) : pairs.length === 0 ? (
                     <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "40px" }}>
                       No trades found for this strategy.
@@ -10006,8 +10016,14 @@ export default function Strategies() {
               </p>
               
               {loadingAssociatedRecords ? (
-                <div style={{ marginBottom: "20px", textAlign: "center", color: "var(--text-secondary)", fontSize: "13px" }}>
-                  Loading associated records...
+                <div style={{ marginBottom: "20px", display: "flex", justifyContent: "center" }}>
+                  <LoadingSphere
+                    size={48}
+                    message="Loading associated records..."
+                    padding={8}
+                    gap={8}
+                    messageFontSize={12}
+                  />
                 </div>
               ) : associatedRecords && (
                 <div style={{ marginBottom: "20px" }}>

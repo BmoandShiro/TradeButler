@@ -3,6 +3,7 @@ import { createChart, IChartApi, ISeriesApi, CandlestickData, ColorType, UTCTime
 import { format } from "date-fns";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Settings } from "lucide-react";
+import { LoadingSphere } from "./LoadingSphere";
 
 interface Trade {
   id: number;
@@ -1693,8 +1694,8 @@ export function TradeChart({ symbol, entryTimestamp, exitTimestamp, entryPrice, 
         </div>
 
         {loading && (
-          <div style={{ textAlign: "center", padding: "40px", color: "var(--text-secondary)" }}>
-            Loading chart data...
+          <div style={{ display: "flex", justifyContent: "center", padding: "32px 24px" }}>
+            <LoadingSphere size={80} message="Loading chart data..." padding={16} />
           </div>
         )}
 
