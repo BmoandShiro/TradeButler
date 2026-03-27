@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useNavigate } from "react-router-dom";
 import { 
@@ -184,6 +185,15 @@ export default function News() {
   useEffect(() => {
     return subscribeToDataMode(setDataMode);
   }, []);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowSettings(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showSettings]);
 
   // Get all symbols to use for news
   const getAllSymbols = useCallback(() => {
@@ -617,16 +627,17 @@ export default function News() {
         <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
           {/* Settings button */}
           <button
-            onClick={() => setShowSettings(!showSettings)}
+            type="button"
+            onClick={() => setShowSettings(true)}
             style={{
               display: "flex",
               alignItems: "center",
               gap: "6px",
               padding: "8px 12px",
               borderRadius: "8px",
-              border: `1px solid ${showSettings ? "var(--accent)" : "var(--border-color)"}`,
-              backgroundColor: showSettings ? "rgba(var(--accent-rgb), 0.1)" : "transparent",
-              color: showSettings ? "var(--accent)" : "var(--text-primary)",
+              border: "1px solid var(--border-color)",
+              backgroundColor: "var(--bg-secondary)",
+              color: "var(--text-primary)",
               fontSize: "14px",
               cursor: "pointer",
             }}
@@ -695,133 +706,6 @@ export default function News() {
           </button>
         </div>
       </div>
-
-      {/* Settings Panel */}
-      {showSettings && (
-        <div style={{
-          backgroundColor: "var(--bg-secondary)",
-          borderRadius: "12px",
-          padding: "20px",
-          marginBottom: "24px",
-          border: "1px solid var(--border-color)",
-        }}>
-          <h3 style={{ 
-            margin: "0 0 16px 0", 
-            fontSize: "16px", 
-            fontWeight: "600",
-            color: "var(--text-primary)"
-          }}>
-            Display Settings
-          </h3>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "16px" }}>
-            {/* Show Sentiment */}
-            <label style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              cursor: "pointer",
-              padding: "10px 14px",
-              borderRadius: "8px",
-              backgroundColor: showSentiment ? "rgba(var(--accent-rgb), 0.1)" : "var(--bg-primary)",
-              border: `1px solid ${showSentiment ? "var(--accent)" : "var(--border-color)"}`,
-            }}>
-              <input
-                type="checkbox"
-                checked={showSentiment}
-                onChange={(e) => setShowSentiment(e.target.checked)}
-                style={{ display: "none" }}
-              />
-              <div style={{
-                width: "20px",
-                height: "20px",
-                borderRadius: "4px",
-                border: `2px solid ${showSentiment ? "var(--accent)" : "var(--border-color)"}`,
-                backgroundColor: showSentiment ? "var(--accent)" : "transparent",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}>
-                {showSentiment && <Check size={14} color="var(--bg-primary)" />}
-              </div>
-              <span style={{ fontSize: "14px", color: "var(--text-primary)" }}>
-                Show Sentiment Indicators
-              </span>
-            </label>
-
-            {/* Show Price Change */}
-            <label style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              cursor: "pointer",
-              padding: "10px 14px",
-              borderRadius: "8px",
-              backgroundColor: showPriceChange ? "rgba(var(--accent-rgb), 0.1)" : "var(--bg-primary)",
-              border: `1px solid ${showPriceChange ? "var(--accent)" : "var(--border-color)"}`,
-            }}>
-              <input
-                type="checkbox"
-                checked={showPriceChange}
-                onChange={(e) => setShowPriceChange(e.target.checked)}
-                style={{ display: "none" }}
-              />
-              <div style={{
-                width: "20px",
-                height: "20px",
-                borderRadius: "4px",
-                border: `2px solid ${showPriceChange ? "var(--accent)" : "var(--border-color)"}`,
-                backgroundColor: showPriceChange ? "var(--accent)" : "transparent",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}>
-                {showPriceChange && <Check size={14} color="var(--bg-primary)" />}
-              </div>
-              <span style={{ fontSize: "14px", color: "var(--text-primary)" }}>
-                Show Price Data
-              </span>
-            </label>
-          </div>
-
-          {/* Muted Symbols */}
-          {mutedSymbols.length > 0 && (
-            <div style={{ marginTop: "16px" }}>
-              <p style={{ 
-                fontSize: "14px", 
-                color: "var(--text-secondary)", 
-                marginBottom: "8px" 
-              }}>
-                Muted Symbols:
-              </p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                {mutedSymbols.map(symbol => (
-                  <span
-                    key={symbol}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
-                      padding: "6px 12px",
-                      borderRadius: "20px",
-                      backgroundColor: "var(--bg-tertiary)",
-                      color: "var(--text-secondary)",
-                      fontSize: "13px",
-                    }}
-                  >
-                    <VolumeX size={12} />
-                    {symbol}
-                    <X
-                      size={14}
-                      style={{ cursor: "pointer" }}
-                      onClick={() => toggleMuteSymbol(symbol)}
-                    />
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Symbol Management */}
       <div style={{
@@ -1685,6 +1569,231 @@ export default function News() {
           animation: spin 1s linear infinite;
         }
       `}</style>
+
+      {showSettings &&
+        createPortal(
+          <div
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: "rgba(0, 0, 0, 0.7)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 1000,
+            }}
+            onClick={() => setShowSettings(false)}
+            role="presentation"
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="news-settings-title"
+              style={{
+                backgroundColor: "var(--bg-secondary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "12px",
+                padding: "24px",
+                maxWidth: "520px",
+                maxHeight: "80vh",
+                overflow: "auto",
+                width: "90%",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "20px",
+                }}
+              >
+                <h2
+                  id="news-settings-title"
+                  style={{
+                    fontSize: "20px",
+                    fontWeight: "600",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    margin: 0,
+                    color: "var(--text-primary)",
+                  }}
+                >
+                  <Settings size={20} aria-hidden />
+                  News settings
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowSettings(false)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--text-secondary)",
+                    cursor: "pointer",
+                    fontSize: "24px",
+                    padding: "0",
+                    width: "32px",
+                    height: "32px",
+                    lineHeight: 1,
+                  }}
+                  aria-label="Close"
+                >
+                  ×
+                </button>
+              </div>
+
+              <h3
+                style={{
+                  margin: "0 0 16px 0",
+                  fontSize: "16px",
+                  fontWeight: "600",
+                  color: "var(--text-primary)",
+                }}
+              >
+                Display
+              </h3>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "16px" }}>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    cursor: "pointer",
+                    padding: "10px 14px",
+                    borderRadius: "8px",
+                    backgroundColor: showSentiment ? "rgba(var(--accent-rgb), 0.1)" : "var(--bg-primary)",
+                    border: `1px solid ${showSentiment ? "var(--accent)" : "var(--border-color)"}`,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showSentiment}
+                    onChange={(e) => setShowSentiment(e.target.checked)}
+                    style={{ display: "none" }}
+                  />
+                  <div
+                    style={{
+                      width: "20px",
+                      height: "20px",
+                      borderRadius: "4px",
+                      border: `2px solid ${showSentiment ? "var(--accent)" : "var(--border-color)"}`,
+                      backgroundColor: showSentiment ? "var(--accent)" : "transparent",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {showSentiment && <Check size={14} color="var(--bg-primary)" />}
+                  </div>
+                  <span style={{ fontSize: "14px", color: "var(--text-primary)" }}>
+                    Show sentiment indicators
+                  </span>
+                </label>
+
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    cursor: "pointer",
+                    padding: "10px 14px",
+                    borderRadius: "8px",
+                    backgroundColor: showPriceChange ? "rgba(var(--accent-rgb), 0.1)" : "var(--bg-primary)",
+                    border: `1px solid ${showPriceChange ? "var(--accent)" : "var(--border-color)"}`,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showPriceChange}
+                    onChange={(e) => setShowPriceChange(e.target.checked)}
+                    style={{ display: "none" }}
+                  />
+                  <div
+                    style={{
+                      width: "20px",
+                      height: "20px",
+                      borderRadius: "4px",
+                      border: `2px solid ${showPriceChange ? "var(--accent)" : "var(--border-color)"}`,
+                      backgroundColor: showPriceChange ? "var(--accent)" : "transparent",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {showPriceChange && <Check size={14} color="var(--bg-primary)" />}
+                  </div>
+                  <span style={{ fontSize: "14px", color: "var(--text-primary)" }}>
+                    Show price data
+                  </span>
+                </label>
+              </div>
+
+              {mutedSymbols.length > 0 && (
+                <div style={{ marginTop: "20px" }}>
+                  <p
+                    style={{
+                      fontSize: "14px",
+                      color: "var(--text-secondary)",
+                      marginBottom: "8px",
+                    }}
+                  >
+                    Muted symbols
+                  </p>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                    {mutedSymbols.map((symbol) => (
+                      <span
+                        key={symbol}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px",
+                          padding: "6px 12px",
+                          borderRadius: "20px",
+                          backgroundColor: "var(--bg-tertiary)",
+                          color: "var(--text-secondary)",
+                          fontSize: "13px",
+                        }}
+                      >
+                        <VolumeX size={12} />
+                        {symbol}
+                        <X
+                          size={14}
+                          style={{ cursor: "pointer" }}
+                          onClick={() => toggleMuteSymbol(symbol)}
+                        />
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ marginTop: "24px", display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  onClick={() => setShowSettings(false)}
+                  style={{
+                    padding: "10px 18px",
+                    borderRadius: "8px",
+                    border: "none",
+                    backgroundColor: "var(--accent)",
+                    color: "var(--bg-primary)",
+                    fontSize: "14px",
+                    fontWeight: "500",
+                    cursor: "pointer",
+                  }}
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
