@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useContext } from "react";
+import { CurrentPriceSyncContext } from "../contexts/CurrentPriceSyncContext";
 import { format, startOfDay } from "date-fns";
 import { AlertCircle, ChevronLeft, ChevronRight } from "lucide-react";
 import { getFinnhubApiKey, hasFinnhubApiKey } from "../utils/finnhubManager";
@@ -15,11 +16,18 @@ import {
   type DividendTimeFilter,
   type ForwardDividendEstimate,
   readDividendTrackerPageSize,
+  DASHBOARD_DIVIDEND_WIDGET_TIME_FILTER_KEY,
+  DASHBOARD_DIVIDEND_WIDGET_SYMBOL_FILTER_KEY,
+  DASHBOARD_DIVIDEND_WIDGET_PAGE_KEY,
+  readDashboardDividendWidgetTimeFilter,
+  readDashboardDividendWidgetSymbolFilter,
+  readDashboardDividendWidgetPage,
   type ForwardIncomeDisplayMode,
 } from "../utils/dividendTrackerData";
 import { DividendTrackerChartsPanel } from "./DividendTrackerChartsPanel";
 import DividendForwardIncomeSummary, { ForwardIncomeModeSelect } from "./DividendForwardIncomeSummary";
 import type { DividendDashboardView } from "../utils/dividendTrackerCharts";
+import { getDividendTrackerSession, setDividendTrackerSession } from "../utils/dividendDashboardSessionCache";
 
 export type DividendTrackerDashboardWidgetProps = {
   /** When set with `onPageSizeChange`, pagination is controlled (e.g. Dashboard header menu). */
@@ -45,16 +53,29 @@ export default function DividendTrackerDashboardWidget({
   onRegisterRefresh,
 }: DividendTrackerDashboardWidgetProps = {}) {
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
-  const [rows, setRows] = useState<DividendTrackerRow[]>([]);
-  const [forwardEstimates, setForwardEstimates] = useState<ForwardDividendEstimate[]>([]);
-  const [projectedFutureRows, setProjectedFutureRows] = useState<DividendTrackerRow[]>([]);
-  const [symbolsLoaded, setSymbolsLoaded] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [rows, setRows] = useState<DividendTrackerRow[]>(() => getDividendTrackerSession(getCurrentDataMode())?.rows ?? []);
+  const [forwardEstimates, setForwardEstimates] = useState<ForwardDividendEstimate[]>(
+    () => getDividendTrackerSession(getCurrentDataMode())?.forwardEstimates ?? []
+  );
+  const [projectedFutureRows, setProjectedFutureRows] = useState<DividendTrackerRow[]>(
+    () => getDividendTrackerSession(getCurrentDataMode())?.projectedFutureRows ?? []
+  );
+  const [symbolsLoaded, setSymbolsLoaded] = useState<string[]>(
+    () => getDividendTrackerSession(getCurrentDataMode())?.symbolsLoaded ?? []
+  );
+  const [loading, setLoading] = useState(() => {
+    if (!hasFinnhubApiKey()) return false;
+    const s = getDividendTrackerSession(getCurrentDataMode());
+    return !(s && (s.rows.length > 0 || s.forwardEstimates.length > 0));
+  });
   const [error, setError] = useState<string | null>(null);
-  const [lastAt, setLastAt] = useState<Date | null>(null);
-  const [timeFilter, setTimeFilter] = useState<DividendTimeFilter>("all");
-  const [symbolFilter, setSymbolFilter] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
+  const [lastAt, setLastAt] = useState<Date | null>(() => {
+    const iso = getDividendTrackerSession(getCurrentDataMode())?.lastAtIso;
+    return iso ? new Date(iso) : null;
+  });
+  const [timeFilter, setTimeFilter] = useState<DividendTimeFilter>(() => readDashboardDividendWidgetTimeFilter());
+  const [symbolFilter, setSymbolFilter] = useState<string | null>(() => readDashboardDividendWidgetSymbolFilter());
+  const [page, setPage] = useState(() => readDashboardDividendWidgetPage());
   const [internalPageSize, setInternalPageSize] = useState(() => readDividendTrackerPageSize());
 
   const isPageSizeControlled =
@@ -62,10 +83,38 @@ export default function DividendTrackerDashboardWidget({
   const pageSize = isPageSizeControlled ? pageSizeProp! : internalPageSize;
 
   const hasKey = hasFinnhubApiKey();
+  const priceSync = useContext(CurrentPriceSyncContext);
 
   useEffect(() => subscribeToDataMode(setDataMode), []);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    try {
+      localStorage.setItem(DASHBOARD_DIVIDEND_WIDGET_TIME_FILTER_KEY, timeFilter);
+    } catch {
+      /* ignore */
+    }
+  }, [timeFilter]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        DASHBOARD_DIVIDEND_WIDGET_SYMBOL_FILTER_KEY,
+        symbolFilter === null ? "__all__" : symbolFilter
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [symbolFilter]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DASHBOARD_DIVIDEND_WIDGET_PAGE_KEY, String(page));
+    } catch {
+      /* ignore */
+    }
+  }, [page]);
+
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
     const apiKey = getFinnhubApiKey();
     if (!apiKey) {
       setError("Add a Finnhub API key in Settings.");
@@ -75,7 +124,7 @@ export default function DividendTrackerDashboardWidget({
       setSymbolsLoaded([]);
       return;
     }
-    setLoading(true);
+    if (!opts?.silent) setLoading(true);
     setError(null);
     try {
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
@@ -88,7 +137,15 @@ export default function DividendTrackerDashboardWidget({
       setForwardEstimates(fwd);
       setProjectedFutureRows(pfr);
       setSymbolsLoaded(symbols);
-      setLastAt(new Date());
+      const now = new Date();
+      setLastAt(now);
+      setDividendTrackerSession(dataMode, {
+        rows: next,
+        forwardEstimates: fwd,
+        projectedFutureRows: pfr,
+        symbolsLoaded: symbols,
+        lastAtIso: now.toISOString(),
+      });
     } catch (e) {
       console.error(e);
       setError(typeof e === "string" ? e : "Could not load dividends");
@@ -102,13 +159,23 @@ export default function DividendTrackerDashboardWidget({
   }, [dataMode]);
 
   useEffect(() => {
-    if (hasKey) void load();
-  }, [hasKey, load]);
+    if (!hasKey) return;
+    const s = getDividendTrackerSession(dataMode);
+    const silent = !!(s && (s.rows.length > 0 || s.forwardEstimates.length > 0));
+    void load({ silent });
+  }, [hasKey, load, dataMode]);
 
   useEffect(() => {
-    onRegisterRefresh?.(load);
+    onRegisterRefresh?.(() => load());
     return () => onRegisterRefresh?.(() => {});
   }, [load, onRegisterRefresh]);
+
+  useEffect(() => {
+    if (!priceSync?.enabled) return;
+    if (priceSync.tick === 0) return;
+    if (!hasKey) return;
+    void load({ silent: true });
+  }, [priceSync?.enabled, priceSync?.tick, hasKey, load]);
 
   useEffect(() => {
     setPage(0);

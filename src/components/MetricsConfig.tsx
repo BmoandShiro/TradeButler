@@ -47,6 +47,7 @@ const defaultMetrics: MetricConfig[] = [
   { id: "worst_day", label: "Worst Day", enabled: false, category: "Advanced" },
   { id: "average_holding_time_seconds", label: "Avg Holding Time", enabled: true, category: "Performance" },
   { id: "position_size_chart", label: "Position Size Chart", enabled: false, category: "Charts" },
+  { id: "forward_dividend_estimates", label: "Forward Dividend Estimates", enabled: false, category: "Dividends" },
   { id: "current_price", label: "Current Price", enabled: false, category: "Market" },
 ];
 

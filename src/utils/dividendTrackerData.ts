@@ -154,6 +154,15 @@ export function forwardIncomeBreakdown(forwardAnnualUsd: number): {
 /** Show all three metrics or one at a time (monthly / quarterly / annual average or run-rate). */
 export type ForwardIncomeDisplayMode = "all" | "monthly" | "quarterly" | "annual";
 
+/** Single-metric dashboard card: label per estimate type (gear menu). */
+export type ForwardDividendEstimateMode = "monthly" | "quarterly" | "annual";
+
+export const FORWARD_DIVIDEND_ESTIMATE_LABELS: Record<ForwardDividendEstimateMode, { label: string }> = {
+  monthly: { label: "EST. Div. monthly (avg.)" },
+  quarterly: { label: "EST. Div. quarterly (avg.)" },
+  annual: { label: "EST. Div. annual (run-rate)" },
+};
+
 export const DIVIDEND_TOOL_FORWARD_INCOME_MODE_KEY = "tradebutler_dividend_tool_income_mode";
 
 export const DASHBOARD_DIVIDEND_SHOW_FORWARD_IN_TRACKER_KEY = "tradebutler_dashboard_dividend_show_forward_in_tracker";
@@ -287,6 +296,43 @@ export function sortDividendRowsAllFilter(rows: DividendTrackerRow[], today: Dat
 }
 
 export type DividendTimeFilter = "all" | "current" | "future" | "past";
+
+/** Persisted dashboard Dividend tracker widget: period / symbol / page. */
+export const DASHBOARD_DIVIDEND_WIDGET_TIME_FILTER_KEY = "tradebutler_dashboard_dividend_widget_time_filter";
+export const DASHBOARD_DIVIDEND_WIDGET_SYMBOL_FILTER_KEY = "tradebutler_dashboard_dividend_widget_symbol_filter";
+export const DASHBOARD_DIVIDEND_WIDGET_PAGE_KEY = "tradebutler_dashboard_dividend_widget_page";
+
+export function readDashboardDividendWidgetTimeFilter(): DividendTimeFilter {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_DIVIDEND_WIDGET_TIME_FILTER_KEY);
+    if (raw === "all" || raw === "current" || raw === "future" || raw === "past") return raw;
+  } catch {
+    /* ignore */
+  }
+  return "all";
+}
+
+export function readDashboardDividendWidgetSymbolFilter(): string | null {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_DIVIDEND_WIDGET_SYMBOL_FILTER_KEY);
+    if (raw == null || raw === "" || raw === "__all__") return null;
+    return raw;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+export function readDashboardDividendWidgetPage(): number {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_DIVIDEND_WIDGET_PAGE_KEY);
+    const n = raw ? parseInt(raw, 10) : 0;
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  } catch {
+    /* ignore */
+  }
+  return 0;
+}
 
 /** Filter by period + symbol, then sort (same rules as Tools Dividend Tracker). */
 export function filterAndSortDividendRows(

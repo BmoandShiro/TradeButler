@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useRef, useMemo, useCallback, createContext, useContext } from "react";
+import { CurrentPriceSyncContext } from "../contexts/CurrentPriceSyncContext";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
@@ -49,6 +50,7 @@ import {
   Coins,
   ExternalLink,
   Sparkles,
+  Newspaper,
 } from "lucide-react";
 import {
   MetricsConfigPanel,
@@ -85,6 +87,13 @@ import {
   Brush,
 } from "recharts";
 import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
+import {
+  buildDashboardSessionCacheKey,
+  getDashboardSessionSnapshot,
+  patchDashboardSessionSnapshot,
+  setDashboardSessionSnapshot,
+  type DashboardSessionSnapshot,
+} from "../utils/dashboardSessionCache";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { formatCompactNumber, formatWithCommas } from "../utils/formatCompactNumber";
 import { loadSandboxState } from "../utils/sandboxStore";
@@ -105,8 +114,12 @@ import {
   readForwardIncomeDisplayMode,
   DASHBOARD_DIVIDEND_TRACKER_INCOME_MODE_KEY,
   DASHBOARD_DIVIDEND_SHOW_FORWARD_IN_TRACKER_KEY,
+  loadDividendTrackerRows,
+  forwardIncomeBreakdown,
+  FORWARD_DIVIDEND_ESTIMATE_LABELS,
   type ForwardIncomeDisplayMode,
 } from "../utils/dividendTrackerData";
+import { getFinnhubApiKey, hasFinnhubApiKey } from "../utils/finnhubManager";
 import {
   readDividendDashboardView,
   DASHBOARD_DIVIDEND_VIEW_KEY,
@@ -256,6 +269,7 @@ const metricIcons: Record<string, any> = {
   strategy_consecutive_losses: TrendingDown,
   average_holding_time_seconds: Clock,
   position_size_chart: BarChart3,
+  forward_dividend_estimates: Sparkles,
   current_price: CircleDollarSign,
 };
 
@@ -304,6 +318,8 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
       return `$${formatWithCommas(value || 0, { decimals: 2 })}`;
     case "average_holding_time_seconds":
       return formatHoldingTime(value || 0);
+    case "forward_dividend_estimates":
+      return `$${formatWithCommas(value || 0, { decimals: 2 })}`;
     case "average_gain_pct":
     case "average_loss_pct":
     case "largest_win_pct":
@@ -350,6 +366,9 @@ const formatHoldingTime = (seconds: number): string => {
 const getMetricColor = (id: string, value: number, colorRange?: { min: number; max: number }): string => {
   if (id === "current_price") {
     return "var(--accent)";
+  }
+  if (id === "forward_dividend_estimates") {
+    return value > 0 ? "var(--profit)" : "var(--text-secondary)";
   }
   // Get color range from localStorage if not provided
   if (!colorRange) {
@@ -573,10 +592,9 @@ interface MetricInstance {
   quoteSymbol?: string;
   /** Live quote metric: refresh interval in seconds; 0 = manual refresh only. */
   quoteRefreshSeconds?: number;
+  /** Forward dividend metric: which single estimate the card shows (gear menu). */
+  forwardDividendEstimateMode?: "monthly" | "quarterly" | "annual";
 }
-
-type CurrentPriceSyncContextValue = { enabled: boolean; seconds: number; tick: number };
-const CurrentPriceSyncContext = createContext<CurrentPriceSyncContextValue | null>(null);
 
 function readDashboardCurrentPriceSync(): { enabled: boolean; seconds: number } {
   const enabled = localStorage.getItem(CURRENT_PRICE_SYNC_ENABLED_KEY) === "true";
@@ -1342,6 +1360,12 @@ const metricDescriptions: Record<string, { description: string; calculation: str
     description: "Live last price for a symbol you choose, refreshed on an interval or manually.",
     calculation: "Fetched from your quote provider via fetch_stock_quote (same source as other quote features)."
   },
+  forward_dividend_estimates: {
+    description:
+      "Estimated monthly, quarterly, and annual dividend income from a forward ~12 month run-rate (latest rate × shares × frequency).",
+    calculation:
+      "Per-symbol forward annual from Finnhub dividend data; monthly and quarterly are annual ÷ 12 and ÷ 4 for planning averages.",
+  },
   strategy_win_rate: {
     description: "The win rate for trades assigned to strategies (excluding unassigned trades).",
     calculation: "Strategy winning trades ÷ (Strategy winning trades + Strategy losing trades) × 100%"
@@ -1780,6 +1804,9 @@ function SortableMetricCard({
                   zIndex: 99999,
                   minWidth: "280px",
                   maxWidth: "400px",
+                  maxHeight: "min(560px, calc(100vh - 24px))",
+                  overflowY: "auto",
+                  overflowX: "hidden",
                 }}
                 onClick={(e) => e.stopPropagation()}
                 onMouseDown={(e) => e.stopPropagation()}
@@ -2257,7 +2284,7 @@ function SortableMetricCard({
           <Icon size={24} />
         )}
       </div>
-      {(metric as any).baseMetricId === "current_price" ? (
+      {baseMetricId === "current_price" ? (
         <CurrentPriceMetricRow
           metric={metric}
           setMetricInstances={setMetricInstances}
@@ -2285,6 +2312,45 @@ function SortableMetricCard({
             })()}
           </p>
         </CurrentPriceMetricRow>
+      ) : baseMetricId === "forward_dividend_estimates" ? (
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            pointerEvents: "none",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+          }}
+        >
+          <p
+            style={{
+              fontSize: "11px",
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+              color: "var(--accent)",
+              marginBottom: "6px",
+              textTransform: "uppercase",
+            }}
+          >
+            {FORWARD_DIVIDEND_ESTIMATE_LABELS[(metric as MetricInstance).forwardDividendEstimateMode ?? "monthly"].label}
+          </p>
+          <p
+            title={formatMetricValue("forward_dividend_estimates", value, metrics)}
+            style={{
+              fontSize: "24px",
+              fontWeight: "bold",
+              color: color,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {formatMetricValue("forward_dividend_estimates", value, metrics)}
+          </p>
+        </div>
       ) : (
       <div 
         style={{ 
@@ -2296,8 +2362,8 @@ function SortableMetricCard({
           cursor: ((metric as any).baseMetricId === "best_day" || (metric as any).baseMetricId === "worst_day" || (metric as any).baseMetricId === "largest_win" || (metric as any).baseMetricId === "largest_loss") ? "pointer" : "default",
         }}
         onClick={async (e) => {
-          const baseMetricId = (metric as any).baseMetricId || metric.id;
-          if (baseMetricId === "best_day" && metrics?.best_day_date) {
+          const baseMetricIdInner = (metric as any).baseMetricId || metric.id;
+          if (baseMetricIdInner === "best_day" && metrics?.best_day_date) {
             e.stopPropagation();
             setTimeframe("custom");
             setCustomStartDate(metrics.best_day_date);
@@ -2305,7 +2371,7 @@ function SortableMetricCard({
             localStorage.setItem("tradebutler_dashboard_timeframe", "custom");
             localStorage.setItem("tradebutler_dashboard_custom_start", metrics.best_day_date);
             localStorage.setItem("tradebutler_dashboard_custom_end", metrics.best_day_date);
-          } else if (baseMetricId === "worst_day" && metrics?.worst_day_date) {
+          } else if (baseMetricIdInner === "worst_day" && metrics?.worst_day_date) {
             e.stopPropagation();
             setTimeframe("custom");
             setCustomStartDate(metrics.worst_day_date);
@@ -2313,7 +2379,7 @@ function SortableMetricCard({
             localStorage.setItem("tradebutler_dashboard_timeframe", "custom");
             localStorage.setItem("tradebutler_dashboard_custom_start", metrics.worst_day_date);
             localStorage.setItem("tradebutler_dashboard_custom_end", metrics.worst_day_date);
-          } else if (baseMetricId === "largest_win" && metrics?.largest_win_group_id) {
+          } else if (baseMetricIdInner === "largest_win" && metrics?.largest_win_group_id) {
             e.stopPropagation();
             setSelectedPositionGroupId(metrics.largest_win_group_id);
             setShowPositionGroupModal(true);
@@ -2328,7 +2394,7 @@ function SortableMetricCard({
             } catch (error) {
               console.error("Error loading position group:", error);
             }
-          } else if (baseMetricId === "largest_loss" && metrics?.largest_loss_group_id) {
+          } else if (baseMetricIdInner === "largest_loss" && metrics?.largest_loss_group_id) {
             e.stopPropagation();
             setSelectedPositionGroupId(metrics.largest_loss_group_id);
             setShowPositionGroupModal(true);
@@ -2467,6 +2533,9 @@ function SortableMetricCard({
               zIndex: 99999,
               minWidth: "280px",
               maxWidth: "400px",
+              maxHeight: "min(560px, calc(100vh - 24px))",
+              overflowY: "auto",
+              overflowX: "hidden",
             }}
             onClick={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
@@ -2564,6 +2633,46 @@ function SortableMetricCard({
                     <option value={120}>Every 2m</option>
                   </select>
                   )}
+                </div>
+              )}
+              {(metric as any).baseMetricId === "forward_dividend_estimates" && (
+                <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--border-color)" }}>
+                  <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>Show estimate</div>
+                  <select
+                    value={(metric as MetricInstance).forwardDividendEstimateMode ?? "monthly"}
+                    onChange={(e) => {
+                      const v = e.target.value as "monthly" | "quarterly" | "annual";
+                      setMetricInstances((prev) => {
+                        const updated = prev.map((inst) =>
+                          inst.instanceId === metric.id ? { ...inst, forwardDividendEstimateMode: v } : inst
+                        );
+                        localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+                        return updated;
+                      });
+                    }}
+                    onClick={(ev) => ev.stopPropagation()}
+                    onMouseDown={(ev) => ev.stopPropagation()}
+                    style={{
+                      width: "100%",
+                      padding: "8px 10px",
+                      backgroundColor: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "6px",
+                      color: "var(--text-primary)",
+                      fontSize: "13px",
+                      cursor: "pointer",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <option value="monthly">Monthly (avg.)</option>
+                    <option value="quarterly">Quarterly (avg.)</option>
+                    <option value="annual">Annual (run-rate)</option>
+                  </select>
+                  {currentPriceSyncCtx?.enabled ? (
+                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "8px", lineHeight: 1.4 }}>
+                      Live quotes sync updates this figure every {currentPriceSyncCtx.seconds}s.
+                    </div>
+                  ) : null}
                 </div>
               )}
               {layoutLocked && moveInLockedGridRef?.current ? (
@@ -2945,6 +3054,7 @@ export default function Dashboard() {
   const fetchOpenPositionQuotes = useCallback(async (showLoading = true) => {
     if (dataMode === "sandbox" || openPositionGroups.length === 0) {
       setOpenPositionQuotes({});
+      patchDashboardSessionSnapshot({ openPositionQuotes: {}, lastQuoteRefreshIso: null });
       return;
     }
     const symbols = [...new Set(openPositionGroups.map((g) => g.entry_trade.symbol))];
@@ -2958,8 +3068,16 @@ export default function Dashboard() {
         next[symbol] = null;
       }
     }
-    setOpenPositionQuotes((prev) => ({ ...prev, ...next }));
-    setLastQuoteRefresh(new Date());
+    const refreshedAt = new Date();
+    setOpenPositionQuotes((prev) => {
+      const merged = { ...prev, ...next };
+      patchDashboardSessionSnapshot({
+        openPositionQuotes: merged,
+        lastQuoteRefreshIso: refreshedAt.toISOString(),
+      });
+      return merged;
+    });
+    setLastQuoteRefresh(refreshedAt);
     if (showLoading) setIsRefreshingQuotes(false);
   }, [dataMode, openPositionGroups]);
 
@@ -3067,6 +3185,11 @@ export default function Dashboard() {
             cardRowSpan: (instance as MetricInstance).cardRowSpan ?? 1,
           }
         : {}),
+      ...(instance.baseMetricId === "forward_dividend_estimates"
+        ? {
+            forwardDividendEstimateMode: (instance as MetricInstance).forwardDividendEstimateMode ?? "monthly",
+          }
+        : {}),
     };
     
     const updatedInstances = [...metricInstances, newInstance];
@@ -3156,6 +3279,7 @@ export default function Dashboard() {
       ...(baseMetricId === "current_price"
         ? { quoteSymbol: "SPY", quoteRefreshSeconds: 30, cardColumnSpan: 1, cardRowSpan: 1 }
         : {}),
+      ...(baseMetricId === "forward_dividend_estimates" ? { forwardDividendEstimateMode: "monthly" as const } : {}),
     };
     
     const updatedInstances = [...metricInstances, newInstance];
@@ -3344,6 +3468,49 @@ export default function Dashboard() {
     dataMode,
     openPositionGroups.length,
     fetchOpenPositionQuotes,
+  ]);
+
+  const [forwardDividendAnnualUsd, setForwardDividendAnnualUsd] = useState(0);
+  const loadForwardDividendAnnual = useCallback(async (): Promise<number> => {
+    const apiKey = getFinnhubApiKey();
+    if (!apiKey || dataMode === "sandbox") {
+      setForwardDividendAnnualUsd(0);
+      return 0;
+    }
+    try {
+      const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+      const { forwardEstimates } = await loadDividendTrackerRows({ apiKey, dataMode, pairingMethod });
+      const sum = forwardEstimates.reduce((s, e) => s + e.forwardAnnualUsd, 0);
+      setForwardDividendAnnualUsd(sum);
+      return sum;
+    } catch {
+      setForwardDividendAnnualUsd(0);
+      return 0;
+    }
+  }, [dataMode]);
+
+  useEffect(() => {
+    if (!hasFinnhubApiKey()) {
+      setForwardDividendAnnualUsd(0);
+      return;
+    }
+    if (!metricInstances.some((m) => m.baseMetricId === "forward_dividend_estimates")) return;
+    void loadForwardDividendAnnual();
+  }, [dataMode, metricInstances, loadForwardDividendAnnual]);
+
+  useEffect(() => {
+    if (!currentPriceSync.enabled) return;
+    if (currentPriceSyncTick === 0) return;
+    if (!hasFinnhubApiKey()) return;
+    if (dataMode === "sandbox") return;
+    if (!metricInstances.some((m) => m.baseMetricId === "forward_dividend_estimates")) return;
+    void loadForwardDividendAnnual();
+  }, [
+    currentPriceSync.enabled,
+    currentPriceSyncTick,
+    dataMode,
+    metricInstances,
+    loadForwardDividendAnnual,
   ]);
 
   const [metricCardOrder, setMetricCardOrder] = useState<string[]>(() => {
@@ -3841,6 +4008,24 @@ export default function Dashboard() {
     const n = parseInt(raw, 10);
     return Number.isNaN(n) ? null : n;
   });
+
+  useLayoutEffect(() => {
+    const snap = getDashboardSessionSnapshot();
+    if (!snap) return;
+    const key = buildDashboardSessionCacheKey({
+      dataMode,
+      timeframe,
+      customStartDate,
+      customEndDate,
+      dashboardStrategyId,
+    });
+    if (snap.cacheKey !== key) return;
+    setOpenPositionQuotes(snap.openPositionQuotes ?? {});
+    if (snap.lastQuoteRefreshIso) {
+      setLastQuoteRefresh(new Date(snap.lastQuoteRefreshIso));
+    }
+  }, [dataMode, timeframe, customStartDate, customEndDate, dashboardStrategyId]);
+
   const [showPositionGroupModal, setShowPositionGroupModal] = useState(false);
   const [_selectedPositionGroupId, setSelectedPositionGroupId] = useState<number | null>(null);
   const [selectedPositionGroup, setSelectedPositionGroup] = useState<any>(null);
@@ -4304,6 +4489,7 @@ export default function Dashboard() {
           cardRowSpan: inst.cardRowSpan ?? undefined,
           quoteSymbol: inst.quoteSymbol,
           quoteRefreshSeconds: inst.quoteRefreshSeconds,
+          forwardDividendEstimateMode: inst.forwardDividendEstimateMode,
         };
       })
       .filter((m): m is any => m !== null);
@@ -4559,12 +4745,6 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    loadDashboardData();
-    // Reset to first page when timeframe changes
-    setCurrentTradesPage(1);
-  }, [timeframe, customStartDate, customEndDate, dataMode, dashboardStrategyId]);
-
-  useEffect(() => {
     if (dashboardStrategyId != null) {
       localStorage.setItem(DASHBOARD_STRATEGY_ID_KEY, String(dashboardStrategyId));
     } else {
@@ -4631,76 +4811,179 @@ export default function Dashboard() {
     }
   }, [configKey]);
 
-  const loadDashboardData = async () => {
-    setLoading(true);
-    try {
-      if (dataMode === "sandbox") {
-        const state = loadSandboxState();
-        setMetrics(EXAMPLE_METRICS as unknown as Metrics);
-        setStrategies(state.strategies.map((s) => ({ id: s.id, name: s.name, description: s.description, notes: s.notes, color: s.color })) as unknown as Strategy[]);
-        const topSymbolsData = EXAMPLE_SYMBOL_PNL.slice(0, 5).map((pnl) => ({
+  const loadDashboardData = useCallback(
+    async (options?: { skipCache?: boolean }) => {
+      const cacheKey = buildDashboardSessionCacheKey({
+        dataMode,
+        timeframe,
+        customStartDate,
+        customEndDate,
+        dashboardStrategyId,
+      });
+      const skipCache = options?.skipCache ?? false;
+      const snap = getDashboardSessionSnapshot();
+      const cacheHit = !skipCache && snap?.cacheKey === cacheKey;
+
+      if (cacheHit && snap) {
+        setMetrics(snap.metrics as Metrics);
+        setStrategies(snap.strategies as Strategy[]);
+        setTopSymbols(snap.topSymbols as TopSymbol[]);
+        setStrategyPerformance(snap.strategyPerformance as StrategyPerformance[]);
+        setRecentTrades(snap.recentTrades as RecentTrade[]);
+        setTrades(snap.trades as RecentTrade[]);
+        setOpenPositionGroups(snap.openPositionGroups as OpenPositionGroup[]);
+        setOpenPositionQuotes(snap.openPositionQuotes ?? {});
+        if (snap.lastQuoteRefreshIso) {
+          setLastQuoteRefresh(new Date(snap.lastQuoteRefreshIso));
+        }
+        setForwardDividendAnnualUsd(snap.forwardDividendAnnualUsd);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
+
+      try {
+        if (dataMode === "sandbox") {
+          const state = loadSandboxState();
+          const metricsVal = EXAMPLE_METRICS as unknown as Metrics;
+          const strategiesVal = state.strategies.map((s) => ({
+            id: s.id,
+            name: s.name,
+            description: s.description,
+            notes: s.notes,
+            color: s.color,
+          })) as unknown as Strategy[];
+          const topSymbolsData = EXAMPLE_SYMBOL_PNL.slice(0, 5).map((pnl) => ({
+            symbol: pnl.symbol,
+            trade_count: pnl.closed_positions,
+            total_volume: 0,
+            estimated_pnl: pnl.total_net_pnl,
+          }));
+          let perf = EXAMPLE_STRATEGY_PERFORMANCE as unknown as StrategyPerformance[];
+          if (dashboardStrategyId != null) {
+            perf = perf.filter((p) => p.strategy_id === dashboardStrategyId);
+          }
+          const recentVal = EXAMPLE_RECENT_TRADES.slice(0, 5) as unknown as RecentTrade[];
+          const tradesVal = EXAMPLE_RECENT_TRADES as unknown as RecentTrade[];
+          setMetrics(metricsVal);
+          setStrategies(strategiesVal);
+          setTopSymbols(topSymbolsData);
+          setStrategyPerformance(perf);
+          setRecentTrades(recentVal);
+          setTrades(tradesVal);
+          setOpenPositionGroups([]);
+          setForwardDividendAnnualUsd(0);
+          const sandboxSnap: DashboardSessionSnapshot = {
+            cacheKey,
+            metrics: metricsVal,
+            topSymbols: topSymbolsData,
+            strategyPerformance: perf,
+            recentTrades: recentVal,
+            trades: tradesVal,
+            openPositionGroups: [],
+            strategies: strategiesVal,
+            forwardDividendAnnualUsd: 0,
+            openPositionQuotes: {},
+            lastQuoteRefreshIso: null,
+          };
+          setDashboardSessionSnapshot(sandboxSnap);
+          return;
+        }
+
+        const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+        const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
+        const startDate = dateRange.start ? dateRange.start.toISOString() : null;
+        const endDate = dateRange.end ? dateRange.end.toISOString() : null;
+        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+        const strategyArgs = dashboardStrategyId != null ? { strategyId: dashboardStrategyId } : {};
+        const [metricsData, pnlData, strategiesData, tradesData, allTradesData, strategiesList, positionGroupsData] = await Promise.all([
+          invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
+          invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate, ...paperArgs, filters: null, ...strategyArgs }),
+          invoke<StrategyPerformance[]>("get_strategy_performance", { pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
+          invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
+          invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
+          invoke<Strategy[]>("get_strategies"),
+          invoke<OpenPositionGroup[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null, ...paperArgs }),
+        ]);
+        setMetrics(metricsData);
+        setStrategies(strategiesList);
+        const filteredGroups = (positionGroupsData || []).filter((g) => Math.abs(g.final_quantity) >= 0.0001);
+        setOpenPositionGroups(filteredGroups);
+
+        const topSymbolsData = pnlData.slice(0, 5).map((pnl) => ({
           symbol: pnl.symbol,
           trade_count: pnl.closed_positions,
           total_volume: 0,
           estimated_pnl: pnl.total_net_pnl,
         }));
         setTopSymbols(topSymbolsData);
-        let perf = EXAMPLE_STRATEGY_PERFORMANCE as unknown as StrategyPerformance[];
-        if (dashboardStrategyId != null) {
-          perf = perf.filter((p) => p.strategy_id === dashboardStrategyId);
-        }
-        setStrategyPerformance(perf);
-        setRecentTrades(EXAMPLE_RECENT_TRADES.slice(0, 5) as unknown as RecentTrade[]);
-        setTrades(EXAMPLE_RECENT_TRADES as unknown as RecentTrade[]);
-        setOpenPositionGroups([]);
-        setLoading(false);
-        return;
-      }
+        setStrategyPerformance(strategiesData);
+        setRecentTrades(tradesData);
+        const sortedTrades = [...allTradesData].sort(
+          (a, b) => new Date(b.exit_timestamp).getTime() - new Date(a.exit_timestamp).getTime()
+        );
+        setTrades(sortedTrades);
 
-      const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-      const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
-      const startDate = dateRange.start ? dateRange.start.toISOString() : null;
-      const endDate = dateRange.end ? dateRange.end.toISOString() : null;
-      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
-      const strategyArgs = dashboardStrategyId != null ? { strategyId: dashboardStrategyId } : {};
-      const [metricsData, pnlData, strategiesData, tradesData, allTradesData, strategiesList, positionGroupsData] = await Promise.all([
-        invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
-        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate, ...paperArgs, filters: null, ...strategyArgs }),
-        invoke<StrategyPerformance[]>("get_strategy_performance", { pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
-        invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
-        invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
-        invoke<Strategy[]>("get_strategies"),
-        invoke<OpenPositionGroup[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null, ...paperArgs }),
-      ]);
-      setMetrics(metricsData);
-      setStrategies(strategiesList);
-      setOpenPositionGroups(
-        (positionGroupsData || []).filter((g) => Math.abs(g.final_quantity) >= 0.0001)
-      );
-      
-      // Convert SymbolPnL to TopSymbol format for display
-      const topSymbolsData = pnlData
-        .slice(0, 5)
-        .map((pnl) => ({
-          symbol: pnl.symbol,
-          trade_count: pnl.closed_positions,
-          total_volume: 0, // We don't track volume separately
-          estimated_pnl: pnl.total_net_pnl,
-        }));
-      setTopSymbols(topSymbolsData);
-      setStrategyPerformance(strategiesData);
-      setRecentTrades(tradesData);
-      // Sort all trades by exit timestamp (most recent first)
-      const sortedTrades = [...allTradesData].sort((a, b) => 
-        new Date(b.exit_timestamp).getTime() - new Date(a.exit_timestamp).getTime()
-      );
-      setTrades(sortedTrades);
-    } catch (error) {
-      console.error("Error loading dashboard data:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
+        const forwardUsd = await loadForwardDividendAnnual();
+        setDashboardSessionSnapshot({
+          cacheKey,
+          metrics: metricsData,
+          topSymbols: topSymbolsData,
+          strategyPerformance: strategiesData,
+          recentTrades: tradesData,
+          trades: sortedTrades,
+          openPositionGroups: filteredGroups,
+          strategies: strategiesList,
+          forwardDividendAnnualUsd: forwardUsd,
+          openPositionQuotes: {},
+          lastQuoteRefreshIso: null,
+        });
+      } catch (error) {
+        console.error("Error loading dashboard data:", error);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [
+      customEndDate,
+      customStartDate,
+      dashboardStrategyId,
+      dataMode,
+      loadForwardDividendAnnual,
+      timeframe,
+    ]
+  );
+
+  const refreshDashboardSections = useCallback(() => {
+    void loadDashboardData({ skipCache: true });
+    void fetchOpenPositionQuotes(true);
+    dividendTrackerDashboardRefreshRef.current?.();
+    dividendIncomeDashboardRefreshRef.current?.();
+    window.dispatchEvent(new Event("tradeButlerRefreshNews"));
+  }, [fetchOpenPositionQuotes, loadDashboardData]);
+
+  useEffect(() => {
+    void loadDashboardData();
+  }, [loadDashboardData]);
+
+  useEffect(() => {
+    setCurrentTradesPage(1);
+  }, [timeframe, customStartDate, customEndDate, dataMode, dashboardStrategyId]);
+
+  useEffect(() => {
+    const onRefreshDashboard = () => {
+      void loadDashboardData({ skipCache: true });
+    };
+    window.addEventListener("tradeButlerRefreshDashboard", onRefreshDashboard);
+    return () => window.removeEventListener("tradeButlerRefreshDashboard", onRefreshDashboard);
+  }, [loadDashboardData]);
+
+  useEffect(() => {
+    if (!currentPriceSync.enabled) return;
+    if (dataMode === "sandbox") return;
+    if (currentPriceSyncTick === 0) return;
+    void loadDashboardData();
+  }, [currentPriceSync.enabled, currentPriceSyncTick, dataMode, loadDashboardData]);
 
   // Calculate strategy-filtered metrics
   const [filteredStrategyMetrics, setFilteredStrategyMetrics] = useState<Record<string, number>>({});
@@ -4895,6 +5178,7 @@ export default function Dashboard() {
     largest_win_pct: metrics?.largest_win_pct || 0,
     largest_loss_pct: metrics?.largest_loss_pct || 0,
     current_price: 0,
+    forward_dividend_estimates: 0,
   };
 
   const splitGrid = localStorage.getItem(DASHBOARD_SPLIT_GRID_KEY) === "true";
@@ -5431,9 +5715,14 @@ export default function Dashboard() {
 
         const renderCard = (metric: typeof sortedMetrics[0]) => {
           const baseMetricId = (metric as any).baseMetricId || metric.id;
-          const value = filteredStrategyMetrics[metric.id] !== undefined
+          let value = filteredStrategyMetrics[metric.id] !== undefined
             ? filteredStrategyMetrics[metric.id]
             : (metricValues[baseMetricId] || 0);
+          if (baseMetricId === "forward_dividend_estimates") {
+            const mode = (metric as MetricInstance).forwardDividendEstimateMode ?? "monthly";
+            const b = forwardIncomeBreakdown(forwardDividendAnnualUsd);
+            value = mode === "monthly" ? b.monthly : mode === "quarterly" ? b.quarterly : b.annual;
+          }
           const Icon = metricIcons[baseMetricId] || Activity;
           const color = getMetricColor(baseMetricId, value);
           return (
@@ -5987,7 +6276,32 @@ export default function Dashboard() {
                   <BarChart3 size={20} color="var(--accent)" />
                   <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Top Symbols</h2>
                   </div>
-                  <div style={{ position: "relative" }}>
+                  <div style={{ position: "relative", display: "flex", alignItems: "center", gap: "4px" }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        refreshDashboardSections();
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        padding: "4px",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "4px",
+                      }}
+                      title="Refresh dashboard data"
+                    >
+                      <RefreshCw size={16} />
+                    </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -6035,6 +6349,9 @@ export default function Dashboard() {
                           boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                           zIndex: 99999,
                           minWidth: "120px",
+                          maxHeight: "min(560px, calc(100vh - 24px))",
+                          overflowY: "auto",
+                          overflowX: "hidden",
                         }}
                         onClick={(e) => e.stopPropagation()}
                         onMouseDown={(e) => e.stopPropagation()}
@@ -6237,7 +6554,32 @@ export default function Dashboard() {
                   <TrendingUpIcon size={20} color="var(--accent)" />
                   <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Strategy Performance</h2>
                   </div>
-                  <div style={{ position: "relative" }}>
+                  <div style={{ position: "relative", display: "flex", alignItems: "center", gap: "4px" }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        refreshDashboardSections();
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        padding: "4px",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "4px",
+                      }}
+                      title="Refresh dashboard data"
+                    >
+                      <RefreshCw size={16} />
+                    </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -6285,6 +6627,9 @@ export default function Dashboard() {
                           boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                           zIndex: 99999,
                           minWidth: "120px",
+                          maxHeight: "min(560px, calc(100vh - 24px))",
+                          overflowY: "auto",
+                          overflowX: "hidden",
                         }}
                         onClick={(e) => e.stopPropagation()}
                         onMouseDown={(e) => e.stopPropagation()}
@@ -6739,7 +7084,32 @@ export default function Dashboard() {
                   <Clock size={20} color="var(--accent)" />
                   <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Recent Trades</h2>
                   </div>
-                  <div style={{ position: "relative" }}>
+                  <div style={{ position: "relative", display: "flex", alignItems: "center", gap: "4px" }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        refreshDashboardSections();
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        padding: "4px",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "4px",
+                      }}
+                      title="Refresh dashboard data"
+                    >
+                      <RefreshCw size={16} />
+                    </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -6787,6 +7157,9 @@ export default function Dashboard() {
                           boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                           zIndex: 99999,
                           minWidth: "120px",
+                          maxHeight: "min(560px, calc(100vh - 24px))",
+                          overflowY: "auto",
+                          overflowX: "hidden",
                         }}
                         onClick={(e) => e.stopPropagation()}
                         onMouseDown={(e) => e.stopPropagation()}
@@ -7043,7 +7416,7 @@ export default function Dashboard() {
                             onClick={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
-                              void fetchOpenPositionQuotes(true);
+                              refreshDashboardSections();
                             }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
@@ -7062,7 +7435,7 @@ export default function Dashboard() {
                               borderRadius: "4px",
                               opacity: isRefreshingQuotes ? 0.5 : 1,
                             }}
-                            title={lastQuoteRefresh ? `Refresh prices (last: ${format(lastQuoteRefresh, "h:mm:ss a")})` : "Refresh prices"}
+                            title={lastQuoteRefresh ? `Refresh dashboard & prices (last quote: ${format(lastQuoteRefresh, "h:mm:ss a")})` : "Refresh dashboard & prices"}
                           >
                             <RefreshCw size={16} style={{ animation: isRefreshingQuotes ? "spin 1s linear infinite" : "none" }} />
                           </button>
@@ -7114,6 +7487,9 @@ export default function Dashboard() {
                               boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                               zIndex: 99999,
                               minWidth: "120px",
+                              maxHeight: "min(560px, calc(100vh - 24px))",
+                              overflowY: "auto",
+                              overflowX: "hidden",
                             }}
                             onClick={(e) => e.stopPropagation()}
                             onMouseDown={(e) => e.stopPropagation()}
@@ -7638,8 +8014,35 @@ export default function Dashboard() {
                         <div {...dragHandleProps} style={{ cursor: "grab" }}>
                           <GripVertical size={16} color="var(--text-secondary)" />
                         </div>
+                        <Newspaper size={20} color="var(--accent)" />
+                        <h2 style={{ fontSize: "20px", fontWeight: "600" }}>News</h2>
                       </div>
-                      <div style={{ position: "relative" }}>
+                      <div style={{ position: "relative", display: "flex", alignItems: "center", gap: "4px" }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            window.dispatchEvent(new Event("tradeButlerRefreshNews"));
+                          }}
+                          onMouseDown={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                          }}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            padding: "4px",
+                            cursor: "pointer",
+                            color: "var(--text-secondary)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            borderRadius: "4px",
+                          }}
+                          title="Refresh news"
+                        >
+                          <RefreshCw size={16} />
+                        </button>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -7687,6 +8090,9 @@ export default function Dashboard() {
                               boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                               zIndex: 99999,
                               minWidth: "120px",
+                              maxHeight: "min(560px, calc(100vh - 24px))",
+                              overflowY: "auto",
+                              overflowX: "hidden",
                             }}
                             onClick={(e) => e.stopPropagation()}
                             onMouseDown={(e) => e.stopPropagation()}
@@ -7833,6 +8239,8 @@ export default function Dashboard() {
                     <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
                       <NewsWidget 
                         compact 
+                        hideCompactTitle
+                        showRefresh={false}
                         maxItems={5}
                         externalSearchQuery={newsSearchQuery}
                         externalIncludePositions={newsIncludePositions}
@@ -8000,6 +8408,9 @@ export default function Dashboard() {
                                   boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                                   zIndex: 99999,
                                   minWidth: "200px",
+                                  maxHeight: "min(560px, calc(100vh - 24px))",
+                                  overflowY: "auto",
+                                  overflowX: "hidden",
                                 }}
                                 onClick={(e) => e.stopPropagation()}
                                 onMouseDown={(e) => e.stopPropagation()}
@@ -8561,6 +8972,9 @@ export default function Dashboard() {
                                     boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                                     zIndex: 99999,
                                     minWidth: "200px",
+                                    maxHeight: "min(560px, calc(100vh - 24px))",
+                                    overflowY: "auto",
+                                    overflowX: "hidden",
                                   }}
                                   onClick={(e) => e.stopPropagation()}
                                   onMouseDown={(e) => e.stopPropagation()}
@@ -8815,7 +9229,32 @@ export default function Dashboard() {
                     <Activity size={20} color="var(--accent)" />
                     <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Trades</h2>
                   </div>
-                  <div style={{ position: "relative" }}>
+                  <div style={{ position: "relative", display: "flex", alignItems: "center", gap: "4px" }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        refreshDashboardSections();
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        padding: "4px",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "4px",
+                      }}
+                      title="Refresh dashboard data"
+                    >
+                      <RefreshCw size={16} />
+                    </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -8863,6 +9302,9 @@ export default function Dashboard() {
                           boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                           zIndex: 99999,
                           minWidth: "120px",
+                          maxHeight: "min(560px, calc(100vh - 24px))",
+                          overflowY: "auto",
+                          overflowX: "hidden",
                         }}
                         onClick={(e) => e.stopPropagation()}
                         onMouseDown={(e) => e.stopPropagation()}
