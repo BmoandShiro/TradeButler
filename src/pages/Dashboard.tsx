@@ -46,6 +46,8 @@ import {
   CircleDollarSign,
   Plus,
   Layers,
+  Coins,
+  ExternalLink,
 } from "lucide-react";
 import {
   MetricsConfigPanel,
@@ -92,6 +94,12 @@ import {
   EXAMPLE_SYMBOL_PNL,
 } from "../exampleData";
 import NewsWidget from "../components/NewsWidget";
+import DividendTrackerDashboardWidget from "../components/DividendTrackerDashboardWidget";
+import {
+  readDividendTrackerPageSize,
+  DIVIDEND_TRACKER_PAGE_SIZE_KEY,
+  DIVIDEND_TRACKER_PAGE_SIZE_OPTIONS,
+} from "../utils/dividendTrackerData";
 import ViewFinancialsButton from "../components/ViewFinancialsButton";
 
 interface Metrics {
@@ -872,6 +880,7 @@ interface DashboardSections {
   showTrades: boolean;
   showOpenPositions: boolean;
   showNews: boolean;
+  showDividendTracker: boolean;
 }
 
 const defaultDashboardSections: DashboardSections = {
@@ -881,16 +890,50 @@ const defaultDashboardSections: DashboardSections = {
   showTrades: true,
   showOpenPositions: true,
   showNews: true,
+  showDividendTracker: true,
 };
 
-type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades" | "trades" | "openPositions" | "news";
+type SectionId =
+  | "topSymbols"
+  | "strategyPerformance"
+  | "recentTrades"
+  | "trades"
+  | "openPositions"
+  | "news"
+  | "dividendTracker";
 
-const SECTION_IDS: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
+const SECTION_IDS: SectionId[] = [
+  "topSymbols",
+  "strategyPerformance",
+  "recentTrades",
+  "trades",
+  "openPositions",
+  "news",
+  "dividendTracker",
+];
 function isSectionId(id: string): id is SectionId {
   return SECTION_IDS.includes(id as SectionId);
 }
 
-const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "news", "openPositions", "trades"];
+const SECTION_DASHBOARD_SECTION_KEY: Record<SectionId, keyof DashboardSections> = {
+  topSymbols: "showTopSymbols",
+  strategyPerformance: "showStrategyPerformance",
+  recentTrades: "showRecentTrades",
+  trades: "showTrades",
+  openPositions: "showOpenPositions",
+  news: "showNews",
+  dividendTracker: "showDividendTracker",
+};
+
+const defaultSectionOrder: SectionId[] = [
+  "topSymbols",
+  "strategyPerformance",
+  "recentTrades",
+  "news",
+  "dividendTracker",
+  "openPositions",
+  "trades",
+];
 
 export type SectionSizes = Record<SectionId, { columnSpan?: number; height?: number; rowSpan?: number }>;
 
@@ -954,6 +997,8 @@ function SortableSection({
 /** Default News section height when none saved — avoids layout jump when articles load (user height still saved via resize). */
 const DEFAULT_NEWS_SECTION_HEIGHT_PX = 320;
 
+const DEFAULT_DIVIDEND_TRACKER_SECTION_HEIGHT_PX = 300;
+
 /** Locked grid rows must cover section pixel height or the card overflows and covers other tiles. */
 function effectiveSectionRowSpanForLockedGrid(
   id: SectionId,
@@ -963,7 +1008,13 @@ function effectiveSectionRowSpanForLockedGrid(
   const sec = sectionSizes[id];
   const stored = Math.min(MAX_ROW_SPAN, Math.max(1, sec?.rowSpan ?? 1));
   const rh = lockedRowHeightPx > 0 ? lockedRowHeightPx : 100;
-  const rawH = sec?.height ?? (id === "news" ? DEFAULT_NEWS_SECTION_HEIGHT_PX : undefined);
+  const rawH =
+    sec?.height ??
+    (id === "news"
+      ? DEFAULT_NEWS_SECTION_HEIGHT_PX
+      : id === "dividendTracker"
+        ? DEFAULT_DIVIDEND_TRACKER_SECTION_HEIGHT_PX
+        : undefined);
   if (rawH != null) {
     const hClamped = Math.min(800, Math.max(200, rawH));
     const implied = Math.ceil(hClamped / rh);
@@ -1010,7 +1061,13 @@ function SectionCardResizeWrapper({
 }) {
   const size = sectionSizes[sectionId] ?? {};
   const rawHeight =
-    size.height != null ? size.height : sectionId === "news" ? DEFAULT_NEWS_SECTION_HEIGHT_PX : undefined;
+    size.height != null
+      ? size.height
+      : sectionId === "news"
+        ? DEFAULT_NEWS_SECTION_HEIGHT_PX
+        : sectionId === "dividendTracker"
+          ? DEFAULT_DIVIDEND_TRACKER_SECTION_HEIGHT_PX
+          : undefined;
   const height = rawHeight != null ? Math.min(800, Math.max(200, rawHeight)) : undefined;
   const rowHeight = typeof lockedRowHeight === "number" && lockedRowHeight > 0 ? lockedRowHeight : 100;
 
@@ -2806,6 +2863,14 @@ export default function Dashboard() {
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const navigate = useNavigate();
 
+  const dividendTrackerDashboardRefreshRef = useRef<(() => void) | null>(null);
+  const [dividendTrackerDashboardPageSize, setDividendTrackerDashboardPageSize] = useState(() =>
+    readDividendTrackerPageSize()
+  );
+  const registerDividendTrackerRefresh = useCallback((fn: () => void) => {
+    dividendTrackerDashboardRefreshRef.current = fn;
+  }, []);
+
   useEffect(() => {
     const unsub = subscribeToDataMode(setDataMode);
     return () => unsub();
@@ -3120,7 +3185,15 @@ export default function Dashboard() {
       try {
         const parsed = JSON.parse(saved);
         // Validate that all sections are present - include all possible sections
-        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
+        const allSections: SectionId[] = [
+          "topSymbols",
+          "strategyPerformance",
+          "recentTrades",
+          "trades",
+          "openPositions",
+          "news",
+          "dividendTracker",
+        ];
         const validOrder = allSections.filter(id => parsed.includes(id));
         const missing = allSections.filter(id => !parsed.includes(id));
         return [...validOrder, ...missing];
@@ -3135,7 +3208,15 @@ export default function Dashboard() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved) as SectionSizes;
-        const allIds: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
+        const allIds: SectionId[] = [
+          "topSymbols",
+          "strategyPerformance",
+          "recentTrades",
+          "trades",
+          "openPositions",
+          "news",
+          "dividendTracker",
+        ];
         const out: SectionSizes = {} as SectionSizes;
         allIds.forEach((id) => {
           const s = parsed[id];
@@ -3651,6 +3732,7 @@ export default function Dashboard() {
     trades: { top: 0, right: 0 },
     openPositions: { top: 0, right: 0 },
     news: { top: 0, right: 0 },
+    dividendTracker: { top: 0, right: 0 },
   });
 
   // News widget settings (controlled from dashboard settings menu)
@@ -3757,7 +3839,15 @@ export default function Dashboard() {
       if (sizes) {
         try {
           const parsed = JSON.parse(sizes) as SectionSizes;
-          const allIds: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
+          const allIds: SectionId[] = [
+            "topSymbols",
+            "strategyPerformance",
+            "recentTrades",
+            "trades",
+            "openPositions",
+            "news",
+            "dividendTracker",
+          ];
           const out: SectionSizes = {} as SectionSizes;
           allIds.forEach((id) => {
             const s = parsed[id];
@@ -4169,7 +4259,7 @@ export default function Dashboard() {
   }, [displayMetrics, metricCardOrder]);
 
   const sectionVisible = (id: SectionId): boolean => {
-    const key: keyof DashboardSections = id === "topSymbols" ? "showTopSymbols" : id === "strategyPerformance" ? "showStrategyPerformance" : id === "recentTrades" ? "showRecentTrades" : id === "trades" ? "showTrades" : "showOpenPositions";
+    const key = SECTION_DASHBOARD_SECTION_KEY[id];
     return !!dashboardSections[key];
   };
   // Unified order: metrics + sections so users can mix them in one grid when unlocked. Use merged order if saved.
@@ -4439,10 +4529,18 @@ export default function Dashboard() {
         setDashboardSections(newSections);
         
         // Ensure all enabled sections are in the sectionOrder
-        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
+        const allSections: SectionId[] = [
+          "topSymbols",
+          "strategyPerformance",
+          "recentTrades",
+          "trades",
+          "openPositions",
+          "news",
+          "dividendTracker",
+        ];
         setSectionOrder(prevOrder => {
-          const enabledSections = allSections.filter(id => {
-            const key = `show${id.charAt(0).toUpperCase() + id.slice(1)}` as keyof typeof newSections;
+          const enabledSections = allSections.filter((id) => {
+            const key = SECTION_DASHBOARD_SECTION_KEY[id];
             return newSections[key] !== false;
           });
           
@@ -7682,7 +7780,482 @@ export default function Dashboard() {
               </SortableSection>
             );
           }
-          
+
+          // Dividend Tracker (condensed)
+          if (sectionId === "dividendTracker" && dashboardSections.showDividendTracker) {
+            const divSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.dividendTracker?.columnSpan ?? 1));
+            return (
+              <SortableSection
+                key="dividendTracker"
+                id="dividendTracker"
+                wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: "hidden",
+                  ...(layoutLocked ? { minHeight: 0 } : {}),
+                  boxSizing: "border-box",
+                  ...(divSpan > 1 ? { gridColumn: `span ${divSpan}` as const } : {}),
+                }}
+              >
+                {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper
+                    sectionId="dividendTracker"
+                    sectionSizes={sectionSizes}
+                    setSectionSizes={setSectionSizes}
+                    layoutLocked={layoutLocked}
+                    lockedRowHeight={lockedRowHeight}
+                  >
+                    <div
+                      style={{
+                        backgroundColor: "var(--bg-secondary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "8px",
+                        padding: "20px",
+                        cursor: isDragging ? "grabbing" : "grab",
+                        display: "flex",
+                        flexDirection: "column",
+                        minHeight: 0,
+                        minWidth: 0,
+                        height: "100%",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px", flexShrink: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                          <div {...dragHandleProps} style={{ cursor: "grab" }}>
+                            <GripVertical size={16} color="var(--text-secondary)" />
+                          </div>
+                          <Coins size={20} color="var(--accent)" />
+                          <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "600", color: "var(--text-primary)" }}>Dividend tracker</h3>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "2px" }}>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              dividendTrackerDashboardRefreshRef.current?.();
+                            }}
+                            onMouseDown={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              padding: "4px",
+                              cursor: "pointer",
+                              color: "var(--text-secondary)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              borderRadius: "4px",
+                            }}
+                            title="Refresh dividend data"
+                          >
+                            <RefreshCw size={16} />
+                          </button>
+                          <div style={{ position: "relative" }}>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                              setSectionMenuPosition({
+                                ...sectionMenuPosition,
+                                dividendTracker: {
+                                  top: rect.bottom + 4,
+                                  right: window.innerWidth - rect.right,
+                                },
+                              });
+                              setOpenSectionSettings(openSectionSettings === "dividendTracker" ? null : "dividendTracker");
+                            }}
+                            onMouseDown={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              padding: "4px",
+                              cursor: "pointer",
+                              color: "var(--text-secondary)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              borderRadius: "4px",
+                            }}
+                            title="Rows per page, full tracker, layout"
+                          >
+                            <Settings size={16} />
+                          </button>
+                          {openSectionSettings === "dividendTracker" &&
+                            createPortal(
+                              <div
+                                data-settings-menu
+                                style={{
+                                  position: "fixed",
+                                  top: `${sectionMenuPosition.dividendTracker.top}px`,
+                                  right: `${sectionMenuPosition.dividendTracker.right}px`,
+                                  backgroundColor: "var(--bg-secondary)",
+                                  border: "1px solid var(--border-color)",
+                                  borderRadius: "8px",
+                                  padding: "8px",
+                                  boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                                  zIndex: 99999,
+                                  minWidth: "200px",
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                onMouseDown={(e) => e.stopPropagation()}
+                              >
+                                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                                  <div
+                                    style={{
+                                      fontSize: "11px",
+                                      fontWeight: "600",
+                                      color: "var(--text-secondary)",
+                                      marginBottom: "2px",
+                                    }}
+                                  >
+                                    Dividend data
+                                  </div>
+                                  {DIVIDEND_TRACKER_PAGE_SIZE_OPTIONS.map((opt) => (
+                                    <button
+                                      key={opt}
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        e.preventDefault();
+                                        setDividendTrackerDashboardPageSize(opt);
+                                        try {
+                                          localStorage.setItem(DIVIDEND_TRACKER_PAGE_SIZE_KEY, String(opt));
+                                        } catch {
+                                          /* ignore */
+                                        }
+                                        setOpenSectionSettings(null);
+                                      }}
+                                      style={{
+                                        textAlign: "left",
+                                        background:
+                                          dividendTrackerDashboardPageSize === opt
+                                            ? "color-mix(in srgb, var(--accent) 12%, transparent)"
+                                            : "transparent",
+                                        border:
+                                          dividendTrackerDashboardPageSize === opt
+                                            ? "1px solid var(--accent)"
+                                            : "1px solid var(--border-color)",
+                                        borderRadius: "4px",
+                                        padding: "6px 8px",
+                                        cursor: "pointer",
+                                        color: "var(--text-primary)",
+                                        fontSize: "12px",
+                                        fontWeight: dividendTrackerDashboardPageSize === opt ? "600" : "500",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: "8px",
+                                      }}
+                                    >
+                                      {opt === 0 ? "All rows (no pagination)" : `${opt} per page`}
+                                    </button>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      navigate("/tools?calc=dividend-tracker");
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    style={{
+                                      background: "transparent",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "4px",
+                                      padding: "6px 8px",
+                                      cursor: "pointer",
+                                      color: "var(--text-primary)",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      fontSize: "13px",
+                                    }}
+                                  >
+                                    <ExternalLink size={14} />
+                                    <span>Open full tracker</span>
+                                  </button>
+                                  <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                                  <div
+                                    style={{
+                                      fontSize: "11px",
+                                      fontWeight: "600",
+                                      color: "var(--text-secondary)",
+                                      marginBottom: "2px",
+                                    }}
+                                  >
+                                    Section layout
+                                  </div>
+                                  {layoutLocked && moveInLockedGridRef?.current ? (
+                                    <>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          moveInLockedGridRef.current?.("dividendTracker", "up");
+                                          setOpenSectionSettings(null);
+                                        }}
+                                        style={{
+                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "4px",
+                                          padding: "6px 8px",
+                                          cursor: "pointer",
+                                          color: "var(--text-primary)",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          fontSize: "13px",
+                                        }}
+                                      >
+                                        <ChevronUp size={14} />
+                                        <span>Move up</span>
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          moveInLockedGridRef.current?.("dividendTracker", "down");
+                                          setOpenSectionSettings(null);
+                                        }}
+                                        style={{
+                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "4px",
+                                          padding: "6px 8px",
+                                          cursor: "pointer",
+                                          color: "var(--text-primary)",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          fontSize: "13px",
+                                        }}
+                                      >
+                                        <ChevronDown size={14} />
+                                        <span>Move down</span>
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          moveInLockedGridRef.current?.("dividendTracker", "left");
+                                          setOpenSectionSettings(null);
+                                        }}
+                                        style={{
+                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "4px",
+                                          padding: "6px 8px",
+                                          cursor: "pointer",
+                                          color: "var(--text-primary)",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          fontSize: "13px",
+                                        }}
+                                      >
+                                        <ChevronLeft size={14} />
+                                        <span>Move left</span>
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          moveInLockedGridRef.current?.("dividendTracker", "right");
+                                          setOpenSectionSettings(null);
+                                        }}
+                                        style={{
+                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "4px",
+                                          padding: "6px 8px",
+                                          cursor: "pointer",
+                                          color: "var(--text-primary)",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          fontSize: "13px",
+                                        }}
+                                      >
+                                        <ChevronRight size={14} />
+                                        <span>Move right</span>
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          const currentIndex = sectionOrder.indexOf("dividendTracker");
+                                          if (currentIndex > 0) {
+                                            const newOrder = [...sectionOrder];
+                                            [newOrder[currentIndex - 1], newOrder[currentIndex]] = [
+                                              newOrder[currentIndex],
+                                              newOrder[currentIndex - 1],
+                                            ];
+                                            setSectionOrder(newOrder);
+                                            localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                          }
+                                          setOpenSectionSettings(null);
+                                        }}
+                                        disabled={sectionOrder.indexOf("dividendTracker") === 0}
+                                        style={{
+                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "4px",
+                                          padding: "6px 8px",
+                                          cursor:
+                                            sectionOrder.indexOf("dividendTracker") === 0 ? "not-allowed" : "pointer",
+                                          color: "var(--text-primary)",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          fontSize: "13px",
+                                          opacity: sectionOrder.indexOf("dividendTracker") === 0 ? 0.3 : 1,
+                                        }}
+                                      >
+                                        <ChevronUp size={14} />
+                                        <span>Move Up</span>
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          const currentIndex = sectionOrder.indexOf("dividendTracker");
+                                          if (currentIndex < sectionOrder.length - 1) {
+                                            const newOrder = [...sectionOrder];
+                                            [newOrder[currentIndex], newOrder[currentIndex + 1]] = [
+                                              newOrder[currentIndex + 1],
+                                              newOrder[currentIndex],
+                                            ];
+                                            setSectionOrder(newOrder);
+                                            localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                          }
+                                          setOpenSectionSettings(null);
+                                        }}
+                                        disabled={sectionOrder.indexOf("dividendTracker") === sectionOrder.length - 1}
+                                        style={{
+                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "4px",
+                                          padding: "6px 8px",
+                                          cursor:
+                                            sectionOrder.indexOf("dividendTracker") === sectionOrder.length - 1
+                                              ? "not-allowed"
+                                              : "pointer",
+                                          color: "var(--text-primary)",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          fontSize: "13px",
+                                          opacity:
+                                            sectionOrder.indexOf("dividendTracker") === sectionOrder.length - 1
+                                              ? 0.3
+                                              : 1,
+                                        }}
+                                      >
+                                        <ChevronDown size={14} />
+                                        <span>Move Down</span>
+                                      </button>
+                                    </>
+                                  )}
+                                  <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      setSectionSizes((prev) => {
+                                        const next = { ...prev, dividendTracker: {} };
+                                        localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                        return next;
+                                      });
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    style={{
+                                      background: "transparent",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "4px",
+                                      padding: "6px 8px",
+                                      cursor: "pointer",
+                                      color: "var(--text-primary)",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      fontSize: "13px",
+                                    }}
+                                  >
+                                    <RotateCcw size={14} />
+                                    <span>Reset Size</span>
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      setDashboardSections((prev) => {
+                                        const next = { ...prev, showDividendTracker: false };
+                                        localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                        return next;
+                                      });
+                                      setSectionOrder((prev) => {
+                                        const newOrder = prev.filter((id) => id !== "dividendTracker");
+                                        localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                        return newOrder;
+                                      });
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    style={{
+                                      background: "transparent",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "4px",
+                                      padding: "6px 8px",
+                                      cursor: "pointer",
+                                      color: "var(--loss)",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      fontSize: "13px",
+                                    }}
+                                  >
+                                    <Trash2 size={14} />
+                                    <span>Hide Section</span>
+                                  </button>
+                                </div>
+                              </div>,
+                              document.body
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}>
+                        <DividendTrackerDashboardWidget
+                          pageSize={dividendTrackerDashboardPageSize}
+                          onPageSizeChange={(n) => {
+                            setDividendTrackerDashboardPageSize(n);
+                            try {
+                              localStorage.setItem(DIVIDEND_TRACKER_PAGE_SIZE_KEY, String(n));
+                            } catch {
+                              /* ignore */
+                            }
+                          }}
+                          onRegisterRefresh={registerDividendTrackerRefresh}
+                        />
+                      </div>
+                    </div>
+                  </SectionCardResizeWrapper>
+                )}
+              </SortableSection>
+            );
+          }
+
           // Trades Section
           if (sectionId === "trades" && dashboardSections.showTrades) {
             const tradesSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.trades?.columnSpan ?? 1));

@@ -1,97 +1,21 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { invoke } from "@tauri-apps/api/tauri";
-import { format, parseISO, startOfDay, isBefore, isAfter, addDays } from "date-fns";
+import { format, startOfDay } from "date-fns";
 import { RefreshCw, AlertCircle, Coins, Info, Settings, ChevronLeft, ChevronRight } from "lucide-react";
 import { getFinnhubApiKey, hasFinnhubApiKey } from "../utils/finnhubManager";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
-
-interface DividendInfo {
-  symbol: string;
-  ex_date: string | null;
-  payment_date: string | null;
-  record_date: string | null;
-  declaration_date: string | null;
-  amount: number | null;
-  frequency: string | null;
-  dividend_type: string | null;
-}
-
-interface OpenPositionGroup {
-  entry_trade: { symbol: string };
-  final_quantity: number;
-}
-
-interface DividendTrackerRow {
-  symbol: string;
-  shares: number;
-  exDate: string;
-  paymentDate: string | null;
-  amountPerShare: number | null;
-  estimatedTotal: number | null;
-}
-
-type DividendTimeFilter = "all" | "current" | "future" | "past";
-
-type RowCategory = "future" | "current" | "past";
-
-function parseExDate(s: string | null): Date | null {
-  if (!s || !s.trim()) return null;
-  try {
-    return startOfDay(parseISO(s.trim()));
-  } catch {
-    return null;
-  }
-}
-
-function formatMoney(n: number | null, decimals = 4): string {
-  if (n == null || !Number.isFinite(n)) return "—";
-  return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: decimals })}`;
-}
-
-/** Future: ex not yet. Past: ex passed and pay date in past (or very old ex with no pay). Current: ex today, or ex passed but pay not yet / unknown. */
-function categorizeDividendRow(r: DividendTrackerRow, today: Date): RowCategory {
-  const ex = parseExDate(r.exDate);
-  if (!ex) return "past";
-  if (isAfter(ex, today)) return "future";
-  if (ex.getTime() === today.getTime()) return "current";
-  const pay = r.paymentDate ? parseExDate(r.paymentDate) : null;
-  if (pay && isBefore(pay, today)) return "past";
-  if (!pay && isBefore(ex, addDays(today, -90))) return "past";
-  return "current";
-}
-
-const ROW_TINT: Record<RowCategory, string> = {
-  future: "color-mix(in srgb, #ca8a04 22%, var(--bg-secondary))",
-  current: "color-mix(in srgb, #2563eb 20%, var(--bg-secondary))",
-  past: "color-mix(in srgb, #16a34a 18%, var(--bg-secondary))",
-};
-
-const ROW_BORDER: Record<RowCategory, string> = {
-  future: "3px solid color-mix(in srgb, #eab308 55%, transparent)",
-  current: "3px solid color-mix(in srgb, #3b82f6 55%, transparent)",
-  past: "3px solid color-mix(in srgb, #22c55e 50%, transparent)",
-};
-
-/** In "All" view: future → current → past, then by ex-date ascending. */
-const CATEGORY_SORT_ORDER: Record<RowCategory, number> = {
-  future: 0,
-  current: 1,
-  past: 2,
-};
-
-const PAGE_SIZE_STORAGE_KEY = "tradebutler_dividend_tracker_page_size";
-const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 0] as const;
-
-function readStoredPageSize(): number {
-  try {
-    const raw = localStorage.getItem(PAGE_SIZE_STORAGE_KEY);
-    const n = raw == null ? NaN : Number(raw);
-    if ((PAGE_SIZE_OPTIONS as readonly number[]).includes(n)) return n;
-  } catch {
-    /* ignore */
-  }
-  return 25;
-}
+import {
+  type DividendTrackerRow,
+  categorizeDividendRow,
+  formatDividendMoney,
+  ROW_TINT,
+  ROW_BORDER,
+  loadDividendTrackerRows,
+  filterAndSortDividendRows,
+  type DividendTimeFilter,
+  DIVIDEND_TRACKER_PAGE_SIZE_KEY,
+  DIVIDEND_TRACKER_PAGE_SIZE_OPTIONS,
+  readDividendTrackerPageSize,
+} from "../utils/dividendTrackerData";
 
 export default function DividendTracker() {
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
@@ -103,7 +27,7 @@ export default function DividendTracker() {
   const [timeFilter, setTimeFilter] = useState<DividendTimeFilter>("all");
   const [symbolFilter, setSymbolFilter] = useState<string | null>(null);
   const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState<number>(() => readStoredPageSize());
+  const [pageSize, setPageSize] = useState<number>(() => readDividendTrackerPageSize());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsRef = useRef<HTMLDivElement | null>(null);
 
@@ -130,73 +54,12 @@ export default function DividendTracker() {
 
     try {
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-      const paperArgs = dataMode === "paper" ? { paperOnly: true as const } : {};
-      const groups = await invoke<OpenPositionGroup[]>("get_position_groups", {
+      const { rows: deduped, symbols } = await loadDividendTrackerRows({
+        apiKey,
+        dataMode,
         pairingMethod,
-        startDate: null,
-        endDate: null,
-        ...paperArgs,
       });
-
-      const longs = (groups || []).filter(
-        (g) => g.final_quantity > 0 && Math.abs(g.final_quantity) >= 0.0001
-      );
-      const bySymbol = new Map<string, number>();
-      for (const g of longs) {
-        const sym = g.entry_trade.symbol.toUpperCase();
-        bySymbol.set(sym, (bySymbol.get(sym) ?? 0) + g.final_quantity);
-      }
-
-      const symbols = [...bySymbol.keys()];
       setSymbolsLoaded(symbols);
-
-      if (symbols.length === 0) {
-        setRows([]);
-        setLastRefresh(new Date());
-        return;
-      }
-
-      const out: DividendTrackerRow[] = [];
-
-      await Promise.all(
-        symbols.map(async (symbol) => {
-          const shares = bySymbol.get(symbol) ?? 0;
-          try {
-            const divs = await invoke<DividendInfo[]>("fetch_finnhub_dividends", { apiKey, symbol });
-            for (const d of divs) {
-              const ex = parseExDate(d.ex_date);
-              if (!ex) continue;
-              const exStr = format(ex, "yyyy-MM-dd");
-              const amt = d.amount != null && Number.isFinite(d.amount) ? d.amount : null;
-              const est = amt != null ? amt * shares : null;
-              out.push({
-                symbol,
-                shares,
-                exDate: exStr,
-                paymentDate: d.payment_date,
-                amountPerShare: amt,
-                estimatedTotal: est,
-              });
-            }
-          } catch (e) {
-            console.warn(`Dividends fetch failed for ${symbol}`, e);
-          }
-        })
-      );
-
-      const seen = new Set<string>();
-      const deduped: DividendTrackerRow[] = [];
-      for (const r of out.sort((a, b) => {
-        const da = parseExDate(a.exDate)!.getTime();
-        const db = parseExDate(b.exDate)!.getTime();
-        return da - db;
-      })) {
-        const k = `${r.symbol}|${r.exDate}`;
-        if (seen.has(k)) continue;
-        seen.add(k);
-        deduped.push(r);
-      }
-
       setRows(deduped);
       setLastRefresh(new Date());
     } catch (e) {
@@ -230,25 +93,7 @@ export default function DividendTracker() {
 
   const orderedFilteredRows = useMemo(() => {
     const day = startOfDay(new Date());
-    const base = [...rows].filter((r) => {
-      if (symbolFilter && r.symbol !== symbolFilter) return false;
-      const cat = categorizeDividendRow(r, day);
-      if (timeFilter === "all") return true;
-      return cat === timeFilter;
-    });
-
-    base.sort((a, b) => {
-      if (timeFilter === "all") {
-        const ca = categorizeDividendRow(a, day);
-        const cb = categorizeDividendRow(b, day);
-        const oa = CATEGORY_SORT_ORDER[ca];
-        const ob = CATEGORY_SORT_ORDER[cb];
-        if (oa !== ob) return oa - ob;
-      }
-      return parseExDate(a.exDate)!.getTime() - parseExDate(b.exDate)!.getTime();
-    });
-
-    return base;
+    return filterAndSortDividendRows(rows, day, timeFilter, symbolFilter);
   }, [rows, symbolFilter, timeFilter]);
 
   const filteredFutureTotal = useMemo(() => {
@@ -357,14 +202,14 @@ export default function DividendTracker() {
                   ROWS PER PAGE
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                  {PAGE_SIZE_OPTIONS.map((opt) => (
+                  {DIVIDEND_TRACKER_PAGE_SIZE_OPTIONS.map((opt) => (
                     <button
                       key={opt}
                       type="button"
                       onClick={() => {
                         setPageSize(opt);
                         try {
-                          localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(opt));
+                          localStorage.setItem(DIVIDEND_TRACKER_PAGE_SIZE_KEY, String(opt));
                         } catch {
                           /* ignore */
                         }
@@ -565,7 +410,7 @@ export default function DividendTracker() {
             <h2 style={{ margin: 0, fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>Dividends</h2>
             {(timeFilter === "all" || timeFilter === "future") && filteredFutureTotal > 0 && (
               <span style={{ fontSize: "14px", fontWeight: "600", color: "var(--profit)" }}>
-                Est. future (visible future rows): {formatMoney(filteredFutureTotal, 2)}
+                Est. future (visible future rows): {formatDividendMoney(filteredFutureTotal, 2)}
               </span>
             )}
           </div>
@@ -605,8 +450,8 @@ export default function DividendTracker() {
                       <td style={{ padding: "12px 14px", fontVariantNumeric: "tabular-nums" }}>{r.shares.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
                       <td style={{ padding: "12px 14px" }}>{r.exDate}</td>
                       <td style={{ padding: "12px 14px", color: "var(--text-secondary)" }}>{r.paymentDate ?? "—"}</td>
-                      <td style={{ padding: "12px 14px", fontVariantNumeric: "tabular-nums" }}>{formatMoney(r.amountPerShare)}</td>
-                      <td style={{ padding: "12px 14px", fontWeight: "600", color: "var(--profit)", fontVariantNumeric: "tabular-nums" }}>{formatMoney(r.estimatedTotal, 2)}</td>
+                      <td style={{ padding: "12px 14px", fontVariantNumeric: "tabular-nums" }}>{formatDividendMoney(r.amountPerShare)}</td>
+                      <td style={{ padding: "12px 14px", fontWeight: "600", color: "var(--profit)", fontVariantNumeric: "tabular-nums" }}>{formatDividendMoney(r.estimatedTotal, 2)}</td>
                     </tr>
                   );
                 })}

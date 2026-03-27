@@ -315,10 +315,26 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       try {
         return JSON.parse(saved);
       } catch {
-        return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true, showTrades: true, showOpenPositions: true, showNews: true };
+        return {
+          showTopSymbols: true,
+          showStrategyPerformance: true,
+          showRecentTrades: true,
+          showTrades: true,
+          showOpenPositions: true,
+          showNews: true,
+          showDividendTracker: true,
+        };
       }
     }
-    return { showTopSymbols: true, showStrategyPerformance: true, showRecentTrades: true, showTrades: true, showOpenPositions: true, showNews: true };
+    return {
+      showTopSymbols: true,
+      showStrategyPerformance: true,
+      showRecentTrades: true,
+      showTrades: true,
+      showOpenPositions: true,
+      showNews: true,
+      showDividendTracker: true,
+    };
   });
 
   // Metric cards layout: max rows (0 = no limit) and columns when layout is locked
@@ -708,6 +724,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
               { id: "showOpenPositions", label: "Open Positions" },
               { id: "showTrades", label: "Trades" },
               { id: "showNews", label: "News Feed" },
+              { id: "showDividendTracker", label: "Dividend Tracker" },
             ].map((section) => (
               <label
                 key={section.id}
