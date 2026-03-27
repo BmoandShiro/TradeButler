@@ -494,7 +494,10 @@ function loadDashboardProfileSnapshot(profileId: string): Record<string, string>
   }
 }
 
-/** Apply active profile into root keys before Dashboard reads localStorage. */
+/** Only apply profile blob once per page load — re-applying on every render overwrote fresh layout keys with stale snapshots. */
+let dashboardProfilesSnapshotAppliedOnce = false;
+
+/** Apply active profile into root keys before Dashboard reads localStorage (first paint only). */
 function ensureDashboardProfilesBootstrapped(): void {
   let meta = readDashboardProfilesMeta();
   if (!meta) {
@@ -508,6 +511,8 @@ function ensureDashboardProfilesBootstrapped(): void {
     localStorage.setItem(dashboardProfileSnapKey("default"), JSON.stringify(snap));
     return;
   }
+  if (dashboardProfilesSnapshotAppliedOnce) return;
+  dashboardProfilesSnapshotAppliedOnce = true;
   const blob = loadDashboardProfileSnapshot(meta.activeProfileId);
   if (blob && Object.keys(blob).length > 0) {
     applyDashboardProfileSnapshot(blob);
@@ -904,6 +909,8 @@ export interface DashboardLayoutPreset {
   lockedGridColumns?: number;
   /** Locked layout: slot assignments (metric/section ids or null for empty slots). */
   lockedSlotAssignments?: (string | null)[];
+  /** Locked layout: packed (row,col) per slot index — required so presets restore grid positions. */
+  lockedPlacements?: { row: number; col: number }[] | null;
   /** Locked layout: column width ratios (fr values). */
   lockedColumnWidths?: number[];
 }
@@ -933,6 +940,8 @@ function SortableSection({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 1 : 0,
+    position: "relative" as const,
   };
 
   return (
@@ -1348,6 +1357,7 @@ function SortableMetricCard({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 1 : 0,
   };
 
   const baseMetricId = (metric as any).baseMetricId || metric.id;
@@ -3267,7 +3277,7 @@ export default function Dashboard() {
     }
   }, [layoutLocked, lockedSlotAssignments]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (needSavePlacementsRef.current) {
       const placements = needSavePlacementsRef.current;
       needSavePlacementsRef.current = null;
@@ -3296,6 +3306,32 @@ export default function Dashboard() {
       coordinateGetter: sortableKeyboardCoordinates,
     })
   );
+
+  /** Remount DnD trees after tab restore so @dnd-kit cannot keep stale transforms (metrics overlapping sections). */
+  const [dndResetKey, setDndResetKey] = useState(0);
+  useEffect(() => {
+    let raf = 0;
+    const bumpOnce = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        setDndResetKey((k) => k + 1);
+      });
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") bumpOnce();
+    };
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) bumpOnce();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pageshow", onPageShow as EventListener);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pageshow", onPageShow as EventListener);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
   
   // When layout is locked, ensure every instance has a slotIndex (init from current order)
   useEffect(() => {
@@ -3810,9 +3846,14 @@ export default function Dashboard() {
     const sync = () => saveDashboardProfileSnapshot(activeDashboardProfileId);
     window.addEventListener("beforeunload", sync);
     const tid = window.setInterval(sync, 45000);
+    const onTabHidden = () => {
+      if (document.visibilityState === "hidden") sync();
+    };
+    document.addEventListener("visibilitychange", onTabHidden);
     return () => {
       window.removeEventListener("beforeunload", sync);
       window.clearInterval(tid);
+      document.removeEventListener("visibilitychange", onTabHidden);
     };
   }, [activeDashboardProfileId]);
 
@@ -4146,6 +4187,10 @@ export default function Dashboard() {
       setLockedColumnWidths(preset.lockedColumnWidths);
       localStorage.setItem(DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY, JSON.stringify(preset.lockedColumnWidths));
     }
+    if (preset.lockedPlacements != null && preset.lockedPlacements.length > 0) {
+      setLockedPlacements(preset.lockedPlacements);
+      localStorage.setItem(DASHBOARD_LOCKED_PLACEMENTS_KEY, JSON.stringify(preset.lockedPlacements));
+    }
     localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(preset.displayOrder));
     localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(preset.metricCardOrder));
     localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(preset.sectionOrder));
@@ -4172,14 +4217,25 @@ export default function Dashboard() {
       sectionSizes: { ...sectionSizes },
       lockedGridColumns: layoutLocked ? lockedGridColumns : undefined,
       lockedSlotAssignments: layoutLocked && lockedSlotAssignments != null && lockedSlotAssignments.length > 0 ? lockedSlotAssignments : undefined,
+      lockedPlacements: layoutLocked && lockedPlacements != null && lockedPlacements.length > 0 ? lockedPlacements : undefined,
       lockedColumnWidths: layoutLocked && lockedColumnWidths.length > 0 ? lockedColumnWidths : undefined,
     };
-    setLayoutPresets((prev) => [...prev, preset]);
+    setLayoutPresets((prev) => {
+      const next = [...prev, preset];
+      localStorage.setItem(DASHBOARD_LAYOUT_PRESETS_KEY, JSON.stringify(next));
+      return next;
+    });
+    saveDashboardProfileSnapshot(activeDashboardProfileId);
     setLayoutsMenuOpen(false);
   };
 
   const deleteLayoutPreset = (id: string) => {
-    setLayoutPresets((prev) => prev.filter((p) => p.id !== id));
+    setLayoutPresets((prev) => {
+      const next = prev.filter((p) => p.id !== id);
+      localStorage.setItem(DASHBOARD_LAYOUT_PRESETS_KEY, JSON.stringify(next));
+      return next;
+    });
+    saveDashboardProfileSnapshot(activeDashboardProfileId);
   };
 
   useEffect(() => {
@@ -5304,7 +5360,14 @@ export default function Dashboard() {
               }
             }
           }
-          if (didPack) needSavePlacementsRef.current = placements;
+          if (didPack) {
+            needSavePlacementsRef.current = placements;
+            try {
+              localStorage.setItem(DASHBOARD_LOCKED_PLACEMENTS_KEY, JSON.stringify(placements));
+            } catch {
+              /* ignore quota */
+            }
+          }
           previousSlotSpansRef.current = slotSpans.map((cs, i) => ({ colSpan: cs, rowSpan: slotRowSpans[i] }));
           let totalRows = 0;
           for (let i = 0; i < totalSlots; i++) {
@@ -5440,6 +5503,7 @@ export default function Dashboard() {
           const sortableIds = effectiveSlotAssignments.filter((id): id is string => id != null);
           return (
             <DndContext
+              key={dndResetKey}
               sensors={sensors}
               collisionDetection={pointerWithin}
               onDragEnd={onDragEnd}
@@ -5546,6 +5610,7 @@ export default function Dashboard() {
 
         return (
       <DndContext
+        key={dndResetKey}
         sensors={sensors}
         collisionDetection={closestCenter}
         onDragEnd={onDragEnd}
@@ -5608,6 +5673,7 @@ export default function Dashboard() {
       >
       {/* Section card renderer: when split, visible above/below metrics; when unified, hidden so renderSectionCardRef is set. */}
       <DndContext
+        key={dndResetKey}
         sensors={sensors}
         collisionDetection={closestCenter}
         onDragEnd={handleSectionDragEnd}
