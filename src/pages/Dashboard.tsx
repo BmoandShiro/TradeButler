@@ -802,7 +802,7 @@ function CurrentPriceMetricRow({
         alignItems: "stretch",
         justifyContent: "center",
         gap: "6px",
-        overflow: "hidden",
+        overflow: "visible",
         pointerEvents: "auto",
       }}
     >
@@ -812,9 +812,12 @@ function CurrentPriceMetricRow({
           display: "flex",
           flexDirection: "row",
           alignItems: "center",
-          justifyContent: "center",
-          gap: "10px",
+          justifyContent: "space-between",
+          gap: "8px",
           minWidth: 0,
+          width: "100%",
+          boxSizing: "border-box",
+          paddingRight: "14px",
         }}
       >
         <input
@@ -822,7 +825,6 @@ function CurrentPriceMetricRow({
           aria-label="Symbol"
           title="Click to edit symbol"
           value={symbolDraft}
-          size={Math.max(3, symbolDraft.length || 1)}
           onChange={(e) => setSymbolDraft(e.target.value.toUpperCase())}
           onFocus={() => setSymbolFocused(true)}
           onBlur={() => {
@@ -836,8 +838,9 @@ function CurrentPriceMetricRow({
           spellCheck={false}
           style={{
             margin: 0,
-            minWidth: "2.5ch",
-            width: "auto",
+            width: "6ch",
+            minWidth: "6ch",
+            maxWidth: "6ch",
             height: quoteRowPxCss,
             backgroundColor: "transparent",
             border: "none",
@@ -861,31 +864,33 @@ function CurrentPriceMetricRow({
             paddingBottom: 0,
             paddingLeft: 2,
             paddingRight: 2,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
           }}
         />
         <span
           style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
+            display: "block",
             height: quoteRowPxCss,
-            minWidth: 0,
             flex: "1 1 0%",
+            flexShrink: 0,
+            minWidth: "min-content",
             fontSize: quoteFontSizeCss,
             fontWeight: "bold",
             lineHeight: quoteRowPxCss,
             color: quoteTint,
             margin: 0,
-            textAlign: "center",
-            maxWidth: "100%",
+            textAlign: "right",
             fontVariantNumeric: "tabular-nums",
             fontFamily: "inherit",
             boxShadow: quotePlaceholderUnderline,
             boxSizing: "border-box",
             paddingTop: 0,
             paddingBottom: 0,
-            paddingLeft: 2,
-            paddingRight: 2,
+            paddingLeft: 6,
+            paddingRight: 0,
+            whiteSpace: "nowrap",
+            overflow: "visible",
           }}
         >
           {loading && price == null ? "…" : price != null ? `$${formatWithCommas(price, { decimals: 2 })}` : "—"}
@@ -2238,8 +2243,20 @@ function SortableMetricCard({
         ...(isGridLayout
           ? {
               ...(isFluidGrid && cardWidth
-                ? { width: `${cardWidth}px`, minWidth: 200, maxWidth: "100%", overflow: "hidden", boxSizing: "border-box" as const }
-                : { width: "100%", minWidth: 0, maxWidth: "100%", overflow: "hidden", boxSizing: "border-box" as const }),
+                ? {
+                    width: `${cardWidth}px`,
+                    minWidth: 200,
+                    maxWidth: "100%",
+                    overflow: baseMetricId === "current_price" ? "visible" : "hidden",
+                    boxSizing: "border-box" as const,
+                  }
+                : {
+                    width: "100%",
+                    minWidth: 0,
+                    maxWidth: "100%",
+                    overflow: baseMetricId === "current_price" ? "visible" : "hidden",
+                    boxSizing: "border-box" as const,
+                  }),
               ...(cardColumnSpan > 1 ? { gridColumn: `span ${cardColumnSpan}` as const } : {}),
             }
           : {
