@@ -69,23 +69,167 @@ function parsePositiveNumberCsv(csv: string): number[] {
   return out;
 }
 
-function parsePositiveNumberCsvPreserveOrder(csv: string): number[] {
-  const parts = csv
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const out: number[] = [];
-  for (const p of parts) {
-    const n = Number(p);
-    if (!Number.isFinite(n) || n <= 0) continue;
-    const asInt = Math.trunc(n);
-    if (asInt <= 0) continue;
-    out.push(asInt);
+/** How an EMA/MA length appears in the Journal when enabled. */
+export type MovingAverageJournalKind = "value" | "checkbox";
+
+export type MovingAverageLengthConfigItem = {
+  len: number;
+  enabled: boolean;
+  /** Default "value" (numeric input). "checkbox" shows a yes/no box instead. */
+  journalKind?: MovingAverageJournalKind;
+  /** Optional #RRGGBB — tints this length in the journal and settings when set. */
+  chipColor?: string;
+};
+
+const INDICATOR_SIGNAL_PREFS_KEY = "tradebutler_indicator_signal_prefs_v1";
+
+export type IndicatorSignalPrefs = {
+  order: string[];
+  journalKindByLabel: Record<string, MovingAverageJournalKind>;
+  /** Optional #RRGGBB per other-signal label — user-set in Journal settings; no automatic hash color. */
+  chipColorByLabel?: Record<string, string>;
+  /** Field names added only in Journal / Signals UI (not from the indicator's `otherSignals` list). */
+  extraJournalFields?: string[];
+  /** Names from `otherSignals` that the user removed from the journal list (can be re-added). */
+  dismissedJournalFields?: string[];
+};
+
+/** Trim and cap length for a custom journal field label. */
+export function normalizeJournalFieldLabel(raw: string): string | null {
+  const t = raw.trim();
+  if (!t) return null;
+  return t.length > 80 ? t.slice(0, 80).trim() || null : t;
+}
+
+export function loadIndicatorSignalPrefs(indicatorId: string, otherSignals: string[]): IndicatorSignalPrefs {
+  const base = (otherSignals ?? []).map((s) => String(s).trim()).filter(Boolean);
+  let raw: Record<string, unknown> = {};
+  if (typeof window !== "undefined") {
+    try {
+      const s = window.localStorage.getItem(INDICATOR_SIGNAL_PREFS_KEY);
+      if (s) raw = JSON.parse(s) as typeof raw;
+    } catch {
+      raw = {};
+    }
   }
+  const stored = raw[indicatorId] as Partial<IndicatorSignalPrefs> | undefined;
+  const dismissed = new Set(
+    (Array.isArray(stored?.dismissedJournalFields) ? stored.dismissedJournalFields : [])
+      .map((x) => String(x).trim())
+      .filter(Boolean)
+  );
+  const extrasStored = (Array.isArray(stored?.extraJournalFields) ? stored.extraJournalFields : [])
+    .map((x) => String(x).trim())
+    .filter(Boolean);
+  const extrasUniq = extrasStored.filter((x, i, a) => a.indexOf(x) === i && !base.includes(x));
+
+  const baseVisible = base.filter((b) => !dismissed.has(b));
+  const labelSet = new Set<string>([...baseVisible, ...extrasUniq]);
+  const orderSaved = (stored?.order ?? []).filter((x) => labelSet.has(x));
+  const remaining = [...baseVisible, ...extrasUniq].filter((x) => !orderSaved.includes(x));
+  const order = [...orderSaved, ...remaining];
+
+  const journalKindByLabel: Record<string, MovingAverageJournalKind> = {};
+  for (const label of order) {
+    const j = stored?.journalKindByLabel?.[label];
+    journalKindByLabel[label] = j === "value" ? "value" : "checkbox";
+  }
+
+  const chipColorByLabel: Record<string, string> = {};
+  const rawChip = stored?.chipColorByLabel;
+  if (rawChip && typeof rawChip === "object") {
+    for (const label of order) {
+      const c = (rawChip as Record<string, unknown>)[label];
+      if (typeof c === "string" && /^#[0-9A-Fa-f]{6}$/i.test(c.trim())) {
+        chipColorByLabel[label] = c.trim().toUpperCase();
+      }
+    }
+  }
+
+  const extraJournalFields = extrasUniq.filter((e) => order.includes(e) && !base.includes(e));
+  const dismissedJournalFields = base.filter((b) => dismissed.has(b));
+
+  const out: IndicatorSignalPrefs = {
+    order,
+    journalKindByLabel,
+    ...(Object.keys(chipColorByLabel).length ? { chipColorByLabel } : {}),
+    ...(extraJournalFields.length ? { extraJournalFields } : {}),
+    ...(dismissedJournalFields.length ? { dismissedJournalFields } : {}),
+  };
   return out;
 }
 
-export type MovingAverageLengthConfigItem = { len: number; enabled: boolean };
+/** Add a journal-only field or restore a dismissed base field. Returns null if invalid or duplicate. */
+export function addJournalFieldToPrefs(prefs: IndicatorSignalPrefs, baseOtherSignals: string[], rawLabel: string): IndicatorSignalPrefs | null {
+  const norm = normalizeJournalFieldLabel(rawLabel);
+  if (!norm) return null;
+  const base = new Set(baseOtherSignals.map((s) => String(s).trim()).filter(Boolean));
+  if (prefs.order.includes(norm)) return null;
+  if (base.has(norm) && (prefs.dismissedJournalFields ?? []).includes(norm)) {
+    const dismissed = (prefs.dismissedJournalFields ?? []).filter((x) => x !== norm);
+    return {
+      ...prefs,
+      dismissedJournalFields: dismissed.length ? dismissed : undefined,
+      order: [...prefs.order, norm],
+      journalKindByLabel: { ...prefs.journalKindByLabel, [norm]: "checkbox" },
+    };
+  }
+  if (base.has(norm)) return null;
+  return {
+    ...prefs,
+    extraJournalFields: [...(prefs.extraJournalFields ?? []), norm],
+    order: [...prefs.order, norm],
+    journalKindByLabel: { ...prefs.journalKindByLabel, [norm]: "checkbox" },
+  };
+}
+
+/** Remove a field: extras drop from list; base signals go to dismissed. */
+export function removeJournalFieldFromPrefs(prefs: IndicatorSignalPrefs, baseOtherSignals: string[], label: string): IndicatorSignalPrefs {
+  const base = new Set(baseOtherSignals.map((s) => String(s).trim()).filter(Boolean));
+  const isExtra = (prefs.extraJournalFields ?? []).includes(label);
+  const order = prefs.order.filter((x) => x !== label);
+  const { [label]: _jk, ...restJk } = prefs.journalKindByLabel;
+  const nextChip = { ...(prefs.chipColorByLabel ?? {}) };
+  delete nextChip[label];
+  const filteredExtras = (prefs.extraJournalFields ?? []).filter((x) => x !== label);
+  let dismissedJournalFields = [...(prefs.dismissedJournalFields ?? [])];
+  if (!isExtra && base.has(label)) {
+    dismissedJournalFields = [...new Set([...dismissedJournalFields, label])];
+  }
+  const out: IndicatorSignalPrefs = {
+    order,
+    journalKindByLabel: restJk,
+  };
+  if (Object.keys(nextChip).length) out.chipColorByLabel = nextChip;
+  if (filteredExtras.length) out.extraJournalFields = filteredExtras;
+  if (dismissedJournalFields.length) out.dismissedJournalFields = dismissedJournalFields;
+  return out;
+}
+
+/** Reset journal fields to match the indicator's `otherSignals` only (clear extras and dismissed). */
+export function resetJournalFieldsPrefsToBase(otherSignals: string[]): IndicatorSignalPrefs {
+  const base = (otherSignals ?? []).map((s) => String(s).trim()).filter(Boolean);
+  const order = [...base];
+  const journalKindByLabel: Record<string, MovingAverageJournalKind> = {};
+  for (const label of base) {
+    journalKindByLabel[label] = "checkbox";
+  }
+  return { order, journalKindByLabel };
+}
+
+export function saveIndicatorSignalPrefs(indicatorId: string, prefs: IndicatorSignalPrefs) {
+  if (typeof window === "undefined") return;
+  let raw: Record<string, IndicatorSignalPrefs> = {};
+  try {
+    const s = window.localStorage.getItem(INDICATOR_SIGNAL_PREFS_KEY);
+    if (s) raw = JSON.parse(s) as typeof raw;
+  } catch {
+    raw = {};
+  }
+  raw[indicatorId] = prefs;
+  window.localStorage.setItem(INDICATOR_SIGNAL_PREFS_KEY, JSON.stringify(raw));
+  window.dispatchEvent(new CustomEvent("tradebutler:indicator-signal-prefs-changed"));
+}
 
 function dedupePositiveIntPreserveOrder(nums: number[]): number[] {
   const out: number[] = [];
@@ -132,7 +276,13 @@ function parseMovingAverageConfigJson(raw: string | null): MovingAverageLengthCo
       seen.add(asInt);
       const enabled =
         typeof item === "object" && item !== null && "enabled" in (item as any) ? Boolean((item as any).enabled) : true;
-      out.push({ len: asInt, enabled });
+      const jk = (item as any)?.journalKind;
+      const journalKind: MovingAverageJournalKind = jk === "checkbox" ? "checkbox" : "value";
+      const ccRaw = (item as any)?.chipColor;
+      const ccTrim = typeof ccRaw === "string" ? ccRaw.trim() : "";
+      const chipColor =
+        ccTrim && /^#[0-9A-Fa-f]{6}$/i.test(ccTrim) ? ccTrim.toUpperCase() : undefined;
+      out.push({ len: asInt, enabled, journalKind, ...(chipColor ? { chipColor } : {}) });
     }
     return out.length ? out : null;
   } catch {
@@ -151,12 +301,12 @@ function loadMovingAverageLengthsConfig(indicatorId: "ema" | "ma"): MovingAverag
       // Legacy CSV (shared between ema/ma).
       const legacyRaw = window.localStorage.getItem(LEGACY_MOVING_AVERAGE_DEFAULT_LENGTHS_KEY);
       const legacyNums = parseLegacyCsvLengths(legacyRaw);
-      if (legacyNums) return legacyNums.map((n) => ({ len: n, enabled: true }));
+      if (legacyNums) return legacyNums.map((n) => ({ len: n, enabled: true, journalKind: "value" as const }));
     } catch {
       /* ignore */
     }
   }
-  return DEFAULT_MOVING_AVERAGE_LENGTHS.map((n) => ({ len: n, enabled: true }));
+  return DEFAULT_MOVING_AVERAGE_LENGTHS.map((n) => ({ len: n, enabled: true, journalKind: "value" as const }));
 }
 
 export function loadMovingAverageDefaultLengthsCsv(indicatorId: "ema" | "ma"): string {
@@ -2036,8 +2186,8 @@ type JournalIndicatorDivergenceMap = Record<
 
 type JournalIndicatorOtherSignalsMap = Record<
   string,
-  Record<string, boolean>
->; // `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}` -> signalLabel -> checked
+  Record<string, boolean | string>
+>; // signalLabel -> checked or text (value mode)
 
 function safeParse<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
@@ -2387,14 +2537,21 @@ export function loadJournalIndicatorValue(
     const defaultsParts = cfg.map((c) => String(c.len));
 
     const stored = data[key];
-    const storedNums =
-      typeof stored === "string" && stored.trim().length > 0 ? parsePositiveNumberCsvPreserveOrder(stored) : [];
+    const rawParts =
+      typeof stored === "string" && stored.trim().length > 0 ? stored.split(",").map((s) => s.trim()) : [];
 
     const mergedParts = defaultsParts.map((d, i) => {
       // If a length is disabled, force it back to its default value
       // (and therefore hide it in the Journal without requiring user input).
       if (!cfg[i]?.enabled) return d;
-      return storedNums[i] != null ? String(storedNums[i]) : d;
+      const kind = cfg[i]?.journalKind ?? "value";
+      const raw = rawParts[i];
+      if (kind === "checkbox") {
+        const on = raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+        return on ? "1" : "";
+      }
+      if (raw != null && raw !== "") return raw;
+      return d;
     });
 
     return mergedParts.join(",");
@@ -2471,6 +2628,43 @@ export function loadJournalIndicatorDivergence(
   const data = safeParse<JournalIndicatorDivergenceMap>(localStorage.getItem(JOURNAL_INDICATOR_DIVERGENCE_KEY), {});
   const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}`;
   return !!data[key];
+}
+
+const EMA_MA_JOURNAL_ROW_VISIBILITY_KEY = "tradebutler_ema_ma_journal_row_visibility_v1";
+
+/** Whether Crossing / Coiling rows appear in the Journal for EMA or MA (Signals modal). */
+export type EmaMaJournalRowVisibility = { showCrossingRow: boolean; showCoilingRow: boolean };
+
+export function loadEmaMaJournalRowVisibility(indicatorId: "ema" | "ma"): EmaMaJournalRowVisibility {
+  const defaultVis: EmaMaJournalRowVisibility = { showCrossingRow: true, showCoilingRow: true };
+  if (typeof window === "undefined") return defaultVis;
+  try {
+    const raw = window.localStorage.getItem(EMA_MA_JOURNAL_ROW_VISIBILITY_KEY);
+    if (!raw?.trim()) return defaultVis;
+    const parsed = JSON.parse(raw) as Record<string, Partial<EmaMaJournalRowVisibility>>;
+    const cur = parsed[indicatorId];
+    if (!cur || typeof cur !== "object") return defaultVis;
+    return {
+      showCrossingRow: typeof cur.showCrossingRow === "boolean" ? cur.showCrossingRow : true,
+      showCoilingRow: typeof cur.showCoilingRow === "boolean" ? cur.showCoilingRow : true,
+    };
+  } catch {
+    return defaultVis;
+  }
+}
+
+export function saveEmaMaJournalRowVisibility(indicatorId: "ema" | "ma", vis: EmaMaJournalRowVisibility) {
+  if (typeof window === "undefined") return;
+  let all: Record<string, EmaMaJournalRowVisibility> = {};
+  try {
+    const raw = window.localStorage.getItem(EMA_MA_JOURNAL_ROW_VISIBILITY_KEY);
+    if (raw?.trim()) all = JSON.parse(raw) as Record<string, EmaMaJournalRowVisibility>;
+  } catch {
+    all = {};
+  }
+  all[indicatorId] = vis;
+  window.localStorage.setItem(EMA_MA_JOURNAL_ROW_VISIBILITY_KEY, JSON.stringify(all));
+  window.dispatchEvent(new CustomEvent("tradebutler:ma-config-changed"));
 }
 
 export type JournalIndicatorMaFlags = { crossing: boolean; coiling: boolean };
@@ -2565,10 +2759,35 @@ export function loadJournalIndicatorOtherSignals(
   tradeIndex: number,
   phase: IndicatorPhase,
   indicatorId: string
-): Record<string, boolean> {
+): Record<string, boolean | string> {
   const data = safeParse<JournalIndicatorOtherSignalsMap>(localStorage.getItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY), {});
   const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}`;
   return data[key] ?? {};
+}
+
+export function setJournalIndicatorOtherSignalField(
+  mode: DataMode,
+  entryId: number,
+  tradeIndex: number,
+  phase: IndicatorPhase,
+  indicatorId: string,
+  signalLabel: string,
+  value: boolean | string
+) {
+  const clean = signalLabel.trim();
+  if (!clean) return;
+  const data = safeParse<JournalIndicatorOtherSignalsMap>(localStorage.getItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY), {});
+  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}`;
+  const cur: Record<string, boolean | string> = { ...(data[key] ?? {}) };
+  if (typeof value === "boolean") {
+    cur[clean] = value;
+  } else {
+    const t = value.trim();
+    if (!t) delete cur[clean];
+    else cur[clean] = value;
+  }
+  data[key] = cur;
+  localStorage.setItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY, JSON.stringify(data));
 }
 
 export function setJournalIndicatorOtherSignal(
@@ -2580,14 +2799,7 @@ export function setJournalIndicatorOtherSignal(
   signalLabel: string,
   checked: boolean
 ) {
-  const clean = signalLabel.trim();
-  if (!clean) return;
-  const data = safeParse<JournalIndicatorOtherSignalsMap>(localStorage.getItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY), {});
-  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}`;
-  const cur = data[key] ?? {};
-  cur[clean] = checked;
-  data[key] = cur;
-  localStorage.setItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY, JSON.stringify(data));
+  setJournalIndicatorOtherSignalField(mode, entryId, tradeIndex, phase, indicatorId, signalLabel, checked);
 }
 
 export function migrateJournalIndicatorDraftOtherSignals(

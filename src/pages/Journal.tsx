@@ -20,6 +20,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
 import { format, parse } from "date-fns";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
+import { JournalSignalsSettingsModal } from "../components/JournalSignalsSettingsModal";
 import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
 import { getSurveyScoreColor, getSurveyScoreBgRgba } from "../utils/intensityColor";
 import RichTextEditor from "../components/RichTextEditor";
@@ -70,6 +71,7 @@ import {
   loadStrategyIndicatorIds,
   loadStrategyRuleTexts,
   loadStrategyCustomRuleSets,
+  loadEmaMaJournalRowVisibility,
   loadJournalIndicatorValue,
   loadJournalIndicatorValueRaw,
   loadMovingAverageLengthsConfigForIndicator,
@@ -80,8 +82,10 @@ import {
   setJournalIndicatorDivergence,
   setJournalIndicatorMaFlags,
   migrateJournalIndicatorDraftDivergence,
+  loadIndicatorSignalPrefs,
   loadJournalIndicatorOtherSignals,
   setJournalIndicatorOtherSignal,
+  setJournalIndicatorOtherSignalField,
   migrateJournalIndicatorDraftOtherSignals,
   loadJournalTradePatternIndicatorIds,
   setJournalTradePatternIndicatorIds,
@@ -4202,19 +4206,18 @@ export default function Journal() {
           <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             Signals ({phaseLabel})
           </div>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "8px" }}>
-                <div style={{ position: "relative" }}>
+              {canEditIndicators ? (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
                   <button
                     type="button"
-                    disabled={!canEditIndicators}
-                    onClick={() => setIndicatorSettingsOpenByPhase((prev) => ({ ...prev, [phase]: !prev[phase] }))}
+                    onClick={() => setJournalSignalsSettingsModalPhase(phase)}
                     style={{
                       padding: "6px 10px",
                       borderRadius: 999,
                       border: "1px solid var(--border-color)",
                       background: "var(--bg-tertiary)",
                       color: "var(--text-primary)",
-                      cursor: canEditIndicators ? "pointer" : "not-allowed",
+                      cursor: "pointer",
                       fontSize: 12,
                       fontWeight: 800,
                       display: "inline-flex",
@@ -4225,95 +4228,8 @@ export default function Journal() {
                   >
                     <Settings size={16} />
                   </button>
-
-                  {indicatorSettingsOpenByPhase[phase] && (
-                    <div
-                      style={{
-                        position: "absolute",
-                        right: 0,
-                        top: "calc(100% + 8px)",
-                        zIndex: 50,
-                        width: 280,
-                        background: "var(--bg-primary)",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: 12,
-                        boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
-                        padding: 12,
-                      }}
-                    >
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                        {phase === "entry" && (
-                          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", color: "var(--text-secondary)", fontSize: 12, fontWeight: 650 }}>
-                            <input
-                              type="checkbox"
-                              checked={showIndicatorColors}
-                              onChange={(e) => setShowIndicatorColors(e.target.checked)}
-                              style={{ width: 16, height: 16 }}
-                            />
-                            Show indicator colors
-                          </label>
-                        )}
-
-                        <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: canEditIndicators ? "pointer" : "default", color: "var(--text-secondary)", fontSize: 12, fontWeight: 650 }}>
-                          <input
-                            type="checkbox"
-                            checked={indicatorSignalGroupFilterByPhase[phase]?.technical ?? true}
-                            disabled={!canEditIndicators}
-                            onChange={(e) => {
-                              if (!canEditIndicators) return;
-                              const next = e.target.checked;
-                              setIndicatorSignalGroupFilterByPhase((prev) => ({
-                                ...prev,
-                                [phase]: { ...prev[phase], technical: next },
-                              }));
-                            }}
-                            style={{ width: 16, height: 16 }}
-                          />
-                          Technical Patterns
-                        </label>
-
-                        <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: canEditIndicators ? "pointer" : "default", color: "var(--text-secondary)", fontSize: 12, fontWeight: 650 }}>
-                          <input
-                            type="checkbox"
-                            checked={indicatorSignalGroupFilterByPhase[phase]?.candlestick ?? true}
-                            disabled={!canEditIndicators}
-                            onChange={(e) => {
-                              if (!canEditIndicators) return;
-                              const next = e.target.checked;
-                              setIndicatorSignalGroupFilterByPhase((prev) => ({
-                                ...prev,
-                                [phase]: { ...prev[phase], candlestick: next },
-                              }));
-                            }}
-                            style={{ width: 16, height: 16 }}
-                          />
-                          Candlesticks
-                        </label>
-
-                      </div>
-
-                      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-                        <button
-                          type="button"
-                          onClick={() => setIndicatorSettingsOpenByPhase((prev) => ({ ...prev, [phase]: false }))}
-                          style={{
-                            padding: "8px 12px",
-                            borderRadius: 10,
-                            border: "none",
-                            background: "var(--accent)",
-                            color: "white",
-                            cursor: "pointer",
-                            fontSize: 12,
-                            fontWeight: 800,
-                          }}
-                        >
-                          Done
-                        </button>
-                      </div>
-                    </div>
-                  )}
                 </div>
-              </div>
+              ) : null}
         </div>
 
         <TradePatternsPicker
@@ -4377,13 +4293,9 @@ export default function Journal() {
               const isMomentum = (ind.category ?? "").toLowerCase() === "momentum";
               const colTfs = isTfIndicator ? globalSelectedTfs : indSelectedTfs;
               const otherSignals = ind.kind === "custom" ? loadJournalIndicatorOtherSignals(dataMode, entryId, tradeIndex, phase, ind.id) : {};
-              // Prefer labels defined on the Indicator; fall back to any previously-stored draft labels for older sessions.
-              const otherSignalLabels =
-                ind.kind === "custom"
-                  ? (ind.otherSignals ?? []).length > 0
-                    ? ind.otherSignals ?? []
-                    : Object.keys(otherSignals)
-                  : [];
+              void indicatorSignalPrefsTick;
+              const signalPrefs = ind.kind === "custom" ? loadIndicatorSignalPrefs(ind.id, ind.otherSignals ?? []) : null;
+              const otherSignalLabels = ind.kind === "custom" ? (signalPrefs?.order ?? []) : [];
               return (
                 <div
                   key={ind.id}
@@ -4412,9 +4324,9 @@ export default function Journal() {
                               fontWeight: 800,
                               padding: "3px 7px",
                               borderRadius: "8px",
-                              background: showIndicatorColors ? hexToRgba(ind.accentColor ?? "#F59E0B", 0.18) : "var(--bg-secondary)",
-                              border: `1px solid ${showIndicatorColors ? hexToRgba(ind.accentColor ?? "#F59E0B", 0.55) : "var(--border-color)"}`,
-                              color: showIndicatorColors ? ind.accentColor ?? "#F59E0B" : "var(--text-secondary)",
+                              background: hexToRgba(ind.accentColor ?? "#F59E0B", 0.18),
+                              border: `1px solid ${hexToRgba(ind.accentColor ?? "#F59E0B", 0.55)}`,
+                              color: ind.accentColor ?? "#F59E0B",
                             }}
                           >
                             {ind.abbreviation}
@@ -4521,20 +4433,45 @@ export default function Journal() {
                                 return p === defaults[actualIdx] ? "" : p;
                               };
 
+                              const checkboxCheckedFor = (actualIdx: number) => {
+                                const p = parts[actualIdx] ?? "";
+                                return p === "1" || p === "true" || p === "yes" || p === "on";
+                              };
+
                               const setLenAtIndex = (actualIdx: number, next: string) => {
                                 const existingRawCsv = loadJournalIndicatorValueRaw(dataMode, entryId, tradeIndex, phase, ind.id, tf);
                                 const existingParts = existingRawCsv.trim().length ? existingRawCsv.split(",").map((s) => s.trim()) : [];
 
-                                const nextParts = defaults.map((d, i) => (existingParts[i] ? existingParts[i] : d));
-                                const trimmed = next.trim();
-                                nextParts[actualIdx] = trimmed.length ? trimmed : defaults[actualIdx];
+                                const nextParts = defaults.map((d, i) => {
+                                  const ex = i < existingParts.length ? existingParts[i] : undefined;
+                                  const kind = cfg[i]?.journalKind ?? "value";
+                                  if (kind === "checkbox") {
+                                    if (ex === undefined) return "";
+                                    return ex === "1" || ex === "true" || ex === "yes" || ex === "on" ? "1" : "";
+                                  }
+                                  if (ex !== undefined && ex !== "") return ex;
+                                  return d;
+                                });
+                                const kind = cfg[actualIdx]?.journalKind ?? "value";
+                                if (kind === "checkbox") {
+                                  const on = next === "1" || next === "true";
+                                  nextParts[actualIdx] = on ? "1" : "";
+                                } else {
+                                  const trimmed = next.trim();
+                                  nextParts[actualIdx] = trimmed.length ? trimmed : defaults[actualIdx];
+                                }
 
                                 // Force disabled indices back to defaults so the hidden values are not user-submitted.
                                 for (let i = 0; i < cfg.length; i++) {
                                   if (!cfg[i]?.enabled) nextParts[i] = defaults[i];
                                 }
 
-                                const isAllDefaults = nextParts.every((p, i) => p === defaults[i]);
+                                const isAllDefaults = nextParts.every((p, i) => {
+                                  if (!cfg[i]?.enabled) return p === defaults[i];
+                                  const kind = cfg[i]?.journalKind ?? "value";
+                                  if (kind === "checkbox") return p === "" || p === undefined;
+                                  return p === defaults[i];
+                                });
                                 setJournalIndicatorValue(
                                   dataMode,
                                   entryId,
@@ -4560,9 +4497,11 @@ export default function Journal() {
                                   >
                                     {enabledActualIndices.map((actualIdx) => {
                                       const label = defaults[actualIdx];
+                                      const jk = cfg[actualIdx]?.journalKind ?? "value";
+                                      const customColor = cfg[actualIdx]?.chipColor;
                                       return (
                                         <div
-                                          key={label}
+                                          key={`${label}-${jk}`}
                                           style={{
                                             display: "flex",
                                             flexDirection: "column",
@@ -4574,7 +4513,7 @@ export default function Journal() {
                                           <div
                                             style={{
                                               fontSize: 9,
-                                              color: "var(--text-secondary)",
+                                              color: customColor ?? "var(--text-secondary)",
                                               fontWeight: 800,
                                               textAlign: "center",
                                               lineHeight: 1.15,
@@ -4584,41 +4523,75 @@ export default function Journal() {
                                           >
                                             {label}
                                           </div>
-                                          <input
-                                            type="text"
-                                            inputMode="numeric"
-                                            placeholder=""
-                                            defaultValue={shownValueFor(actualIdx)}
-                                            onChange={(e) => {
-                                              if (!canEditIndicators) return;
-                                              setLenAtIndex(actualIdx, e.target.value);
-                                            }}
-                                            readOnly={!canEditIndicators}
-                                            disabled={!canEditIndicators}
-                                            spellCheck={false}
-                                            style={{
-                                              width: "100%",
-                                              minWidth: 0,
-                                              background: "var(--bg-tertiary)",
-                                              border: "1px solid var(--border-color)",
-                                              borderRadius: "8px",
-                                              color: "var(--text-primary)",
-                                              outline: "none",
-                                              textAlign: "center",
-                                              fontSize: 12,
-                                              padding: "6px 2px",
-                                              height: 30,
-                                              boxSizing: "border-box",
-                                            }}
-                                          />
+                                          {jk === "checkbox" ? (
+                                            <label
+                                              style={{
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                justifyContent: "center",
+                                                width: "100%",
+                                                minHeight: 30,
+                                                cursor: canEditIndicators ? "pointer" : "default",
+                                              }}
+                                            >
+                                              <input
+                                                type="checkbox"
+                                                defaultChecked={checkboxCheckedFor(actualIdx)}
+                                                disabled={!canEditIndicators}
+                                                onChange={(e) => {
+                                                  if (!canEditIndicators) return;
+                                                  setLenAtIndex(actualIdx, e.target.checked ? "1" : "");
+                                                  setJournalSignalInputsTick((t) => t + 1);
+                                                }}
+                                                style={{
+                                                  width: 16,
+                                                  height: 16,
+                                                  ...(customColor ? { accentColor: customColor } : {}),
+                                                }}
+                                              />
+                                            </label>
+                                          ) : (
+                                            <input
+                                              type="text"
+                                              inputMode="numeric"
+                                              placeholder=""
+                                              defaultValue={shownValueFor(actualIdx)}
+                                              onChange={(e) => {
+                                                if (!canEditIndicators) return;
+                                                setLenAtIndex(actualIdx, e.target.value);
+                                              }}
+                                              readOnly={!canEditIndicators}
+                                              disabled={!canEditIndicators}
+                                              spellCheck={false}
+                                              style={{
+                                                width: "100%",
+                                                minWidth: 0,
+                                                background: customColor ? hexToRgba(customColor, 0.08) : "var(--bg-tertiary)",
+                                                border: customColor
+                                                  ? `1px solid ${hexToRgba(customColor, 0.45)}`
+                                                  : "1px solid var(--border-color)",
+                                                borderRadius: "8px",
+                                                color: "var(--text-primary)",
+                                                outline: "none",
+                                                textAlign: "center",
+                                                fontSize: 12,
+                                                padding: "6px 2px",
+                                                height: 30,
+                                                boxSizing: "border-box",
+                                              }}
+                                            />
+                                          )}
                                         </div>
                                       );
                                     })}
                                   </div>
 
-                                  {/* Crossing / coiling: one row, two columns — fits standard timeframe column width */}
+                                  {/* Crossing / coiling — visibility controlled in Signals (EMA/MA modal) */}
                                   {(() => {
+                                    const rowVis = loadEmaMaJournalRowVisibility(ind.id as "ema" | "ma");
+                                    if (!rowVis.showCrossingRow && !rowVis.showCoilingRow) return null;
                                     const flags = loadJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf);
+                                    const twoCols = rowVis.showCrossingRow && rowVis.showCoilingRow;
                                     return (
                                       <div
                                         style={{
@@ -4626,7 +4599,7 @@ export default function Journal() {
                                           borderTop: "1px solid var(--border-color)",
                                           paddingTop: 6,
                                           display: "grid",
-                                          gridTemplateColumns: "1fr 1fr",
+                                          gridTemplateColumns: twoCols ? "1fr 1fr" : "1fr",
                                           columnGap: 6,
                                           rowGap: 4,
                                           alignItems: "center",
@@ -4635,61 +4608,65 @@ export default function Journal() {
                                           boxSizing: "border-box",
                                         }}
                                       >
-                                        <label
-                                          style={{
-                                            display: "inline-flex",
-                                            alignItems: "center",
-                                            justifyContent: "flex-start",
-                                            gap: 5,
-                                            cursor: canEditIndicators ? "pointer" : "default",
-                                            fontSize: 10,
-                                            fontWeight: 650,
-                                            color: "var(--text-secondary)",
-                                            userSelect: "none",
-                                            whiteSpace: "nowrap",
-                                            minWidth: 0,
-                                          }}
-                                        >
-                                          <input
-                                            type="checkbox"
-                                            checked={flags.crossing}
-                                            disabled={!canEditIndicators}
-                                            onChange={(e) => {
-                                              setJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf, { ...flags, crossing: e.target.checked });
-                                              setJournalSignalInputsTick((t) => t + 1);
+                                        {rowVis.showCrossingRow && (
+                                          <label
+                                            style={{
+                                              display: "inline-flex",
+                                              alignItems: "center",
+                                              justifyContent: "flex-start",
+                                              gap: 5,
+                                              cursor: canEditIndicators ? "pointer" : "default",
+                                              fontSize: 10,
+                                              fontWeight: 650,
+                                              color: "var(--text-secondary)",
+                                              userSelect: "none",
+                                              whiteSpace: "nowrap",
+                                              minWidth: 0,
                                             }}
-                                            style={{ width: 14, height: 14, flexShrink: 0 }}
-                                          />
-                                          Crossing
-                                        </label>
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              checked={flags.crossing}
+                                              disabled={!canEditIndicators}
+                                              onChange={(e) => {
+                                                setJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf, { ...flags, crossing: e.target.checked });
+                                                setJournalSignalInputsTick((t) => t + 1);
+                                              }}
+                                              style={{ width: 14, height: 14, flexShrink: 0 }}
+                                            />
+                                            Crossing
+                                          </label>
+                                        )}
 
-                                        <label
-                                          style={{
-                                            display: "inline-flex",
-                                            alignItems: "center",
-                                            justifyContent: "flex-start",
-                                            gap: 5,
-                                            cursor: canEditIndicators ? "pointer" : "default",
-                                            fontSize: 10,
-                                            fontWeight: 650,
-                                            color: "var(--text-secondary)",
-                                            userSelect: "none",
-                                            whiteSpace: "nowrap",
-                                            minWidth: 0,
-                                          }}
-                                        >
-                                          <input
-                                            type="checkbox"
-                                            checked={flags.coiling}
-                                            disabled={!canEditIndicators}
-                                            onChange={(e) => {
-                                              setJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf, { ...flags, coiling: e.target.checked });
-                                              setJournalSignalInputsTick((t) => t + 1);
+                                        {rowVis.showCoilingRow && (
+                                          <label
+                                            style={{
+                                              display: "inline-flex",
+                                              alignItems: "center",
+                                              justifyContent: "flex-start",
+                                              gap: 5,
+                                              cursor: canEditIndicators ? "pointer" : "default",
+                                              fontSize: 10,
+                                              fontWeight: 650,
+                                              color: "var(--text-secondary)",
+                                              userSelect: "none",
+                                              whiteSpace: "nowrap",
+                                              minWidth: 0,
                                             }}
-                                            style={{ width: 14, height: 14, flexShrink: 0 }}
-                                          />
-                                          Coiling
-                                        </label>
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              checked={flags.coiling}
+                                              disabled={!canEditIndicators}
+                                              onChange={(e) => {
+                                                setJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf, { ...flags, coiling: e.target.checked });
+                                                setJournalSignalInputsTick((t) => t + 1);
+                                              }}
+                                              style={{ width: 14, height: 14, flexShrink: 0 }}
+                                            />
+                                            Coiling
+                                          </label>
+                                        )}
                                       </div>
                                     );
                                   })()}
@@ -4751,7 +4728,52 @@ export default function Journal() {
                           {ind.kind === "custom" && otherSignalLabels.length > 0 && tf === (colTfs[0] ?? tf) && (
                             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                               {otherSignalLabels.map((label) => {
-                                const checked = !!otherSignals[label];
+                                const osMode = signalPrefs?.journalKindByLabel[label] ?? "checkbox";
+                                const customColor = signalPrefs?.chipColorByLabel?.[label];
+                                const raw = otherSignals[label];
+                                const checked = typeof raw === "boolean" ? raw : raw === "true" || raw === "1";
+                                const textVal = typeof raw === "string" ? raw : "";
+                                if (osMode === "value") {
+                                  return (
+                                    <label
+                                      key={label}
+                                      style={{
+                                        display: "inline-flex",
+                                        flexDirection: "column",
+                                        alignItems: "flex-start",
+                                        gap: 4,
+                                        color: "var(--text-primary)",
+                                        fontSize: 12,
+                                        fontWeight: 650,
+                                        userSelect: "none",
+                                        minWidth: 0,
+                                      }}
+                                    >
+                                      <span style={{ color: customColor ?? "var(--text-secondary)", fontSize: 11, fontWeight: 800 }}>{label}</span>
+                                      <input
+                                        type="text"
+                                        defaultValue={textVal}
+                                        disabled={!canEditIndicators}
+                                        readOnly={!canEditIndicators}
+                                        spellCheck={false}
+                                        onChange={(e) => {
+                                          if (!canEditIndicators) return;
+                                          setJournalIndicatorOtherSignalField(dataMode, entryId, tradeIndex, phase, ind.id, label, e.target.value);
+                                          setJournalSignalInputsTick((t) => t + 1);
+                                        }}
+                                        style={{
+                                          padding: "6px 8px",
+                                          minWidth: 100,
+                                          background: customColor ? hexToRgba(customColor, 0.08) : "var(--bg-tertiary)",
+                                          border: customColor ? `1px solid ${hexToRgba(customColor, 0.45)}` : "1px solid var(--border-color)",
+                                          borderRadius: "8px",
+                                          color: "var(--text-primary)",
+                                          fontSize: 12,
+                                        }}
+                                      />
+                                    </label>
+                                  );
+                                }
                                 return (
                                   <label
                                     key={label}
@@ -4774,9 +4796,9 @@ export default function Journal() {
                                         setJournalIndicatorOtherSignal(dataMode, entryId, tradeIndex, phase, ind.id, label, e.target.checked);
                                         setJournalSignalInputsTick((t) => t + 1);
                                       }}
-                                      style={{ width: 16, height: 16 }}
+                                      style={{ width: 16, height: 16, ...(customColor ? { accentColor: customColor } : {}) }}
                                     />
-                                    {label}
+                                    <span style={{ color: customColor ?? "var(--text-primary)", fontWeight: customColor ? 800 : 650 }}>{label}</span>
                                   </label>
                                 );
                               })}
@@ -5010,20 +5032,7 @@ export default function Journal() {
   // Free-text "custom rule sets" configured in the Strategy "Rules" tab.
   // Each set gets its own Journal section that can be reordered.
   const [strategyCustomRuleSets, setStrategyCustomRuleSets] = useState<StrategyCustomRuleSet[]>([]);
-  const SHOW_INDICATOR_COLORS_KEY = "tradebutler_show_indicator_colors_v1";
-  const [showIndicatorColors, setShowIndicatorColors] = useState<boolean>(() => {
-    try {
-      const raw = typeof window !== "undefined" ? window.localStorage.getItem(SHOW_INDICATOR_COLORS_KEY) : null;
-      if (raw === null) return true;
-      return raw === "1" || raw.toLowerCase() === "true";
-    } catch {
-      return true;
-    }
-  });
-  const [indicatorSettingsOpenByPhase, setIndicatorSettingsOpenByPhase] = useState<Record<IndicatorPhase, boolean>>({
-    entry: false,
-    exit: false,
-  });
+  const [journalSignalsSettingsModalPhase, setJournalSignalsSettingsModalPhase] = useState<IndicatorPhase | null>(null);
   /** Bumped when divergence / other-signal prefs change in localStorage so controlled checkboxes re-render. */
   const [, setJournalSignalInputsTick] = useState(0);
   const [indicatorSignalGroupFilterByPhase, setIndicatorSignalGroupFilterByPhase] = useState<
@@ -5032,6 +5041,16 @@ export default function Journal() {
     entry: { technical: true, candlestick: true },
     exit: { technical: true, candlestick: true },
   });
+
+  const journalSignalsSettingsVisibleIndicators = useMemo(() => {
+    if (journalSignalsSettingsModalPhase === null) return [];
+    const signalFilter = indicatorSignalGroupFilterByPhase[journalSignalsSettingsModalPhase];
+    return strategyIndicators.filter((ind) => {
+      if (ind.signalGroup === "TechnicalPattern") return signalFilter.technical;
+      if (ind.signalGroup === "Candlestick") return signalFilter.candlestick;
+      return true;
+    });
+  }, [journalSignalsSettingsModalPhase, strategyIndicators, indicatorSignalGroupFilterByPhase]);
   const [indicatorTimeframesByPhase, setIndicatorTimeframesByPhase] = useState<Record<IndicatorPhase, string[]>>({
     // Default indicator timeframes (top-of-section buttons).
     entry: ["15m", "1H", "4H"],
@@ -5055,16 +5074,12 @@ export default function Journal() {
     return () => window.removeEventListener("tradebutler:ma-config-changed", handler as EventListener);
   }, []);
 
-  // Custom-indicator "Other signals" labels are managed on the Indicators page.
-
+  const [indicatorSignalPrefsTick, setIndicatorSignalPrefsTick] = useState(0);
   useEffect(() => {
-    try {
-      if (typeof window === "undefined") return;
-      window.localStorage.setItem(SHOW_INDICATOR_COLORS_KEY, showIndicatorColors ? "1" : "0");
-    } catch {
-      /* optional */
-    }
-  }, [showIndicatorColors]);
+    const handler = () => setIndicatorSignalPrefsTick((t) => t + 1);
+    window.addEventListener("tradebutler:indicator-signal-prefs-changed", handler as EventListener);
+    return () => window.removeEventListener("tradebutler:indicator-signal-prefs-changed", handler as EventListener);
+  }, []);
 
   const overviewEntriesFiltered = useMemo(() => {
     const { start, end } = getTimeframeDates(chartTimeframe, chartCustomStart || undefined, chartCustomEnd || undefined);
@@ -9407,6 +9422,26 @@ export default function Journal() {
           </div>
         </div>
       </div>
+
+      <JournalSignalsSettingsModal
+        open={journalSignalsSettingsModalPhase !== null}
+        onClose={() => setJournalSignalsSettingsModalPhase(null)}
+        phase={journalSignalsSettingsModalPhase ?? "entry"}
+        indicators={journalSignalsSettingsVisibleIndicators}
+        signalFilter={
+          journalSignalsSettingsModalPhase
+            ? indicatorSignalGroupFilterByPhase[journalSignalsSettingsModalPhase]
+            : { technical: true, candlestick: true }
+        }
+        onSignalFilter={(next) => {
+          if (journalSignalsSettingsModalPhase === null) return;
+          setIndicatorSignalGroupFilterByPhase((prev) => ({
+            ...prev,
+            [journalSignalsSettingsModalPhase]: next,
+          }));
+        }}
+        canEdit={isCreating || isEditing}
+      />
 
       {/* Link to actual trades modal (journal trade -> real trades from Trades table) */}
       {linkActualTradesModalJournalTradeId !== null && (
