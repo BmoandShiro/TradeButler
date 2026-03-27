@@ -430,9 +430,12 @@ const DASHBOARD_PROFILE_STORAGE_KEYS: readonly string[] = [
   "tradebutler_dashboard_timeframe",
   "tradebutler_dashboard_custom_start",
   "tradebutler_dashboard_custom_end",
+  "tradebutler_dashboard_strategy_id",
   "tradebutler_news_include_positions",
   "tradebutler_news_show_sentiment",
 ];
+
+const DASHBOARD_STRATEGY_ID_KEY = "tradebutler_dashboard_strategy_id";
 
 type DashboardProfileInfo = { id: string; name: string };
 type DashboardProfilesMetaV1 = { version: 1; profiles: DashboardProfileInfo[]; activeProfileId: string };
@@ -3603,6 +3606,12 @@ export default function Dashboard() {
   const [customEndDate, setCustomEndDate] = useState<string>(() => {
     return localStorage.getItem("tradebutler_dashboard_custom_end") || "";
   });
+  const [dashboardStrategyId, setDashboardStrategyId] = useState<number | null>(() => {
+    const raw = localStorage.getItem(DASHBOARD_STRATEGY_ID_KEY);
+    if (raw == null || raw === "") return null;
+    const n = parseInt(raw, 10);
+    return Number.isNaN(n) ? null : n;
+  });
   const [showPositionGroupModal, setShowPositionGroupModal] = useState(false);
   const [_selectedPositionGroupId, setSelectedPositionGroupId] = useState<number | null>(null);
   const [selectedPositionGroup, setSelectedPositionGroup] = useState<any>(null);
@@ -3710,6 +3719,12 @@ export default function Dashboard() {
       setTimeframe(((tf as Timeframe) || "all") as Timeframe);
       setCustomStartDate(localStorage.getItem("tradebutler_dashboard_custom_start") || "");
       setCustomEndDate(localStorage.getItem("tradebutler_dashboard_custom_end") || "");
+
+      const ds = localStorage.getItem(DASHBOARD_STRATEGY_ID_KEY);
+      if (ds != null && ds !== "") {
+        const n = parseInt(ds, 10);
+        setDashboardStrategyId(Number.isNaN(n) ? null : n);
+      } else setDashboardStrategyId(null);
 
       const nIncl = localStorage.getItem(NEWS_INCLUDE_POSITIONS_KEY);
       setNewsIncludePositions(nIncl ? JSON.parse(nIncl) : true);
@@ -4289,7 +4304,15 @@ export default function Dashboard() {
     loadDashboardData();
     // Reset to first page when timeframe changes
     setCurrentTradesPage(1);
-  }, [timeframe, customStartDate, customEndDate, dataMode]);
+  }, [timeframe, customStartDate, customEndDate, dataMode, dashboardStrategyId]);
+
+  useEffect(() => {
+    if (dashboardStrategyId != null) {
+      localStorage.setItem(DASHBOARD_STRATEGY_ID_KEY, String(dashboardStrategyId));
+    } else {
+      localStorage.removeItem(DASHBOARD_STRATEGY_ID_KEY);
+    }
+  }, [dashboardStrategyId]);
   
   useEffect(() => {
     localStorage.setItem("tradebutler_dashboard_timeframe", timeframe);
@@ -4355,7 +4378,11 @@ export default function Dashboard() {
           estimated_pnl: pnl.total_net_pnl,
         }));
         setTopSymbols(topSymbolsData);
-        setStrategyPerformance(EXAMPLE_STRATEGY_PERFORMANCE as unknown as StrategyPerformance[]);
+        let perf = EXAMPLE_STRATEGY_PERFORMANCE as unknown as StrategyPerformance[];
+        if (dashboardStrategyId != null) {
+          perf = perf.filter((p) => p.strategy_id === dashboardStrategyId);
+        }
+        setStrategyPerformance(perf);
         setRecentTrades(EXAMPLE_RECENT_TRADES.slice(0, 5) as unknown as RecentTrade[]);
         setTrades(EXAMPLE_RECENT_TRADES as unknown as RecentTrade[]);
         setOpenPositionGroups([]);
@@ -4368,12 +4395,13 @@ export default function Dashboard() {
       const startDate = dateRange.start ? dateRange.start.toISOString() : null;
       const endDate = dateRange.end ? dateRange.end.toISOString() : null;
       const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+      const strategyArgs = dashboardStrategyId != null ? { strategyId: dashboardStrategyId } : {};
       const [metricsData, pnlData, strategiesData, tradesData, allTradesData, strategiesList, positionGroupsData] = await Promise.all([
-        invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate, ...paperArgs }),
-        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate, ...paperArgs }),
-        invoke<StrategyPerformance[]>("get_strategy_performance", { pairingMethod, startDate, endDate, ...paperArgs }),
-        invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate, ...paperArgs }),
-        invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate, ...paperArgs }),
+        invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
+        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate, ...paperArgs, filters: null, ...strategyArgs }),
+        invoke<StrategyPerformance[]>("get_strategy_performance", { pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
+        invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
+        invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
         invoke<Strategy[]>("get_strategies"),
         invoke<OpenPositionGroup[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null, ...paperArgs }),
       ]);
@@ -4411,6 +4439,11 @@ export default function Dashboard() {
   const [filteredStrategyMetrics, setFilteredStrategyMetrics] = useState<Record<string, number>>({});
   
   useEffect(() => {
+    if (dashboardStrategyId != null) {
+      setFilteredStrategyMetrics({});
+      return;
+    }
+
     let cancelled = false;
     
     const calculateFilteredMetrics = async () => {
@@ -4535,7 +4568,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [strategyFilterForMetrics, timeframe, customStartDate, customEndDate, metrics, metricInstances]);
+  }, [dashboardStrategyId, strategyFilterForMetrics, timeframe, customStartDate, customEndDate, metrics, metricInstances, dataMode]);
 
   if (loading) {
     return (
@@ -5035,7 +5068,55 @@ export default function Dashboard() {
               Paper mode — you are viewing paper trades only.
             </p>
           )}
-          <div style={{ marginBottom: "30px" }}>
+          <div style={{ marginBottom: "30px", display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: "20px 24px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px", minWidth: "min(100%, 280px)" }}>
+              <label
+                htmlFor="dashboard-strategy-select"
+                style={{
+                  fontSize: "13px",
+                  fontWeight: "600",
+                  color: "var(--text-secondary)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
+              >
+                <Layers size={16} style={{ flexShrink: 0 }} aria-hidden />
+                Strategy
+              </label>
+              <select
+                id="dashboard-strategy-select"
+                value={dashboardStrategyId ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDashboardStrategyId(v === "" ? null : parseInt(v, 10));
+                }}
+                style={{
+                  width: "100%",
+                  maxWidth: "320px",
+                  padding: "10px 12px",
+                  fontSize: "14px",
+                  color: "var(--text-primary)",
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  cursor: "pointer",
+                }}
+              >
+                <option value="">All strategies</option>
+                {strategies
+                  .filter((s) => s.id != null)
+                  .map((s) => (
+                    <option key={s.id} value={s.id!}>
+                      {s.name}
+                    </option>
+                  ))}
+              </select>
+              <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", maxWidth: "360px", lineHeight: 1.4 }}>
+                Filters metrics and sections below. Open positions always show all open positions.
+              </p>
+            </div>
+            <div style={{ flex: "1 1 200px", minWidth: 0 }}>
             <TimeframeSelector
               value={timeframe}
               onChange={setTimeframe}
@@ -5058,6 +5139,7 @@ export default function Dashboard() {
                 }
               }}
             />
+            </div>
           </div>
 
       <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
