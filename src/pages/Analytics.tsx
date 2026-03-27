@@ -13,6 +13,7 @@ import {
   EXAMPLE_SYMBOL_PNL,
   EXAMPLE_EQUITY_CURVE,
 } from "../exampleData";
+import { LoadingSphere } from "../components/LoadingSphere";
 
 interface Trade {
   id: number;
@@ -1433,8 +1434,17 @@ export default function Analytics() {
 
   if (loading) {
     return (
-      <div style={{ padding: "40px", textAlign: "center" }}>
-        <p>Loading analytics...</p>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100%",
+          width: "100%",
+          minHeight: "100vh",
+        }}
+      >
+        <LoadingSphere size={100} message="Loading analytics..." />
       </div>
     );
   }

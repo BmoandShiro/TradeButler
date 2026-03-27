@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useRef, useMemo, useCallback, createContext, useContext } from "react";
+import { CurrentPriceSyncContext } from "../contexts/CurrentPriceSyncContext";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
@@ -46,6 +47,10 @@ import {
   CircleDollarSign,
   Plus,
   Layers,
+  Coins,
+  ExternalLink,
+  Sparkles,
+  Newspaper,
 } from "lucide-react";
 import {
   MetricsConfigPanel,
@@ -82,6 +87,13 @@ import {
   Brush,
 } from "recharts";
 import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
+import {
+  buildDashboardSessionCacheKey,
+  getDashboardSessionSnapshot,
+  patchDashboardSessionSnapshot,
+  setDashboardSessionSnapshot,
+  type DashboardSessionSnapshot,
+} from "../utils/dashboardSessionCache";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { formatCompactNumber, formatWithCommas } from "../utils/formatCompactNumber";
 import { loadSandboxState } from "../utils/sandboxStore";
@@ -92,7 +104,29 @@ import {
   EXAMPLE_SYMBOL_PNL,
 } from "../exampleData";
 import NewsWidget from "../components/NewsWidget";
+import DividendTrackerDashboardWidget from "../components/DividendTrackerDashboardWidget";
+import DividendIncomeDashboardWidget from "../components/DividendIncomeDashboardWidget";
+import {
+  readDividendTrackerPageSize,
+  DIVIDEND_TRACKER_PAGE_SIZE_KEY,
+  DIVIDEND_TRACKER_PAGE_SIZE_OPTIONS,
+  readDashboardShowForwardInTracker,
+  readForwardIncomeDisplayMode,
+  DASHBOARD_DIVIDEND_TRACKER_INCOME_MODE_KEY,
+  DASHBOARD_DIVIDEND_SHOW_FORWARD_IN_TRACKER_KEY,
+  loadDividendTrackerRows,
+  forwardIncomeBreakdown,
+  FORWARD_DIVIDEND_ESTIMATE_LABELS,
+  type ForwardIncomeDisplayMode,
+} from "../utils/dividendTrackerData";
+import { getFinnhubApiKey, hasFinnhubApiKey } from "../utils/finnhubManager";
+import {
+  readDividendDashboardView,
+  DASHBOARD_DIVIDEND_VIEW_KEY,
+  type DividendDashboardView,
+} from "../utils/dividendTrackerCharts";
 import ViewFinancialsButton from "../components/ViewFinancialsButton";
+import { LoadingSphere } from "../components/LoadingSphere";
 
 interface Metrics {
   total_trades: number;
@@ -236,6 +270,7 @@ const metricIcons: Record<string, any> = {
   strategy_consecutive_losses: TrendingDown,
   average_holding_time_seconds: Clock,
   position_size_chart: BarChart3,
+  forward_dividend_estimates: Sparkles,
   current_price: CircleDollarSign,
 };
 
@@ -284,6 +319,8 @@ const formatMetricValue = (id: string, value: number, metrics: Metrics | null): 
       return `$${formatWithCommas(value || 0, { decimals: 2 })}`;
     case "average_holding_time_seconds":
       return formatHoldingTime(value || 0);
+    case "forward_dividend_estimates":
+      return `$${formatWithCommas(value || 0, { decimals: 2 })}`;
     case "average_gain_pct":
     case "average_loss_pct":
     case "largest_win_pct":
@@ -330,6 +367,9 @@ const formatHoldingTime = (seconds: number): string => {
 const getMetricColor = (id: string, value: number, colorRange?: { min: number; max: number }): string => {
   if (id === "current_price") {
     return "var(--accent)";
+  }
+  if (id === "forward_dividend_estimates") {
+    return value > 0 ? "var(--profit)" : "var(--text-secondary)";
   }
   // Get color range from localStorage if not provided
   if (!colorRange) {
@@ -430,9 +470,12 @@ const DASHBOARD_PROFILE_STORAGE_KEYS: readonly string[] = [
   "tradebutler_dashboard_timeframe",
   "tradebutler_dashboard_custom_start",
   "tradebutler_dashboard_custom_end",
+  "tradebutler_dashboard_strategy_id",
   "tradebutler_news_include_positions",
   "tradebutler_news_show_sentiment",
 ];
+
+const DASHBOARD_STRATEGY_ID_KEY = "tradebutler_dashboard_strategy_id";
 
 type DashboardProfileInfo = { id: string; name: string };
 type DashboardProfilesMetaV1 = { version: 1; profiles: DashboardProfileInfo[]; activeProfileId: string };
@@ -491,7 +534,10 @@ function loadDashboardProfileSnapshot(profileId: string): Record<string, string>
   }
 }
 
-/** Apply active profile into root keys before Dashboard reads localStorage. */
+/** Only apply profile blob once per page load — re-applying on every render overwrote fresh layout keys with stale snapshots. */
+let dashboardProfilesSnapshotAppliedOnce = false;
+
+/** Apply active profile into root keys before Dashboard reads localStorage (first paint only). */
 function ensureDashboardProfilesBootstrapped(): void {
   let meta = readDashboardProfilesMeta();
   if (!meta) {
@@ -505,6 +551,8 @@ function ensureDashboardProfilesBootstrapped(): void {
     localStorage.setItem(dashboardProfileSnapKey("default"), JSON.stringify(snap));
     return;
   }
+  if (dashboardProfilesSnapshotAppliedOnce) return;
+  dashboardProfilesSnapshotAppliedOnce = true;
   const blob = loadDashboardProfileSnapshot(meta.activeProfileId);
   if (blob && Object.keys(blob).length > 0) {
     applyDashboardProfileSnapshot(blob);
@@ -545,10 +593,9 @@ interface MetricInstance {
   quoteSymbol?: string;
   /** Live quote metric: refresh interval in seconds; 0 = manual refresh only. */
   quoteRefreshSeconds?: number;
+  /** Forward dividend metric: which single estimate the card shows (gear menu). */
+  forwardDividendEstimateMode?: "monthly" | "quarterly" | "annual";
 }
-
-type CurrentPriceSyncContextValue = { enabled: boolean; seconds: number; tick: number };
-const CurrentPriceSyncContext = createContext<CurrentPriceSyncContextValue | null>(null);
 
 function readDashboardCurrentPriceSync(): { enabled: boolean; seconds: number } {
   const enabled = localStorage.getItem(CURRENT_PRICE_SYNC_ENABLED_KEY) === "true";
@@ -756,7 +803,7 @@ function CurrentPriceMetricRow({
         alignItems: "stretch",
         justifyContent: "center",
         gap: "6px",
-        overflow: "hidden",
+        overflow: "visible",
         pointerEvents: "auto",
       }}
     >
@@ -766,9 +813,12 @@ function CurrentPriceMetricRow({
           display: "flex",
           flexDirection: "row",
           alignItems: "center",
-          justifyContent: "center",
-          gap: "10px",
+          justifyContent: "space-between",
+          gap: "8px",
           minWidth: 0,
+          width: "100%",
+          boxSizing: "border-box",
+          paddingRight: "14px",
         }}
       >
         <input
@@ -776,7 +826,6 @@ function CurrentPriceMetricRow({
           aria-label="Symbol"
           title="Click to edit symbol"
           value={symbolDraft}
-          size={Math.max(3, symbolDraft.length || 1)}
           onChange={(e) => setSymbolDraft(e.target.value.toUpperCase())}
           onFocus={() => setSymbolFocused(true)}
           onBlur={() => {
@@ -790,8 +839,9 @@ function CurrentPriceMetricRow({
           spellCheck={false}
           style={{
             margin: 0,
-            minWidth: "2.5ch",
-            width: "auto",
+            width: "6ch",
+            minWidth: "6ch",
+            maxWidth: "6ch",
             height: quoteRowPxCss,
             backgroundColor: "transparent",
             border: "none",
@@ -815,31 +865,33 @@ function CurrentPriceMetricRow({
             paddingBottom: 0,
             paddingLeft: 2,
             paddingRight: 2,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
           }}
         />
         <span
           style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
+            display: "block",
             height: quoteRowPxCss,
-            minWidth: 0,
             flex: "1 1 0%",
+            flexShrink: 0,
+            minWidth: "min-content",
             fontSize: quoteFontSizeCss,
             fontWeight: "bold",
             lineHeight: quoteRowPxCss,
             color: quoteTint,
             margin: 0,
-            textAlign: "center",
-            maxWidth: "100%",
+            textAlign: "right",
             fontVariantNumeric: "tabular-nums",
             fontFamily: "inherit",
             boxShadow: quotePlaceholderUnderline,
             boxSizing: "border-box",
             paddingTop: 0,
             paddingBottom: 0,
-            paddingLeft: 2,
-            paddingRight: 2,
+            paddingLeft: 6,
+            paddingRight: 0,
+            whiteSpace: "nowrap",
+            overflow: "visible",
           }}
         >
           {loading && price == null ? "…" : price != null ? `$${formatWithCommas(price, { decimals: 2 })}` : "—"}
@@ -864,6 +916,9 @@ interface DashboardSections {
   showTrades: boolean;
   showOpenPositions: boolean;
   showNews: boolean;
+  showDividendTracker: boolean;
+  /** Standalone forward dividend income metrics card (optional). */
+  showDividendIncome: boolean;
 }
 
 const defaultDashboardSections: DashboardSections = {
@@ -873,16 +928,55 @@ const defaultDashboardSections: DashboardSections = {
   showTrades: true,
   showOpenPositions: true,
   showNews: true,
+  showDividendTracker: true,
+  showDividendIncome: false,
 };
 
-type SectionId = "topSymbols" | "strategyPerformance" | "recentTrades" | "trades" | "openPositions" | "news";
+type SectionId =
+  | "topSymbols"
+  | "strategyPerformance"
+  | "recentTrades"
+  | "trades"
+  | "openPositions"
+  | "news"
+  | "dividendTracker"
+  | "dividendIncome";
 
-const SECTION_IDS: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
+const SECTION_IDS: SectionId[] = [
+  "topSymbols",
+  "strategyPerformance",
+  "recentTrades",
+  "trades",
+  "openPositions",
+  "news",
+  "dividendTracker",
+  "dividendIncome",
+];
 function isSectionId(id: string): id is SectionId {
   return SECTION_IDS.includes(id as SectionId);
 }
 
-const defaultSectionOrder: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "news", "openPositions", "trades"];
+const SECTION_DASHBOARD_SECTION_KEY: Record<SectionId, keyof DashboardSections> = {
+  topSymbols: "showTopSymbols",
+  strategyPerformance: "showStrategyPerformance",
+  recentTrades: "showRecentTrades",
+  trades: "showTrades",
+  openPositions: "showOpenPositions",
+  news: "showNews",
+  dividendTracker: "showDividendTracker",
+  dividendIncome: "showDividendIncome",
+};
+
+const defaultSectionOrder: SectionId[] = [
+  "topSymbols",
+  "strategyPerformance",
+  "recentTrades",
+  "news",
+  "dividendTracker",
+  "dividendIncome",
+  "openPositions",
+  "trades",
+];
 
 export type SectionSizes = Record<SectionId, { columnSpan?: number; height?: number; rowSpan?: number }>;
 
@@ -901,6 +995,8 @@ export interface DashboardLayoutPreset {
   lockedGridColumns?: number;
   /** Locked layout: slot assignments (metric/section ids or null for empty slots). */
   lockedSlotAssignments?: (string | null)[];
+  /** Locked layout: packed (row,col) per slot index — required so presets restore grid positions. */
+  lockedPlacements?: { row: number; col: number }[] | null;
   /** Locked layout: column width ratios (fr values). */
   lockedColumnWidths?: number[];
 }
@@ -930,6 +1026,8 @@ function SortableSection({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 1 : 0,
+    position: "relative" as const,
   };
 
   return (
@@ -937,6 +1035,59 @@ function SortableSection({
       {children({ dragHandleProps: { ...attributes, ...listeners }, isDragging })}
     </div>
   );
+}
+
+/** Default News section height when none saved — avoids layout jump when articles load (user height still saved via resize). */
+const DEFAULT_NEWS_SECTION_HEIGHT_PX = 320;
+
+const DEFAULT_DIVIDEND_TRACKER_SECTION_HEIGHT_PX = 300;
+
+const DEFAULT_DIVIDEND_INCOME_SECTION_HEIGHT_PX = 280;
+
+/** Locked grid rows must cover section pixel height or the card overflows and covers other tiles. */
+function effectiveSectionRowSpanForLockedGrid(
+  id: SectionId,
+  sectionSizes: SectionSizes,
+  lockedRowHeightPx: number
+): number {
+  const sec = sectionSizes[id];
+  const stored = Math.min(MAX_ROW_SPAN, Math.max(1, sec?.rowSpan ?? 1));
+  const rh = lockedRowHeightPx > 0 ? lockedRowHeightPx : 100;
+  const rawH =
+    sec?.height ??
+    (id === "news"
+      ? DEFAULT_NEWS_SECTION_HEIGHT_PX
+      : id === "dividendTracker"
+        ? DEFAULT_DIVIDEND_TRACKER_SECTION_HEIGHT_PX
+        : id === "dividendIncome"
+          ? DEFAULT_DIVIDEND_INCOME_SECTION_HEIGHT_PX
+          : undefined);
+  if (rawH != null) {
+    const hClamped = Math.min(800, Math.max(200, rawH));
+    const implied = Math.ceil(hClamped / rh);
+    return Math.min(MAX_ROW_SPAN, Math.max(1, stored, implied));
+  }
+  return stored;
+}
+
+/** Same for metric cards: cardHeight / chartHeight vs row span. */
+function effectiveMetricRowSpanForLockedGrid(
+  metric: MetricInstance,
+  baseMetricId: string,
+  lockedRowHeightPx: number
+): number {
+  const m = metric as MetricInstance;
+  const stored = Math.min(MAX_ROW_SPAN, Math.max(1, m.cardRowSpan ?? 1));
+  const rh = lockedRowHeightPx > 0 ? lockedRowHeightPx : 100;
+  if (baseMetricId === "position_size_chart") {
+    const ch = Math.min(600, Math.max(160, m.chartHeight ?? 200));
+    const implied = Math.ceil(ch / rh);
+    return Math.min(MAX_ROW_SPAN, Math.max(1, stored, implied));
+  }
+  const defaultH = baseMetricId === "current_price" ? rh : 100;
+  const ch = Math.min(400, Math.max(80, m.cardHeight ?? defaultH));
+  const implied = Math.ceil(ch / rh);
+  return Math.min(MAX_ROW_SPAN, Math.max(1, stored, implied));
 }
 
 // Wrapper that adds resize handles (right + bottom) to a dashboard section card
@@ -956,7 +1107,17 @@ function SectionCardResizeWrapper({
   lockedRowHeight?: number;
 }) {
   const size = sectionSizes[sectionId] ?? {};
-  const height = size.height != null ? Math.min(800, Math.max(200, size.height)) : undefined;
+  const rawHeight =
+    size.height != null
+      ? size.height
+      : sectionId === "news"
+        ? DEFAULT_NEWS_SECTION_HEIGHT_PX
+        : sectionId === "dividendTracker"
+          ? DEFAULT_DIVIDEND_TRACKER_SECTION_HEIGHT_PX
+          : sectionId === "dividendIncome"
+            ? DEFAULT_DIVIDEND_INCOME_SECTION_HEIGHT_PX
+            : undefined;
+  const height = rawHeight != null ? Math.min(800, Math.max(200, rawHeight)) : undefined;
   const rowHeight = typeof lockedRowHeight === "number" && lockedRowHeight > 0 ? lockedRowHeight : 100;
 
   const handleResizeHorizontal = (e: React.MouseEvent) => {
@@ -1205,6 +1366,12 @@ const metricDescriptions: Record<string, { description: string; calculation: str
     description: "Live last price for a symbol you choose, refreshed on an interval or manually.",
     calculation: "Fetched from your quote provider via fetch_stock_quote (same source as other quote features)."
   },
+  forward_dividend_estimates: {
+    description:
+      "Estimated monthly, quarterly, and annual dividend income from a forward ~12 month run-rate (latest rate × shares × frequency).",
+    calculation:
+      "Per-symbol forward annual from Finnhub dividend data; monthly and quarterly are annual ÷ 12 and ÷ 4 for planning averages.",
+  },
   strategy_win_rate: {
     description: "The win rate for trades assigned to strategies (excluding unassigned trades).",
     calculation: "Strategy winning trades ÷ (Strategy winning trades + Strategy losing trades) × 100%"
@@ -1345,6 +1512,7 @@ function SortableMetricCard({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 1 : 0,
   };
 
   const baseMetricId = (metric as any).baseMetricId || metric.id;
@@ -1642,6 +1810,9 @@ function SortableMetricCard({
                   zIndex: 99999,
                   minWidth: "280px",
                   maxWidth: "400px",
+                  maxHeight: "min(560px, calc(100vh - 24px))",
+                  overflowY: "auto",
+                  overflowX: "hidden",
                 }}
                 onClick={(e) => e.stopPropagation()}
                 onMouseDown={(e) => e.stopPropagation()}
@@ -2073,8 +2244,20 @@ function SortableMetricCard({
         ...(isGridLayout
           ? {
               ...(isFluidGrid && cardWidth
-                ? { width: `${cardWidth}px`, minWidth: 200, maxWidth: "100%", overflow: "hidden", boxSizing: "border-box" as const }
-                : { width: "100%", minWidth: 0, maxWidth: "100%", overflow: "hidden", boxSizing: "border-box" as const }),
+                ? {
+                    width: `${cardWidth}px`,
+                    minWidth: 200,
+                    maxWidth: "100%",
+                    overflow: baseMetricId === "current_price" ? "visible" : "hidden",
+                    boxSizing: "border-box" as const,
+                  }
+                : {
+                    width: "100%",
+                    minWidth: 0,
+                    maxWidth: "100%",
+                    overflow: baseMetricId === "current_price" ? "visible" : "hidden",
+                    boxSizing: "border-box" as const,
+                  }),
               ...(cardColumnSpan > 1 ? { gridColumn: `span ${cardColumnSpan}` as const } : {}),
             }
           : {
@@ -2119,7 +2302,7 @@ function SortableMetricCard({
           <Icon size={24} />
         )}
       </div>
-      {(metric as any).baseMetricId === "current_price" ? (
+      {baseMetricId === "current_price" ? (
         <CurrentPriceMetricRow
           metric={metric}
           setMetricInstances={setMetricInstances}
@@ -2147,6 +2330,45 @@ function SortableMetricCard({
             })()}
           </p>
         </CurrentPriceMetricRow>
+      ) : baseMetricId === "forward_dividend_estimates" ? (
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            pointerEvents: "none",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+          }}
+        >
+          <p
+            style={{
+              fontSize: "11px",
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+              color: "var(--accent)",
+              marginBottom: "6px",
+              textTransform: "uppercase",
+            }}
+          >
+            {FORWARD_DIVIDEND_ESTIMATE_LABELS[(metric as MetricInstance).forwardDividendEstimateMode ?? "monthly"].label}
+          </p>
+          <p
+            title={formatMetricValue("forward_dividend_estimates", value, metrics)}
+            style={{
+              fontSize: "24px",
+              fontWeight: "bold",
+              color: color,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {formatMetricValue("forward_dividend_estimates", value, metrics)}
+          </p>
+        </div>
       ) : (
       <div 
         style={{ 
@@ -2158,8 +2380,8 @@ function SortableMetricCard({
           cursor: ((metric as any).baseMetricId === "best_day" || (metric as any).baseMetricId === "worst_day" || (metric as any).baseMetricId === "largest_win" || (metric as any).baseMetricId === "largest_loss") ? "pointer" : "default",
         }}
         onClick={async (e) => {
-          const baseMetricId = (metric as any).baseMetricId || metric.id;
-          if (baseMetricId === "best_day" && metrics?.best_day_date) {
+          const baseMetricIdInner = (metric as any).baseMetricId || metric.id;
+          if (baseMetricIdInner === "best_day" && metrics?.best_day_date) {
             e.stopPropagation();
             setTimeframe("custom");
             setCustomStartDate(metrics.best_day_date);
@@ -2167,7 +2389,7 @@ function SortableMetricCard({
             localStorage.setItem("tradebutler_dashboard_timeframe", "custom");
             localStorage.setItem("tradebutler_dashboard_custom_start", metrics.best_day_date);
             localStorage.setItem("tradebutler_dashboard_custom_end", metrics.best_day_date);
-          } else if (baseMetricId === "worst_day" && metrics?.worst_day_date) {
+          } else if (baseMetricIdInner === "worst_day" && metrics?.worst_day_date) {
             e.stopPropagation();
             setTimeframe("custom");
             setCustomStartDate(metrics.worst_day_date);
@@ -2175,7 +2397,7 @@ function SortableMetricCard({
             localStorage.setItem("tradebutler_dashboard_timeframe", "custom");
             localStorage.setItem("tradebutler_dashboard_custom_start", metrics.worst_day_date);
             localStorage.setItem("tradebutler_dashboard_custom_end", metrics.worst_day_date);
-          } else if (baseMetricId === "largest_win" && metrics?.largest_win_group_id) {
+          } else if (baseMetricIdInner === "largest_win" && metrics?.largest_win_group_id) {
             e.stopPropagation();
             setSelectedPositionGroupId(metrics.largest_win_group_id);
             setShowPositionGroupModal(true);
@@ -2190,7 +2412,7 @@ function SortableMetricCard({
             } catch (error) {
               console.error("Error loading position group:", error);
             }
-          } else if (baseMetricId === "largest_loss" && metrics?.largest_loss_group_id) {
+          } else if (baseMetricIdInner === "largest_loss" && metrics?.largest_loss_group_id) {
             e.stopPropagation();
             setSelectedPositionGroupId(metrics.largest_loss_group_id);
             setShowPositionGroupModal(true);
@@ -2329,6 +2551,9 @@ function SortableMetricCard({
               zIndex: 99999,
               minWidth: "280px",
               maxWidth: "400px",
+              maxHeight: "min(560px, calc(100vh - 24px))",
+              overflowY: "auto",
+              overflowX: "hidden",
             }}
             onClick={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
@@ -2426,6 +2651,46 @@ function SortableMetricCard({
                     <option value={120}>Every 2m</option>
                   </select>
                   )}
+                </div>
+              )}
+              {(metric as any).baseMetricId === "forward_dividend_estimates" && (
+                <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--border-color)" }}>
+                  <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>Show estimate</div>
+                  <select
+                    value={(metric as MetricInstance).forwardDividendEstimateMode ?? "monthly"}
+                    onChange={(e) => {
+                      const v = e.target.value as "monthly" | "quarterly" | "annual";
+                      setMetricInstances((prev) => {
+                        const updated = prev.map((inst) =>
+                          inst.instanceId === metric.id ? { ...inst, forwardDividendEstimateMode: v } : inst
+                        );
+                        localStorage.setItem(METRIC_INSTANCES_KEY, JSON.stringify(updated));
+                        return updated;
+                      });
+                    }}
+                    onClick={(ev) => ev.stopPropagation()}
+                    onMouseDown={(ev) => ev.stopPropagation()}
+                    style={{
+                      width: "100%",
+                      padding: "8px 10px",
+                      backgroundColor: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "6px",
+                      color: "var(--text-primary)",
+                      fontSize: "13px",
+                      cursor: "pointer",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <option value="monthly">Monthly (avg.)</option>
+                    <option value="quarterly">Quarterly (avg.)</option>
+                    <option value="annual">Annual (run-rate)</option>
+                  </select>
+                  {currentPriceSyncCtx?.enabled ? (
+                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "8px", lineHeight: 1.4 }}>
+                      Dashboard auto-refresh (Configure) also reloads this estimate every {currentPriceSyncCtx.seconds}s.
+                    </div>
+                  ) : null}
                 </div>
               )}
               {layoutLocked && moveInLockedGridRef?.current ? (
@@ -2746,39 +3011,112 @@ export default function Dashboard() {
   const [trades, setTrades] = useState<RecentTrade[]>([]);
   const [openPositionGroups, setOpenPositionGroups] = useState<OpenPositionGroup[]>([]);
   const [openPositionQuotes, setOpenPositionQuotes] = useState<Record<string, number | null>>({});
+  const [isRefreshingQuotes, setIsRefreshingQuotes] = useState(false);
+  const [lastQuoteRefresh, setLastQuoteRefresh] = useState<Date | null>(null);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const navigate = useNavigate();
+
+  const dividendTrackerDashboardRefreshRef = useRef<(() => void) | null>(null);
+  const dividendIncomeDashboardRefreshRef = useRef<(() => void) | null>(null);
+  /** After manual Open Positions refresh, skip one effect run so we do not fetch quotes twice. */
+  const skipOpenQuotesEffectOnce = useRef(false);
+  const [dividendTrackerDashboardPageSize, setDividendTrackerDashboardPageSize] = useState(() =>
+    readDividendTrackerPageSize()
+  );
+  const [dividendTrackerView, setDividendTrackerView] = useState<DividendDashboardView>(() =>
+    readDividendDashboardView()
+  );
+  const [dividendTrackerShowForwardIncome, setDividendTrackerShowForwardIncome] = useState(() =>
+    readDashboardShowForwardInTracker()
+  );
+  const [dividendTrackerForwardIncomeMode, setDividendTrackerForwardIncomeMode] = useState<ForwardIncomeDisplayMode>(() =>
+    readForwardIncomeDisplayMode(DASHBOARD_DIVIDEND_TRACKER_INCOME_MODE_KEY)
+  );
+  const registerDividendTrackerRefresh = useCallback((fn: () => void) => {
+    dividendTrackerDashboardRefreshRef.current = fn;
+  }, []);
+  const registerDividendIncomeRefresh = useCallback((fn: () => void) => {
+    dividendIncomeDashboardRefreshRef.current = fn;
+  }, []);
 
   useEffect(() => {
     const unsub = subscribeToDataMode(setDataMode);
     return () => unsub();
   }, []);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(DASHBOARD_DIVIDEND_VIEW_KEY, dividendTrackerView);
+    } catch {
+      /* ignore */
+    }
+  }, [dividendTrackerView]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        DASHBOARD_DIVIDEND_SHOW_FORWARD_IN_TRACKER_KEY,
+        dividendTrackerShowForwardIncome ? "true" : "false"
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [dividendTrackerShowForwardIncome]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DASHBOARD_DIVIDEND_TRACKER_INCOME_MODE_KEY, dividendTrackerForwardIncomeMode);
+    } catch {
+      /* ignore */
+    }
+  }, [dividendTrackerForwardIncomeMode]);
+
   // Fetch current prices for open position symbols (Real/Paper only)
-  const fetchOpenPositionQuotes = useCallback(async (showLoading = true) => {
-    if (dataMode === "sandbox" || openPositionGroups.length === 0) {
-      setOpenPositionQuotes({});
-      return;
-    }
-    const symbols = [...new Set(openPositionGroups.map((g) => g.entry_trade.symbol))];
-    if (showLoading) setIsRefreshingQuotes(true);
-    const next: Record<string, number | null> = {};
-    for (const symbol of symbols) {
-      try {
-        const quote = await invoke<{ current_price: number | null }>("fetch_stock_quote", { symbol });
-        next[symbol] = quote.current_price;
-      } catch {
-        next[symbol] = null;
+  const fetchOpenPositionQuotes = useCallback(
+    async (showLoading = true, groupsOverride?: OpenPositionGroup[]) => {
+      const groups = groupsOverride ?? openPositionGroups;
+      if (dataMode === "sandbox" || groups.length === 0) {
+        setOpenPositionQuotes({});
+        patchDashboardSessionSnapshot({ openPositionQuotes: {}, lastQuoteRefreshIso: null });
+        if (showLoading) setIsRefreshingQuotes(false);
+        return;
       }
-    }
-    setOpenPositionQuotes((prev) => ({ ...prev, ...next }));
-    setLastQuoteRefresh(new Date());
-    if (showLoading) setIsRefreshingQuotes(false);
-  }, [dataMode, openPositionGroups]);
+      const symbols = [...new Set(groups.map((g) => g.entry_trade.symbol))];
+      if (showLoading) setIsRefreshingQuotes(true);
+      try {
+        const next: Record<string, number | null> = {};
+        for (const symbol of symbols) {
+          try {
+            const quote = await invoke<{ current_price: number | null }>("fetch_stock_quote", { symbol });
+            next[symbol] = quote.current_price;
+          } catch {
+            next[symbol] = null;
+          }
+        }
+        const refreshedAt = new Date();
+        setOpenPositionQuotes((prev) => {
+          const merged = { ...prev, ...next };
+          patchDashboardSessionSnapshot({
+            openPositionQuotes: merged,
+            lastQuoteRefreshIso: refreshedAt.toISOString(),
+          });
+          return merged;
+        });
+        setLastQuoteRefresh(refreshedAt);
+      } finally {
+        if (showLoading) setIsRefreshingQuotes(false);
+      }
+    },
+    [dataMode, openPositionGroups]
+  );
 
   // Initial fetch and when positions change
   useEffect(() => {
+    if (skipOpenQuotesEffectOnce.current) {
+      skipOpenQuotesEffectOnce.current = false;
+      return;
+    }
     if (dataMode === "sandbox" || openPositionGroups.length === 0) {
       setOpenPositionQuotes({});
       return;
@@ -2881,6 +3219,11 @@ export default function Dashboard() {
             cardRowSpan: (instance as MetricInstance).cardRowSpan ?? 1,
           }
         : {}),
+      ...(instance.baseMetricId === "forward_dividend_estimates"
+        ? {
+            forwardDividendEstimateMode: (instance as MetricInstance).forwardDividendEstimateMode ?? "monthly",
+          }
+        : {}),
     };
     
     const updatedInstances = [...metricInstances, newInstance];
@@ -2970,6 +3313,7 @@ export default function Dashboard() {
       ...(baseMetricId === "current_price"
         ? { quoteSymbol: "SPY", quoteRefreshSeconds: 30, cardColumnSpan: 1, cardRowSpan: 1 }
         : {}),
+      ...(baseMetricId === "forward_dividend_estimates" ? { forwardDividendEstimateMode: "monthly" as const } : {}),
     };
     
     const updatedInstances = [...metricInstances, newInstance];
@@ -3064,7 +3408,16 @@ export default function Dashboard() {
       try {
         const parsed = JSON.parse(saved);
         // Validate that all sections are present - include all possible sections
-        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
+        const allSections: SectionId[] = [
+          "topSymbols",
+          "strategyPerformance",
+          "recentTrades",
+          "trades",
+          "openPositions",
+          "news",
+          "dividendTracker",
+          "dividendIncome",
+        ];
         const validOrder = allSections.filter(id => parsed.includes(id));
         const missing = allSections.filter(id => !parsed.includes(id));
         return [...validOrder, ...missing];
@@ -3079,7 +3432,16 @@ export default function Dashboard() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved) as SectionSizes;
-        const allIds: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
+        const allIds: SectionId[] = [
+          "topSymbols",
+          "strategyPerformance",
+          "recentTrades",
+          "trades",
+          "openPositions",
+          "news",
+          "dividendTracker",
+          "dividendIncome",
+        ];
         const out: SectionSizes = {} as SectionSizes;
         allIds.forEach((id) => {
           const s = parsed[id];
@@ -3110,8 +3472,6 @@ export default function Dashboard() {
     }
     return 0; // 0 = manual
   });
-  const [isRefreshingQuotes, setIsRefreshingQuotes] = useState(false);
-  const [lastQuoteRefresh, setLastQuoteRefresh] = useState<Date | null>(null);
 
   // Auto-refresh interval for open position quotes (minutes; skipped when dashboard quote sync is on)
   useEffect(() => {
@@ -3140,6 +3500,49 @@ export default function Dashboard() {
     dataMode,
     openPositionGroups.length,
     fetchOpenPositionQuotes,
+  ]);
+
+  const [forwardDividendAnnualUsd, setForwardDividendAnnualUsd] = useState(0);
+  const loadForwardDividendAnnual = useCallback(async (): Promise<number> => {
+    const apiKey = getFinnhubApiKey();
+    if (!apiKey || dataMode === "sandbox") {
+      setForwardDividendAnnualUsd(0);
+      return 0;
+    }
+    try {
+      const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+      const { forwardEstimates } = await loadDividendTrackerRows({ apiKey, dataMode, pairingMethod });
+      const sum = forwardEstimates.reduce((s, e) => s + e.forwardAnnualUsd, 0);
+      setForwardDividendAnnualUsd(sum);
+      return sum;
+    } catch {
+      setForwardDividendAnnualUsd(0);
+      return 0;
+    }
+  }, [dataMode]);
+
+  useEffect(() => {
+    if (!hasFinnhubApiKey()) {
+      setForwardDividendAnnualUsd(0);
+      return;
+    }
+    if (!metricInstances.some((m) => m.baseMetricId === "forward_dividend_estimates")) return;
+    void loadForwardDividendAnnual();
+  }, [dataMode, metricInstances, loadForwardDividendAnnual]);
+
+  useEffect(() => {
+    if (!currentPriceSync.enabled) return;
+    if (currentPriceSyncTick === 0) return;
+    if (!hasFinnhubApiKey()) return;
+    if (dataMode === "sandbox") return;
+    if (!metricInstances.some((m) => m.baseMetricId === "forward_dividend_estimates")) return;
+    void loadForwardDividendAnnual();
+  }, [
+    currentPriceSync.enabled,
+    currentPriceSyncTick,
+    dataMode,
+    metricInstances,
+    loadForwardDividendAnnual,
   ]);
 
   const [metricCardOrder, setMetricCardOrder] = useState<string[]>(() => {
@@ -3264,7 +3667,7 @@ export default function Dashboard() {
     }
   }, [layoutLocked, lockedSlotAssignments]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (needSavePlacementsRef.current) {
       const placements = needSavePlacementsRef.current;
       needSavePlacementsRef.current = null;
@@ -3293,6 +3696,32 @@ export default function Dashboard() {
       coordinateGetter: sortableKeyboardCoordinates,
     })
   );
+
+  /** Remount DnD trees after tab restore so @dnd-kit cannot keep stale transforms (metrics overlapping sections). */
+  const [dndResetKey, setDndResetKey] = useState(0);
+  useEffect(() => {
+    let raf = 0;
+    const bumpOnce = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        setDndResetKey((k) => k + 1);
+      });
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") bumpOnce();
+    };
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) bumpOnce();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pageshow", onPageShow as EventListener);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pageshow", onPageShow as EventListener);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
   
   // When layout is locked, ensure every instance has a slotIndex (init from current order)
   useEffect(() => {
@@ -3569,6 +3998,8 @@ export default function Dashboard() {
     trades: { top: 0, right: 0 },
     openPositions: { top: 0, right: 0 },
     news: { top: 0, right: 0 },
+    dividendTracker: { top: 0, right: 0 },
+    dividendIncome: { top: 0, right: 0 },
   });
 
   // News widget settings (controlled from dashboard settings menu)
@@ -3603,6 +4034,30 @@ export default function Dashboard() {
   const [customEndDate, setCustomEndDate] = useState<string>(() => {
     return localStorage.getItem("tradebutler_dashboard_custom_end") || "";
   });
+  const [dashboardStrategyId, setDashboardStrategyId] = useState<number | null>(() => {
+    const raw = localStorage.getItem(DASHBOARD_STRATEGY_ID_KEY);
+    if (raw == null || raw === "") return null;
+    const n = parseInt(raw, 10);
+    return Number.isNaN(n) ? null : n;
+  });
+
+  useLayoutEffect(() => {
+    const snap = getDashboardSessionSnapshot();
+    if (!snap) return;
+    const key = buildDashboardSessionCacheKey({
+      dataMode,
+      timeframe,
+      customStartDate,
+      customEndDate,
+      dashboardStrategyId,
+    });
+    if (snap.cacheKey !== key) return;
+    setOpenPositionQuotes(snap.openPositionQuotes ?? {});
+    if (snap.lastQuoteRefreshIso) {
+      setLastQuoteRefresh(new Date(snap.lastQuoteRefreshIso));
+    }
+  }, [dataMode, timeframe, customStartDate, customEndDate, dashboardStrategyId]);
+
   const [showPositionGroupModal, setShowPositionGroupModal] = useState(false);
   const [_selectedPositionGroupId, setSelectedPositionGroupId] = useState<number | null>(null);
   const [selectedPositionGroup, setSelectedPositionGroup] = useState<any>(null);
@@ -3669,7 +4124,16 @@ export default function Dashboard() {
       if (sizes) {
         try {
           const parsed = JSON.parse(sizes) as SectionSizes;
-          const allIds: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
+          const allIds: SectionId[] = [
+            "topSymbols",
+            "strategyPerformance",
+            "recentTrades",
+            "trades",
+            "openPositions",
+            "news",
+            "dividendTracker",
+            "dividendIncome",
+          ];
           const out: SectionSizes = {} as SectionSizes;
           allIds.forEach((id) => {
             const s = parsed[id];
@@ -3710,6 +4174,12 @@ export default function Dashboard() {
       setTimeframe(((tf as Timeframe) || "all") as Timeframe);
       setCustomStartDate(localStorage.getItem("tradebutler_dashboard_custom_start") || "");
       setCustomEndDate(localStorage.getItem("tradebutler_dashboard_custom_end") || "");
+
+      const ds = localStorage.getItem(DASHBOARD_STRATEGY_ID_KEY);
+      if (ds != null && ds !== "") {
+        const n = parseInt(ds, 10);
+        setDashboardStrategyId(Number.isNaN(n) ? null : n);
+      } else setDashboardStrategyId(null);
 
       const nIncl = localStorage.getItem(NEWS_INCLUDE_POSITIONS_KEY);
       setNewsIncludePositions(nIncl ? JSON.parse(nIncl) : true);
@@ -3795,9 +4265,14 @@ export default function Dashboard() {
     const sync = () => saveDashboardProfileSnapshot(activeDashboardProfileId);
     window.addEventListener("beforeunload", sync);
     const tid = window.setInterval(sync, 45000);
+    const onTabHidden = () => {
+      if (document.visibilityState === "hidden") sync();
+    };
+    document.addEventListener("visibilitychange", onTabHidden);
     return () => {
       window.removeEventListener("beforeunload", sync);
       window.clearInterval(tid);
+      document.removeEventListener("visibilitychange", onTabHidden);
     };
   }, [activeDashboardProfileId]);
 
@@ -4046,6 +4521,7 @@ export default function Dashboard() {
           cardRowSpan: inst.cardRowSpan ?? undefined,
           quoteSymbol: inst.quoteSymbol,
           quoteRefreshSeconds: inst.quoteRefreshSeconds,
+          forwardDividendEstimateMode: inst.forwardDividendEstimateMode,
         };
       })
       .filter((m): m is any => m !== null);
@@ -4070,7 +4546,7 @@ export default function Dashboard() {
   }, [displayMetrics, metricCardOrder]);
 
   const sectionVisible = (id: SectionId): boolean => {
-    const key: keyof DashboardSections = id === "topSymbols" ? "showTopSymbols" : id === "strategyPerformance" ? "showStrategyPerformance" : id === "recentTrades" ? "showRecentTrades" : id === "trades" ? "showTrades" : "showOpenPositions";
+    const key = SECTION_DASHBOARD_SECTION_KEY[id];
     return !!dashboardSections[key];
   };
   // Unified order: metrics + sections so users can mix them in one grid when unlocked. Use merged order if saved.
@@ -4131,6 +4607,10 @@ export default function Dashboard() {
       setLockedColumnWidths(preset.lockedColumnWidths);
       localStorage.setItem(DASHBOARD_LOCKED_COLUMN_WIDTHS_KEY, JSON.stringify(preset.lockedColumnWidths));
     }
+    if (preset.lockedPlacements != null && preset.lockedPlacements.length > 0) {
+      setLockedPlacements(preset.lockedPlacements);
+      localStorage.setItem(DASHBOARD_LOCKED_PLACEMENTS_KEY, JSON.stringify(preset.lockedPlacements));
+    }
     localStorage.setItem(DASHBOARD_DISPLAY_ORDER_KEY, JSON.stringify(preset.displayOrder));
     localStorage.setItem(METRIC_CARDS_ORDER_KEY, JSON.stringify(preset.metricCardOrder));
     localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(preset.sectionOrder));
@@ -4157,14 +4637,25 @@ export default function Dashboard() {
       sectionSizes: { ...sectionSizes },
       lockedGridColumns: layoutLocked ? lockedGridColumns : undefined,
       lockedSlotAssignments: layoutLocked && lockedSlotAssignments != null && lockedSlotAssignments.length > 0 ? lockedSlotAssignments : undefined,
+      lockedPlacements: layoutLocked && lockedPlacements != null && lockedPlacements.length > 0 ? lockedPlacements : undefined,
       lockedColumnWidths: layoutLocked && lockedColumnWidths.length > 0 ? lockedColumnWidths : undefined,
     };
-    setLayoutPresets((prev) => [...prev, preset]);
+    setLayoutPresets((prev) => {
+      const next = [...prev, preset];
+      localStorage.setItem(DASHBOARD_LAYOUT_PRESETS_KEY, JSON.stringify(next));
+      return next;
+    });
+    saveDashboardProfileSnapshot(activeDashboardProfileId);
     setLayoutsMenuOpen(false);
   };
 
   const deleteLayoutPreset = (id: string) => {
-    setLayoutPresets((prev) => prev.filter((p) => p.id !== id));
+    setLayoutPresets((prev) => {
+      const next = prev.filter((p) => p.id !== id);
+      localStorage.setItem(DASHBOARD_LAYOUT_PRESETS_KEY, JSON.stringify(next));
+      return next;
+    });
+    saveDashboardProfileSnapshot(activeDashboardProfileId);
   };
 
   useEffect(() => {
@@ -4286,10 +4777,12 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    loadDashboardData();
-    // Reset to first page when timeframe changes
-    setCurrentTradesPage(1);
-  }, [timeframe, customStartDate, customEndDate, dataMode]);
+    if (dashboardStrategyId != null) {
+      localStorage.setItem(DASHBOARD_STRATEGY_ID_KEY, String(dashboardStrategyId));
+    } else {
+      localStorage.removeItem(DASHBOARD_STRATEGY_ID_KEY);
+    }
+  }, [dashboardStrategyId]);
   
   useEffect(() => {
     localStorage.setItem("tradebutler_dashboard_timeframe", timeframe);
@@ -4317,10 +4810,19 @@ export default function Dashboard() {
         setDashboardSections(newSections);
         
         // Ensure all enabled sections are in the sectionOrder
-        const allSections: SectionId[] = ["topSymbols", "strategyPerformance", "recentTrades", "trades", "openPositions", "news"];
+        const allSections: SectionId[] = [
+          "topSymbols",
+          "strategyPerformance",
+          "recentTrades",
+          "trades",
+          "openPositions",
+          "news",
+          "dividendTracker",
+          "dividendIncome",
+        ];
         setSectionOrder(prevOrder => {
-          const enabledSections = allSections.filter(id => {
-            const key = `show${id.charAt(0).toUpperCase() + id.slice(1)}` as keyof typeof newSections;
+          const enabledSections = allSections.filter((id) => {
+            const key = SECTION_DASHBOARD_SECTION_KEY[id];
             return newSections[key] !== false;
           });
           
@@ -4341,76 +4843,342 @@ export default function Dashboard() {
     }
   }, [configKey]);
 
-  const loadDashboardData = async () => {
-    setLoading(true);
-    try {
-      if (dataMode === "sandbox") {
-        const state = loadSandboxState();
-        setMetrics(EXAMPLE_METRICS as unknown as Metrics);
-        setStrategies(state.strategies.map((s) => ({ id: s.id, name: s.name, description: s.description, notes: s.notes, color: s.color })) as unknown as Strategy[]);
-        const topSymbolsData = EXAMPLE_SYMBOL_PNL.slice(0, 5).map((pnl) => ({
+  const loadDashboardData = useCallback(
+    async (options?: { skipCache?: boolean }) => {
+      const cacheKey = buildDashboardSessionCacheKey({
+        dataMode,
+        timeframe,
+        customStartDate,
+        customEndDate,
+        dashboardStrategyId,
+      });
+      const skipCache = options?.skipCache ?? false;
+      const snap = getDashboardSessionSnapshot();
+      const cacheHit = !skipCache && snap?.cacheKey === cacheKey;
+
+      if (cacheHit && snap) {
+        setMetrics(snap.metrics as Metrics);
+        setStrategies(snap.strategies as Strategy[]);
+        setTopSymbols(snap.topSymbols as TopSymbol[]);
+        setStrategyPerformance(snap.strategyPerformance as StrategyPerformance[]);
+        setRecentTrades(snap.recentTrades as RecentTrade[]);
+        setTrades(snap.trades as RecentTrade[]);
+        setOpenPositionGroups(snap.openPositionGroups as OpenPositionGroup[]);
+        setOpenPositionQuotes(snap.openPositionQuotes ?? {});
+        if (snap.lastQuoteRefreshIso) {
+          setLastQuoteRefresh(new Date(snap.lastQuoteRefreshIso));
+        }
+        setForwardDividendAnnualUsd(snap.forwardDividendAnnualUsd);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
+
+      try {
+        if (dataMode === "sandbox") {
+          const state = loadSandboxState();
+          const metricsVal = EXAMPLE_METRICS as unknown as Metrics;
+          const strategiesVal = state.strategies.map((s) => ({
+            id: s.id,
+            name: s.name,
+            description: s.description,
+            notes: s.notes,
+            color: s.color,
+          })) as unknown as Strategy[];
+          const topSymbolsData = EXAMPLE_SYMBOL_PNL.slice(0, 5).map((pnl) => ({
+            symbol: pnl.symbol,
+            trade_count: pnl.closed_positions,
+            total_volume: 0,
+            estimated_pnl: pnl.total_net_pnl,
+          }));
+          let perf = EXAMPLE_STRATEGY_PERFORMANCE as unknown as StrategyPerformance[];
+          if (dashboardStrategyId != null) {
+            perf = perf.filter((p) => p.strategy_id === dashboardStrategyId);
+          }
+          const recentVal = EXAMPLE_RECENT_TRADES.slice(0, 5) as unknown as RecentTrade[];
+          const tradesVal = EXAMPLE_RECENT_TRADES as unknown as RecentTrade[];
+          setMetrics(metricsVal);
+          setStrategies(strategiesVal);
+          setTopSymbols(topSymbolsData);
+          setStrategyPerformance(perf);
+          setRecentTrades(recentVal);
+          setTrades(tradesVal);
+          setOpenPositionGroups([]);
+          setForwardDividendAnnualUsd(0);
+          const sandboxSnap: DashboardSessionSnapshot = {
+            cacheKey,
+            metrics: metricsVal,
+            topSymbols: topSymbolsData,
+            strategyPerformance: perf,
+            recentTrades: recentVal,
+            trades: tradesVal,
+            openPositionGroups: [],
+            strategies: strategiesVal,
+            forwardDividendAnnualUsd: 0,
+            openPositionQuotes: {},
+            lastQuoteRefreshIso: null,
+          };
+          setDashboardSessionSnapshot(sandboxSnap);
+          return;
+        }
+
+        const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+        const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
+        const startDate = dateRange.start ? dateRange.start.toISOString() : null;
+        const endDate = dateRange.end ? dateRange.end.toISOString() : null;
+        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+        const strategyArgs = dashboardStrategyId != null ? { strategyId: dashboardStrategyId } : {};
+        const [metricsData, pnlData, strategiesData, tradesData, allTradesData, strategiesList, positionGroupsData] = await Promise.all([
+          invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
+          invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate, ...paperArgs, filters: null, ...strategyArgs }),
+          invoke<StrategyPerformance[]>("get_strategy_performance", { pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
+          invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
+          invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate, ...paperArgs, ...strategyArgs }),
+          invoke<Strategy[]>("get_strategies"),
+          invoke<OpenPositionGroup[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null, ...paperArgs }),
+        ]);
+        setMetrics(metricsData);
+        setStrategies(strategiesList);
+        const filteredGroups = (positionGroupsData || []).filter((g) => Math.abs(g.final_quantity) >= 0.0001);
+        setOpenPositionGroups(filteredGroups);
+
+        const topSymbolsData = pnlData.slice(0, 5).map((pnl) => ({
           symbol: pnl.symbol,
           trade_count: pnl.closed_positions,
           total_volume: 0,
           estimated_pnl: pnl.total_net_pnl,
         }));
         setTopSymbols(topSymbolsData);
-        setStrategyPerformance(EXAMPLE_STRATEGY_PERFORMANCE as unknown as StrategyPerformance[]);
-        setRecentTrades(EXAMPLE_RECENT_TRADES.slice(0, 5) as unknown as RecentTrade[]);
-        setTrades(EXAMPLE_RECENT_TRADES as unknown as RecentTrade[]);
-        setOpenPositionGroups([]);
-        setLoading(false);
-        return;
-      }
+        setStrategyPerformance(strategiesData);
+        setRecentTrades(tradesData);
+        const sortedTrades = [...allTradesData].sort(
+          (a, b) => new Date(b.exit_timestamp).getTime() - new Date(a.exit_timestamp).getTime()
+        );
+        setTrades(sortedTrades);
 
+        const forwardUsd = await loadForwardDividendAnnual();
+        setDashboardSessionSnapshot({
+          cacheKey,
+          metrics: metricsData,
+          topSymbols: topSymbolsData,
+          strategyPerformance: strategiesData,
+          recentTrades: tradesData,
+          trades: sortedTrades,
+          openPositionGroups: filteredGroups,
+          strategies: strategiesList,
+          forwardDividendAnnualUsd: forwardUsd,
+          openPositionQuotes: {},
+          lastQuoteRefreshIso: null,
+        });
+      } catch (error) {
+        console.error("Error loading dashboard data:", error);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [
+      customEndDate,
+      customStartDate,
+      dashboardStrategyId,
+      dataMode,
+      loadForwardDividendAnnual,
+      timeframe,
+    ]
+  );
+
+  const refreshDashboardSections = useCallback(() => {
+    void loadDashboardData({ skipCache: true });
+    void fetchOpenPositionQuotes(true);
+    dividendTrackerDashboardRefreshRef.current?.();
+    dividendIncomeDashboardRefreshRef.current?.();
+    window.dispatchEvent(new Event("tradeButlerRefreshNews"));
+  }, [fetchOpenPositionQuotes, loadDashboardData]);
+
+  /** Reload open position groups from the backend and refresh live quotes only (no full dashboard load). */
+  const refreshOpenPositionsSection = useCallback(async () => {
+    if (dataMode === "sandbox") {
+      setOpenPositionQuotes({});
+      patchDashboardSessionSnapshot({ openPositionQuotes: {}, lastQuoteRefreshIso: null });
+      return;
+    }
+    setIsRefreshingQuotes(true);
+    try {
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-      const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
-      const startDate = dateRange.start ? dateRange.start.toISOString() : null;
-      const endDate = dateRange.end ? dateRange.end.toISOString() : null;
       const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
-      const [metricsData, pnlData, strategiesData, tradesData, allTradesData, strategiesList, positionGroupsData] = await Promise.all([
-        invoke<Metrics>("get_metrics", { pairingMethod, startDate, endDate, ...paperArgs }),
-        invoke<SymbolPnL[]>("get_symbol_pnl", { pairingMethod, startDate, endDate, ...paperArgs }),
-        invoke<StrategyPerformance[]>("get_strategy_performance", { pairingMethod, startDate, endDate, ...paperArgs }),
-        invoke<RecentTrade[]>("get_recent_trades", { limit: 5, pairingMethod, startDate, endDate, ...paperArgs }),
-        invoke<RecentTrade[]>("get_recent_trades", { limit: 10000, pairingMethod, startDate, endDate, ...paperArgs }),
-        invoke<Strategy[]>("get_strategies"),
-        invoke<OpenPositionGroup[]>("get_position_groups", { pairingMethod, startDate: null, endDate: null, ...paperArgs }),
-      ]);
-      setMetrics(metricsData);
-      setStrategies(strategiesList);
-      setOpenPositionGroups(
-        (positionGroupsData || []).filter((g) => Math.abs(g.final_quantity) >= 0.0001)
-      );
-      
-      // Convert SymbolPnL to TopSymbol format for display
-      const topSymbolsData = pnlData
-        .slice(0, 5)
-        .map((pnl) => ({
-          symbol: pnl.symbol,
-          trade_count: pnl.closed_positions,
-          total_volume: 0, // We don't track volume separately
-          estimated_pnl: pnl.total_net_pnl,
-        }));
+      const positionGroupsData = await invoke<OpenPositionGroup[]>("get_position_groups", {
+        pairingMethod,
+        startDate: null,
+        endDate: null,
+        ...paperArgs,
+      });
+      const filteredGroups = (positionGroupsData || []).filter((g) => Math.abs(g.final_quantity) >= 0.0001);
+      skipOpenQuotesEffectOnce.current = true;
+      setOpenPositionGroups(filteredGroups);
+      patchDashboardSessionSnapshot({ openPositionGroups: filteredGroups });
+      await fetchOpenPositionQuotes(true, filteredGroups);
+    } catch (err) {
+      console.error("Error refreshing open positions:", err);
+      setIsRefreshingQuotes(false);
+    }
+  }, [dataMode, fetchOpenPositionQuotes]);
+
+  const getDashboardInvokeArgs = useCallback(() => {
+    const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+    const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
+    const startDate = dateRange.start ? dateRange.start.toISOString() : null;
+    const endDate = dateRange.end ? dateRange.end.toISOString() : null;
+    const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+    const strategyArgs = dashboardStrategyId != null ? { strategyId: dashboardStrategyId } : {};
+    return { pairingMethod, startDate, endDate, paperArgs, strategyArgs };
+  }, [customEndDate, customStartDate, dashboardStrategyId, dataMode, timeframe]);
+
+  const refreshTopSymbolsSection = useCallback(async () => {
+    if (dataMode === "sandbox") {
+      const topSymbolsData = EXAMPLE_SYMBOL_PNL.slice(0, 5).map((pnl) => ({
+        symbol: pnl.symbol,
+        trade_count: pnl.closed_positions,
+        total_volume: 0,
+        estimated_pnl: pnl.total_net_pnl,
+      }));
       setTopSymbols(topSymbolsData);
+      patchDashboardSessionSnapshot({ topSymbols: topSymbolsData });
+      return;
+    }
+    try {
+      const { pairingMethod, startDate, endDate, paperArgs, strategyArgs } = getDashboardInvokeArgs();
+      const pnlData = await invoke<SymbolPnL[]>("get_symbol_pnl", {
+        pairingMethod,
+        startDate,
+        endDate,
+        ...paperArgs,
+        filters: null,
+        ...strategyArgs,
+      });
+      const topSymbolsData = pnlData.slice(0, 5).map((pnl) => ({
+        symbol: pnl.symbol,
+        trade_count: pnl.closed_positions,
+        total_volume: 0,
+        estimated_pnl: pnl.total_net_pnl,
+      }));
+      setTopSymbols(topSymbolsData);
+      patchDashboardSessionSnapshot({ topSymbols: topSymbolsData });
+    } catch (err) {
+      console.error("Error refreshing top symbols:", err);
+    }
+  }, [dataMode, getDashboardInvokeArgs]);
+
+  const refreshStrategyPerformanceSection = useCallback(async () => {
+    if (dataMode === "sandbox") {
+      let perf = EXAMPLE_STRATEGY_PERFORMANCE as unknown as StrategyPerformance[];
+      if (dashboardStrategyId != null) {
+        perf = perf.filter((p) => p.strategy_id === dashboardStrategyId);
+      }
+      setStrategyPerformance(perf);
+      patchDashboardSessionSnapshot({ strategyPerformance: perf });
+      return;
+    }
+    try {
+      const { pairingMethod, startDate, endDate, paperArgs, strategyArgs } = getDashboardInvokeArgs();
+      const strategiesData = await invoke<StrategyPerformance[]>("get_strategy_performance", {
+        pairingMethod,
+        startDate,
+        endDate,
+        ...paperArgs,
+        ...strategyArgs,
+      });
       setStrategyPerformance(strategiesData);
+      patchDashboardSessionSnapshot({ strategyPerformance: strategiesData });
+    } catch (err) {
+      console.error("Error refreshing strategy performance:", err);
+    }
+  }, [dashboardStrategyId, dataMode, getDashboardInvokeArgs]);
+
+  const refreshRecentTradesSection = useCallback(async () => {
+    if (dataMode === "sandbox") {
+      const recentVal = EXAMPLE_RECENT_TRADES.slice(0, 5) as unknown as RecentTrade[];
+      setRecentTrades(recentVal);
+      patchDashboardSessionSnapshot({ recentTrades: recentVal });
+      return;
+    }
+    try {
+      const { pairingMethod, startDate, endDate, paperArgs, strategyArgs } = getDashboardInvokeArgs();
+      const tradesData = await invoke<RecentTrade[]>("get_recent_trades", {
+        limit: 5,
+        pairingMethod,
+        startDate,
+        endDate,
+        ...paperArgs,
+        ...strategyArgs,
+      });
       setRecentTrades(tradesData);
-      // Sort all trades by exit timestamp (most recent first)
-      const sortedTrades = [...allTradesData].sort((a, b) => 
-        new Date(b.exit_timestamp).getTime() - new Date(a.exit_timestamp).getTime()
+      patchDashboardSessionSnapshot({ recentTrades: tradesData });
+    } catch (err) {
+      console.error("Error refreshing recent trades:", err);
+    }
+  }, [dataMode, getDashboardInvokeArgs]);
+
+  const refreshTradesSection = useCallback(async () => {
+    if (dataMode === "sandbox") {
+      const tradesVal = EXAMPLE_RECENT_TRADES as unknown as RecentTrade[];
+      const sortedTrades = [...tradesVal].sort(
+        (a, b) => new Date(b.exit_timestamp).getTime() - new Date(a.exit_timestamp).getTime()
       );
       setTrades(sortedTrades);
-    } catch (error) {
-      console.error("Error loading dashboard data:", error);
-    } finally {
-      setLoading(false);
+      patchDashboardSessionSnapshot({ trades: sortedTrades });
+      return;
     }
-  };
+    try {
+      const { pairingMethod, startDate, endDate, paperArgs, strategyArgs } = getDashboardInvokeArgs();
+      const allTradesData = await invoke<RecentTrade[]>("get_recent_trades", {
+        limit: 10000,
+        pairingMethod,
+        startDate,
+        endDate,
+        ...paperArgs,
+        ...strategyArgs,
+      });
+      const sortedTrades = [...allTradesData].sort(
+        (a, b) => new Date(b.exit_timestamp).getTime() - new Date(a.exit_timestamp).getTime()
+      );
+      setTrades(sortedTrades);
+      patchDashboardSessionSnapshot({ trades: sortedTrades });
+    } catch (err) {
+      console.error("Error refreshing trades list:", err);
+    }
+  }, [dataMode, getDashboardInvokeArgs]);
+
+  useEffect(() => {
+    void loadDashboardData();
+  }, [loadDashboardData]);
+
+  useEffect(() => {
+    setCurrentTradesPage(1);
+  }, [timeframe, customStartDate, customEndDate, dataMode, dashboardStrategyId]);
+
+  useEffect(() => {
+    const onRefreshDashboard = () => {
+      void loadDashboardData({ skipCache: true });
+    };
+    window.addEventListener("tradeButlerRefreshDashboard", onRefreshDashboard);
+    return () => window.removeEventListener("tradeButlerRefreshDashboard", onRefreshDashboard);
+  }, [loadDashboardData]);
+
+  useEffect(() => {
+    if (!currentPriceSync.enabled) return;
+    if (dataMode === "sandbox") return;
+    if (currentPriceSyncTick === 0) return;
+    void loadDashboardData();
+  }, [currentPriceSync.enabled, currentPriceSyncTick, dataMode, loadDashboardData]);
 
   // Calculate strategy-filtered metrics
   const [filteredStrategyMetrics, setFilteredStrategyMetrics] = useState<Record<string, number>>({});
   
   useEffect(() => {
+    if (dashboardStrategyId != null) {
+      setFilteredStrategyMetrics({});
+      return;
+    }
+
     let cancelled = false;
     
     const calculateFilteredMetrics = async () => {
@@ -4535,12 +5303,21 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [strategyFilterForMetrics, timeframe, customStartDate, customEndDate, metrics, metricInstances]);
+  }, [dashboardStrategyId, strategyFilterForMetrics, timeframe, customStartDate, customEndDate, metrics, metricInstances, dataMode]);
 
   if (loading) {
     return (
-      <div style={{ padding: "40px", textAlign: "center" }}>
-        <p>Loading metrics...</p>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100%",
+          width: "100%",
+          minHeight: "100vh",
+        }}
+      >
+        <LoadingSphere size={100} message="Loading metrics..." />
       </div>
     );
   }
@@ -4595,6 +5372,7 @@ export default function Dashboard() {
     largest_win_pct: metrics?.largest_win_pct || 0,
     largest_loss_pct: metrics?.largest_loss_pct || 0,
     current_price: 0,
+    forward_dividend_estimates: 0,
   };
 
   const splitGrid = localStorage.getItem(DASHBOARD_SPLIT_GRID_KEY) === "true";
@@ -5006,6 +5784,28 @@ export default function Dashboard() {
                 )}
               </div>
               <button
+                type="button"
+                onClick={() => refreshDashboardSections()}
+                disabled={loading || isRefreshingQuotes}
+                title="Refresh all dashboard data: metrics and sections, open-position quotes, news, and dividend widgets. Matches what runs on the Configure → Dashboard auto-refresh timer when that is enabled."
+                style={{
+                  background: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "10px 16px",
+                  color: "var(--text-primary)",
+                  cursor: loading || isRefreshingQuotes ? "not-allowed" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  fontSize: "14px",
+                  opacity: loading || isRefreshingQuotes ? 0.55 : 1,
+                }}
+              >
+                <RefreshCw size={16} />
+                Refresh
+              </button>
+              <button
                 onClick={() => setShowMetricsConfig(true)}
                 style={{
                   background: "var(--bg-secondary)",
@@ -5035,7 +5835,55 @@ export default function Dashboard() {
               Paper mode — you are viewing paper trades only.
             </p>
           )}
-          <div style={{ marginBottom: "30px" }}>
+          <div style={{ marginBottom: "30px", display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: "20px 24px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px", minWidth: "min(100%, 280px)" }}>
+              <label
+                htmlFor="dashboard-strategy-select"
+                style={{
+                  fontSize: "13px",
+                  fontWeight: "600",
+                  color: "var(--text-secondary)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
+              >
+                <Layers size={16} style={{ flexShrink: 0 }} aria-hidden />
+                Strategy
+              </label>
+              <select
+                id="dashboard-strategy-select"
+                value={dashboardStrategyId ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDashboardStrategyId(v === "" ? null : parseInt(v, 10));
+                }}
+                style={{
+                  width: "100%",
+                  maxWidth: "320px",
+                  padding: "10px 12px",
+                  fontSize: "14px",
+                  color: "var(--text-primary)",
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  cursor: "pointer",
+                }}
+              >
+                <option value="">All strategies</option>
+                {strategies
+                  .filter((s) => s.id != null)
+                  .map((s) => (
+                    <option key={s.id} value={s.id!}>
+                      {s.name}
+                    </option>
+                  ))}
+              </select>
+              <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", maxWidth: "360px", lineHeight: 1.4 }}>
+                Filters metrics and sections below. Open positions always show all open positions.
+              </p>
+            </div>
+            <div style={{ flex: "1 1 200px", minWidth: 0 }}>
             <TimeframeSelector
               value={timeframe}
               onChange={setTimeframe}
@@ -5058,6 +5906,7 @@ export default function Dashboard() {
                 }
               }}
             />
+            </div>
           </div>
 
       <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -5082,9 +5931,14 @@ export default function Dashboard() {
 
         const renderCard = (metric: typeof sortedMetrics[0]) => {
           const baseMetricId = (metric as any).baseMetricId || metric.id;
-          const value = filteredStrategyMetrics[metric.id] !== undefined
+          let value = filteredStrategyMetrics[metric.id] !== undefined
             ? filteredStrategyMetrics[metric.id]
             : (metricValues[baseMetricId] || 0);
+          if (baseMetricId === "forward_dividend_estimates") {
+            const mode = (metric as MetricInstance).forwardDividendEstimateMode ?? "monthly";
+            const b = forwardIncomeBreakdown(forwardDividendAnnualUsd);
+            value = mode === "monthly" ? b.monthly : mode === "quarterly" ? b.quarterly : b.annual;
+          }
           const Icon = metricIcons[baseMetricId] || Activity;
           const color = getMetricColor(baseMetricId, value);
           return (
@@ -5148,14 +6002,16 @@ export default function Dashboard() {
               if (isSectionId(id)) {
                 const defaultSectionSpan = id === "openPositions" && openPositionsDisplayMode === "compact" ? 3 : 1;
                 span = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes[id]?.columnSpan ?? defaultSectionSpan));
-                rowSpan = Math.min(MAX_ROW_SPAN, Math.max(1, sectionSizes[id]?.rowSpan ?? 1));
+                rowSpan = effectiveSectionRowSpanForLockedGrid(id, sectionSizes, lockedRowHeight);
               } else {
                 const metric = sortedMetrics.find((m) => m.id === id);
                 if (metric) {
-                  span = (metric as any).baseMetricId === "position_size_chart"
-                    ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).chartColumnSpan ?? ((metric as any).chartWidth ? 2 : 1)))
-                    : Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).cardColumnSpan ?? 1));
-                  rowSpan = Math.min(MAX_ROW_SPAN, Math.max(1, (metric as any).cardRowSpan ?? 1));
+                  const bm = (metric as MetricInstance).baseMetricId || metric.id;
+                  span =
+                    bm === "position_size_chart"
+                      ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as MetricInstance).chartColumnSpan ?? ((metric as MetricInstance).chartWidth ? 2 : 1)))
+                      : Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as MetricInstance).cardColumnSpan ?? 1));
+                  rowSpan = effectiveMetricRowSpanForLockedGrid(metric as MetricInstance, bm, lockedRowHeight);
                 }
               }
             }
@@ -5179,50 +6035,84 @@ export default function Dashboard() {
             }
           }
           const stored = !forceRepack && lockedPlacements && lockedPlacements.length >= totalSlots ? lockedPlacements : null;
+
+          const tryFirstFitPlace = (colSpan: number, rowSpan: number): { row: number; col: number } | null => {
+            for (let r = 0; r < 400; r++) {
+              ensureRows(r + rowSpan - 1);
+              for (let c = 0; c <= gridColumns - colSpan; c++) {
+                let fits = true;
+                for (let dr = 0; dr < rowSpan && fits; dr++) {
+                  for (let dc = 0; dc < colSpan && fits; dc++) {
+                    if (used[r + dr][c + dc]) fits = false;
+                  }
+                }
+                if (fits) {
+                  for (let dr = 0; dr < rowSpan; dr++) {
+                    ensureRows(r + dr);
+                    for (let dc = 0; dc < colSpan; dc++) used[r + dr][c + dc] = true;
+                  }
+                  return { row: r, col: c };
+                }
+              }
+            }
+            return null;
+          };
+
           for (let i = 0; i < totalSlots; i++) {
             const colSpan = slotSpans[i];
             const rowSpan = slotRowSpans[i];
+            let placed = false;
+
             if (stored && i < stored.length) {
               const row = Math.max(0, stored[i].row);
               const col = Math.max(0, Math.min(stored[i].col, gridColumns - colSpan));
               ensureRows(row + rowSpan - 1);
-              for (let dr = 0; dr < rowSpan; dr++) {
-                for (let dc = 0; dc < colSpan; dc++) {
+              let fitsStored = true;
+              for (let dr = 0; dr < rowSpan && fitsStored; dr++) {
+                for (let dc = 0; dc < colSpan && fitsStored; dc++) {
                   const rr = row + dr;
                   const cc = col + dc;
-                  if (rr < used.length && cc < gridColumns) used[rr][cc] = true;
+                  if (cc >= gridColumns || used[rr][cc]) fitsStored = false;
                 }
               }
-              placements.push({ row, col });
-            } else {
-              let placed = false;
-              for (let r = 0; r < 200 && !placed; r++) {
-                ensureRows(r + rowSpan - 1);
-                for (let c = 0; c <= gridColumns - colSpan && !placed; c++) {
-                  let fits = true;
-                  for (let dr = 0; dr < rowSpan && fits; dr++) {
-                    for (let dc = 0; dc < colSpan && fits; dc++) {
-                      if (used[r + dr][c + dc]) fits = false;
-                    }
-                  }
-                  if (fits) {
-                    placements.push({ row: r, col: c });
-                    for (let dr = 0; dr < rowSpan; dr++) {
-                      ensureRows(r + dr);
-                      for (let dc = 0; dc < colSpan; dc++) used[r + dr][c + dc] = true;
-                    }
-                    placed = true;
-                    didPack = true;
+              if (fitsStored) {
+                for (let dr = 0; dr < rowSpan; dr++) {
+                  for (let dc = 0; dc < colSpan; dc++) {
+                    used[row + dr][col + dc] = true;
                   }
                 }
+                placements.push({ row, col });
+                placed = true;
               }
-              if (!placed) {
-                placements.push({ row: used.length, col: 0 });
+            }
+
+            if (!placed) {
+              const pos = tryFirstFitPlace(colSpan, rowSpan);
+              if (pos) {
+                placements.push(pos);
+                didPack = true;
+              } else {
+                const row = used.length;
+                const colStart = 0;
+                ensureRows(row + rowSpan - 1);
+                for (let dr = 0; dr < rowSpan; dr++) {
+                  for (let dc = 0; dc < colSpan; dc++) {
+                    used[row + dr][colStart + dc] = true;
+                  }
+                }
+                placements.push({ row, col: colStart });
                 didPack = true;
               }
             }
           }
-          if (didPack) needSavePlacementsRef.current = placements;
+          if (didPack) {
+            needSavePlacementsRef.current = placements;
+            try {
+              localStorage.setItem(DASHBOARD_LOCKED_PLACEMENTS_KEY, JSON.stringify(placements));
+            } catch {
+              /* ignore quota */
+            }
+          }
           previousSlotSpansRef.current = slotSpans.map((cs, i) => ({ colSpan: cs, rowSpan: slotRowSpans[i] }));
           let totalRows = 0;
           for (let i = 0; i < totalSlots; i++) {
@@ -5253,11 +6143,14 @@ export default function Dashboard() {
             const currentSlot = effectiveSlotAssignments.indexOf(id);
             if (currentSlot === -1) return;
             const { row, col } = placements[currentSlot];
-            let r2 = row, c2 = col;
+            const myColSpan = slotSpans[currentSlot];
+            const myRowSpan = slotRowSpans[currentSlot];
+            let r2 = row;
+            let c2 = col;
             if (dir === "up") r2 = row - 1;
-            else if (dir === "down") r2 = row + 1;
+            else if (dir === "down") r2 = row + myRowSpan;
             else if (dir === "left") c2 = col - 1;
-            else c2 = col + 1;
+            else c2 = col + myColSpan;
             if (r2 < 0 || r2 >= totalRows || c2 < 0 || c2 >= gridColumns) return;
             const targetSlot = cellToSlot[r2]?.[c2];
             if (targetSlot === undefined || targetSlot === currentSlot) return;
@@ -5358,6 +6251,7 @@ export default function Dashboard() {
           const sortableIds = effectiveSlotAssignments.filter((id): id is string => id != null);
           return (
             <DndContext
+              key={dndResetKey}
               sensors={sensors}
               collisionDetection={pointerWithin}
               onDragEnd={onDragEnd}
@@ -5464,6 +6358,7 @@ export default function Dashboard() {
 
         return (
       <DndContext
+        key={dndResetKey}
         sensors={sensors}
         collisionDetection={closestCenter}
         onDragEnd={onDragEnd}
@@ -5526,6 +6421,7 @@ export default function Dashboard() {
       >
       {/* Section card renderer: when split, visible above/below metrics; when unified, hidden so renderSectionCardRef is set. */}
       <DndContext
+        key={dndResetKey}
         sensors={sensors}
         collisionDetection={closestCenter}
         onDragEnd={handleSectionDragEnd}
@@ -5596,7 +6492,32 @@ export default function Dashboard() {
                   <BarChart3 size={20} color="var(--accent)" />
                   <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Top Symbols</h2>
                   </div>
-                  <div style={{ position: "relative" }}>
+                  <div style={{ position: "relative", display: "flex", alignItems: "center", gap: "4px" }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        void refreshTopSymbolsSection();
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        padding: "4px",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "4px",
+                      }}
+                      title="Refresh top symbols for this timeframe"
+                    >
+                      <RefreshCw size={16} />
+                    </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -5644,6 +6565,9 @@ export default function Dashboard() {
                           boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                           zIndex: 99999,
                           minWidth: "120px",
+                          maxHeight: "min(560px, calc(100vh - 24px))",
+                          overflowY: "auto",
+                          overflowX: "hidden",
                         }}
                         onClick={(e) => e.stopPropagation()}
                         onMouseDown={(e) => e.stopPropagation()}
@@ -5846,7 +6770,32 @@ export default function Dashboard() {
                   <TrendingUpIcon size={20} color="var(--accent)" />
                   <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Strategy Performance</h2>
                   </div>
-                  <div style={{ position: "relative" }}>
+                  <div style={{ position: "relative", display: "flex", alignItems: "center", gap: "4px" }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        void refreshStrategyPerformanceSection();
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        padding: "4px",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "4px",
+                      }}
+                      title="Refresh strategy performance for this timeframe"
+                    >
+                      <RefreshCw size={16} />
+                    </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -5894,6 +6843,9 @@ export default function Dashboard() {
                           boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                           zIndex: 99999,
                           minWidth: "120px",
+                          maxHeight: "min(560px, calc(100vh - 24px))",
+                          overflowY: "auto",
+                          overflowX: "hidden",
                         }}
                         onClick={(e) => e.stopPropagation()}
                         onMouseDown={(e) => e.stopPropagation()}
@@ -6167,7 +7119,15 @@ export default function Dashboard() {
                         }}
                       >
                         {isLoading ? (
-                          <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>Loading positions...</p>
+                          <div style={{ display: "flex", justifyContent: "center", padding: "12px 0" }}>
+                            <LoadingSphere
+                              size={56}
+                              message="Loading positions..."
+                              padding={12}
+                              gap={8}
+                              messageFontSize={12}
+                            />
+                          </div>
                         ) : pairs.length === 0 ? (
                           <p style={{ color: "var(--text-secondary)", textAlign: "center" }}>No positions found for this strategy.</p>
                         ) : (() => {
@@ -6348,7 +7308,32 @@ export default function Dashboard() {
                   <Clock size={20} color="var(--accent)" />
                   <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Recent Trades</h2>
                   </div>
-                  <div style={{ position: "relative" }}>
+                  <div style={{ position: "relative", display: "flex", alignItems: "center", gap: "4px" }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        void refreshRecentTradesSection();
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        padding: "4px",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "4px",
+                      }}
+                      title="Refresh recent trades for this timeframe"
+                    >
+                      <RefreshCw size={16} />
+                    </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -6396,6 +7381,9 @@ export default function Dashboard() {
                           boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                           zIndex: 99999,
                           minWidth: "120px",
+                          maxHeight: "min(560px, calc(100vh - 24px))",
+                          overflowY: "auto",
+                          overflowX: "hidden",
                         }}
                         onClick={(e) => e.stopPropagation()}
                         onMouseDown={(e) => e.stopPropagation()}
@@ -6652,7 +7640,7 @@ export default function Dashboard() {
                             onClick={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
-                              void fetchOpenPositionQuotes(true);
+                              void refreshOpenPositionsSection();
                             }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
@@ -6671,7 +7659,7 @@ export default function Dashboard() {
                               borderRadius: "4px",
                               opacity: isRefreshingQuotes ? 0.5 : 1,
                             }}
-                            title={lastQuoteRefresh ? `Refresh prices (last: ${format(lastQuoteRefresh, "h:mm:ss a")})` : "Refresh prices"}
+                            title={lastQuoteRefresh ? `Refresh positions & prices (last quote: ${format(lastQuoteRefresh, "h:mm:ss a")})` : "Refresh positions & prices"}
                           >
                             <RefreshCw size={16} style={{ animation: isRefreshingQuotes ? "spin 1s linear infinite" : "none" }} />
                           </button>
@@ -6723,6 +7711,9 @@ export default function Dashboard() {
                               boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                               zIndex: 99999,
                               minWidth: "120px",
+                              maxHeight: "min(560px, calc(100vh - 24px))",
+                              overflowY: "auto",
+                              overflowX: "hidden",
                             }}
                             onClick={(e) => e.stopPropagation()}
                             onMouseDown={(e) => e.stopPropagation()}
@@ -6893,10 +7884,10 @@ export default function Dashboard() {
                                 <>
                                   <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                                   <div style={{ padding: "4px 0" }}>
-                                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>Auto-Refresh Prices</div>
+                                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>Dashboard auto-refresh</div>
                                     {currentPriceSync.enabled ? (
                                       <div style={{ fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.4 }}>
-                                        Live quotes sync is on in Dashboard configure — open position prices refresh with Current Price cards every{" "}
+                                        Enabled in Configure — metrics, sections, open-position quotes, Current Price cards, news, and dividend widgets refresh together every{" "}
                                         {currentPriceSync.seconds}s.
                                       </div>
                                     ) : (
@@ -7220,10 +8211,10 @@ export default function Dashboard() {
                   minWidth: 0,
                   maxWidth: "100%",
                   width: "100%",
-                  overflow: layoutLocked ? "visible" : "hidden",
+                  overflow: "hidden",
+                  ...(layoutLocked ? { minHeight: 0 } : {}),
                   boxSizing: "border-box",
                   ...(newsSpan > 1 ? { gridColumn: `span ${newsSpan}` as const } : {}),
-                  ...(sectionSizes.news?.height != null ? { minHeight: `${sectionSizes.news.height}px` } : {}),
                 }}
               >
                 {({ dragHandleProps, isDragging }) => (
@@ -7247,8 +8238,35 @@ export default function Dashboard() {
                         <div {...dragHandleProps} style={{ cursor: "grab" }}>
                           <GripVertical size={16} color="var(--text-secondary)" />
                         </div>
+                        <Newspaper size={20} color="var(--accent)" />
+                        <h2 style={{ fontSize: "20px", fontWeight: "600" }}>News</h2>
                       </div>
-                      <div style={{ position: "relative" }}>
+                      <div style={{ position: "relative", display: "flex", alignItems: "center", gap: "4px" }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            window.dispatchEvent(new Event("tradeButlerRefreshNews"));
+                          }}
+                          onMouseDown={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                          }}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            padding: "4px",
+                            cursor: "pointer",
+                            color: "var(--text-secondary)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            borderRadius: "4px",
+                          }}
+                          title="Refresh news"
+                        >
+                          <RefreshCw size={16} />
+                        </button>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -7296,6 +8314,9 @@ export default function Dashboard() {
                               boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                               zIndex: 99999,
                               minWidth: "120px",
+                              maxHeight: "min(560px, calc(100vh - 24px))",
+                              overflowY: "auto",
+                              overflowX: "hidden",
                             }}
                             onClick={(e) => e.stopPropagation()}
                             onMouseDown={(e) => e.stopPropagation()}
@@ -7439,9 +8460,11 @@ export default function Dashboard() {
                         )}
                       </div>
                     </div>
-                    <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+                    <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
                       <NewsWidget 
                         compact 
+                        hideCompactTitle
+                        showRefresh={false}
                         maxItems={5}
                         externalSearchQuery={newsSearchQuery}
                         externalIncludePositions={newsIncludePositions}
@@ -7459,7 +8482,936 @@ export default function Dashboard() {
               </SortableSection>
             );
           }
-          
+
+          // Dividend Tracker (condensed)
+          if (sectionId === "dividendTracker" && dashboardSections.showDividendTracker) {
+            const divSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.dividendTracker?.columnSpan ?? 1));
+            return (
+              <SortableSection
+                key="dividendTracker"
+                id="dividendTracker"
+                wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: "hidden",
+                  ...(layoutLocked ? { minHeight: 0 } : {}),
+                  boxSizing: "border-box",
+                  ...(divSpan > 1 ? { gridColumn: `span ${divSpan}` as const } : {}),
+                }}
+              >
+                {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper
+                    sectionId="dividendTracker"
+                    sectionSizes={sectionSizes}
+                    setSectionSizes={setSectionSizes}
+                    layoutLocked={layoutLocked}
+                    lockedRowHeight={lockedRowHeight}
+                  >
+                    <div
+                      style={{
+                        backgroundColor: "var(--bg-secondary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "8px",
+                        padding: "20px",
+                        cursor: isDragging ? "grabbing" : "grab",
+                        display: "flex",
+                        flexDirection: "column",
+                        minHeight: 0,
+                        minWidth: 0,
+                        height: "100%",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px", flexShrink: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                          <div {...dragHandleProps} style={{ cursor: "grab" }}>
+                            <GripVertical size={16} color="var(--text-secondary)" />
+                          </div>
+                          <Coins size={20} color="var(--accent)" />
+                          <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "600", color: "var(--text-primary)" }}>Dividend tracker</h3>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <select
+                            aria-label="Dividend tracker view"
+                            value={dividendTrackerView}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              setDividendTrackerView(e.target.value as DividendDashboardView);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            title="Switch between table and chart"
+                            style={{
+                              fontSize: "12px",
+                              padding: "5px 8px",
+                              borderRadius: "6px",
+                              border: "1px solid var(--border-color)",
+                              backgroundColor: "var(--bg-tertiary)",
+                              color: "var(--text-primary)",
+                              cursor: "pointer",
+                              maxWidth: "min(160px, 36vw)",
+                            }}
+                          >
+                            <option value="table">Table</option>
+                            <option value="split">Table + charts</option>
+                            <option value="charts">Charts</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              dividendTrackerDashboardRefreshRef.current?.();
+                            }}
+                            onMouseDown={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              padding: "4px",
+                              cursor: "pointer",
+                              color: "var(--text-secondary)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              borderRadius: "4px",
+                            }}
+                            title="Refresh dividend data"
+                          >
+                            <RefreshCw size={16} />
+                          </button>
+                          <div style={{ position: "relative" }}>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                              setSectionMenuPosition({
+                                ...sectionMenuPosition,
+                                dividendTracker: {
+                                  top: rect.bottom + 4,
+                                  right: window.innerWidth - rect.right,
+                                },
+                              });
+                              setOpenSectionSettings(openSectionSettings === "dividendTracker" ? null : "dividendTracker");
+                            }}
+                            onMouseDown={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              padding: "4px",
+                              cursor: "pointer",
+                              color: "var(--text-secondary)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              borderRadius: "4px",
+                            }}
+                            title="Rows per page, full tracker, layout"
+                          >
+                            <Settings size={16} />
+                          </button>
+                          {openSectionSettings === "dividendTracker" &&
+                            createPortal(
+                              <div
+                                data-settings-menu
+                                style={{
+                                  position: "fixed",
+                                  top: `${sectionMenuPosition.dividendTracker.top}px`,
+                                  right: `${sectionMenuPosition.dividendTracker.right}px`,
+                                  backgroundColor: "var(--bg-secondary)",
+                                  border: "1px solid var(--border-color)",
+                                  borderRadius: "8px",
+                                  padding: "8px",
+                                  boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                                  zIndex: 99999,
+                                  minWidth: "200px",
+                                  maxHeight: "min(560px, calc(100vh - 24px))",
+                                  overflowY: "auto",
+                                  overflowX: "hidden",
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                onMouseDown={(e) => e.stopPropagation()}
+                              >
+                                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                                  <div
+                                    style={{
+                                      fontSize: "11px",
+                                      fontWeight: "600",
+                                      color: "var(--text-secondary)",
+                                      marginBottom: "2px",
+                                    }}
+                                  >
+                                    Dividend data
+                                  </div>
+                                  {DIVIDEND_TRACKER_PAGE_SIZE_OPTIONS.map((opt) => (
+                                    <button
+                                      key={opt}
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        e.preventDefault();
+                                        setDividendTrackerDashboardPageSize(opt);
+                                        try {
+                                          localStorage.setItem(DIVIDEND_TRACKER_PAGE_SIZE_KEY, String(opt));
+                                        } catch {
+                                          /* ignore */
+                                        }
+                                        setOpenSectionSettings(null);
+                                      }}
+                                      style={{
+                                        textAlign: "left",
+                                        background:
+                                          dividendTrackerDashboardPageSize === opt
+                                            ? "color-mix(in srgb, var(--accent) 12%, transparent)"
+                                            : "transparent",
+                                        border:
+                                          dividendTrackerDashboardPageSize === opt
+                                            ? "1px solid var(--accent)"
+                                            : "1px solid var(--border-color)",
+                                        borderRadius: "4px",
+                                        padding: "6px 8px",
+                                        cursor: "pointer",
+                                        color: "var(--text-primary)",
+                                        fontSize: "12px",
+                                        fontWeight: dividendTrackerDashboardPageSize === opt ? "600" : "500",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: "8px",
+                                      }}
+                                    >
+                                      {opt === 0 ? "All rows (no pagination)" : `${opt} per page`}
+                                    </button>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      navigate("/tools?calc=dividend-tracker");
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    style={{
+                                      background: "transparent",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "4px",
+                                      padding: "6px 8px",
+                                      cursor: "pointer",
+                                      color: "var(--text-primary)",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      fontSize: "13px",
+                                    }}
+                                  >
+                                    <ExternalLink size={14} />
+                                    <span>Open full tracker</span>
+                                  </button>
+                                  <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                                  <div
+                                    style={{
+                                      fontSize: "11px",
+                                      fontWeight: "600",
+                                      color: "var(--text-secondary)",
+                                      marginBottom: "2px",
+                                    }}
+                                  >
+                                    Forward income
+                                  </div>
+                                  <label
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      gap: "12px",
+                                      padding: "6px 8px",
+                                      cursor: "pointer",
+                                      fontSize: "12px",
+                                      color: "var(--text-primary)",
+                                      borderRadius: "4px",
+                                    }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onMouseDown={(e) => e.stopPropagation()}
+                                  >
+                                    <span>Show estimates and dropdown</span>
+                                    <input
+                                      type="checkbox"
+                                      checked={dividendTrackerShowForwardIncome}
+                                      onChange={(e) => {
+                                        e.stopPropagation();
+                                        setDividendTrackerShowForwardIncome(e.target.checked);
+                                      }}
+                                      onClick={(e) => e.stopPropagation()}
+                                    />
+                                  </label>
+                                  <label
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      gap: "12px",
+                                      padding: "6px 8px",
+                                      cursor: "pointer",
+                                      fontSize: "12px",
+                                      color: "var(--text-primary)",
+                                      borderRadius: "4px",
+                                    }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onMouseDown={(e) => e.stopPropagation()}
+                                  >
+                                    <span>Separate Dividend income section</span>
+                                    <input
+                                      type="checkbox"
+                                      checked={dashboardSections.showDividendIncome}
+                                      onChange={(e) => {
+                                        e.stopPropagation();
+                                        const on = e.target.checked;
+                                        setDashboardSections((prev) => {
+                                          const next = { ...prev, showDividendIncome: on };
+                                          localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                          return next;
+                                        });
+                                        setSectionOrder((prev) => {
+                                          if (on && !prev.includes("dividendIncome")) {
+                                            const next: SectionId[] = [...prev, "dividendIncome"];
+                                            localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(next));
+                                            return next;
+                                          }
+                                          if (!on) {
+                                            const next = prev.filter((id) => id !== "dividendIncome");
+                                            localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(next));
+                                            return next;
+                                          }
+                                          return prev;
+                                        });
+                                      }}
+                                      onClick={(e) => e.stopPropagation()}
+                                    />
+                                  </label>
+                                  <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                                  <div
+                                    style={{
+                                      fontSize: "11px",
+                                      fontWeight: "600",
+                                      color: "var(--text-secondary)",
+                                      marginBottom: "2px",
+                                    }}
+                                  >
+                                    Section layout
+                                  </div>
+                                  {layoutLocked && moveInLockedGridRef?.current ? (
+                                    <>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          moveInLockedGridRef.current?.("dividendTracker", "up");
+                                          setOpenSectionSettings(null);
+                                        }}
+                                        style={{
+                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "4px",
+                                          padding: "6px 8px",
+                                          cursor: "pointer",
+                                          color: "var(--text-primary)",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          fontSize: "13px",
+                                        }}
+                                      >
+                                        <ChevronUp size={14} />
+                                        <span>Move up</span>
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          moveInLockedGridRef.current?.("dividendTracker", "down");
+                                          setOpenSectionSettings(null);
+                                        }}
+                                        style={{
+                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "4px",
+                                          padding: "6px 8px",
+                                          cursor: "pointer",
+                                          color: "var(--text-primary)",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          fontSize: "13px",
+                                        }}
+                                      >
+                                        <ChevronDown size={14} />
+                                        <span>Move down</span>
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          moveInLockedGridRef.current?.("dividendTracker", "left");
+                                          setOpenSectionSettings(null);
+                                        }}
+                                        style={{
+                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "4px",
+                                          padding: "6px 8px",
+                                          cursor: "pointer",
+                                          color: "var(--text-primary)",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          fontSize: "13px",
+                                        }}
+                                      >
+                                        <ChevronLeft size={14} />
+                                        <span>Move left</span>
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          moveInLockedGridRef.current?.("dividendTracker", "right");
+                                          setOpenSectionSettings(null);
+                                        }}
+                                        style={{
+                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "4px",
+                                          padding: "6px 8px",
+                                          cursor: "pointer",
+                                          color: "var(--text-primary)",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          fontSize: "13px",
+                                        }}
+                                      >
+                                        <ChevronRight size={14} />
+                                        <span>Move right</span>
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          const currentIndex = sectionOrder.indexOf("dividendTracker");
+                                          if (currentIndex > 0) {
+                                            const newOrder = [...sectionOrder];
+                                            [newOrder[currentIndex - 1], newOrder[currentIndex]] = [
+                                              newOrder[currentIndex],
+                                              newOrder[currentIndex - 1],
+                                            ];
+                                            setSectionOrder(newOrder);
+                                            localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                          }
+                                          setOpenSectionSettings(null);
+                                        }}
+                                        disabled={sectionOrder.indexOf("dividendTracker") === 0}
+                                        style={{
+                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "4px",
+                                          padding: "6px 8px",
+                                          cursor:
+                                            sectionOrder.indexOf("dividendTracker") === 0 ? "not-allowed" : "pointer",
+                                          color: "var(--text-primary)",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          fontSize: "13px",
+                                          opacity: sectionOrder.indexOf("dividendTracker") === 0 ? 0.3 : 1,
+                                        }}
+                                      >
+                                        <ChevronUp size={14} />
+                                        <span>Move Up</span>
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          const currentIndex = sectionOrder.indexOf("dividendTracker");
+                                          if (currentIndex < sectionOrder.length - 1) {
+                                            const newOrder = [...sectionOrder];
+                                            [newOrder[currentIndex], newOrder[currentIndex + 1]] = [
+                                              newOrder[currentIndex + 1],
+                                              newOrder[currentIndex],
+                                            ];
+                                            setSectionOrder(newOrder);
+                                            localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                          }
+                                          setOpenSectionSettings(null);
+                                        }}
+                                        disabled={sectionOrder.indexOf("dividendTracker") === sectionOrder.length - 1}
+                                        style={{
+                                          background: "transparent",
+                                          border: "1px solid var(--border-color)",
+                                          borderRadius: "4px",
+                                          padding: "6px 8px",
+                                          cursor:
+                                            sectionOrder.indexOf("dividendTracker") === sectionOrder.length - 1
+                                              ? "not-allowed"
+                                              : "pointer",
+                                          color: "var(--text-primary)",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          fontSize: "13px",
+                                          opacity:
+                                            sectionOrder.indexOf("dividendTracker") === sectionOrder.length - 1
+                                              ? 0.3
+                                              : 1,
+                                        }}
+                                      >
+                                        <ChevronDown size={14} />
+                                        <span>Move Down</span>
+                                      </button>
+                                    </>
+                                  )}
+                                  <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      setSectionSizes((prev) => {
+                                        const next = { ...prev, dividendTracker: {} };
+                                        localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                        return next;
+                                      });
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    style={{
+                                      background: "transparent",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "4px",
+                                      padding: "6px 8px",
+                                      cursor: "pointer",
+                                      color: "var(--text-primary)",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      fontSize: "13px",
+                                    }}
+                                  >
+                                    <RotateCcw size={14} />
+                                    <span>Reset Size</span>
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      setDashboardSections((prev) => {
+                                        const next = { ...prev, showDividendTracker: false };
+                                        localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                        return next;
+                                      });
+                                      setSectionOrder((prev) => {
+                                        const newOrder = prev.filter((id) => id !== "dividendTracker");
+                                        localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                        return newOrder;
+                                      });
+                                      setOpenSectionSettings(null);
+                                    }}
+                                    style={{
+                                      background: "transparent",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "4px",
+                                      padding: "6px 8px",
+                                      cursor: "pointer",
+                                      color: "var(--loss)",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      fontSize: "13px",
+                                    }}
+                                  >
+                                    <Trash2 size={14} />
+                                    <span>Hide Section</span>
+                                  </button>
+                                </div>
+                              </div>,
+                              document.body
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                        <DividendTrackerDashboardWidget
+                          pageSize={dividendTrackerDashboardPageSize}
+                          viewMode={dividendTrackerView}
+                          showForwardIncomePanel={dividendTrackerShowForwardIncome}
+                          forwardIncomeMode={dividendTrackerForwardIncomeMode}
+                          onForwardIncomeModeChange={setDividendTrackerForwardIncomeMode}
+                          onPageSizeChange={(n) => {
+                            setDividendTrackerDashboardPageSize(n);
+                            try {
+                              localStorage.setItem(DIVIDEND_TRACKER_PAGE_SIZE_KEY, String(n));
+                            } catch {
+                              /* ignore */
+                            }
+                          }}
+                          onRegisterRefresh={registerDividendTrackerRefresh}
+                        />
+                      </div>
+                    </div>
+                  </SectionCardResizeWrapper>
+                )}
+              </SortableSection>
+            );
+          }
+
+          // Dividend income (standalone forward estimates)
+          if (sectionId === "dividendIncome" && dashboardSections.showDividendIncome) {
+            const incomeSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.dividendIncome?.columnSpan ?? 1));
+            return (
+              <SortableSection
+                key="dividendIncome"
+                id="dividendIncome"
+                wrapperStyle={{
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  width: "100%",
+                  overflow: "hidden",
+                  ...(layoutLocked ? { minHeight: 0 } : {}),
+                  boxSizing: "border-box",
+                  ...(incomeSpan > 1 ? { gridColumn: `span ${incomeSpan}` as const } : {}),
+                  ...(sectionSizes.dividendIncome?.height != null ? { minHeight: `${sectionSizes.dividendIncome.height}px` } : {}),
+                }}
+              >
+                {({ dragHandleProps, isDragging }) => (
+                  <SectionCardResizeWrapper
+                    sectionId="dividendIncome"
+                    sectionSizes={sectionSizes}
+                    setSectionSizes={setSectionSizes}
+                    layoutLocked={layoutLocked}
+                    lockedRowHeight={lockedRowHeight}
+                  >
+                    <div
+                      style={{
+                        backgroundColor: "var(--bg-secondary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "8px",
+                        padding: "20px",
+                        cursor: isDragging ? "grabbing" : "grab",
+                        display: "flex",
+                        flexDirection: "column",
+                        minHeight: 0,
+                        minWidth: 0,
+                        height: "100%",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px", flexShrink: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                          <div {...dragHandleProps} style={{ cursor: "grab" }}>
+                            <GripVertical size={16} color="var(--text-secondary)" />
+                          </div>
+                          <Sparkles size={20} color="var(--accent)" />
+                          <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "600", color: "var(--text-primary)" }}>Dividend income</h3>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              dividendIncomeDashboardRefreshRef.current?.();
+                            }}
+                            onMouseDown={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              padding: "4px",
+                              cursor: "pointer",
+                              color: "var(--text-secondary)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              borderRadius: "4px",
+                            }}
+                            title="Refresh estimates"
+                          >
+                            <RefreshCw size={16} />
+                          </button>
+                          <div style={{ position: "relative" }}>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                setSectionMenuPosition({
+                                  ...sectionMenuPosition,
+                                  dividendIncome: {
+                                    top: rect.bottom + 4,
+                                    right: window.innerWidth - rect.right,
+                                  },
+                                });
+                                setOpenSectionSettings(openSectionSettings === "dividendIncome" ? null : "dividendIncome");
+                              }}
+                              onMouseDown={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                              }}
+                              style={{
+                                background: "transparent",
+                                border: "none",
+                                padding: "4px",
+                                cursor: "pointer",
+                                color: "var(--text-secondary)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                borderRadius: "4px",
+                              }}
+                              title="Layout and full tracker"
+                            >
+                              <Settings size={16} />
+                            </button>
+                            {openSectionSettings === "dividendIncome" &&
+                              createPortal(
+                                <div
+                                  data-settings-menu
+                                  style={{
+                                    position: "fixed",
+                                    top: `${sectionMenuPosition.dividendIncome.top}px`,
+                                    right: `${sectionMenuPosition.dividendIncome.right}px`,
+                                    backgroundColor: "var(--bg-secondary)",
+                                    border: "1px solid var(--border-color)",
+                                    borderRadius: "8px",
+                                    padding: "8px",
+                                    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                                    zIndex: 99999,
+                                    minWidth: "200px",
+                                    maxHeight: "min(560px, calc(100vh - 24px))",
+                                    overflowY: "auto",
+                                    overflowX: "hidden",
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onMouseDown={(e) => e.stopPropagation()}
+                                >
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        e.preventDefault();
+                                        navigate("/tools?calc=dividend-tracker");
+                                        setOpenSectionSettings(null);
+                                      }}
+                                      style={{
+                                        background: "transparent",
+                                        border: "1px solid var(--border-color)",
+                                        borderRadius: "4px",
+                                        padding: "6px 8px",
+                                        cursor: "pointer",
+                                        color: "var(--text-primary)",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: "8px",
+                                        fontSize: "13px",
+                                      }}
+                                    >
+                                      <ExternalLink size={14} />
+                                      <span>Open full tracker</span>
+                                    </button>
+                                    {layoutLocked && moveInLockedGridRef?.current ? (
+                                      <>
+                                        <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                                        <div
+                                          style={{
+                                            fontSize: "11px",
+                                            fontWeight: "600",
+                                            color: "var(--text-secondary)",
+                                            marginBottom: "2px",
+                                          }}
+                                        >
+                                          Section layout
+                                        </div>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            moveInLockedGridRef.current?.("dividendIncome", "up");
+                                            setOpenSectionSettings(null);
+                                          }}
+                                          style={{
+                                            background: "transparent",
+                                            border: "1px solid var(--border-color)",
+                                            borderRadius: "4px",
+                                            padding: "6px 8px",
+                                            cursor: "pointer",
+                                            color: "var(--text-primary)",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "8px",
+                                            fontSize: "13px",
+                                          }}
+                                        >
+                                          <ChevronUp size={14} />
+                                          <span>Move up</span>
+                                        </button>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            moveInLockedGridRef.current?.("dividendIncome", "down");
+                                            setOpenSectionSettings(null);
+                                          }}
+                                          style={{
+                                            background: "transparent",
+                                            border: "1px solid var(--border-color)",
+                                            borderRadius: "4px",
+                                            padding: "6px 8px",
+                                            cursor: "pointer",
+                                            color: "var(--text-primary)",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "8px",
+                                            fontSize: "13px",
+                                          }}
+                                        >
+                                          <ChevronDown size={14} />
+                                          <span>Move down</span>
+                                        </button>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            moveInLockedGridRef.current?.("dividendIncome", "left");
+                                            setOpenSectionSettings(null);
+                                          }}
+                                          style={{
+                                            background: "transparent",
+                                            border: "1px solid var(--border-color)",
+                                            borderRadius: "4px",
+                                            padding: "6px 8px",
+                                            cursor: "pointer",
+                                            color: "var(--text-primary)",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "8px",
+                                            fontSize: "13px",
+                                          }}
+                                        >
+                                          <ChevronLeft size={14} />
+                                          <span>Move left</span>
+                                        </button>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            moveInLockedGridRef.current?.("dividendIncome", "right");
+                                            setOpenSectionSettings(null);
+                                          }}
+                                          style={{
+                                            background: "transparent",
+                                            border: "1px solid var(--border-color)",
+                                            borderRadius: "4px",
+                                            padding: "6px 8px",
+                                            cursor: "pointer",
+                                            color: "var(--text-primary)",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "8px",
+                                            fontSize: "13px",
+                                          }}
+                                        >
+                                          <ChevronRight size={14} />
+                                          <span>Move right</span>
+                                        </button>
+                                      </>
+                                    ) : null}
+                                    <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        e.preventDefault();
+                                        setSectionSizes((prev) => {
+                                          const next = { ...prev, dividendIncome: {} };
+                                          localStorage.setItem(DASHBOARD_SECTION_SIZES_KEY, JSON.stringify(next));
+                                          return next;
+                                        });
+                                        setOpenSectionSettings(null);
+                                      }}
+                                      style={{
+                                        background: "transparent",
+                                        border: "1px solid var(--border-color)",
+                                        borderRadius: "4px",
+                                        padding: "6px 8px",
+                                        cursor: "pointer",
+                                        color: "var(--text-primary)",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: "8px",
+                                        fontSize: "13px",
+                                      }}
+                                    >
+                                      <RotateCcw size={14} />
+                                      <span>Reset size</span>
+                                    </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        e.preventDefault();
+                                        setDashboardSections((prev) => {
+                                          const next = { ...prev, showDividendIncome: false };
+                                          localStorage.setItem(DASHBOARD_SECTIONS_KEY, JSON.stringify(next));
+                                          return next;
+                                        });
+                                        setSectionOrder((prev) => {
+                                          const newOrder = prev.filter((id) => id !== "dividendIncome");
+                                          localStorage.setItem(DASHBOARD_SECTION_ORDER_KEY, JSON.stringify(newOrder));
+                                          return newOrder;
+                                        });
+                                        setOpenSectionSettings(null);
+                                      }}
+                                      style={{
+                                        background: "transparent",
+                                        border: "1px solid var(--border-color)",
+                                        borderRadius: "4px",
+                                        padding: "6px 8px",
+                                        cursor: "pointer",
+                                        color: "var(--loss)",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: "8px",
+                                        fontSize: "13px",
+                                      }}
+                                    >
+                                      <Trash2 size={14} />
+                                      <span>Hide section</span>
+                                    </button>
+                                  </div>
+                                </div>,
+                                document.body
+                              )}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                        <DividendIncomeDashboardWidget onRegisterRefresh={registerDividendIncomeRefresh} />
+                      </div>
+                    </div>
+                  </SectionCardResizeWrapper>
+                )}
+              </SortableSection>
+            );
+          }
+
           // Trades Section
           if (sectionId === "trades" && dashboardSections.showTrades) {
             const tradesSpan = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes.trades?.columnSpan ?? 1));
@@ -7501,7 +9453,32 @@ export default function Dashboard() {
                     <Activity size={20} color="var(--accent)" />
                     <h2 style={{ fontSize: "20px", fontWeight: "600" }}>Trades</h2>
                   </div>
-                  <div style={{ position: "relative" }}>
+                  <div style={{ position: "relative", display: "flex", alignItems: "center", gap: "4px" }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        void refreshTradesSection();
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        padding: "4px",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "4px",
+                      }}
+                      title="Refresh trades list for this timeframe"
+                    >
+                      <RefreshCw size={16} />
+                    </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -7549,6 +9526,9 @@ export default function Dashboard() {
                           boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                           zIndex: 99999,
                           minWidth: "120px",
+                          maxHeight: "min(560px, calc(100vh - 24px))",
+                          overflowY: "auto",
+                          overflowX: "hidden",
                         }}
                         onClick={(e) => e.stopPropagation()}
                         onMouseDown={(e) => e.stopPropagation()}

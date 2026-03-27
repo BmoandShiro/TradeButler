@@ -1,11 +1,20 @@
 interface LoadingSphereProps {
   size?: number;
   message?: string;
+  /** Outer padding around the sphere (default 40; use ~8–12 in tight popovers). */
+  padding?: number;
+  /** Gap between sphere and message (default 16). */
+  gap?: number;
+  /** Message font size (default 15px). */
+  messageFontSize?: number | string;
 }
 
 export function LoadingSphere({ 
   size = 100, 
-  message = "Loading..."
+  message = "Loading...",
+  padding = 40,
+  gap = 16,
+  messageFontSize = "15px",
 }: LoadingSphereProps) {
   const rings = 7;
   const dotsPerRing = 14;
@@ -30,8 +39,9 @@ export function LoadingSphere({
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        gap: "16px",
-        padding: "40px",
+        gap: `${gap}px`,
+        padding: `${padding}px`,
+        boxSizing: "border-box",
       }}
     >
       <div
@@ -73,19 +83,20 @@ export function LoadingSphere({
           })}
         </div>
       </div>
-      {message && (
+      {message ? (
         <p
           style={{
             color: "var(--text-secondary)",
-            fontSize: "15px",
+            fontSize: typeof messageFontSize === "number" ? `${messageFontSize}px` : messageFontSize,
             fontWeight: "500",
             margin: 0,
+            textAlign: "center",
             animation: "spherePulse 1.5s ease-in-out infinite",
           }}
         >
           {message}
         </p>
-      )}
+      ) : null}
       <style>{`
         @keyframes sphereRotate {
           from { transform: rotateY(360deg); }

@@ -1156,6 +1156,7 @@ pub fn get_symbol_pnl(
     end_date: Option<String>,
     paper_only: Option<bool>,
     filters: Option<EquityCurveFilters>,
+    strategy_id: Option<i64>,
 ) -> Result<Vec<SymbolPnL>, String> {
     use std::collections::HashMap;
     // Get both paired trades and open trades from pairing logic
@@ -1215,6 +1216,21 @@ pub fn get_symbol_pnl(
     } else {
         paired_trades
     };
+
+    if let Some(sid) = strategy_id {
+        filtered_paired_trades = filter_paired_trades_by_resolved_strategy(
+            filtered_paired_trades,
+            Some(sid),
+            pairing_method.clone(),
+            start_date.clone(),
+            end_date.clone(),
+            paper_only,
+        )?;
+        open_trades = open_trades
+            .into_iter()
+            .filter(|t| t.strategy_id == Some(sid))
+            .collect();
+    }
     
     // Apply strategy/symbol/side/order_type/position_size filters (same as get_equity_curve; multi-select + position size USD)
     if let Some(ref f) = filters {
@@ -1672,62 +1688,99 @@ pub fn get_daily_pnl(paper_only: Option<bool>) -> Result<Vec<DailyPnL>, String> 
 }
 
 #[tauri::command]
-pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>, paper_only: Option<bool>) -> Result<Metrics, String> {
-    let db_path = get_db_path();
-    let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
-    
-    // Build date filter clause
-    let date_filter = if start_date.is_some() || end_date.is_some() {
-        let mut filter = String::from(" WHERE 1=1");
-        if let Some(start) = &start_date {
-            filter.push_str(&format!(" AND timestamp >= '{}'", start));
-        }
-        if let Some(end) = &end_date {
-            filter.push_str(&format!(" AND timestamp <= '{}'", end));
-        }
-        filter
-    } else {
-        String::new()
-    };
-    let where_volume = if date_filter.is_empty() {
-        paper_only_where_clause(paper_only).to_string()
-    } else {
-        format!("{}{}", date_filter, paper_only_and_clause(paper_only))
-    };
-    
-    let total_volume: f64 = conn
-        .query_row(&format!("SELECT SUM(quantity * price) FROM trades{}", where_volume), [], |row| {
-            Ok(row.get::<_, Option<f64>>(0)?.unwrap_or(0.0))
-        })
-        .map_err(|e| e.to_string())?;
-    
+pub fn get_metrics(
+    pairing_method: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    paper_only: Option<bool>,
+    strategy_id: Option<i64>,
+) -> Result<Metrics, String> {
     // Get paired trades for accurate metrics
     let paired_trades = get_paired_trades(pairing_method.clone(), paper_only).map_err(|e| e.to_string())?;
-    
+
     // Filter paired trades by date range if provided
-    let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
-        paired_trades.into_iter().filter(|pair| {
-            let exit_date = &pair.exit_timestamp;
-            let in_range = if let Some(start) = &start_date {
-                exit_date >= start
-            } else {
-                true
-            } && if let Some(end) = &end_date {
-                exit_date <= end
-            } else {
-                true
-            };
-            in_range
-        }).collect()
+    let mut filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
+        paired_trades
+            .into_iter()
+            .filter(|pair| {
+                let exit_date = &pair.exit_timestamp;
+                let in_range = if let Some(start) = &start_date {
+                    exit_date >= start
+                } else {
+                    true
+                } && if let Some(end) = &end_date {
+                    exit_date <= end
+                } else {
+                    true
+                };
+                in_range
+            })
+            .collect()
     } else {
         paired_trades
     };
-    
+
+    if let Some(sid) = strategy_id {
+        filtered_paired_trades = filter_paired_trades_by_resolved_strategy(
+            filtered_paired_trades,
+            Some(sid),
+            pairing_method.clone(),
+            start_date.clone(),
+            end_date.clone(),
+            paper_only,
+        )?;
+    }
+
+    let total_volume: f64 = if strategy_id.is_some() {
+        filtered_paired_trades
+            .iter()
+            .map(|p| p.quantity * p.entry_price)
+            .sum()
+    } else {
+        let db_path = get_db_path();
+        let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
+        let date_filter = if start_date.is_some() || end_date.is_some() {
+            let mut filter = String::from(" WHERE 1=1");
+            if let Some(start) = &start_date {
+                filter.push_str(&format!(" AND timestamp >= '{}'", start));
+            }
+            if let Some(end) = &end_date {
+                filter.push_str(&format!(" AND timestamp <= '{}'", end));
+            }
+            filter
+        } else {
+            String::new()
+        };
+        let where_volume = if date_filter.is_empty() {
+            paper_only_where_clause(paper_only).to_string()
+        } else {
+            format!("{}{}", date_filter, paper_only_and_clause(paper_only))
+        };
+        conn
+            .query_row(
+                &format!("SELECT SUM(quantity * price) FROM trades{}", where_volume),
+                [],
+                |row| Ok(row.get::<_, Option<f64>>(0)?.unwrap_or(0.0)),
+            )
+            .map_err(|e| e.to_string())?
+    };
+
     // Total trades should count pairs, not individual trades
     let total_trades = filtered_paired_trades.len() as i64;
-    
+
     // Get position groups to calculate largest win/loss per position (not per pair)
-    let position_groups = get_position_groups(pairing_method, start_date.clone(), end_date.clone(), paper_only).map_err(|e| e.to_string())?;
+    let mut position_groups =
+        get_position_groups(pairing_method.clone(), start_date.clone(), end_date.clone(), paper_only).map_err(|e| e.to_string())?;
+    if strategy_id.is_some() {
+        let entry_ids: std::collections::HashSet<i64> =
+            filtered_paired_trades.iter().map(|p| p.entry_trade_id).collect();
+        position_groups.retain(|g| {
+            g.entry_trade
+                .id
+                .map(|id| entry_ids.contains(&id))
+                .unwrap_or(false)
+        });
+    }
     
     let mut winning_trades = 0;
     let mut losing_trades = 0;
@@ -1822,30 +1875,40 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
     let mut strategy_consecutive_losses = 0;
     let mut strategy_current_win = 0;
     let mut strategy_current_loss = 0;
-    
-    for paired in &filtered_paired_trades {
-        if paired.strategy_id.is_some() {
-            if paired.net_profit_loss > 0.0 {
-                strategy_winning += 1;
-                strategy_pnl += paired.net_profit_loss;
-                strategy_current_loss = 0;
-                strategy_current_win += 1;
-                if strategy_current_win > strategy_consecutive_wins {
-                    strategy_consecutive_wins = strategy_current_win;
-                }
-            } else if paired.net_profit_loss < 0.0 {
-                strategy_losing += 1;
-                strategy_pnl += paired.net_profit_loss;
-                strategy_current_win = 0;
-                strategy_current_loss += 1;
-                if strategy_current_loss > strategy_consecutive_losses {
-                    strategy_consecutive_losses = strategy_current_loss;
+
+    if strategy_id.is_some() {
+        strategy_winning = winning_trades;
+        strategy_losing = losing_trades;
+        strategy_pnl = total_profit_loss;
+        strategy_consecutive_wins = consecutive_wins;
+        strategy_consecutive_losses = consecutive_losses;
+    } else {
+        for paired in &filtered_paired_trades {
+            if paired.strategy_id.is_some() {
+                if paired.net_profit_loss > 0.0 {
+                    strategy_winning += 1;
+                    strategy_pnl += paired.net_profit_loss;
+                    strategy_current_loss = 0;
+                    strategy_current_win += 1;
+                    if strategy_current_win > strategy_consecutive_wins {
+                        strategy_consecutive_wins = strategy_current_win;
+                    }
+                } else if paired.net_profit_loss < 0.0 {
+                    strategy_losing += 1;
+                    strategy_pnl += paired.net_profit_loss;
+                    strategy_current_win = 0;
+                    strategy_current_loss += 1;
+                    if strategy_current_loss > strategy_consecutive_losses {
+                        strategy_consecutive_losses = strategy_current_loss;
+                    }
                 }
             }
         }
     }
-    
-    let strategy_win_rate = if (strategy_winning + strategy_losing) > 0 {
+
+    let strategy_win_rate = if strategy_id.is_some() {
+        win_rate
+    } else if (strategy_winning + strategy_losing) > 0 {
         strategy_winning as f64 / (strategy_winning + strategy_losing) as f64
     } else {
         0.0
@@ -1916,25 +1979,60 @@ pub fn get_metrics(pairing_method: Option<String>, start_date: Option<String>, e
     let sharpe_ratio = 0.0; // TODO: Implement proper Sharpe ratio calculation
     
     // Get daily P&L for best/worst day and trades per day
-    // Filter daily P&L by date range if provided
-    let mut daily_pnl = get_daily_pnl(paper_only).unwrap_or_default();
-    
-    // Filter by date range if provided
-    if start_date.is_some() || end_date.is_some() {
-        daily_pnl.retain(|d| {
-            let day_date = &d.date;
-            let in_range = if let Some(start) = &start_date {
-                day_date >= start
-            } else {
-                true
-            } && if let Some(end) = &end_date {
-                day_date <= end
-            } else {
-                true
-            };
-            in_range
-        });
-    }
+    let mut daily_pnl = if strategy_id.is_some() {
+        use std::collections::HashMap;
+        let mut m: HashMap<String, (f64, i64)> = HashMap::new();
+        for pair in &filtered_paired_trades {
+            if let Some(date_str) = pair.exit_timestamp.split('T').next() {
+                let e = m.entry(date_str.to_string()).or_insert((0.0, 0));
+                e.0 += pair.net_profit_loss;
+                e.1 += 1;
+            }
+        }
+        let mut v: Vec<DailyPnL> = m
+            .into_iter()
+            .map(|(date, (profit_loss, trade_count))| DailyPnL {
+                date,
+                profit_loss,
+                trade_count,
+            })
+            .collect();
+        if start_date.is_some() || end_date.is_some() {
+            v.retain(|d| {
+                let day_date = &d.date;
+                let in_range = if let Some(start) = &start_date {
+                    day_date >= start
+                } else {
+                    true
+                } && if let Some(end) = &end_date {
+                    day_date <= end
+                } else {
+                    true
+                };
+                in_range
+            });
+        }
+        v.sort_by(|a, b| b.date.cmp(&a.date));
+        v
+    } else {
+        let mut d = get_daily_pnl(paper_only).unwrap_or_default();
+        if start_date.is_some() || end_date.is_some() {
+            d.retain(|day| {
+                let day_date = &day.date;
+                let in_range = if let Some(start) = &start_date {
+                    day_date >= start
+                } else {
+                    true
+                } && if let Some(end) = &end_date {
+                    day_date <= end
+                } else {
+                    true
+                };
+                in_range
+            });
+        }
+        d
+    };
     
     // Find best day and its date
     let mut best_day_value = 0.0;
@@ -4211,14 +4309,20 @@ pub struct StrategyPerformance {
 }
 
 #[tauri::command]
-pub fn get_strategy_performance(pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>, paper_only: Option<bool>) -> Result<Vec<StrategyPerformance>, String> {
+pub fn get_strategy_performance(
+    pairing_method: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    paper_only: Option<bool>,
+    strategy_id: Option<i64>,
+) -> Result<Vec<StrategyPerformance>, String> {
     use std::collections::HashMap;
     
     // Get paired trades using the pairing method
     let paired_trades = get_paired_trades(pairing_method.clone(), paper_only).map_err(|e| e.to_string())?;
     
     // Filter paired trades by date range if provided
-    let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
+    let mut filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
         paired_trades.into_iter().filter(|pair| {
             let exit_date = &pair.exit_timestamp;
             let in_range = if let Some(start) = &start_date {
@@ -4235,6 +4339,17 @@ pub fn get_strategy_performance(pairing_method: Option<String>, start_date: Opti
     } else {
         paired_trades
     };
+
+    if let Some(sid) = strategy_id {
+        filtered_paired_trades = filter_paired_trades_by_resolved_strategy(
+            filtered_paired_trades,
+            Some(sid),
+            pairing_method.clone(),
+            start_date.clone(),
+            end_date.clone(),
+            paper_only,
+        )?;
+    }
     
     // Get position groups to find the original entry trade's strategy_id for positions with additions
     let position_groups = get_position_groups(pairing_method.clone(), start_date.clone(), end_date.clone(), paper_only).map_err(|e| e.to_string())?;
@@ -4352,40 +4467,18 @@ pub fn get_strategy_performance(pairing_method: Option<String>, start_date: Opti
     Ok(performance)
 }
 
-#[tauri::command]
-pub fn get_paired_trades_by_strategy(
+/// Filter paired trades by resolved strategy (position-group entry, entry trade, or pair).
+/// `strategy_id` = Some(id) keeps pairs for that strategy; None keeps only unassigned pairs.
+pub(crate) fn filter_paired_trades_by_resolved_strategy(
+    mut filtered: Vec<PairedTrade>,
     strategy_id: Option<i64>,
     pairing_method: Option<String>,
     start_date: Option<String>,
     end_date: Option<String>,
     paper_only: Option<bool>,
 ) -> Result<Vec<PairedTrade>, String> {
-    // Get all paired trades
-    let paired_trades = get_paired_trades(pairing_method.clone(), paper_only).map_err(|e| e.to_string())?;
-    
-    // Filter by date range if provided
-    let mut filtered = if start_date.is_some() || end_date.is_some() {
-        paired_trades.into_iter().filter(|pair| {
-            let exit_date = &pair.exit_timestamp;
-            let in_range = if let Some(start) = &start_date {
-                exit_date >= start
-            } else {
-                true
-            } && if let Some(end) = &end_date {
-                exit_date <= end
-            } else {
-                true
-            };
-            in_range
-        }).collect::<Vec<_>>()
-    } else {
-        paired_trades
-    };
-    
-    // Get position groups to find the original entry trade's strategy_id for positions with additions
     let position_groups = get_position_groups(pairing_method.clone(), start_date.clone(), end_date.clone(), paper_only).map_err(|e| e.to_string())?;
-    
-    // Create a map: trade_id -> position_group_entry_trade_strategy_id
+
     use std::collections::HashMap;
     let mut trade_to_position_strategy: HashMap<i64, Option<i64>> = HashMap::new();
     for group in &position_groups {
@@ -4396,73 +4489,107 @@ pub fn get_paired_trades_by_strategy(
             }
         }
     }
-    
-    // Get entry trade strategy_ids from database
+
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
-    
+
     let entry_trade_ids: Vec<i64> = filtered
         .iter()
         .map(|p| p.entry_trade_id)
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
-    
+
     let mut entry_trade_strategies: HashMap<i64, Option<i64>> = HashMap::new();
     if !entry_trade_ids.is_empty() {
         let mut entry_trade_stmt = conn
             .prepare("SELECT strategy_id FROM trades WHERE id = ?")
             .map_err(|e| e.to_string())?;
-        
+
         for entry_trade_id in &entry_trade_ids {
-            if let Ok(strategy_id) = entry_trade_stmt.query_row([entry_trade_id], |row| {
+            if let Ok(sid) = entry_trade_stmt.query_row([entry_trade_id], |row| {
                 row.get::<_, Option<i64>>(0)
             }) {
-                entry_trade_strategies.insert(*entry_trade_id, strategy_id);
+                entry_trade_strategies.insert(*entry_trade_id, sid);
             }
         }
     }
-    
-    // Filter by strategy_id
-    if let Some(strategy_id) = strategy_id {
-        filtered = filtered.into_iter().filter(|paired| {
-            // First, try to get strategy_id from position group (for positions with additions)
-            let pair_strategy_id = trade_to_position_strategy
-                .get(&paired.entry_trade_id)
-                .copied()
-                .flatten()
-                // Fallback to direct entry trade lookup
-                .or_else(|| {
-                    entry_trade_strategies
-                        .get(&paired.entry_trade_id)
-                        .copied()
-                        .flatten()
-                })
-                // Final fallback to paired trade's strategy_id
-                .or(paired.strategy_id);
-            
-            pair_strategy_id == Some(strategy_id)
-        }).collect();
+
+    if let Some(target_id) = strategy_id {
+        filtered = filtered
+            .into_iter()
+            .filter(|paired| {
+                let pair_strategy_id = trade_to_position_strategy
+                    .get(&paired.entry_trade_id)
+                    .copied()
+                    .flatten()
+                    .or_else(|| {
+                        entry_trade_strategies
+                            .get(&paired.entry_trade_id)
+                            .copied()
+                            .flatten()
+                    })
+                    .or(paired.strategy_id);
+
+                pair_strategy_id == Some(target_id)
+            })
+            .collect();
     } else {
-        // Filter for unassigned (strategy_id is None)
-        filtered = filtered.into_iter().filter(|paired| {
-            let pair_strategy_id = trade_to_position_strategy
-                .get(&paired.entry_trade_id)
-                .copied()
-                .flatten()
-                .or_else(|| {
-                    entry_trade_strategies
-                        .get(&paired.entry_trade_id)
-                        .copied()
-                        .flatten()
-                })
-                .or(paired.strategy_id);
-            
-            pair_strategy_id.is_none()
-        }).collect();
+        filtered = filtered
+            .into_iter()
+            .filter(|paired| {
+                let pair_strategy_id = trade_to_position_strategy
+                    .get(&paired.entry_trade_id)
+                    .copied()
+                    .flatten()
+                    .or_else(|| {
+                        entry_trade_strategies
+                            .get(&paired.entry_trade_id)
+                            .copied()
+                            .flatten()
+                    })
+                    .or(paired.strategy_id);
+
+                pair_strategy_id.is_none()
+            })
+            .collect();
     }
-    
+
     Ok(filtered)
+}
+
+#[tauri::command]
+pub fn get_paired_trades_by_strategy(
+    strategy_id: Option<i64>,
+    pairing_method: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    paper_only: Option<bool>,
+) -> Result<Vec<PairedTrade>, String> {
+    let paired_trades = get_paired_trades(pairing_method.clone(), paper_only).map_err(|e| e.to_string())?;
+
+    let filtered = if start_date.is_some() || end_date.is_some() {
+        paired_trades
+            .into_iter()
+            .filter(|pair| {
+                let exit_date = &pair.exit_timestamp;
+                let in_range = if let Some(start) = &start_date {
+                    exit_date >= start
+                } else {
+                    true
+                } && if let Some(end) = &end_date {
+                    exit_date <= end
+                } else {
+                    true
+                };
+                in_range
+            })
+            .collect::<Vec<_>>()
+    } else {
+        paired_trades
+    };
+
+    filter_paired_trades_by_resolved_strategy(filtered, strategy_id, pairing_method, start_date, end_date, paper_only)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -4478,7 +4605,14 @@ pub struct RecentTrade {
 }
 
 #[tauri::command]
-pub fn get_recent_trades(limit: Option<i64>, pairing_method: Option<String>, start_date: Option<String>, end_date: Option<String>, paper_only: Option<bool>) -> Result<Vec<RecentTrade>, String> {
+pub fn get_recent_trades(
+    limit: Option<i64>,
+    pairing_method: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    paper_only: Option<bool>,
+    strategy_id: Option<i64>,
+) -> Result<Vec<RecentTrade>, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     let limit = limit.unwrap_or(5);
@@ -4535,7 +4669,7 @@ pub fn get_recent_trades(limit: Option<i64>, pairing_method: Option<String>, sta
     };
     
     // Filter paired trades by date range if provided (filter by exit timestamp)
-    let filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
+    let mut filtered_paired_trades: Vec<PairedTrade> = if start_date.is_some() || end_date.is_some() {
         paired_trades.into_iter().filter(|pair| {
             let exit_date = &pair.exit_timestamp;
             let in_range = if let Some(start) = &start_date {
@@ -4552,6 +4686,17 @@ pub fn get_recent_trades(limit: Option<i64>, pairing_method: Option<String>, sta
     } else {
         paired_trades
     };
+
+    if let Some(sid) = strategy_id {
+        filtered_paired_trades = filter_paired_trades_by_resolved_strategy(
+            filtered_paired_trades,
+            Some(sid),
+            pairing_method.clone(),
+            start_date.clone(),
+            end_date.clone(),
+            paper_only,
+        )?;
+    }
     
     // Sort by exit timestamp (most recent first) and limit
     let mut sorted_pairs = filtered_paired_trades;

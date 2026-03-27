@@ -1,13 +1,20 @@
 import { useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Calculator, DollarSign, BarChart3, TrendingUp, Grid3X3 } from "lucide-react";
+import { Calculator, DollarSign, BarChart3, TrendingUp, Grid3X3, Coins } from "lucide-react";
 import AverageDownCalculator from "./AverageDownCalculator";
 import DividendCalculator from "./DividendCalculator";
 import BasicFinancials from "./BasicFinancials";
 import IpoCalendar from "./IpoCalendar";
 import GridLadderTool from "./GridLadderTool";
+import DividendTracker from "./DividendTracker";
 
-type ToolTab = "average-down" | "dividend" | "basic-financials" | "ipo-calendar" | "grid-ladder";
+type ToolTab =
+  | "average-down"
+  | "dividend"
+  | "dividend-tracker"
+  | "basic-financials"
+  | "ipo-calendar"
+  | "grid-ladder";
 const TOOLS_LAST_CALC_KEY = "tradebutler_tools_last_calc";
 
 export default function Tools() {
@@ -17,7 +24,14 @@ export default function Tools() {
     ? localStorage.getItem(TOOLS_LAST_CALC_KEY)
     : null;
   const calc = (calcFromUrl || calcFromStorage || "average-down") as ToolTab;
-  const validCalc = ["average-down", "dividend", "basic-financials", "ipo-calendar", "grid-ladder"].includes(calc)
+  const validCalc = [
+    "average-down",
+    "dividend",
+    "dividend-tracker",
+    "basic-financials",
+    "ipo-calendar",
+    "grid-ladder",
+  ].includes(calc)
     ? calc
     : "average-down";
 
@@ -92,6 +106,29 @@ export default function Tools() {
         </button>
         <button
           type="button"
+          onClick={() => setCalc("dividend-tracker")}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            padding: "10px 16px",
+            borderRadius: "8px",
+            border: validCalc === "dividend-tracker" ? "1px solid var(--accent)" : "1px solid var(--border-color)",
+            backgroundColor:
+              validCalc === "dividend-tracker"
+                ? "color-mix(in srgb, var(--accent) 14%, transparent)"
+                : "var(--bg-secondary)",
+            color: validCalc === "dividend-tracker" ? "var(--accent)" : "var(--text-secondary)",
+            fontSize: "14px",
+            fontWeight: "600",
+            cursor: "pointer",
+          }}
+        >
+          <Coins size={18} />
+          Dividend Tracker
+        </button>
+        <button
+          type="button"
           onClick={() => setCalc("basic-financials")}
           style={{
             display: "flex",
@@ -157,6 +194,7 @@ export default function Tools() {
       <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
         {validCalc === "average-down" && <AverageDownCalculator />}
         {validCalc === "dividend" && <DividendCalculator />}
+        {validCalc === "dividend-tracker" && <DividendTracker />}
         {validCalc === "basic-financials" && <BasicFinancials />}
         {validCalc === "ipo-calendar" && <IpoCalendar />}
         {validCalc === "grid-ladder" && <GridLadderTool />}

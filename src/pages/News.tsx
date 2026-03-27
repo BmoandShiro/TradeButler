@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useNavigate } from "react-router-dom";
 import { 
@@ -22,7 +23,9 @@ import {
   FolderPlus,
   Folder,
   Trash2,
-  Settings
+  Settings,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { formatDistanceToNow, parseISO, format } from "date-fns";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
@@ -81,6 +84,51 @@ const NEWS_WATCHLISTS_KEY = "tradebutler_news_watchlists";
 const NEWS_SHOW_SENTIMENT_KEY = "tradebutler_news_show_sentiment";
 const NEWS_SHOW_PRICE_CHANGE_KEY = "tradebutler_news_show_price_change";
 const NEWS_CALENDAR_CACHE_KEY = "tradebutler_news_calendar_cache";
+const NEWS_READ_IDS_KEY = "tradebutler_news_read_ids";
+const NEWS_ITEMS_PER_PAGE_KEY = "tradebutler_news_items_per_page";
+const NEWS_EVENTS_PER_PAGE_KEY = "tradebutler_news_events_per_page";
+const NEWS_READ_IDS_MAX_KEY = "tradebutler_news_read_ids_max";
+const NEWS_CALENDAR_CACHE_MAX_EVENTS_KEY = "tradebutler_news_calendar_cache_max_events";
+
+const DEFAULT_NEWS_ITEMS_PER_PAGE = 15;
+const DEFAULT_EVENTS_PER_PAGE = 10;
+const DEFAULT_READ_IDS_MAX = 5000;
+const DEFAULT_CALENDAR_CACHE_MAX_EVENTS = 250;
+
+const NEWS_ITEMS_PER_PAGE_OPTIONS = [5, 10, 15, 20, 25, 50] as const;
+const EVENTS_PER_PAGE_OPTIONS = [3, 5, 10, 15, 20, 25, 30] as const;
+const READ_IDS_MAX_OPTIONS = [500, 1000, 2500, 5000, 10000, 25000] as const;
+const CALENDAR_CACHE_MAX_OPTIONS = [50, 100, 250, 500, 1000, 2000] as const;
+
+function clampInt(value: string | null, fallback: number, min: number, max: number): number {
+  if (value == null || value === "") return fallback;
+  const n = parseInt(value, 10);
+  if (Number.isNaN(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function parseAllowedInt(
+  raw: string | null,
+  allowed: readonly number[],
+  fallback: number
+): number {
+  const n = raw == null || raw === "" ? fallback : parseInt(raw, 10);
+  if (Number.isNaN(n)) return fallback;
+  return allowed.includes(n) ? n : fallback;
+}
+
+function loadReadIdsFromStorage(maxAllowed: number): string[] {
+  try {
+    const raw = localStorage.getItem(NEWS_READ_IDS_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw) as unknown;
+    const list = Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : [];
+    return list.length > maxAllowed ? list.slice(-maxAllowed) : list;
+  } catch {
+    return [];
+  }
+}
+
 const NEWS_CACHE_DURATION_MS = 60 * 60 * 1000; // 1 hour
 
 interface CachedNewsCalendarData {
@@ -103,11 +151,13 @@ const getNewsCalendarCache = (symbolsHash: string): CachedNewsCalendarData | nul
   }
 };
 
-const setNewsCalendarCache = (symbolsHash: string, events: CalendarEvent[]) => {
+const setNewsCalendarCache = (symbolsHash: string, events: CalendarEvent[], maxEvents: number) => {
+  const trimmed =
+    events.length > maxEvents ? events.slice(0, Math.max(0, maxEvents)) : events;
   const data: CachedNewsCalendarData = {
     timestamp: Date.now(),
     symbolsHash,
-    events,
+    events: trimmed,
   };
   localStorage.setItem(NEWS_CALENDAR_CACHE_KEY, JSON.stringify(data));
 };
@@ -179,11 +229,45 @@ export default function News() {
   const [newWatchlistName, setNewWatchlistName] = useState("");
   const [selectedWatchlist, setSelectedWatchlist] = useState<string | null>(null);
   const [filterSentiment, setFilterSentiment] = useState<"all" | "positive" | "negative" | "neutral">("all");
+  const [readIdsMax, setReadIdsMax] = useState(() =>
+    parseAllowedInt(localStorage.getItem(NEWS_READ_IDS_MAX_KEY), [...READ_IDS_MAX_OPTIONS], DEFAULT_READ_IDS_MAX)
+  );
+  const [readNewsIds, setReadNewsIds] = useState<string[]>(() =>
+    loadReadIdsFromStorage(
+      parseAllowedInt(localStorage.getItem(NEWS_READ_IDS_MAX_KEY), [...READ_IDS_MAX_OPTIONS], DEFAULT_READ_IDS_MAX)
+    )
+  );
+  const [newsItemsPerPage, setNewsItemsPerPage] = useState(() =>
+    parseAllowedInt(localStorage.getItem(NEWS_ITEMS_PER_PAGE_KEY), [...NEWS_ITEMS_PER_PAGE_OPTIONS], DEFAULT_NEWS_ITEMS_PER_PAGE)
+  );
+  const [eventsPerPage, setEventsPerPage] = useState(() =>
+    parseAllowedInt(localStorage.getItem(NEWS_EVENTS_PER_PAGE_KEY), [...EVENTS_PER_PAGE_OPTIONS], DEFAULT_EVENTS_PER_PAGE)
+  );
+  const [calendarCacheMaxEvents, setCalendarCacheMaxEvents] = useState(() =>
+    parseAllowedInt(
+      localStorage.getItem(NEWS_CALENDAR_CACHE_MAX_EVENTS_KEY),
+      [...CALENDAR_CACHE_MAX_OPTIONS],
+      DEFAULT_CALENDAR_CACHE_MAX_EVENTS
+    )
+  );
+  const [newsPage, setNewsPage] = useState(1);
+  const [eventsPage, setEventsPage] = useState(1);
+  const [selectedNewsIds, setSelectedNewsIds] = useState<string[]>([]);
+  const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
 
   // Subscribe to data mode changes
   useEffect(() => {
     return subscribeToDataMode(setDataMode);
   }, []);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowSettings(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showSettings]);
 
   // Get all symbols to use for news
   const getAllSymbols = useCallback(() => {
@@ -303,8 +387,11 @@ export default function News() {
       const cachedCalendar = getNewsCalendarCache(symbolsHash);
       
       if (cachedCalendar) {
-        // Use cached calendar events
-        setCalendarEvents(cachedCalendar.events);
+        // Use cached calendar events (trim to current cap)
+        const ev = cachedCalendar.events;
+        setCalendarEvents(
+          ev.length > calendarCacheMaxEvents ? ev.slice(0, calendarCacheMaxEvents) : ev
+        );
         console.log("Using cached calendar events (cache age:", Math.round((Date.now() - cachedCalendar.timestamp) / 60000), "minutes)");
       } else {
         // Fetch fresh calendar events
@@ -352,10 +439,12 @@ export default function News() {
         
         // Deduplicate events, preferring Finnhub data
         const allEvents = deduplicateCalendarEvents(finnhubCalendarEvents, yahooEvents);
-        setCalendarEvents(allEvents);
-        
-        // Cache the calendar events
-        setNewsCalendarCache(symbolsHash, allEvents);
+        const eventsForUi =
+          allEvents.length > calendarCacheMaxEvents ? allEvents.slice(0, calendarCacheMaxEvents) : allEvents;
+        setCalendarEvents(eventsForUi);
+
+        // Cache the calendar events (trimmed for localStorage size)
+        setNewsCalendarCache(symbolsHash, allEvents, calendarCacheMaxEvents);
         console.log("Fetched and cached calendar events for", symbols.length, "symbols");
       }
       
@@ -371,7 +460,7 @@ export default function News() {
     } finally {
       setIsLoading(false);
     }
-  }, [getAllSymbols, fetchPriceData, showPriceChange]);
+  }, [getAllSymbols, fetchPriceData, showPriceChange, calendarCacheMaxEvents]);
 
   // Initial fetch and when symbols change
   useEffect(() => {
@@ -424,6 +513,30 @@ export default function News() {
   useEffect(() => {
     localStorage.setItem(NEWS_SHOW_PRICE_CHANGE_KEY, JSON.stringify(showPriceChange));
   }, [showPriceChange]);
+
+  useEffect(() => {
+    localStorage.setItem(NEWS_READ_IDS_KEY, JSON.stringify(readNewsIds));
+  }, [readNewsIds]);
+
+  useEffect(() => {
+    setReadNewsIds((prev) => (prev.length > readIdsMax ? prev.slice(-readIdsMax) : prev));
+  }, [readIdsMax]);
+
+  useEffect(() => {
+    localStorage.setItem(NEWS_READ_IDS_MAX_KEY, String(readIdsMax));
+  }, [readIdsMax]);
+
+  useEffect(() => {
+    localStorage.setItem(NEWS_ITEMS_PER_PAGE_KEY, String(newsItemsPerPage));
+  }, [newsItemsPerPage]);
+
+  useEffect(() => {
+    localStorage.setItem(NEWS_EVENTS_PER_PAGE_KEY, String(eventsPerPage));
+  }, [eventsPerPage]);
+
+  useEffect(() => {
+    localStorage.setItem(NEWS_CALENDAR_CACHE_MAX_EVENTS_KEY, String(calendarCacheMaxEvents));
+  }, [calendarCacheMaxEvents]);
 
   // Analyze sentiment of a news title
   const analyzeSentiment = (title: string): "positive" | "negative" | "neutral" => {
@@ -517,6 +630,105 @@ export default function News() {
         item.source.toLowerCase().includes(query)
       );
     });
+
+  const newsTotalPages = Math.max(1, Math.ceil(filteredNews.length / newsItemsPerPage));
+  const safeNewsPage = Math.min(newsPage, newsTotalPages);
+  const paginatedNews = filteredNews.slice(
+    (safeNewsPage - 1) * newsItemsPerPage,
+    safeNewsPage * newsItemsPerPage
+  );
+
+  const eventsTotalPages = Math.max(1, Math.ceil(calendarEvents.length / eventsPerPage));
+  const safeEventsPage = Math.min(eventsPage, eventsTotalPages);
+  const paginatedCalendarEvents = calendarEvents.slice(
+    (safeEventsPage - 1) * eventsPerPage,
+    safeEventsPage * eventsPerPage
+  );
+
+  useEffect(() => {
+    setNewsPage(1);
+  }, [searchQuery, filterSymbol, filterSentiment]);
+
+  useEffect(() => {
+    setSelectedNewsIds([]);
+  }, [searchQuery, filterSymbol, filterSentiment]);
+
+  useEffect(() => {
+    if (newsPage > newsTotalPages) setNewsPage(newsTotalPages);
+  }, [newsPage, newsTotalPages]);
+
+  useEffect(() => {
+    setNewsPage(1);
+  }, [newsItemsPerPage]);
+
+  useEffect(() => {
+    setEventsPage(1);
+  }, [eventsPerPage]);
+
+  useEffect(() => {
+    setEventsPage(1);
+  }, [calendarEvents.length]);
+
+  useEffect(() => {
+    if (eventsPage > eventsTotalPages) setEventsPage(eventsTotalPages);
+  }, [eventsPage, eventsTotalPages]);
+
+  const isNewsRead = (id: string) => readNewsIds.includes(id);
+
+  const filteredNewsIds = filteredNews.map((n) => n.id);
+  const selectedInFilteredCount = selectedNewsIds.filter((id) => filteredNewsIds.includes(id)).length;
+  const allFilteredSelected = filteredNews.length > 0 && selectedInFilteredCount === filteredNews.length;
+  const someFilteredSelected = selectedInFilteredCount > 0 && !allFilteredSelected;
+
+  useEffect(() => {
+    const el = selectAllCheckboxRef.current;
+    if (el) el.indeterminate = someFilteredSelected;
+  }, [someFilteredSelected]);
+
+  const toggleNewsSelected = (id: string) => {
+    setSelectedNewsIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const toggleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      setSelectedNewsIds((prev) => prev.filter((id) => !filteredNewsIds.includes(id)));
+    } else {
+      setSelectedNewsIds((prev) => {
+        const s = new Set(prev);
+        filteredNewsIds.forEach((id) => s.add(id));
+        return [...s];
+      });
+    }
+  };
+
+  const markSelectedAsRead = () => {
+    if (selectedNewsIds.length === 0) return;
+    setReadNewsIds((prev) => {
+      const s = new Set(prev);
+      selectedNewsIds.forEach((id) => s.add(id));
+      return [...s];
+    });
+  };
+
+  const markSelectedAsUnread = () => {
+    if (selectedNewsIds.length === 0) return;
+    setReadNewsIds((prev) => prev.filter((id) => !selectedNewsIds.includes(id)));
+  };
+
+  const markAllFilteredAsRead = () => {
+    if (filteredNews.length === 0) return;
+    setReadNewsIds((prev) => {
+      const s = new Set(prev);
+      filteredNews.forEach((n) => s.add(n.id));
+      return [...s];
+    });
+  };
+
+  const markAllFilteredAsUnread = () => {
+    if (filteredNews.length === 0) return;
+    const drop = new Set(filteredNews.map((n) => n.id));
+    setReadNewsIds((prev) => prev.filter((id) => !drop.has(id)));
+  };
 
   // Get unique symbols from current news
   const newsSymbols = [...new Set(news.map(item => item.symbol))];
@@ -617,16 +829,17 @@ export default function News() {
         <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
           {/* Settings button */}
           <button
-            onClick={() => setShowSettings(!showSettings)}
+            type="button"
+            onClick={() => setShowSettings(true)}
             style={{
               display: "flex",
               alignItems: "center",
               gap: "6px",
               padding: "8px 12px",
               borderRadius: "8px",
-              border: `1px solid ${showSettings ? "var(--accent)" : "var(--border-color)"}`,
-              backgroundColor: showSettings ? "rgba(var(--accent-rgb), 0.1)" : "transparent",
-              color: showSettings ? "var(--accent)" : "var(--text-primary)",
+              border: "1px solid var(--border-color)",
+              backgroundColor: "var(--bg-secondary)",
+              color: "var(--text-primary)",
               fontSize: "14px",
               cursor: "pointer",
             }}
@@ -695,133 +908,6 @@ export default function News() {
           </button>
         </div>
       </div>
-
-      {/* Settings Panel */}
-      {showSettings && (
-        <div style={{
-          backgroundColor: "var(--bg-secondary)",
-          borderRadius: "12px",
-          padding: "20px",
-          marginBottom: "24px",
-          border: "1px solid var(--border-color)",
-        }}>
-          <h3 style={{ 
-            margin: "0 0 16px 0", 
-            fontSize: "16px", 
-            fontWeight: "600",
-            color: "var(--text-primary)"
-          }}>
-            Display Settings
-          </h3>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "16px" }}>
-            {/* Show Sentiment */}
-            <label style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              cursor: "pointer",
-              padding: "10px 14px",
-              borderRadius: "8px",
-              backgroundColor: showSentiment ? "rgba(var(--accent-rgb), 0.1)" : "var(--bg-primary)",
-              border: `1px solid ${showSentiment ? "var(--accent)" : "var(--border-color)"}`,
-            }}>
-              <input
-                type="checkbox"
-                checked={showSentiment}
-                onChange={(e) => setShowSentiment(e.target.checked)}
-                style={{ display: "none" }}
-              />
-              <div style={{
-                width: "20px",
-                height: "20px",
-                borderRadius: "4px",
-                border: `2px solid ${showSentiment ? "var(--accent)" : "var(--border-color)"}`,
-                backgroundColor: showSentiment ? "var(--accent)" : "transparent",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}>
-                {showSentiment && <Check size={14} color="var(--bg-primary)" />}
-              </div>
-              <span style={{ fontSize: "14px", color: "var(--text-primary)" }}>
-                Show Sentiment Indicators
-              </span>
-            </label>
-
-            {/* Show Price Change */}
-            <label style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              cursor: "pointer",
-              padding: "10px 14px",
-              borderRadius: "8px",
-              backgroundColor: showPriceChange ? "rgba(var(--accent-rgb), 0.1)" : "var(--bg-primary)",
-              border: `1px solid ${showPriceChange ? "var(--accent)" : "var(--border-color)"}`,
-            }}>
-              <input
-                type="checkbox"
-                checked={showPriceChange}
-                onChange={(e) => setShowPriceChange(e.target.checked)}
-                style={{ display: "none" }}
-              />
-              <div style={{
-                width: "20px",
-                height: "20px",
-                borderRadius: "4px",
-                border: `2px solid ${showPriceChange ? "var(--accent)" : "var(--border-color)"}`,
-                backgroundColor: showPriceChange ? "var(--accent)" : "transparent",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}>
-                {showPriceChange && <Check size={14} color="var(--bg-primary)" />}
-              </div>
-              <span style={{ fontSize: "14px", color: "var(--text-primary)" }}>
-                Show Price Data
-              </span>
-            </label>
-          </div>
-
-          {/* Muted Symbols */}
-          {mutedSymbols.length > 0 && (
-            <div style={{ marginTop: "16px" }}>
-              <p style={{ 
-                fontSize: "14px", 
-                color: "var(--text-secondary)", 
-                marginBottom: "8px" 
-              }}>
-                Muted Symbols:
-              </p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                {mutedSymbols.map(symbol => (
-                  <span
-                    key={symbol}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
-                      padding: "6px 12px",
-                      borderRadius: "20px",
-                      backgroundColor: "var(--bg-tertiary)",
-                      color: "var(--text-secondary)",
-                      fontSize: "13px",
-                    }}
-                  >
-                    <VolumeX size={12} />
-                    {symbol}
-                    <X
-                      size={14}
-                      style={{ cursor: "pointer" }}
-                      onClick={() => toggleMuteSymbol(symbol)}
-                    />
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Symbol Management */}
       <div style={{
@@ -1346,6 +1432,118 @@ export default function News() {
             )}
           </div>
 
+          {filteredNews.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: "10px 16px",
+                marginBottom: "12px",
+                padding: "12px 14px",
+                backgroundColor: "var(--bg-secondary)",
+                borderRadius: "10px",
+                border: "1px solid var(--border-color)",
+              }}
+            >
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  color: "var(--text-primary)",
+                  userSelect: "none",
+                }}
+              >
+                <input
+                  ref={selectAllCheckboxRef}
+                  type="checkbox"
+                  checked={allFilteredSelected}
+                  onChange={toggleSelectAllFiltered}
+                  style={{ width: "18px", height: "18px", cursor: "pointer", accentColor: "var(--accent)" }}
+                />
+                Select all
+              </label>
+              <span style={{ color: "var(--border-color)", fontSize: "12px" }} aria-hidden>
+                |
+              </span>
+              <button
+                type="button"
+                onClick={markSelectedAsRead}
+                disabled={selectedNewsIds.length === 0}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                  backgroundColor: selectedNewsIds.length === 0 ? "var(--bg-tertiary)" : "var(--bg-primary)",
+                  color: "var(--text-primary)",
+                  fontSize: "13px",
+                  cursor: selectedNewsIds.length === 0 ? "not-allowed" : "pointer",
+                  opacity: selectedNewsIds.length === 0 ? 0.55 : 1,
+                }}
+              >
+                Mark selected as read
+              </button>
+              <button
+                type="button"
+                onClick={markSelectedAsUnread}
+                disabled={selectedNewsIds.length === 0}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                  backgroundColor: selectedNewsIds.length === 0 ? "var(--bg-tertiary)" : "var(--bg-primary)",
+                  color: "var(--text-primary)",
+                  fontSize: "13px",
+                  cursor: selectedNewsIds.length === 0 ? "not-allowed" : "pointer",
+                  opacity: selectedNewsIds.length === 0 ? 0.55 : 1,
+                }}
+              >
+                Mark selected as unread
+              </button>
+              <span style={{ color: "var(--border-color)", fontSize: "12px" }} aria-hidden>
+                |
+              </span>
+              <button
+                type="button"
+                onClick={markAllFilteredAsRead}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                  backgroundColor: "var(--bg-primary)",
+                  color: "var(--text-primary)",
+                  fontSize: "13px",
+                  cursor: "pointer",
+                }}
+              >
+                Mark all as read
+              </button>
+              <button
+                type="button"
+                onClick={markAllFilteredAsUnread}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                  backgroundColor: "var(--bg-primary)",
+                  color: "var(--text-primary)",
+                  fontSize: "13px",
+                  cursor: "pointer",
+                }}
+              >
+                Mark all as unread
+              </button>
+              {selectedInFilteredCount > 0 && (
+                <span style={{ fontSize: "12px", color: "var(--text-secondary)", marginLeft: "auto" }}>
+                  {selectedInFilteredCount} selected
+                </span>
+              )}
+            </div>
+          )}
+
           {/* News cards */}
           <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
             {filteredNews.length === 0 && !isLoading && (
@@ -1365,17 +1563,20 @@ export default function News() {
               </div>
             )}
 
-            {filteredNews.map((item) => (
+            {paginatedNews.map((item) => {
+              const read = isNewsRead(item.id);
+              return (
               <div
                 key={item.id}
                 style={{
                   display: "block",
                   padding: "16px 20px",
-                  backgroundColor: "var(--bg-secondary)",
+                  backgroundColor: read ? "var(--bg-secondary)" : "color-mix(in srgb, var(--bg-secondary) 92%, var(--accent))",
                   borderRadius: "12px",
                   border: "1px solid var(--border-color)",
                   transition: "all 0.2s ease",
                   borderLeft: showSentiment ? `4px solid ${getSentimentColor(item.sentiment)}` : undefined,
+                  opacity: read ? 0.95 : 1,
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.borderColor = "var(--accent)";
@@ -1392,7 +1593,32 @@ export default function News() {
                   alignItems: "flex-start",
                   gap: "12px"
                 }}>
-                  <div style={{ flex: 1 }}>
+                  <label
+                    style={{
+                      flexShrink: 0,
+                      paddingTop: "2px",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "flex-start",
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedNewsIds.includes(item.id)}
+                      onChange={() => toggleNewsSelected(item.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        width: "18px",
+                        height: "18px",
+                        cursor: "pointer",
+                        accentColor: "var(--accent)",
+                        marginTop: "2px",
+                      }}
+                      aria-label={`Select ${item.title.slice(0, 40)}`}
+                    />
+                  </label>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ 
                       display: "flex", 
                       alignItems: "center", 
@@ -1458,7 +1684,7 @@ export default function News() {
                     >
                       <h3 style={{ 
                         fontSize: "15px", 
-                        fontWeight: "500", 
+                        fontWeight: read ? "500" : "600", 
                         color: "var(--text-primary)",
                         margin: 0,
                         lineHeight: "1.4",
@@ -1470,7 +1696,8 @@ export default function News() {
                       display: "flex",
                       alignItems: "center",
                       gap: "12px",
-                      marginTop: "8px" 
+                      marginTop: "8px",
+                      flexWrap: "wrap",
                     }}>
                       <p style={{ 
                         fontSize: "12px", 
@@ -1536,8 +1763,79 @@ export default function News() {
                   </div>
                 </div>
               </div>
-            ))}
+            );
+            })}
           </div>
+
+          {filteredNews.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+                marginTop: "16px",
+                padding: "12px 16px",
+                backgroundColor: "var(--bg-secondary)",
+                borderRadius: "10px",
+                border: "1px solid var(--border-color)",
+              }}
+            >
+              <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                {(safeNewsPage - 1) * newsItemsPerPage + 1}
+                –
+                {Math.min(safeNewsPage * newsItemsPerPage, filteredNews.length)} of {filteredNews.length}
+              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <button
+                  type="button"
+                  onClick={() => setNewsPage((p) => Math.max(1, p - 1))}
+                  disabled={safeNewsPage <= 1}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "8px 12px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    backgroundColor: "var(--bg-primary)",
+                    color: "var(--text-primary)",
+                    fontSize: "13px",
+                    cursor: safeNewsPage <= 1 ? "not-allowed" : "pointer",
+                    opacity: safeNewsPage <= 1 ? 0.5 : 1,
+                  }}
+                >
+                  <ChevronLeft size={16} />
+                  Previous
+                </button>
+                <span style={{ fontSize: "13px", color: "var(--text-secondary)", minWidth: "100px", textAlign: "center" }}>
+                  Page {safeNewsPage} of {newsTotalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setNewsPage((p) => Math.min(newsTotalPages, p + 1))}
+                  disabled={safeNewsPage >= newsTotalPages}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "8px 12px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    backgroundColor: "var(--bg-primary)",
+                    color: "var(--text-primary)",
+                    fontSize: "13px",
+                    cursor: safeNewsPage >= newsTotalPages ? "not-allowed" : "pointer",
+                    opacity: safeNewsPage >= newsTotalPages ? 0.5 : 1,
+                  }}
+                >
+                  Next
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Sidebar - Calendar Events */}
@@ -1599,10 +1897,11 @@ export default function News() {
                   No upcoming events
                 </p>
               ) : (
+                <>
                 <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                  {calendarEvents.slice(0, 10).map((event, idx) => (
+                  {paginatedCalendarEvents.map((event, idx) => (
                     <div
-                      key={`${event.date}-${event.symbol}-${event.event_type}-${idx}`}
+                      key={`${event.date}-${event.symbol}-${event.event_type}-${idx}-${safeEventsPage}`}
                       style={{
                         padding: "12px",
                         backgroundColor: "var(--bg-primary)",
@@ -1669,6 +1968,73 @@ export default function News() {
                     </div>
                   ))}
                 </div>
+                {eventsTotalPages > 1 && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "8px",
+                      marginTop: "16px",
+                      paddingTop: "16px",
+                      borderTop: "1px solid var(--border-color)",
+                    }}
+                  >
+                    <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                      {(safeEventsPage - 1) * eventsPerPage + 1}–
+                      {Math.min(safeEventsPage * eventsPerPage, calendarEvents.length)} of {calendarEvents.length}
+                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <button
+                        type="button"
+                        onClick={() => setEventsPage((p) => Math.max(1, p - 1))}
+                        disabled={safeEventsPage <= 1}
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: "6px",
+                          border: "1px solid var(--border-color)",
+                          backgroundColor: "var(--bg-primary)",
+                          color: "var(--text-primary)",
+                          fontSize: "12px",
+                          cursor: safeEventsPage <= 1 ? "not-allowed" : "pointer",
+                          opacity: safeEventsPage <= 1 ? 0.5 : 1,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "4px",
+                        }}
+                      >
+                        <ChevronLeft size={14} />
+                        Prev
+                      </button>
+                      <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                        {safeEventsPage}/{eventsTotalPages}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setEventsPage((p) => Math.min(eventsTotalPages, p + 1))}
+                        disabled={safeEventsPage >= eventsTotalPages}
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: "6px",
+                          border: "1px solid var(--border-color)",
+                          backgroundColor: "var(--bg-primary)",
+                          color: "var(--text-primary)",
+                          fontSize: "12px",
+                          cursor: safeEventsPage >= eventsTotalPages ? "not-allowed" : "pointer",
+                          opacity: safeEventsPage >= eventsTotalPages ? 0.5 : 1,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "4px",
+                        }}
+                      >
+                        Next
+                        <ChevronRight size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+                </>
               )}
             </div>
           )}
@@ -1685,6 +2051,369 @@ export default function News() {
           animation: spin 1s linear infinite;
         }
       `}</style>
+
+      {showSettings &&
+        createPortal(
+          <div
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: "rgba(0, 0, 0, 0.7)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 1000,
+            }}
+            onClick={() => setShowSettings(false)}
+            role="presentation"
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="news-settings-title"
+              style={{
+                backgroundColor: "var(--bg-secondary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "12px",
+                padding: "24px",
+                maxWidth: "520px",
+                maxHeight: "80vh",
+                overflow: "auto",
+                width: "90%",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "20px",
+                }}
+              >
+                <h2
+                  id="news-settings-title"
+                  style={{
+                    fontSize: "20px",
+                    fontWeight: "600",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    margin: 0,
+                    color: "var(--text-primary)",
+                  }}
+                >
+                  <Settings size={20} aria-hidden />
+                  News settings
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowSettings(false)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--text-secondary)",
+                    cursor: "pointer",
+                    fontSize: "24px",
+                    padding: "0",
+                    width: "32px",
+                    height: "32px",
+                    lineHeight: 1,
+                  }}
+                  aria-label="Close"
+                >
+                  ×
+                </button>
+              </div>
+
+              <h3
+                style={{
+                  margin: "0 0 16px 0",
+                  fontSize: "16px",
+                  fontWeight: "600",
+                  color: "var(--text-primary)",
+                }}
+              >
+                Display
+              </h3>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "16px" }}>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    cursor: "pointer",
+                    padding: "10px 14px",
+                    borderRadius: "8px",
+                    backgroundColor: showSentiment ? "rgba(var(--accent-rgb), 0.1)" : "var(--bg-primary)",
+                    border: `1px solid ${showSentiment ? "var(--accent)" : "var(--border-color)"}`,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showSentiment}
+                    onChange={(e) => setShowSentiment(e.target.checked)}
+                    style={{ display: "none" }}
+                  />
+                  <div
+                    style={{
+                      width: "20px",
+                      height: "20px",
+                      borderRadius: "4px",
+                      border: `2px solid ${showSentiment ? "var(--accent)" : "var(--border-color)"}`,
+                      backgroundColor: showSentiment ? "var(--accent)" : "transparent",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {showSentiment && <Check size={14} color="var(--bg-primary)" />}
+                  </div>
+                  <span style={{ fontSize: "14px", color: "var(--text-primary)" }}>
+                    Show sentiment indicators
+                  </span>
+                </label>
+
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    cursor: "pointer",
+                    padding: "10px 14px",
+                    borderRadius: "8px",
+                    backgroundColor: showPriceChange ? "rgba(var(--accent-rgb), 0.1)" : "var(--bg-primary)",
+                    border: `1px solid ${showPriceChange ? "var(--accent)" : "var(--border-color)"}`,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showPriceChange}
+                    onChange={(e) => setShowPriceChange(e.target.checked)}
+                    style={{ display: "none" }}
+                  />
+                  <div
+                    style={{
+                      width: "20px",
+                      height: "20px",
+                      borderRadius: "4px",
+                      border: `2px solid ${showPriceChange ? "var(--accent)" : "var(--border-color)"}`,
+                      backgroundColor: showPriceChange ? "var(--accent)" : "transparent",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {showPriceChange && <Check size={14} color="var(--bg-primary)" />}
+                  </div>
+                  <span style={{ fontSize: "14px", color: "var(--text-primary)" }}>
+                    Show price data
+                  </span>
+                </label>
+              </div>
+
+              <h3
+                style={{
+                  margin: "24px 0 12px 0",
+                  fontSize: "16px",
+                  fontWeight: "600",
+                  color: "var(--text-primary)",
+                }}
+              >
+                Pagination
+              </h3>
+              <p style={{ margin: "0 0 12px 0", fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+                How many items appear on each page in the main news list and in the upcoming events sidebar.
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: "14px", maxWidth: "100%" }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>News articles per page</span>
+                  <select
+                    value={newsItemsPerPage}
+                    onChange={(e) => setNewsItemsPerPage(parseInt(e.target.value, 10))}
+                    style={{
+                      padding: "10px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      backgroundColor: "var(--bg-primary)",
+                      color: "var(--text-primary)",
+                      fontSize: "14px",
+                      cursor: "pointer",
+                      maxWidth: "280px",
+                    }}
+                  >
+                    {NEWS_ITEMS_PER_PAGE_OPTIONS.map((n) => (
+                      <option key={n} value={n}>
+                        {n} per page
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Calendar events per page</span>
+                  <select
+                    value={eventsPerPage}
+                    onChange={(e) => setEventsPerPage(parseInt(e.target.value, 10))}
+                    style={{
+                      padding: "10px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      backgroundColor: "var(--bg-primary)",
+                      color: "var(--text-primary)",
+                      fontSize: "14px",
+                      cursor: "pointer",
+                      maxWidth: "280px",
+                    }}
+                  >
+                    {EVENTS_PER_PAGE_OPTIONS.map((n) => (
+                      <option key={n} value={n}>
+                        {n} per page
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <h3
+                style={{
+                  margin: "24px 0 12px 0",
+                  fontSize: "16px",
+                  fontWeight: "600",
+                  color: "var(--text-primary)",
+                }}
+              >
+                Local storage
+              </h3>
+              <p style={{ margin: "0 0 12px 0", fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+                TradeButler saves a few News preferences in your browser. The largest piece is the list of article IDs
+                you have marked as read (capped so it does not grow forever). The calendar cache stores upcoming events
+                for faster loads; you can limit how many events are kept in that cache.
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: "14px", maxWidth: "100%" }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                    Max read article IDs stored
+                  </span>
+                  <select
+                    value={readIdsMax}
+                    onChange={(e) => setReadIdsMax(parseInt(e.target.value, 10))}
+                    style={{
+                      padding: "10px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      backgroundColor: "var(--bg-primary)",
+                      color: "var(--text-primary)",
+                      fontSize: "14px",
+                      cursor: "pointer",
+                      maxWidth: "320px",
+                    }}
+                  >
+                    {READ_IDS_MAX_OPTIONS.map((n) => (
+                      <option key={n} value={n}>
+                        {n.toLocaleString()} (oldest dropped when over limit)
+                      </option>
+                    ))}
+                  </select>
+                  <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                    Currently storing {readNewsIds.length.toLocaleString()} ID
+                    {readNewsIds.length === 1 ? "" : "s"}.
+                  </span>
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                    Max calendar events in cache (per symbol set)
+                  </span>
+                  <select
+                    value={calendarCacheMaxEvents}
+                    onChange={(e) => setCalendarCacheMaxEvents(parseInt(e.target.value, 10))}
+                    style={{
+                      padding: "10px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      backgroundColor: "var(--bg-primary)",
+                      color: "var(--text-primary)",
+                      fontSize: "14px",
+                      cursor: "pointer",
+                      maxWidth: "320px",
+                    }}
+                  >
+                    {CALENDAR_CACHE_MAX_OPTIONS.map((n) => (
+                      <option key={n} value={n}>
+                        {n.toLocaleString()} events (earliest in list kept)
+                      </option>
+                    ))}
+                  </select>
+                  <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                    Applies on the next news refresh. Other saved keys: watched symbols, filters, watchlists, and display
+                    toggles (small).
+                  </span>
+                </label>
+              </div>
+
+              {mutedSymbols.length > 0 && (
+                <div style={{ marginTop: "20px" }}>
+                  <p
+                    style={{
+                      fontSize: "14px",
+                      color: "var(--text-secondary)",
+                      marginBottom: "8px",
+                    }}
+                  >
+                    Muted symbols
+                  </p>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                    {mutedSymbols.map((symbol) => (
+                      <span
+                        key={symbol}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px",
+                          padding: "6px 12px",
+                          borderRadius: "20px",
+                          backgroundColor: "var(--bg-tertiary)",
+                          color: "var(--text-secondary)",
+                          fontSize: "13px",
+                        }}
+                      >
+                        <VolumeX size={12} />
+                        {symbol}
+                        <X
+                          size={14}
+                          style={{ cursor: "pointer" }}
+                          onClick={() => toggleMuteSymbol(symbol)}
+                        />
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ marginTop: "24px", display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  onClick={() => setShowSettings(false)}
+                  style={{
+                    padding: "10px 18px",
+                    borderRadius: "8px",
+                    border: "none",
+                    backgroundColor: "var(--accent)",
+                    color: "var(--bg-primary)",
+                    fontSize: "14px",
+                    fontWeight: "500",
+                    cursor: "pointer",
+                  }}
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
