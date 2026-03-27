@@ -137,6 +137,51 @@ export interface ForwardDividendEstimate {
   forwardAnnualUsd: number;
 }
 
+/** Monthly / quarterly averages derived from portfolio forward ~12 month run-rate (not payment-calendar cash flow). */
+export function forwardIncomeBreakdown(forwardAnnualUsd: number): {
+  monthly: number;
+  quarterly: number;
+  annual: number;
+} {
+  const a = Number.isFinite(forwardAnnualUsd) && forwardAnnualUsd > 0 ? forwardAnnualUsd : 0;
+  return {
+    monthly: a / 12,
+    quarterly: a / 4,
+    annual: a,
+  };
+}
+
+/** Show all three metrics or one at a time (monthly / quarterly / annual average or run-rate). */
+export type ForwardIncomeDisplayMode = "all" | "monthly" | "quarterly" | "annual";
+
+export const DIVIDEND_TOOL_FORWARD_INCOME_MODE_KEY = "tradebutler_dividend_tool_income_mode";
+
+export const DASHBOARD_DIVIDEND_SHOW_FORWARD_IN_TRACKER_KEY = "tradebutler_dashboard_dividend_show_forward_in_tracker";
+
+export const DASHBOARD_DIVIDEND_TRACKER_INCOME_MODE_KEY = "tradebutler_dashboard_dividend_tracker_income_mode";
+
+export const DASHBOARD_DIVIDEND_INCOME_SECTION_MODE_KEY = "tradebutler_dashboard_dividend_income_section_mode";
+
+export function readForwardIncomeDisplayMode(storageKey: string, fallback: ForwardIncomeDisplayMode = "all"): ForwardIncomeDisplayMode {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (raw === "all" || raw === "monthly" || raw === "quarterly" || raw === "annual") return raw;
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
+
+export function readDashboardShowForwardInTracker(): boolean {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_DIVIDEND_SHOW_FORWARD_IN_TRACKER_KEY);
+    if (raw === "false") return false;
+  } catch {
+    /* ignore */
+  }
+  return true;
+}
+
 /** Step ex-date forward one payment period from frequency (payments/year). */
 export function advanceDividendExDate(d: Date, paymentsPerYear: number): Date {
   const p = paymentsPerYear;

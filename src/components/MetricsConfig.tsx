@@ -323,6 +323,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
           showOpenPositions: true,
           showNews: true,
           showDividendTracker: true,
+          showDividendIncome: false,
         };
       }
     }
@@ -334,6 +335,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
       showOpenPositions: true,
       showNews: true,
       showDividendTracker: true,
+      showDividendIncome: false,
     };
   });
 
@@ -725,6 +727,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
               { id: "showTrades", label: "Trades" },
               { id: "showNews", label: "News Feed" },
               { id: "showDividendTracker", label: "Dividend Tracker" },
+              { id: "showDividendIncome", label: "Dividend income (forward estimates)" },
             ].map((section) => (
               <label
                 key={section.id}

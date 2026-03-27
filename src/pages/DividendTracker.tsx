@@ -17,8 +17,12 @@ import {
   DIVIDEND_TRACKER_PAGE_SIZE_OPTIONS,
   readDividendTrackerPageSize,
   type ForwardDividendEstimate,
+  type ForwardIncomeDisplayMode,
+  readForwardIncomeDisplayMode,
+  DIVIDEND_TOOL_FORWARD_INCOME_MODE_KEY,
 } from "../utils/dividendTrackerData";
 import { DividendTrackerChartsPanel } from "../components/DividendTrackerChartsPanel";
+import DividendForwardIncomeSummary, { ForwardIncomeModeSelect } from "../components/DividendForwardIncomeSummary";
 
 export default function DividendTracker() {
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
@@ -35,10 +39,21 @@ export default function DividendTracker() {
   const [pageSize, setPageSize] = useState<number>(() => readDividendTrackerPageSize());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsRef = useRef<HTMLDivElement | null>(null);
+  const [toolForwardIncomeMode, setToolForwardIncomeMode] = useState<ForwardIncomeDisplayMode>(() =>
+    readForwardIncomeDisplayMode(DIVIDEND_TOOL_FORWARD_INCOME_MODE_KEY)
+  );
 
   const hasApiKey = hasFinnhubApiKey();
 
   useEffect(() => subscribeToDataMode(setDataMode), []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DIVIDEND_TOOL_FORWARD_INCOME_MODE_KEY, toolForwardIncomeMode);
+    } catch {
+      /* ignore */
+    }
+  }, [toolForwardIncomeMode]);
 
   const load = useCallback(async () => {
     const apiKey = getFinnhubApiKey();
@@ -434,6 +449,18 @@ export default function DividendTracker() {
               Past (paid out or historical)
             </span>
           </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px" }}>
+              <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--text-secondary)" }}>FORWARD INCOME</span>
+              <ForwardIncomeModeSelect
+                id="dividend-tool-income-mode"
+                value={toolForwardIncomeMode}
+                onChange={setToolForwardIncomeMode}
+              />
+            </div>
+            <DividendForwardIncomeSummary forwardAnnualUsd={forwardAnnualFiltered} compact={false} mode={toolForwardIncomeMode} />
+          </div>
         </div>
       )}
 
@@ -444,22 +471,6 @@ export default function DividendTracker() {
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: "12px", marginBottom: "12px" }}>
             <h2 style={{ margin: 0, fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>Dividends</h2>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "8px", maxWidth: "min(100%, 480px)" }}>
-              {timeFilter === "future" && forwardAnnualFiltered > 0 && (
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ fontSize: "14px", fontWeight: "600", color: "var(--profit)" }}>
-                    Est. forward ~12 months (latest rate × open shares × payments/year):{" "}
-                    {formatDividendMoney(forwardAnnualFiltered, 2)}
-                  </div>
-                  <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px", lineHeight: 1.4 }}>
-                    Based on the most recent dividend per share in the feed and declared frequency (defaults to quarterly when unknown). Listed payment rows may use the same rate when amounts are missing.
-                  </div>
-                </div>
-              )}
-              {timeFilter === "future" && forwardAnnualFiltered <= 0 && symbolsLoaded.length > 0 && (
-                <span style={{ fontSize: "12px", color: "var(--text-secondary)", textAlign: "right" }}>
-                  Forward annual estimate needs at least one dividend with an amount in the feed for your symbols.
-                </span>
-              )}
               {(timeFilter === "all" || timeFilter === "future") && filteredFutureTotal > 0 && (
                 <span style={{ fontSize: "14px", fontWeight: "600", color: "var(--profit)" }}>
                   {timeFilter === "future"

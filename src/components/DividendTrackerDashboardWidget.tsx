@@ -15,8 +15,10 @@ import {
   type DividendTimeFilter,
   type ForwardDividendEstimate,
   readDividendTrackerPageSize,
+  type ForwardIncomeDisplayMode,
 } from "../utils/dividendTrackerData";
 import { DividendTrackerChartsPanel } from "./DividendTrackerChartsPanel";
+import DividendForwardIncomeSummary, { ForwardIncomeModeSelect } from "./DividendForwardIncomeSummary";
 import type { DividendDashboardView } from "../utils/dividendTrackerCharts";
 
 export type DividendTrackerDashboardWidgetProps = {
@@ -25,6 +27,10 @@ export type DividendTrackerDashboardWidgetProps = {
   onPageSizeChange?: (n: number) => void;
   /** Table only, table + charts, or charts only (Dashboard header dropdown). */
   viewMode?: DividendDashboardView;
+  /** Show forward income row with mode dropdown (Dashboard gear). */
+  showForwardIncomePanel?: boolean;
+  forwardIncomeMode?: ForwardIncomeDisplayMode;
+  onForwardIncomeModeChange?: (mode: ForwardIncomeDisplayMode) => void;
   /** Register `load` so parent can trigger refresh (e.g. Dashboard gear menu). */
   onRegisterRefresh?: (refresh: () => void) => void;
 };
@@ -33,6 +39,9 @@ export default function DividendTrackerDashboardWidget({
   pageSize: pageSizeProp,
   onPageSizeChange,
   viewMode = "table",
+  showForwardIncomePanel = true,
+  forwardIncomeMode = "all",
+  onForwardIncomeModeChange,
   onRegisterRefresh,
 }: DividendTrackerDashboardWidgetProps = {}) {
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
@@ -210,6 +219,21 @@ export default function DividendTrackerDashboardWidget({
         {loading && <span style={{ opacity: 0.8 }}>(loading…)</span>}
       </div>
 
+      {showForwardIncomePanel && symbolsLoaded.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px" }}>
+            <span style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)" }}>FORWARD INCOME</span>
+            <ForwardIncomeModeSelect
+              id="dashboard-dividend-tracker-income-mode"
+              value={forwardIncomeMode}
+              onChange={(m) => onForwardIncomeModeChange?.(m)}
+              compact
+            />
+          </div>
+          <DividendForwardIncomeSummary forwardAnnualUsd={forwardAnnualFiltered} compact mode={forwardIncomeMode} />
+        </div>
+      )}
+
       {showChartPanel && <DividendTrackerChartsPanel rows={rows} compact={!chartOnly} />}
 
       {!chartOnly && symbolsLoaded.length > 0 && (
@@ -288,13 +312,6 @@ export default function DividendTrackerDashboardWidget({
         </div>
       )}
 
-      {!chartOnly && timeFilter === "future" && forwardAnnualFiltered > 0 && (
-        <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.4 }}>
-          <span style={{ fontWeight: "600", color: "var(--profit)" }}>
-            Est. forward ~12 mo (latest rate × shares × freq): {formatDividendMoney(forwardAnnualFiltered, 2)}
-          </span>
-        </div>
-      )}
       {!chartOnly && (timeFilter === "all" || timeFilter === "future") && filteredFutureTotal > 0 && (
         <div style={{ fontSize: "11px", fontWeight: "600", color: "var(--profit)" }}>
           {timeFilter === "future"
