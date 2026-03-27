@@ -901,8 +901,22 @@ export default function Journal() {
 
   /** Merge persisted tab scroll map with in-memory ref so unmount / partial saves never wipe other keys (same pattern as Strategies). */
   const saveJournalScrollPositionsMerged = useCallback((storageKey: string) => {
+    const preTabJournalPage = tabScrollPositions.current.get("journal_page") ?? null;
     const merged = new Map<TabType, number>(restoreTabScrollPositions(storageKey));
-    tabScrollPositions.current.forEach((v, k) => merged.set(k, v));
+    tabScrollPositions.current.forEach((v, k) => {
+      // In-memory journal_page can be 0 from a mount/resize scroll event before the user scrolls Overview;
+      // do not let that overwrite a positive value restored from localStorage (see debug H2 journal saves).
+      if (
+        k === "journal_page" &&
+        storageKey === "journal" &&
+        v === 0 &&
+        !journalOverviewScrollUserDirtyRef.current
+      ) {
+        const diskJp = merged.get("journal_page");
+        if (diskJp != null && diskJp > 0) return;
+      }
+      merged.set(k, v);
+    });
     if (storageKey === "journal" && lastJournalOverviewPageScrollRef.current != null) {
       const v = lastJournalOverviewPageScrollRef.current;
       const diskJp = merged.get("journal_page") ?? 0;
@@ -954,6 +968,7 @@ export default function Journal() {
           lastEntry: lastJournalEntryPageScrollRef.current,
           dirtyOv: journalOverviewScrollUserDirtyRef.current,
           dirtyEntry: journalEntryReadScrollUserDirtyRef.current,
+          preTabJournalPage,
         },
         timestamp: Date.now(),
       }),
@@ -2630,7 +2645,10 @@ export default function Journal() {
       lastJournalOverviewPageScrollRef.current = el.scrollTop;
       window.clearTimeout(debounceId);
       debounceId = window.setTimeout(() => {
-        tabScrollPositions.current.set("journal_page", el.scrollTop);
+        const top = el.scrollTop;
+        if (top !== 0 || journalOverviewScrollUserDirtyRef.current) {
+          tabScrollPositions.current.set("journal_page", top);
+        }
         saveJournalScrollPositionsMerged("journal");
       }, 120);
     };
