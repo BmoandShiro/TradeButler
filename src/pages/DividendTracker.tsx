@@ -1,6 +1,18 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { format, startOfDay } from "date-fns";
+import { format, startOfDay, subMonths, addMonths } from "date-fns";
 import { RefreshCw, AlertCircle, Coins, Info, Settings, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
 import { getFinnhubApiKey, hasFinnhubApiKey } from "../utils/finnhubManager";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import {
@@ -16,6 +28,13 @@ import {
   DIVIDEND_TRACKER_PAGE_SIZE_OPTIONS,
   readDividendTrackerPageSize,
 } from "../utils/dividendTrackerData";
+import {
+  readDividendChartRange,
+  DIVIDEND_CHART_RANGE_KEY,
+  buildDividendChartData,
+  parseRangeDate,
+  inferRowDateBounds,
+} from "../utils/dividendTrackerCharts";
 
 export default function DividendTracker() {
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
@@ -30,8 +49,17 @@ export default function DividendTracker() {
   const [pageSize, setPageSize] = useState<number>(() => readDividendTrackerPageSize());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsRef = useRef<HTMLDivElement | null>(null);
+  const [chartRange, setChartRange] = useState(() => readDividendChartRange());
 
   const hasApiKey = hasFinnhubApiKey();
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DIVIDEND_CHART_RANGE_KEY, JSON.stringify(chartRange));
+    } catch {
+      /* ignore */
+    }
+  }, [chartRange]);
 
   useEffect(() => subscribeToDataMode(setDataMode), []);
 
@@ -119,6 +147,24 @@ export default function DividendTracker() {
   useEffect(() => {
     if (page !== safePage) setPage(safePage);
   }, [page, safePage]);
+
+  const chartData = useMemo(() => {
+    const start = parseRangeDate(chartRange.start);
+    const end = parseRangeDate(chartRange.end);
+    if (!start || !end) return { monthly: [] as { month: string; label: string; received: number; expected: number }[], bySymbol: [] as { symbol: string; received: number; expected: number }[] };
+    const day = startOfDay(new Date());
+    return buildDividendChartData(rows, start, end, day);
+  }, [rows, chartRange.start, chartRange.end]);
+
+  const chartSymbolBars = useMemo(() => chartData.bySymbol.slice(0, 24), [chartData.bySymbol]);
+
+  const chartRangeInvalid = useMemo(() => {
+    const start = parseRangeDate(chartRange.start);
+    const end = parseRangeDate(chartRange.end);
+    return !start || !end || start > end;
+  }, [chartRange.start, chartRange.end]);
+
+  const rowChartBounds = useMemo(() => inferRowDateBounds(rows), [rows]);
 
   if (!hasApiKey) {
     return (
@@ -402,6 +448,178 @@ export default function DividendTracker() {
             </span>
           </div>
         </div>
+      )}
+
+      {symbolsLoaded.length > 0 && rows.length > 0 && dataMode !== "sandbox" && (
+        <section style={{ marginBottom: "24px" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: "12px", marginBottom: "14px" }}>
+            <div>
+              <h2 style={{ margin: "0 0 4px 0", fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>Dividend charts</h2>
+              <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", maxWidth: "560px" }}>
+                Estimates use current share counts and API data. Green = received (paid or ex in the past); blue = expected (pay or ex still ahead).
+              </p>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                From
+                <input
+                  type="date"
+                  value={chartRange.start}
+                  onChange={(e) => setChartRange((r) => ({ ...r, start: e.target.value }))}
+                  style={{
+                    padding: "6px 8px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    backgroundColor: "var(--bg-secondary)",
+                    color: "var(--text-primary)",
+                    fontSize: "13px",
+                  }}
+                />
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                To
+                <input
+                  type="date"
+                  value={chartRange.end}
+                  onChange={(e) => setChartRange((r) => ({ ...r, end: e.target.value }))}
+                  style={{
+                    padding: "6px 8px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    backgroundColor: "var(--bg-secondary)",
+                    color: "var(--text-primary)",
+                    fontSize: "13px",
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  const t = startOfDay(new Date());
+                  setChartRange({
+                    start: format(subMonths(t, 12), "yyyy-MM-dd"),
+                    end: format(addMonths(t, 12), "yyyy-MM-dd"),
+                  });
+                }}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border-color)",
+                  backgroundColor: "var(--bg-secondary)",
+                  color: "var(--text-secondary)",
+                  fontSize: "12px",
+                  fontWeight: "600",
+                  cursor: "pointer",
+                }}
+              >
+                Default (±1 year)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (rowChartBounds) setChartRange(rowChartBounds);
+                }}
+                disabled={!rowChartBounds}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border-color)",
+                  backgroundColor: "var(--bg-secondary)",
+                  color: "var(--text-secondary)",
+                  fontSize: "12px",
+                  fontWeight: "600",
+                  cursor: rowChartBounds ? "pointer" : "not-allowed",
+                  opacity: rowChartBounds ? 1 : 0.5,
+                }}
+              >
+                Span all data
+              </button>
+            </div>
+          </div>
+          {chartRangeInvalid && (
+            <div style={{ padding: "10px 14px", borderRadius: "8px", backgroundColor: "rgba(239, 68, 68, 0.1)", color: "#EF4444", fontSize: "13px", marginBottom: "12px" }}>
+              Choose a valid date range (start on or before end).
+            </div>
+          )}
+          {!chartRangeInvalid && chartData.monthly.some((m) => m.received > 0 || m.expected > 0) && (
+            <div style={{ marginBottom: "28px", width: "100%", minHeight: "320px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "16px", marginBottom: "8px", fontSize: "11px", color: "var(--text-secondary)" }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                  <span style={{ width: "12px", height: "3px", borderRadius: "1px", background: "#22c55e" }} />
+                  Received
+                </span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                  <span style={{ width: "12px", height: "3px", borderRadius: "1px", background: "#3b82f6" }} />
+                  Expected
+                </span>
+              </div>
+              <ResponsiveContainer width="100%" height={320}>
+                <LineChart data={chartData.monthly} margin={{ top: 8, right: 12, left: 4, bottom: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" opacity={0.5} />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fontSize: 11, fill: "var(--text-secondary)" }}
+                    interval={0}
+                    angle={-32}
+                    textAnchor="end"
+                    height={72}
+                  />
+                  <YAxis tick={{ fontSize: 11, fill: "var(--text-secondary)" }} tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(1) + "k" : v}`} />
+                  <Tooltip
+                    formatter={(value: number) => formatDividendMoney(value, 2)}
+                    labelStyle={{ color: "var(--text-primary)" }}
+                    contentStyle={{
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                    }}
+                  />
+                  <Line type="monotone" dataKey="received" name="Received" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                  <Line type="monotone" dataKey="expected" name="Expected" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                </LineChart>
+              </ResponsiveContainer>
+              <p style={{ margin: "8px 0 0 0", fontSize: "11px", color: "var(--text-secondary)" }}>Total by calendar month (payment date, or ex-date if pay unknown).</p>
+            </div>
+          )}
+          {!chartRangeInvalid && chartSymbolBars.length > 0 && (
+            <div style={{ width: "100%", minHeight: Math.min(520, 28 + chartSymbolBars.length * 28) }}>
+              <h3 style={{ margin: "0 0 10px 0", fontSize: "15px", fontWeight: "600", color: "var(--text-primary)" }}>By symbol (top {chartSymbolBars.length})</h3>
+              <ResponsiveContainer width="100%" height={Math.min(520, 40 + chartSymbolBars.length * 28)}>
+                <BarChart data={chartSymbolBars} layout="vertical" margin={{ top: 4, right: 12, left: 4, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" opacity={0.5} />
+                  <XAxis type="number" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(1) + "k" : v}`} />
+                  <YAxis type="category" dataKey="symbol" width={56} tick={{ fontSize: 11, fill: "var(--text-primary)" }} />
+                  <Tooltip
+                    formatter={(value: number) => formatDividendMoney(value, 2)}
+                    contentStyle={{
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "8px",
+                    }}
+                  />
+                  <Bar dataKey="received" name="Received" stackId="div" fill="#22c55e" />
+                  <Bar dataKey="expected" name="Expected" stackId="div" fill="#3b82f6" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+          {!chartRangeInvalid &&
+            !chartData.monthly.some((m) => m.received > 0 || m.expected > 0) &&
+            chartSymbolBars.length === 0 && (
+              <div
+                style={{
+                  padding: "20px",
+                  borderRadius: "10px",
+                  border: "1px dashed var(--border-color)",
+                  backgroundColor: "var(--bg-secondary)",
+                  color: "var(--text-secondary)",
+                  fontSize: "14px",
+                }}
+              >
+                No dividend amounts fall in this date range. Widen the range or check your positions.
+              </div>
+            )}
+        </section>
       )}
 
       {symbolsLoaded.length > 0 && rows.length > 0 && (

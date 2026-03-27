@@ -18,6 +18,61 @@ export interface OpenPositionGroupLite {
   final_quantity: number;
 }
 
+/** Minimal trade shape from `get_trades` for historical long quantity at ex-date. */
+export interface DividendTradeLite {
+  symbol: string;
+  side: string;
+  quantity: number;
+  timestamp: string;
+  status?: string | null;
+}
+
+function isFilledTrade(t: DividendTradeLite): boolean {
+  const s = (t.status ?? "").toUpperCase();
+  return s === "FILLED";
+}
+
+/** Long shares held for a symbol immediately before the calendar ex-date (entitlement). */
+export function longSharesAtExDate(sortedAscTradesForSymbol: DividendTradeLite[], exDate: Date): number {
+  const boundary = startOfDay(exDate).getTime();
+  let net = 0;
+  for (const t of sortedAscTradesForSymbol) {
+    const ts = new Date(t.timestamp).getTime();
+    if (ts >= boundary) break;
+    const side = t.side.toUpperCase();
+    if (side === "BUY") net += t.quantity;
+    else if (side === "SELL") net -= t.quantity;
+  }
+  return Math.max(0, net);
+}
+
+export function prepareSortedTradesBySymbol(trades: DividendTradeLite[]): Map<string, DividendTradeLite[]> {
+  const map = new Map<string, DividendTradeLite[]>();
+  for (const t of trades) {
+    if (!isFilledTrade(t)) continue;
+    const sym = t.symbol.toUpperCase();
+    if (!map.has(sym)) map.set(sym, []);
+    map.get(sym)!.push(t);
+  }
+  for (const arr of map.values()) {
+    arr.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }
+  return map;
+}
+
+/** Same rule as charts: received = paid, or no pay date and ex is before today. */
+export function dividendRowUsesSharesAtExDate(
+  paymentDate: string | null,
+  exDate: string,
+  today: Date
+): boolean {
+  const pay = paymentDate ? parseExDate(paymentDate) : null;
+  const ex = parseExDate(exDate);
+  if (!ex) return false;
+  if (pay) return pay < today;
+  return ex < today;
+}
+
 export interface DividendTrackerRow {
   symbol: string;
   shares: number;
@@ -161,11 +216,17 @@ export async function loadDividendTrackerRows(options: {
     return { rows: [], symbols: [] };
   }
 
+  const paperArgsForTrades = dataMode === "paper" ? { paperOnly: true as const } : {};
+  const allTrades = await invoke<DividendTradeLite[]>("get_trades", paperArgsForTrades);
+  const tradesBySymbol = prepareSortedTradesBySymbol(allTrades ?? []);
+  const today = startOfDay(new Date());
+
   const out: DividendTrackerRow[] = [];
 
   await Promise.all(
     symbols.map(async (symbol) => {
-      const shares = bySymbol.get(symbol) ?? 0;
+      const currentShares = bySymbol.get(symbol) ?? 0;
+      const symTrades = tradesBySymbol.get(symbol) ?? [];
       try {
         const divs = await invoke<DividendInfo[]>("fetch_finnhub_dividends", { apiKey, symbol });
         for (const d of divs) {
@@ -173,10 +234,13 @@ export async function loadDividendTrackerRows(options: {
           if (!ex) continue;
           const exStr = format(ex, "yyyy-MM-dd");
           const amt = d.amount != null && Number.isFinite(d.amount) ? d.amount : null;
-          const est = amt != null ? amt * shares : null;
+          const sharesAtEx = longSharesAtExDate(symTrades, ex);
+          const useAtEx = dividendRowUsesSharesAtExDate(d.payment_date, exStr, today);
+          const qty = useAtEx ? sharesAtEx : currentShares;
+          const est = amt != null ? amt * qty : null;
           out.push({
             symbol,
-            shares,
+            shares: qty,
             exDate: exStr,
             paymentDate: d.payment_date,
             amountPerShare: amt,
