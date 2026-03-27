@@ -3,7 +3,20 @@
  * Handles persistent scroll position saving and restoration
  */
 
-export type TabType = string | "notes" | "trades" | "checklists" | "survey" | "trade" | "what_went_well" | "what_could_be_improved" | "emotional_state";
+export type TabType =
+  | string
+  | "notes"
+  | "trades"
+  | "checklists"
+  | "survey"
+  | "surveys"
+  | "rules"
+  | "trade"
+  | "what_went_well"
+  | "what_could_be_improved"
+  | "emotional_state"
+  /** Journal: main scroll container when not in maximized tab mode */
+  | "journal_page";
 
 export interface ScrollState {
   tabPositions: Map<TabType, number>;
