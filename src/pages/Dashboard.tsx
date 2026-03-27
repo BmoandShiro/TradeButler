@@ -951,6 +951,47 @@ function SortableSection({
   );
 }
 
+/** Default News section height when none saved — avoids layout jump when articles load (user height still saved via resize). */
+const DEFAULT_NEWS_SECTION_HEIGHT_PX = 320;
+
+/** Locked grid rows must cover section pixel height or the card overflows and covers other tiles. */
+function effectiveSectionRowSpanForLockedGrid(
+  id: SectionId,
+  sectionSizes: SectionSizes,
+  lockedRowHeightPx: number
+): number {
+  const sec = sectionSizes[id];
+  const stored = Math.min(MAX_ROW_SPAN, Math.max(1, sec?.rowSpan ?? 1));
+  const rh = lockedRowHeightPx > 0 ? lockedRowHeightPx : 100;
+  const rawH = sec?.height ?? (id === "news" ? DEFAULT_NEWS_SECTION_HEIGHT_PX : undefined);
+  if (rawH != null) {
+    const hClamped = Math.min(800, Math.max(200, rawH));
+    const implied = Math.ceil(hClamped / rh);
+    return Math.min(MAX_ROW_SPAN, Math.max(1, stored, implied));
+  }
+  return stored;
+}
+
+/** Same for metric cards: cardHeight / chartHeight vs row span. */
+function effectiveMetricRowSpanForLockedGrid(
+  metric: MetricInstance,
+  baseMetricId: string,
+  lockedRowHeightPx: number
+): number {
+  const m = metric as MetricInstance;
+  const stored = Math.min(MAX_ROW_SPAN, Math.max(1, m.cardRowSpan ?? 1));
+  const rh = lockedRowHeightPx > 0 ? lockedRowHeightPx : 100;
+  if (baseMetricId === "position_size_chart") {
+    const ch = Math.min(600, Math.max(160, m.chartHeight ?? 200));
+    const implied = Math.ceil(ch / rh);
+    return Math.min(MAX_ROW_SPAN, Math.max(1, stored, implied));
+  }
+  const defaultH = baseMetricId === "current_price" ? rh : 100;
+  const ch = Math.min(400, Math.max(80, m.cardHeight ?? defaultH));
+  const implied = Math.ceil(ch / rh);
+  return Math.min(MAX_ROW_SPAN, Math.max(1, stored, implied));
+}
+
 // Wrapper that adds resize handles (right + bottom) to a dashboard section card
 function SectionCardResizeWrapper({
   sectionId,
@@ -968,7 +1009,9 @@ function SectionCardResizeWrapper({
   lockedRowHeight?: number;
 }) {
   const size = sectionSizes[sectionId] ?? {};
-  const height = size.height != null ? Math.min(800, Math.max(200, size.height)) : undefined;
+  const rawHeight =
+    size.height != null ? size.height : sectionId === "news" ? DEFAULT_NEWS_SECTION_HEIGHT_PX : undefined;
+  const height = rawHeight != null ? Math.min(800, Math.max(200, rawHeight)) : undefined;
   const rowHeight = typeof lockedRowHeight === "number" && lockedRowHeight > 0 ? lockedRowHeight : 100;
 
   const handleResizeHorizontal = (e: React.MouseEvent) => {
@@ -5286,14 +5329,16 @@ export default function Dashboard() {
               if (isSectionId(id)) {
                 const defaultSectionSpan = id === "openPositions" && openPositionsDisplayMode === "compact" ? 3 : 1;
                 span = Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, sectionSizes[id]?.columnSpan ?? defaultSectionSpan));
-                rowSpan = Math.min(MAX_ROW_SPAN, Math.max(1, sectionSizes[id]?.rowSpan ?? 1));
+                rowSpan = effectiveSectionRowSpanForLockedGrid(id, sectionSizes, lockedRowHeight);
               } else {
                 const metric = sortedMetrics.find((m) => m.id === id);
                 if (metric) {
-                  span = (metric as any).baseMetricId === "position_size_chart"
-                    ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).chartColumnSpan ?? ((metric as any).chartWidth ? 2 : 1)))
-                    : Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as any).cardColumnSpan ?? 1));
-                  rowSpan = Math.min(MAX_ROW_SPAN, Math.max(1, (metric as any).cardRowSpan ?? 1));
+                  const bm = (metric as MetricInstance).baseMetricId || metric.id;
+                  span =
+                    bm === "position_size_chart"
+                      ? Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as MetricInstance).chartColumnSpan ?? ((metric as MetricInstance).chartWidth ? 2 : 1)))
+                      : Math.min(MAX_POSITION_CHART_COLUMN_SPAN, Math.max(1, (metric as MetricInstance).cardColumnSpan ?? 1));
+                  rowSpan = effectiveMetricRowSpanForLockedGrid(metric as MetricInstance, bm, lockedRowHeight);
                 }
               }
             }
@@ -5317,45 +5362,72 @@ export default function Dashboard() {
             }
           }
           const stored = !forceRepack && lockedPlacements && lockedPlacements.length >= totalSlots ? lockedPlacements : null;
+
+          const tryFirstFitPlace = (colSpan: number, rowSpan: number): { row: number; col: number } | null => {
+            for (let r = 0; r < 400; r++) {
+              ensureRows(r + rowSpan - 1);
+              for (let c = 0; c <= gridColumns - colSpan; c++) {
+                let fits = true;
+                for (let dr = 0; dr < rowSpan && fits; dr++) {
+                  for (let dc = 0; dc < colSpan && fits; dc++) {
+                    if (used[r + dr][c + dc]) fits = false;
+                  }
+                }
+                if (fits) {
+                  for (let dr = 0; dr < rowSpan; dr++) {
+                    ensureRows(r + dr);
+                    for (let dc = 0; dc < colSpan; dc++) used[r + dr][c + dc] = true;
+                  }
+                  return { row: r, col: c };
+                }
+              }
+            }
+            return null;
+          };
+
           for (let i = 0; i < totalSlots; i++) {
             const colSpan = slotSpans[i];
             const rowSpan = slotRowSpans[i];
+            let placed = false;
+
             if (stored && i < stored.length) {
               const row = Math.max(0, stored[i].row);
               const col = Math.max(0, Math.min(stored[i].col, gridColumns - colSpan));
               ensureRows(row + rowSpan - 1);
-              for (let dr = 0; dr < rowSpan; dr++) {
-                for (let dc = 0; dc < colSpan; dc++) {
+              let fitsStored = true;
+              for (let dr = 0; dr < rowSpan && fitsStored; dr++) {
+                for (let dc = 0; dc < colSpan && fitsStored; dc++) {
                   const rr = row + dr;
                   const cc = col + dc;
-                  if (rr < used.length && cc < gridColumns) used[rr][cc] = true;
+                  if (cc >= gridColumns || used[rr][cc]) fitsStored = false;
                 }
               }
-              placements.push({ row, col });
-            } else {
-              let placed = false;
-              for (let r = 0; r < 200 && !placed; r++) {
-                ensureRows(r + rowSpan - 1);
-                for (let c = 0; c <= gridColumns - colSpan && !placed; c++) {
-                  let fits = true;
-                  for (let dr = 0; dr < rowSpan && fits; dr++) {
-                    for (let dc = 0; dc < colSpan && fits; dc++) {
-                      if (used[r + dr][c + dc]) fits = false;
-                    }
-                  }
-                  if (fits) {
-                    placements.push({ row: r, col: c });
-                    for (let dr = 0; dr < rowSpan; dr++) {
-                      ensureRows(r + dr);
-                      for (let dc = 0; dc < colSpan; dc++) used[r + dr][c + dc] = true;
-                    }
-                    placed = true;
-                    didPack = true;
+              if (fitsStored) {
+                for (let dr = 0; dr < rowSpan; dr++) {
+                  for (let dc = 0; dc < colSpan; dc++) {
+                    used[row + dr][col + dc] = true;
                   }
                 }
+                placements.push({ row, col });
+                placed = true;
               }
-              if (!placed) {
-                placements.push({ row: used.length, col: 0 });
+            }
+
+            if (!placed) {
+              const pos = tryFirstFitPlace(colSpan, rowSpan);
+              if (pos) {
+                placements.push(pos);
+                didPack = true;
+              } else {
+                const row = used.length;
+                const colStart = 0;
+                ensureRows(row + rowSpan - 1);
+                for (let dr = 0; dr < rowSpan; dr++) {
+                  for (let dc = 0; dc < colSpan; dc++) {
+                    used[row + dr][colStart + dc] = true;
+                  }
+                }
+                placements.push({ row, col: colStart });
                 didPack = true;
               }
             }
@@ -5398,11 +5470,14 @@ export default function Dashboard() {
             const currentSlot = effectiveSlotAssignments.indexOf(id);
             if (currentSlot === -1) return;
             const { row, col } = placements[currentSlot];
-            let r2 = row, c2 = col;
+            const myColSpan = slotSpans[currentSlot];
+            const myRowSpan = slotRowSpans[currentSlot];
+            let r2 = row;
+            let c2 = col;
             if (dir === "up") r2 = row - 1;
-            else if (dir === "down") r2 = row + 1;
+            else if (dir === "down") r2 = row + myRowSpan;
             else if (dir === "left") c2 = col - 1;
-            else c2 = col + 1;
+            else c2 = col + myColSpan;
             if (r2 < 0 || r2 >= totalRows || c2 < 0 || c2 >= gridColumns) return;
             const targetSlot = cellToSlot[r2]?.[c2];
             if (targetSlot === undefined || targetSlot === currentSlot) return;
@@ -7368,10 +7443,10 @@ export default function Dashboard() {
                   minWidth: 0,
                   maxWidth: "100%",
                   width: "100%",
-                  overflow: layoutLocked ? "visible" : "hidden",
+                  overflow: "hidden",
+                  ...(layoutLocked ? { minHeight: 0 } : {}),
                   boxSizing: "border-box",
                   ...(newsSpan > 1 ? { gridColumn: `span ${newsSpan}` as const } : {}),
-                  ...(sectionSizes.news?.height != null ? { minHeight: `${sectionSizes.news.height}px` } : {}),
                 }}
               >
                 {({ dragHandleProps, isDragging }) => (
@@ -7587,7 +7662,7 @@ export default function Dashboard() {
                         )}
                       </div>
                     </div>
-                    <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+                    <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
                       <NewsWidget 
                         compact 
                         maxItems={5}

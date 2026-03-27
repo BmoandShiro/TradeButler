@@ -253,14 +253,26 @@ export default function NewsWidget({
 
   if (compact) {
     return (
-      <div style={{ height: "100%" }}>
-        {/* Compact header */}
-        <div style={{
+      <div
+        style={{
+          height: "100%",
+          minHeight: 0,
           display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "12px",
-        }}>
+          flexDirection: "column",
+          overflow: "hidden",
+          boxSizing: "border-box",
+        }}
+      >
+        {/* Compact header — fixed; list scrolls below */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: "12px",
+            flexShrink: 0,
+          }}
+        >
           <span style={{ 
             fontSize: "14px", 
             fontWeight: "600", 
@@ -473,14 +485,19 @@ export default function NewsWidget({
           </div>
         )}
 
-        {/* Compact news list */}
-        <div style={{ 
-          display: "flex", 
-          flexDirection: "column", 
-          gap: "8px",
-          overflowY: "auto",
-          maxHeight: showSettings ? "calc(100% - 180px)" : "calc(100% - 40px)",
-        }}>
+        {/* Compact news list — scroll inside fixed dashboard card height */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px",
+            flex: 1,
+            minHeight: 0,
+            overflowY: "auto",
+            overflowX: "hidden",
+            WebkitOverflowScrolling: "touch",
+          }}
+        >
           {error && (
             <div style={{
               padding: "8px",
