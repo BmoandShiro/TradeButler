@@ -18,6 +18,7 @@ import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/data
 import {
   type DividendTrackerRow,
   categorizeDividendRow,
+  parseExDate,
   formatDividendMoney,
   ROW_TINT,
   ROW_BORDER,
@@ -27,6 +28,7 @@ import {
   DIVIDEND_TRACKER_PAGE_SIZE_KEY,
   DIVIDEND_TRACKER_PAGE_SIZE_OPTIONS,
   readDividendTrackerPageSize,
+  type ForwardDividendEstimate,
 } from "../utils/dividendTrackerData";
 import {
   readDividendChartRange,
@@ -44,6 +46,8 @@ import {
 export default function DividendTracker() {
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [rows, setRows] = useState<DividendTrackerRow[]>([]);
+  const [forwardEstimates, setForwardEstimates] = useState<ForwardDividendEstimate[]>([]);
+  const [projectedFutureRows, setProjectedFutureRows] = useState<DividendTrackerRow[]>([]);
   const [symbolsLoaded, setSymbolsLoaded] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,6 +89,8 @@ export default function DividendTracker() {
     }
     if (dataMode === "sandbox") {
       setRows([]);
+      setForwardEstimates([]);
+      setProjectedFutureRows([]);
       setSymbolsLoaded([]);
       setError(null);
       setLastRefresh(new Date());
@@ -96,17 +102,21 @@ export default function DividendTracker() {
 
     try {
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-      const { rows: deduped, symbols } = await loadDividendTrackerRows({
+      const { rows: deduped, symbols, forwardEstimates: fwd, projectedFutureRows: pfr } = await loadDividendTrackerRows({
         apiKey,
         dataMode,
         pairingMethod,
       });
       setSymbolsLoaded(symbols);
       setRows(deduped);
+      setForwardEstimates(fwd);
+      setProjectedFutureRows(pfr);
       setLastRefresh(new Date());
     } catch (e) {
       console.error(e);
       setError(typeof e === "string" ? e : "Failed to load dividend data");
+      setForwardEstimates([]);
+      setProjectedFutureRows([]);
     } finally {
       setIsLoading(false);
     }
@@ -135,15 +145,37 @@ export default function DividendTracker() {
 
   const orderedFilteredRows = useMemo(() => {
     const day = startOfDay(new Date());
+    if (timeFilter === "future") {
+      const base = symbolFilter
+        ? projectedFutureRows.filter((r) => r.symbol === symbolFilter)
+        : projectedFutureRows;
+      return [...base].sort((a, b) => {
+        const ta = parseExDate(a.exDate)!.getTime();
+        const tb = parseExDate(b.exDate)!.getTime();
+        if (ta !== tb) return ta - tb;
+        return a.symbol.localeCompare(b.symbol);
+      });
+    }
     return filterAndSortDividendRows(rows, day, timeFilter, symbolFilter);
-  }, [rows, symbolFilter, timeFilter]);
+  }, [rows, projectedFutureRows, symbolFilter, timeFilter]);
 
   const filteredFutureTotal = useMemo(() => {
+    if (timeFilter === "future") {
+      return orderedFilteredRows.reduce((s, r) => s + (r.estimatedTotal ?? 0), 0);
+    }
     const day = startOfDay(new Date());
     return orderedFilteredRows
       .filter((r) => categorizeDividendRow(r, day) === "future")
       .reduce((s, r) => s + (r.estimatedTotal ?? 0), 0);
-  }, [orderedFilteredRows]);
+  }, [orderedFilteredRows, timeFilter]);
+
+  /** Portfolio forward ~12 month run-rate; respects symbol filter. */
+  const forwardAnnualFiltered = useMemo(() => {
+    const list = symbolFilter
+      ? forwardEstimates.filter((e) => e.symbol === symbolFilter)
+      : forwardEstimates;
+    return list.reduce((s, e) => s + e.forwardAnnualUsd, 0);
+  }, [forwardEstimates, symbolFilter]);
 
   const effectivePageSize = pageSize === 0 ? Infinity : pageSize;
   const totalItems = orderedFilteredRows.length;
@@ -781,16 +813,41 @@ export default function DividendTracker() {
         </section>
       )}
 
-      {symbolsLoaded.length > 0 && rows.length > 0 && (
+      {symbolsLoaded.length > 0 && (rows.length > 0 || projectedFutureRows.length > 0) && (
         <section style={{ marginBottom: "8px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px", marginBottom: "12px" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: "12px", marginBottom: "12px" }}>
             <h2 style={{ margin: 0, fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>Dividends</h2>
-            {(timeFilter === "all" || timeFilter === "future") && filteredFutureTotal > 0 && (
-              <span style={{ fontSize: "14px", fontWeight: "600", color: "var(--profit)" }}>
-                Est. future (visible future rows): {formatDividendMoney(filteredFutureTotal, 2)}
-              </span>
-            )}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "8px", maxWidth: "min(100%, 480px)" }}>
+              {timeFilter === "future" && forwardAnnualFiltered > 0 && (
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: "14px", fontWeight: "600", color: "var(--profit)" }}>
+                    Est. forward ~12 months (latest rate × open shares × payments/year):{" "}
+                    {formatDividendMoney(forwardAnnualFiltered, 2)}
+                  </div>
+                  <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px", lineHeight: 1.4 }}>
+                    Based on the most recent dividend per share in the feed and declared frequency (defaults to quarterly when unknown). Listed payment rows may use the same rate when amounts are missing.
+                  </div>
+                </div>
+              )}
+              {timeFilter === "future" && forwardAnnualFiltered <= 0 && symbolsLoaded.length > 0 && (
+                <span style={{ fontSize: "12px", color: "var(--text-secondary)", textAlign: "right" }}>
+                  Forward annual estimate needs at least one dividend with an amount in the feed for your symbols.
+                </span>
+              )}
+              {(timeFilter === "all" || timeFilter === "future") && filteredFutureTotal > 0 && (
+                <span style={{ fontSize: "14px", fontWeight: "600", color: "var(--profit)" }}>
+                  {timeFilter === "future"
+                    ? `Sum of projected payments (next 12 mo): ${formatDividendMoney(filteredFutureTotal, 2)}`
+                    : `Est. future (visible future rows): ${formatDividendMoney(filteredFutureTotal, 2)}`}
+                </span>
+              )}
+            </div>
           </div>
+          {timeFilter === "future" && (
+            <p style={{ margin: "0 0 12px 0", fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+              Rows are projected ex-dates through the next 12 months using your current open shares and the latest dividend per share, stepped by payment frequency (quarterly if unknown). Pay dates are not estimated.
+            </p>
+          )}
           <div style={{ overflowX: "auto", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
               <thead>
@@ -825,7 +882,21 @@ export default function DividendTracker() {
                         {r.symbol}
                       </td>
                       <td style={{ padding: "12px 14px", fontVariantNumeric: "tabular-nums" }}>{r.shares.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
-                      <td style={{ padding: "12px 14px" }}>{r.exDate}</td>
+                      <td style={{ padding: "12px 14px" }}>
+                        {r.exDate}
+                        {r.isProjected && (
+                          <span
+                            style={{
+                              marginLeft: "6px",
+                              fontSize: "10px",
+                              fontWeight: "600",
+                              color: "var(--text-secondary)",
+                            }}
+                          >
+                            (proj.)
+                          </span>
+                        )}
+                      </td>
                       <td style={{ padding: "12px 14px", color: "var(--text-secondary)" }}>{r.paymentDate ?? "—"}</td>
                       <td style={{ padding: "12px 14px", fontVariantNumeric: "tabular-nums" }}>{formatDividendMoney(r.amountPerShare)}</td>
                       <td style={{ padding: "12px 14px", fontWeight: "600", color: "var(--profit)", fontVariantNumeric: "tabular-nums" }}>{formatDividendMoney(r.estimatedTotal, 2)}</td>

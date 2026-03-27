@@ -5,6 +5,7 @@ import { getFinnhubApiKey, hasFinnhubApiKey } from "../utils/finnhubManager";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import {
   categorizeDividendRow,
+  parseExDate,
   formatDividendMoney,
   loadDividendTrackerRows,
   ROW_BORDER,
@@ -12,6 +13,7 @@ import {
   filterAndSortDividendRows,
   type DividendTrackerRow,
   type DividendTimeFilter,
+  type ForwardDividendEstimate,
   readDividendTrackerPageSize,
 } from "../utils/dividendTrackerData";
 
@@ -30,6 +32,8 @@ export default function DividendTrackerDashboardWidget({
 }: DividendTrackerDashboardWidgetProps = {}) {
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const [rows, setRows] = useState<DividendTrackerRow[]>([]);
+  const [forwardEstimates, setForwardEstimates] = useState<ForwardDividendEstimate[]>([]);
+  const [projectedFutureRows, setProjectedFutureRows] = useState<DividendTrackerRow[]>([]);
   const [symbolsLoaded, setSymbolsLoaded] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +56,8 @@ export default function DividendTrackerDashboardWidget({
     if (!apiKey) {
       setError("Add a Finnhub API key in Settings.");
       setRows([]);
+      setForwardEstimates([]);
+      setProjectedFutureRows([]);
       setSymbolsLoaded([]);
       return;
     }
@@ -59,14 +65,22 @@ export default function DividendTrackerDashboardWidget({
     setError(null);
     try {
       const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-      const { rows: next, symbols } = await loadDividendTrackerRows({ apiKey, dataMode, pairingMethod });
+      const { rows: next, symbols, forwardEstimates: fwd, projectedFutureRows: pfr } = await loadDividendTrackerRows({
+        apiKey,
+        dataMode,
+        pairingMethod,
+      });
       setRows(next);
+      setForwardEstimates(fwd);
+      setProjectedFutureRows(pfr);
       setSymbolsLoaded(symbols);
       setLastAt(new Date());
     } catch (e) {
       console.error(e);
       setError(typeof e === "string" ? e : "Could not load dividends");
       setRows([]);
+      setForwardEstimates([]);
+      setProjectedFutureRows([]);
       setSymbolsLoaded([]);
     } finally {
       setLoading(false);
@@ -90,15 +104,36 @@ export default function DividendTrackerDashboardWidget({
 
   const orderedFilteredRows = useMemo(() => {
     const day = startOfDay(new Date());
+    if (timeFilter === "future") {
+      const base = symbolFilter
+        ? projectedFutureRows.filter((r) => r.symbol === symbolFilter)
+        : projectedFutureRows;
+      return [...base].sort((a, b) => {
+        const ta = parseExDate(a.exDate)!.getTime();
+        const tb = parseExDate(b.exDate)!.getTime();
+        if (ta !== tb) return ta - tb;
+        return a.symbol.localeCompare(b.symbol);
+      });
+    }
     return filterAndSortDividendRows(rows, day, timeFilter, symbolFilter);
-  }, [rows, symbolFilter, timeFilter]);
+  }, [rows, projectedFutureRows, symbolFilter, timeFilter]);
 
   const filteredFutureTotal = useMemo(() => {
+    if (timeFilter === "future") {
+      return orderedFilteredRows.reduce((s, r) => s + (r.estimatedTotal ?? 0), 0);
+    }
     const day = startOfDay(new Date());
     return orderedFilteredRows
       .filter((r) => categorizeDividendRow(r, day) === "future")
       .reduce((s, r) => s + (r.estimatedTotal ?? 0), 0);
-  }, [orderedFilteredRows]);
+  }, [orderedFilteredRows, timeFilter]);
+
+  const forwardAnnualFiltered = useMemo(() => {
+    const list = symbolFilter
+      ? forwardEstimates.filter((e) => e.symbol === symbolFilter)
+      : forwardEstimates;
+    return list.reduce((s, e) => s + e.forwardAnnualUsd, 0);
+  }, [forwardEstimates, symbolFilter]);
 
   const effectivePageSize = pageSize === 0 ? Infinity : pageSize;
   const totalItems = orderedFilteredRows.length;
@@ -243,9 +278,18 @@ export default function DividendTrackerDashboardWidget({
         </div>
       )}
 
+      {timeFilter === "future" && forwardAnnualFiltered > 0 && (
+        <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.4 }}>
+          <span style={{ fontWeight: "600", color: "var(--profit)" }}>
+            Est. forward ~12 mo (latest rate × shares × freq): {formatDividendMoney(forwardAnnualFiltered, 2)}
+          </span>
+        </div>
+      )}
       {(timeFilter === "all" || timeFilter === "future") && filteredFutureTotal > 0 && (
         <div style={{ fontSize: "11px", fontWeight: "600", color: "var(--profit)" }}>
-          Est. future (visible future rows): {formatDividendMoney(filteredFutureTotal, 2)}
+          {timeFilter === "future"
+            ? `Sum projected (next 12 mo): ${formatDividendMoney(filteredFutureTotal, 2)}`
+            : `Est. future (visible future rows): ${formatDividendMoney(filteredFutureTotal, 2)}`}
         </div>
       )}
 
@@ -292,7 +336,14 @@ export default function DividendTrackerDashboardWidget({
                       <td style={{ padding: "6px 8px", fontVariantNumeric: "tabular-nums" }}>
                         {r.shares.toLocaleString(undefined, { maximumFractionDigits: 4 })}
                       </td>
-                      <td style={{ padding: "6px 8px", fontVariantNumeric: "tabular-nums" }}>{r.exDate}</td>
+                      <td style={{ padding: "6px 8px", fontVariantNumeric: "tabular-nums" }}>
+                        {r.exDate}
+                        {r.isProjected && (
+                          <span style={{ marginLeft: "4px", fontSize: "9px", fontWeight: "600", color: "var(--text-secondary)" }}>
+                            (p)
+                          </span>
+                        )}
+                      </td>
                       <td style={{ padding: "6px 8px", color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>
                         {r.paymentDate ?? "—"}
                       </td>

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/tauri";
-import { format, parseISO, startOfDay, isBefore, isAfter, addDays } from "date-fns";
+import { format, parseISO, startOfDay, isBefore, isAfter, addDays, addMonths, addYears } from "date-fns";
 import type { DataMode } from "./dataMode";
 
 export interface DividendInfo {
@@ -87,6 +87,8 @@ export interface DividendTrackerRow {
   paymentDate: string | null;
   amountPerShare: number | null;
   estimatedTotal: number | null;
+  /** True when ex-date is projected from latest rate + frequency (Future tab next-year schedule). */
+  isProjected?: boolean;
 }
 
 export type RowCategory = "future" | "current" | "past";
@@ -98,6 +100,98 @@ export function parseExDate(s: string | null): Date | null {
   } catch {
     return null;
   }
+}
+
+/** Payments per year from Finnhub `freq` or similar strings; Yahoo often omits frequency (default quarterly). */
+export function paymentsPerYearFromFrequency(frequency: string | null | undefined): number {
+  const u = (frequency ?? "").toLowerCase();
+  if (u.includes("month")) return 12;
+  if (u.includes("quarter")) return 4;
+  if (u.includes("semi") || u.includes("half")) return 2;
+  if (u.includes("annual") || u.includes("year") || u === "1" || u.includes("yr")) return 1;
+  if (u.includes("week")) return 52;
+  if (u.includes("day") && u.includes("1")) return 252;
+  return 4;
+}
+
+/** Most recent dividend row with a valid amount (by ex-date). */
+export function pickLatestDividendWithAmount(divs: DividendInfo[]): DividendInfo | null {
+  const withAmt = divs.filter(
+    (d) => d.amount != null && Number.isFinite(d.amount) && d.ex_date && String(d.ex_date).trim() !== ""
+  );
+  if (withAmt.length === 0) return null;
+  withAmt.sort((a, b) => {
+    const ta = parseExDate(a.ex_date)!.getTime();
+    const tb = parseExDate(b.ex_date)!.getTime();
+    return tb - ta;
+  });
+  return withAmt[0] ?? null;
+}
+
+export interface ForwardDividendEstimate {
+  symbol: string;
+  currentShares: number;
+  latestRatePerShare: number;
+  frequency: string | null;
+  /** Latest per-payment rate × shares × payments/year (forward ~12 month run-rate). */
+  forwardAnnualUsd: number;
+}
+
+/** Step ex-date forward one payment period from frequency (payments/year). */
+export function advanceDividendExDate(d: Date, paymentsPerYear: number): Date {
+  const p = paymentsPerYear;
+  if (p >= 50) return addDays(d, 7);
+  if (p >= 12) return addMonths(d, 1);
+  if (p >= 4) return addMonths(d, 3);
+  if (p >= 2) return addMonths(d, 6);
+  return addMonths(d, 12);
+}
+
+/**
+ * One row per projected payment in (today, today + 1 year], from latest paid amount and schedule.
+ * Ex-dates advance from the anchor (latest historical ex) until the first date strictly after today, then continue.
+ */
+export function buildProjectedNextYearDividendRows(
+  symbol: string,
+  currentShares: number,
+  latest: DividendInfo,
+  today: Date
+): DividendTrackerRow[] {
+  if (!Number.isFinite(currentShares) || currentShares <= 0) return [];
+  if (latest.amount == null || !Number.isFinite(latest.amount)) return [];
+  const anchorEx = latest.ex_date ? parseExDate(latest.ex_date) : null;
+  if (!anchorEx) return [];
+
+  const pp = paymentsPerYearFromFrequency(latest.frequency);
+  const rate = latest.amount;
+  const est = rate * currentShares;
+  const day = startOfDay(today);
+  const endWindow = addYears(day, 1);
+
+  let cursor = startOfDay(anchorEx);
+  let guard = 0;
+  while (!isAfter(cursor, day) && guard < 200) {
+    cursor = advanceDividendExDate(cursor, pp);
+    guard++;
+  }
+
+  const out: DividendTrackerRow[] = [];
+  guard = 0;
+  while (cursor.getTime() <= endWindow.getTime() && guard < 64) {
+    out.push({
+      symbol,
+      shares: currentShares,
+      exDate: format(cursor, "yyyy-MM-dd"),
+      paymentDate: null,
+      amountPerShare: rate,
+      estimatedTotal: est,
+      isProjected: true,
+    });
+    cursor = advanceDividendExDate(cursor, pp);
+    guard++;
+  }
+
+  return out;
 }
 
 export function formatDividendMoney(n: number | null, decimals = 4): string {
@@ -195,10 +289,15 @@ export async function loadDividendTrackerRows(options: {
   apiKey: string;
   dataMode: DataMode;
   pairingMethod: string;
-}): Promise<{ rows: DividendTrackerRow[]; symbols: string[] }> {
+}): Promise<{
+  rows: DividendTrackerRow[];
+  symbols: string[];
+  forwardEstimates: ForwardDividendEstimate[];
+  projectedFutureRows: DividendTrackerRow[];
+}> {
   const { apiKey, dataMode, pairingMethod } = options;
   if (dataMode === "sandbox") {
-    return { rows: [], symbols: [] };
+    return { rows: [], symbols: [], forwardEstimates: [], projectedFutureRows: [] };
   }
 
   const paperArgs = dataMode === "paper" ? { paperOnly: true as const } : {};
@@ -220,7 +319,7 @@ export async function loadDividendTrackerRows(options: {
 
   const symbols = [...bySymbol.keys()];
   if (symbols.length === 0) {
-    return { rows: [], symbols: [] };
+    return { rows: [], symbols: [], forwardEstimates: [], projectedFutureRows: [] };
   }
 
   const paperArgsForTrades = dataMode === "paper" ? { paperOnly: true as const } : {};
@@ -229,6 +328,8 @@ export async function loadDividendTrackerRows(options: {
   const today = startOfDay(new Date());
 
   const out: DividendTrackerRow[] = [];
+  const forwardEstimates: ForwardDividendEstimate[] = [];
+  const projectedFutureRows: DividendTrackerRow[] = [];
 
   await Promise.all(
     symbols.map(async (symbol) => {
@@ -236,6 +337,18 @@ export async function loadDividendTrackerRows(options: {
       const symTrades = tradesBySymbol.get(symbol) ?? [];
       try {
         const divs = await invoke<DividendInfo[]>("fetch_finnhub_dividends", { apiKey, symbol });
+        const latest = pickLatestDividendWithAmount(divs);
+        if (latest?.amount != null && Number.isFinite(latest.amount) && currentShares > 0) {
+          const pp = paymentsPerYearFromFrequency(latest.frequency);
+          forwardEstimates.push({
+            symbol,
+            currentShares,
+            latestRatePerShare: latest.amount,
+            frequency: latest.frequency ?? null,
+            forwardAnnualUsd: latest.amount * currentShares * pp,
+          });
+          projectedFutureRows.push(...buildProjectedNextYearDividendRows(symbol, currentShares, latest, today));
+        }
         for (const d of divs) {
           const ex = parseExDate(d.ex_date);
           if (!ex) continue;
@@ -246,13 +359,15 @@ export async function loadDividendTrackerRows(options: {
           /** Past / paid: entitlement shares at prior close to ex-day. Future / not yet paid: current open long. */
           const qty = useAtEx ? sharesAtEx : currentShares;
           if (!Number.isFinite(qty) || qty <= 0) continue;
-          const est = amt != null ? amt * qty : null;
+          /** Historical rows: only declared amount. Expected/future rows: fall back to latest paid rate when API omits amount. */
+          const rate = useAtEx ? amt : (amt ?? latest?.amount ?? null);
+          const est = rate != null ? rate * qty : null;
           out.push({
             symbol,
             shares: qty,
             exDate: exStr,
             paymentDate: d.payment_date,
-            amountPerShare: amt,
+            amountPerShare: rate,
             estimatedTotal: est,
           });
         }
@@ -275,5 +390,14 @@ export async function loadDividendTrackerRows(options: {
     deduped.push(r);
   }
 
-  return { rows: deduped, symbols };
+  forwardEstimates.sort((a, b) => a.symbol.localeCompare(b.symbol));
+
+  projectedFutureRows.sort((a, b) => {
+    const ta = parseExDate(a.exDate)!.getTime();
+    const tb = parseExDate(b.exDate)!.getTime();
+    if (ta !== tb) return ta - tb;
+    return a.symbol.localeCompare(b.symbol);
+  });
+
+  return { rows: deduped, symbols, forwardEstimates, projectedFutureRows };
 }
