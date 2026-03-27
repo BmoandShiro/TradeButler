@@ -3011,12 +3011,16 @@ export default function Dashboard() {
   const [trades, setTrades] = useState<RecentTrade[]>([]);
   const [openPositionGroups, setOpenPositionGroups] = useState<OpenPositionGroup[]>([]);
   const [openPositionQuotes, setOpenPositionQuotes] = useState<Record<string, number | null>>({});
+  const [isRefreshingQuotes, setIsRefreshingQuotes] = useState(false);
+  const [lastQuoteRefresh, setLastQuoteRefresh] = useState<Date | null>(null);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
   const navigate = useNavigate();
 
   const dividendTrackerDashboardRefreshRef = useRef<(() => void) | null>(null);
   const dividendIncomeDashboardRefreshRef = useRef<(() => void) | null>(null);
+  /** After manual Open Positions refresh, skip one effect run so we do not fetch quotes twice. */
+  const skipOpenQuotesEffectOnce = useRef(false);
   const [dividendTrackerDashboardPageSize, setDividendTrackerDashboardPageSize] = useState(() =>
     readDividendTrackerPageSize()
   );
@@ -3069,38 +3073,50 @@ export default function Dashboard() {
   }, [dividendTrackerForwardIncomeMode]);
 
   // Fetch current prices for open position symbols (Real/Paper only)
-  const fetchOpenPositionQuotes = useCallback(async (showLoading = true) => {
-    if (dataMode === "sandbox" || openPositionGroups.length === 0) {
-      setOpenPositionQuotes({});
-      patchDashboardSessionSnapshot({ openPositionQuotes: {}, lastQuoteRefreshIso: null });
-      return;
-    }
-    const symbols = [...new Set(openPositionGroups.map((g) => g.entry_trade.symbol))];
-    if (showLoading) setIsRefreshingQuotes(true);
-    const next: Record<string, number | null> = {};
-    for (const symbol of symbols) {
-      try {
-        const quote = await invoke<{ current_price: number | null }>("fetch_stock_quote", { symbol });
-        next[symbol] = quote.current_price;
-      } catch {
-        next[symbol] = null;
+  const fetchOpenPositionQuotes = useCallback(
+    async (showLoading = true, groupsOverride?: OpenPositionGroup[]) => {
+      const groups = groupsOverride ?? openPositionGroups;
+      if (dataMode === "sandbox" || groups.length === 0) {
+        setOpenPositionQuotes({});
+        patchDashboardSessionSnapshot({ openPositionQuotes: {}, lastQuoteRefreshIso: null });
+        if (showLoading) setIsRefreshingQuotes(false);
+        return;
       }
-    }
-    const refreshedAt = new Date();
-    setOpenPositionQuotes((prev) => {
-      const merged = { ...prev, ...next };
-      patchDashboardSessionSnapshot({
-        openPositionQuotes: merged,
-        lastQuoteRefreshIso: refreshedAt.toISOString(),
-      });
-      return merged;
-    });
-    setLastQuoteRefresh(refreshedAt);
-    if (showLoading) setIsRefreshingQuotes(false);
-  }, [dataMode, openPositionGroups]);
+      const symbols = [...new Set(groups.map((g) => g.entry_trade.symbol))];
+      if (showLoading) setIsRefreshingQuotes(true);
+      try {
+        const next: Record<string, number | null> = {};
+        for (const symbol of symbols) {
+          try {
+            const quote = await invoke<{ current_price: number | null }>("fetch_stock_quote", { symbol });
+            next[symbol] = quote.current_price;
+          } catch {
+            next[symbol] = null;
+          }
+        }
+        const refreshedAt = new Date();
+        setOpenPositionQuotes((prev) => {
+          const merged = { ...prev, ...next };
+          patchDashboardSessionSnapshot({
+            openPositionQuotes: merged,
+            lastQuoteRefreshIso: refreshedAt.toISOString(),
+          });
+          return merged;
+        });
+        setLastQuoteRefresh(refreshedAt);
+      } finally {
+        if (showLoading) setIsRefreshingQuotes(false);
+      }
+    },
+    [dataMode, openPositionGroups]
+  );
 
   // Initial fetch and when positions change
   useEffect(() => {
+    if (skipOpenQuotesEffectOnce.current) {
+      skipOpenQuotesEffectOnce.current = false;
+      return;
+    }
     if (dataMode === "sandbox" || openPositionGroups.length === 0) {
       setOpenPositionQuotes({});
       return;
@@ -3456,8 +3472,6 @@ export default function Dashboard() {
     }
     return 0; // 0 = manual
   });
-  const [isRefreshingQuotes, setIsRefreshingQuotes] = useState(false);
-  const [lastQuoteRefresh, setLastQuoteRefresh] = useState<Date | null>(null);
 
   // Auto-refresh interval for open position quotes (minutes; skipped when dashboard quote sync is on)
   useEffect(() => {
@@ -4980,6 +4994,159 @@ export default function Dashboard() {
     window.dispatchEvent(new Event("tradeButlerRefreshNews"));
   }, [fetchOpenPositionQuotes, loadDashboardData]);
 
+  /** Reload open position groups from the backend and refresh live quotes only (no full dashboard load). */
+  const refreshOpenPositionsSection = useCallback(async () => {
+    if (dataMode === "sandbox") {
+      setOpenPositionQuotes({});
+      patchDashboardSessionSnapshot({ openPositionQuotes: {}, lastQuoteRefreshIso: null });
+      return;
+    }
+    setIsRefreshingQuotes(true);
+    try {
+      const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+      const positionGroupsData = await invoke<OpenPositionGroup[]>("get_position_groups", {
+        pairingMethod,
+        startDate: null,
+        endDate: null,
+        ...paperArgs,
+      });
+      const filteredGroups = (positionGroupsData || []).filter((g) => Math.abs(g.final_quantity) >= 0.0001);
+      skipOpenQuotesEffectOnce.current = true;
+      setOpenPositionGroups(filteredGroups);
+      patchDashboardSessionSnapshot({ openPositionGroups: filteredGroups });
+      await fetchOpenPositionQuotes(true, filteredGroups);
+    } catch (err) {
+      console.error("Error refreshing open positions:", err);
+      setIsRefreshingQuotes(false);
+    }
+  }, [dataMode, fetchOpenPositionQuotes]);
+
+  const getDashboardInvokeArgs = useCallback(() => {
+    const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+    const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
+    const startDate = dateRange.start ? dateRange.start.toISOString() : null;
+    const endDate = dateRange.end ? dateRange.end.toISOString() : null;
+    const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+    const strategyArgs = dashboardStrategyId != null ? { strategyId: dashboardStrategyId } : {};
+    return { pairingMethod, startDate, endDate, paperArgs, strategyArgs };
+  }, [customEndDate, customStartDate, dashboardStrategyId, dataMode, timeframe]);
+
+  const refreshTopSymbolsSection = useCallback(async () => {
+    if (dataMode === "sandbox") {
+      const topSymbolsData = EXAMPLE_SYMBOL_PNL.slice(0, 5).map((pnl) => ({
+        symbol: pnl.symbol,
+        trade_count: pnl.closed_positions,
+        total_volume: 0,
+        estimated_pnl: pnl.total_net_pnl,
+      }));
+      setTopSymbols(topSymbolsData);
+      patchDashboardSessionSnapshot({ topSymbols: topSymbolsData });
+      return;
+    }
+    try {
+      const { pairingMethod, startDate, endDate, paperArgs, strategyArgs } = getDashboardInvokeArgs();
+      const pnlData = await invoke<SymbolPnL[]>("get_symbol_pnl", {
+        pairingMethod,
+        startDate,
+        endDate,
+        ...paperArgs,
+        filters: null,
+        ...strategyArgs,
+      });
+      const topSymbolsData = pnlData.slice(0, 5).map((pnl) => ({
+        symbol: pnl.symbol,
+        trade_count: pnl.closed_positions,
+        total_volume: 0,
+        estimated_pnl: pnl.total_net_pnl,
+      }));
+      setTopSymbols(topSymbolsData);
+      patchDashboardSessionSnapshot({ topSymbols: topSymbolsData });
+    } catch (err) {
+      console.error("Error refreshing top symbols:", err);
+    }
+  }, [dataMode, getDashboardInvokeArgs]);
+
+  const refreshStrategyPerformanceSection = useCallback(async () => {
+    if (dataMode === "sandbox") {
+      let perf = EXAMPLE_STRATEGY_PERFORMANCE as unknown as StrategyPerformance[];
+      if (dashboardStrategyId != null) {
+        perf = perf.filter((p) => p.strategy_id === dashboardStrategyId);
+      }
+      setStrategyPerformance(perf);
+      patchDashboardSessionSnapshot({ strategyPerformance: perf });
+      return;
+    }
+    try {
+      const { pairingMethod, startDate, endDate, paperArgs, strategyArgs } = getDashboardInvokeArgs();
+      const strategiesData = await invoke<StrategyPerformance[]>("get_strategy_performance", {
+        pairingMethod,
+        startDate,
+        endDate,
+        ...paperArgs,
+        ...strategyArgs,
+      });
+      setStrategyPerformance(strategiesData);
+      patchDashboardSessionSnapshot({ strategyPerformance: strategiesData });
+    } catch (err) {
+      console.error("Error refreshing strategy performance:", err);
+    }
+  }, [dashboardStrategyId, dataMode, getDashboardInvokeArgs]);
+
+  const refreshRecentTradesSection = useCallback(async () => {
+    if (dataMode === "sandbox") {
+      const recentVal = EXAMPLE_RECENT_TRADES.slice(0, 5) as unknown as RecentTrade[];
+      setRecentTrades(recentVal);
+      patchDashboardSessionSnapshot({ recentTrades: recentVal });
+      return;
+    }
+    try {
+      const { pairingMethod, startDate, endDate, paperArgs, strategyArgs } = getDashboardInvokeArgs();
+      const tradesData = await invoke<RecentTrade[]>("get_recent_trades", {
+        limit: 5,
+        pairingMethod,
+        startDate,
+        endDate,
+        ...paperArgs,
+        ...strategyArgs,
+      });
+      setRecentTrades(tradesData);
+      patchDashboardSessionSnapshot({ recentTrades: tradesData });
+    } catch (err) {
+      console.error("Error refreshing recent trades:", err);
+    }
+  }, [dataMode, getDashboardInvokeArgs]);
+
+  const refreshTradesSection = useCallback(async () => {
+    if (dataMode === "sandbox") {
+      const tradesVal = EXAMPLE_RECENT_TRADES as unknown as RecentTrade[];
+      const sortedTrades = [...tradesVal].sort(
+        (a, b) => new Date(b.exit_timestamp).getTime() - new Date(a.exit_timestamp).getTime()
+      );
+      setTrades(sortedTrades);
+      patchDashboardSessionSnapshot({ trades: sortedTrades });
+      return;
+    }
+    try {
+      const { pairingMethod, startDate, endDate, paperArgs, strategyArgs } = getDashboardInvokeArgs();
+      const allTradesData = await invoke<RecentTrade[]>("get_recent_trades", {
+        limit: 10000,
+        pairingMethod,
+        startDate,
+        endDate,
+        ...paperArgs,
+        ...strategyArgs,
+      });
+      const sortedTrades = [...allTradesData].sort(
+        (a, b) => new Date(b.exit_timestamp).getTime() - new Date(a.exit_timestamp).getTime()
+      );
+      setTrades(sortedTrades);
+      patchDashboardSessionSnapshot({ trades: sortedTrades });
+    } catch (err) {
+      console.error("Error refreshing trades list:", err);
+    }
+  }, [dataMode, getDashboardInvokeArgs]);
+
   useEffect(() => {
     void loadDashboardData();
   }, [loadDashboardData]);
@@ -6330,7 +6497,7 @@ export default function Dashboard() {
                       onClick={(e) => {
                         e.stopPropagation();
                         e.preventDefault();
-                        refreshDashboardSections();
+                        void refreshTopSymbolsSection();
                       }}
                       onMouseDown={(e) => {
                         e.stopPropagation();
@@ -6347,7 +6514,7 @@ export default function Dashboard() {
                         justifyContent: "center",
                         borderRadius: "4px",
                       }}
-                      title="Refresh dashboard data"
+                      title="Refresh top symbols for this timeframe"
                     >
                       <RefreshCw size={16} />
                     </button>
@@ -6608,7 +6775,7 @@ export default function Dashboard() {
                       onClick={(e) => {
                         e.stopPropagation();
                         e.preventDefault();
-                        refreshDashboardSections();
+                        void refreshStrategyPerformanceSection();
                       }}
                       onMouseDown={(e) => {
                         e.stopPropagation();
@@ -6625,7 +6792,7 @@ export default function Dashboard() {
                         justifyContent: "center",
                         borderRadius: "4px",
                       }}
-                      title="Refresh dashboard data"
+                      title="Refresh strategy performance for this timeframe"
                     >
                       <RefreshCw size={16} />
                     </button>
@@ -7146,7 +7313,7 @@ export default function Dashboard() {
                       onClick={(e) => {
                         e.stopPropagation();
                         e.preventDefault();
-                        refreshDashboardSections();
+                        void refreshRecentTradesSection();
                       }}
                       onMouseDown={(e) => {
                         e.stopPropagation();
@@ -7163,7 +7330,7 @@ export default function Dashboard() {
                         justifyContent: "center",
                         borderRadius: "4px",
                       }}
-                      title="Refresh dashboard data"
+                      title="Refresh recent trades for this timeframe"
                     >
                       <RefreshCw size={16} />
                     </button>
@@ -7473,7 +7640,7 @@ export default function Dashboard() {
                             onClick={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
-                              refreshDashboardSections();
+                              void refreshOpenPositionsSection();
                             }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
@@ -7492,7 +7659,7 @@ export default function Dashboard() {
                               borderRadius: "4px",
                               opacity: isRefreshingQuotes ? 0.5 : 1,
                             }}
-                            title={lastQuoteRefresh ? `Refresh dashboard & prices (last quote: ${format(lastQuoteRefresh, "h:mm:ss a")})` : "Refresh dashboard & prices"}
+                            title={lastQuoteRefresh ? `Refresh positions & prices (last quote: ${format(lastQuoteRefresh, "h:mm:ss a")})` : "Refresh positions & prices"}
                           >
                             <RefreshCw size={16} style={{ animation: isRefreshingQuotes ? "spin 1s linear infinite" : "none" }} />
                           </button>
@@ -9291,7 +9458,7 @@ export default function Dashboard() {
                       onClick={(e) => {
                         e.stopPropagation();
                         e.preventDefault();
-                        refreshDashboardSections();
+                        void refreshTradesSection();
                       }}
                       onMouseDown={(e) => {
                         e.stopPropagation();
@@ -9308,7 +9475,7 @@ export default function Dashboard() {
                         justifyContent: "center",
                         borderRadius: "4px",
                       }}
-                      title="Refresh dashboard data"
+                      title="Refresh trades list for this timeframe"
                     >
                       <RefreshCw size={16} />
                     </button>
