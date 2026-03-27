@@ -1,6 +1,5 @@
-import React, { useEffect, useState, useRef, Dispatch, SetStateAction } from "react";
+import React, { useCallback, useEffect, useRef, useState, Dispatch, SetStateAction } from "react";
 import { ChecklistItemCaption } from "../components/ChecklistItemCaption";
-import React, { useEffect, useState, useRef, useCallback, Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
@@ -79,7 +78,7 @@ import { TradeChart } from "../components/TradeChart";
 import {
   saveAllScrollPositions,
   restoreAllScrollPositions,
-  restoreTabScrollPositions,
+  copyRestoredTabScrollPositions,
 } from "../utils/scrollManager";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import {
@@ -277,8 +276,8 @@ function SortableStrategy({
   expandedStats,
   setExpandedStats,
   flushStrategiesScrollToStorage,
-  leftPanelScrollRef,
-  rightPanelScrollRef,
+  leftPanelScrollRef: _leftPanelScrollRef,
+  rightPanelScrollRef: _rightPanelScrollRef,
   clearWorkInProgress,
   setSelectedStrategy,
   setActiveTab,
@@ -2271,7 +2270,7 @@ export default function Strategies() {
       const tab = activeTab;
       const tabEl = tabContentRefs.current.get(tab);
       // Merge storage + in-memory so a second unmount with an empty ref map cannot wipe keys (React Strict Mode / double cleanup).
-      const merged = new Map<TabType, number>(restoreTabScrollPositions("strategies"));
+      const merged = copyRestoredTabScrollPositions<TabType>("strategies");
       tabScrollPositions.current.forEach((v, k) => merged.set(k, v));
       let tabScroll = merged.get(tab) ?? 0;
       if (tabEl) {
@@ -2310,7 +2309,7 @@ export default function Strategies() {
       // Merge with persisted map so we never write a partial map that wipes other tabs.
       const tab = activeTabRef.current;
       const tabEl = tabContentRefs.current.get(tab);
-      const merged = new Map<TabType, number>(restoreTabScrollPositions("strategies"));
+      const merged = copyRestoredTabScrollPositions<TabType>("strategies");
       tabScrollPositions.current.forEach((v, k) => merged.set(k, v));
       if (tabEl) {
         merged.set(tab, tabEl.scrollTop);

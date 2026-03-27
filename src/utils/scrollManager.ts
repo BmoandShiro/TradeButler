@@ -62,6 +62,17 @@ export function restoreTabScrollPositions(
 }
 
 /**
+ * Copy restored tab positions into a fresh Map typed with the page's Tab union (avoids TS errors from
+ * `new Map<PageTab>(restoreTabScrollPositions(...))` when PageTab differs from this module's TabType).
+ */
+export function copyRestoredTabScrollPositions<K extends string>(storageKey: string): Map<K, number> {
+  const src = restoreTabScrollPositions(storageKey);
+  const out = new Map<K, number>();
+  src.forEach((v, k) => out.set(k as K, v));
+  return out;
+}
+
+/**
  * Save panel scroll positions to localStorage
  */
 export function savePanelScrollPositions(

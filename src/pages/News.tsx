@@ -100,13 +100,6 @@ const EVENTS_PER_PAGE_OPTIONS = [3, 5, 10, 15, 20, 25, 30] as const;
 const READ_IDS_MAX_OPTIONS = [500, 1000, 2500, 5000, 10000, 25000] as const;
 const CALENDAR_CACHE_MAX_OPTIONS = [50, 100, 250, 500, 1000, 2000] as const;
 
-function clampInt(value: string | null, fallback: number, min: number, max: number): number {
-  if (value == null || value === "") return fallback;
-  const n = parseInt(value, 10);
-  if (Number.isNaN(n)) return fallback;
-  return Math.min(max, Math.max(min, n));
-}
-
 function parseAllowedInt(
   raw: string | null,
   allowed: readonly number[],

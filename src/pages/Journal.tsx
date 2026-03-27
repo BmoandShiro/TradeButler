@@ -29,7 +29,7 @@ import { TradeChart } from "../components/TradeChart";
 import {
   saveAllScrollPositions,
   restoreAllScrollPositions,
-  restoreTabScrollPositions,
+  copyRestoredTabScrollPositions,
   restorePanelScrollPositions,
 } from "../utils/scrollManager";
 import { LoadingSphere } from "../components/LoadingSphere";
@@ -1096,7 +1096,7 @@ export default function Journal() {
 
   /** Merge persisted tab scroll map with in-memory ref so unmount / partial saves never wipe other keys (same pattern as Strategies). */
   const saveJournalScrollPositionsMerged = useCallback((storageKey: string) => {
-    const merged = new Map<TabType, number>(restoreTabScrollPositions(storageKey));
+    const merged = copyRestoredTabScrollPositions<TabType>(storageKey);
     tabScrollPositions.current.forEach((v, k) => {
       // In-memory journal_page can be 0 from a mount/resize scroll event before the user scrolls Overview;
       // do not let that overwrite a positive value restored from localStorage.

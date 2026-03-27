@@ -76,7 +76,7 @@ export default function DividendTrackerDashboardWidget({
   const [timeFilter, setTimeFilter] = useState<DividendTimeFilter>(() => readDashboardDividendWidgetTimeFilter());
   const [symbolFilter, setSymbolFilter] = useState<string | null>(() => readDashboardDividendWidgetSymbolFilter());
   const [page, setPage] = useState(() => readDashboardDividendWidgetPage());
-  const [internalPageSize, setInternalPageSize] = useState(() => readDividendTrackerPageSize());
+  const [internalPageSize, _setInternalPageSize] = useState(() => readDividendTrackerPageSize());
 
   const isPageSizeControlled =
     typeof pageSizeProp === "number" && typeof onPageSizeChange === "function";
