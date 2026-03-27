@@ -941,11 +941,12 @@ export default function Journal() {
         leftTop = prevPanels.leftPanelScroll;
       } else {
         leftTop = leftEl.scrollTop;
+        // lastLeftPanelScrollRef is null: no scroll event on Entries yet. DOM may still be 0 before restore
+        // or only the Overview column was scrolled — don't persist 0 over a positive stored left offset.
         if (
           leftTop === 0 &&
           prevPanels.leftPanelScroll != null &&
-          prevPanels.leftPanelScroll > 0 &&
-          leftEl.scrollHeight < 8
+          prevPanels.leftPanelScroll > 0
         ) {
           leftTop = prevPanels.leftPanelScroll;
         }
@@ -969,6 +970,9 @@ export default function Journal() {
           dirtyOv: journalOverviewScrollUserDirtyRef.current,
           dirtyEntry: journalEntryReadScrollUserDirtyRef.current,
           preTabJournalPage,
+          leftTopResolved: leftTop,
+          leftDom: leftEl?.scrollTop ?? null,
+          leftDisk: prevPanels.leftPanelScroll,
         },
         timestamp: Date.now(),
       }),
