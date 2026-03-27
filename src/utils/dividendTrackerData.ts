@@ -32,7 +32,10 @@ function isFilledTrade(t: DividendTradeLite): boolean {
   return s === "FILLED";
 }
 
-/** Long shares held for a symbol immediately before the calendar ex-date (entitlement). */
+/**
+ * Long shares held before the ex-date calendar day starts (≈ prior close / same test as “did you hold before ex?”).
+ * Trades on the ex-date do not count toward that dividend.
+ */
 export function longSharesAtExDate(sortedAscTradesForSymbol: DividendTradeLite[], exDate: Date): number {
   const boundary = startOfDay(exDate).getTime();
   let net = 0;
@@ -75,6 +78,10 @@ export function dividendRowUsesSharesAtExDate(
 
 export interface DividendTrackerRow {
   symbol: string;
+  /**
+   * Shares used for this row: at ex (before ex-day) when the row uses entitlement logic; otherwise current open long.
+   * Matches est. total = amountPerShare × this value when amount is known.
+   */
   shares: number;
   exDate: string;
   paymentDate: string | null;
@@ -236,7 +243,9 @@ export async function loadDividendTrackerRows(options: {
           const amt = d.amount != null && Number.isFinite(d.amount) ? d.amount : null;
           const sharesAtEx = longSharesAtExDate(symTrades, ex);
           const useAtEx = dividendRowUsesSharesAtExDate(d.payment_date, exStr, today);
+          /** Past / paid: entitlement shares at prior close to ex-day. Future / not yet paid: current open long. */
           const qty = useAtEx ? sharesAtEx : currentShares;
+          if (!Number.isFinite(qty) || qty <= 0) continue;
           const est = amt != null ? amt * qty : null;
           out.push({
             symbol,
