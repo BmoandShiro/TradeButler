@@ -901,11 +901,10 @@ export default function Journal() {
 
   /** Merge persisted tab scroll map with in-memory ref so unmount / partial saves never wipe other keys (same pattern as Strategies). */
   const saveJournalScrollPositionsMerged = useCallback((storageKey: string) => {
-    const preTabJournalPage = tabScrollPositions.current.get("journal_page") ?? null;
     const merged = new Map<TabType, number>(restoreTabScrollPositions(storageKey));
     tabScrollPositions.current.forEach((v, k) => {
       // In-memory journal_page can be 0 from a mount/resize scroll event before the user scrolls Overview;
-      // do not let that overwrite a positive value restored from localStorage (see debug H2 journal saves).
+      // do not let that overwrite a positive value restored from localStorage.
       if (
         k === "journal_page" &&
         storageKey === "journal" &&
@@ -953,31 +952,6 @@ export default function Journal() {
       }
     }
     saveAllScrollPositions(merged, leftTop, null, storageKey);
-    // #region agent log
-    fetch("http://127.0.0.1:7387/ingest/6d4142e7-afcd-4188-969e-10586ca15c31", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "5837a7" },
-      body: JSON.stringify({
-        sessionId: "5837a7",
-        hypothesisId: "H2",
-        location: "Journal.tsx:saveJournalScrollPositionsMerged",
-        message: "merged save",
-        data: {
-          storageKey,
-          journalPageMerged: merged.get("journal_page") ?? null,
-          lastOv: lastJournalOverviewPageScrollRef.current,
-          lastEntry: lastJournalEntryPageScrollRef.current,
-          dirtyOv: journalOverviewScrollUserDirtyRef.current,
-          dirtyEntry: journalEntryReadScrollUserDirtyRef.current,
-          preTabJournalPage,
-          leftTopResolved: leftTop,
-          leftDom: leftEl?.scrollTop ?? null,
-          leftDisk: prevPanels.leftPanelScroll,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
   }, []);
 
   useEffect(() => {
@@ -2538,20 +2512,6 @@ export default function Journal() {
       }
       if (jp != null && jp > 0 && journalOverviewScrollRef.current) {
         journalOverviewScrollRef.current.scrollTop = jp;
-        // #region agent log
-        fetch("http://127.0.0.1:7387/ingest/6d4142e7-afcd-4188-969e-10586ca15c31", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "5837a7" },
-          body: JSON.stringify({
-            sessionId: "5837a7",
-            hypothesisId: "H3",
-            location: "Journal.tsx:overviewRestore",
-            message: "applied journal_page overview",
-            data: { jp, appliedTop: journalOverviewScrollRef.current?.scrollTop ?? null },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
       }
     }, 80);
     return () => clearTimeout(t);
@@ -2612,37 +2572,7 @@ export default function Journal() {
     if (selectedEntry != null || loading || isCreating || isEditing) return;
     if (pendingRestoreEntryId != null) return;
     const el = journalOverviewScrollRef.current;
-    if (!el) {
-      // #region agent log
-      fetch("http://127.0.0.1:7387/ingest/6d4142e7-afcd-4188-969e-10586ca15c31", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "5837a7" },
-        body: JSON.stringify({
-          sessionId: "5837a7",
-          hypothesisId: "H1",
-          location: "Journal.tsx:overviewScrollListen",
-          message: "overview ref null skip",
-          data: {},
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
-      return;
-    }
-    // #region agent log
-    fetch("http://127.0.0.1:7387/ingest/6d4142e7-afcd-4188-969e-10586ca15c31", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "5837a7" },
-      body: JSON.stringify({
-        sessionId: "5837a7",
-        hypothesisId: "H1",
-        location: "Journal.tsx:overviewScrollListen",
-        message: "attach overview scroll listener",
-        data: { scrollHeight: el.scrollHeight },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
+    if (!el) return;
     let debounceId: number | undefined;
     const onScroll = () => {
       journalOverviewScrollUserDirtyRef.current = true;
