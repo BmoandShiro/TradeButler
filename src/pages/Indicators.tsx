@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Code2, Plus, Search, Star, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { addIndicator, getPrebuiltIndicatorThumbnails, loadIndicators, loadStrategyIndicatorIds, updateIndicator, type Indicator } from "../utils/indicatorsStore";
+import {
+  addIndicator,
+  getPrebuiltIndicatorThumbnails,
+  loadIndicators,
+  loadStrategyIndicatorIds,
+  updateIndicator,
+  type Indicator,
+} from "../utils/indicatorsStore";
+import { CustomOtherSignalsSettingsPanel } from "../components/CustomOtherSignalsSettingsPanel";
+import { EmaMaJournalSettingsEditor } from "../components/EmaMaJournalSettingsEditor";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import { getSandboxStrategies } from "../utils/sandboxStore";
 
@@ -37,6 +47,7 @@ function hexToRgba(hex: string, alpha: number): string {
 
 export default function IndicatorsPage({ view = "signals" }: { view?: SignalsView }) {
   const FAVORITES_KEY = "tradebutler_favorite_indicators_v1";
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all"); // "all" | "custom" | "Momentum" | ...
@@ -70,6 +81,22 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
   const [strategyFilterId, setStrategyFilterId] = useState<number | "all">("all");
 
   const [selected, setSelected] = useState<Indicator | null>(null);
+
+  useEffect(() => {
+    const focus = searchParams.get("focus");
+    if (!focus) return;
+    const ind = loadIndicators().find((i) => i.id === focus);
+    if (ind) setSelected(ind);
+    setSearchParams(
+      (prev) => {
+        const n = new URLSearchParams(prev);
+        n.delete("focus");
+        return n;
+      },
+      { replace: true }
+    );
+  }, [searchParams, setSearchParams]);
+
   const [showAdd, setShowAdd] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
 
@@ -93,7 +120,6 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
   const [editCategory, setEditCategory] = useState<Indicator["category"]>("Custom");
   const [editCapturesTimeframes, setEditCapturesTimeframes] = useState<boolean>(false);
   const [editOtherSignals, setEditOtherSignals] = useState<string[]>([]);
-  const [editOtherSignalDraft, setEditOtherSignalDraft] = useState<string>("");
   const [editAccentColor, setEditAccentColor] = useState<string>("#F59E0B");
   const [editThemeMode, setEditThemeMode] = useState<"auto" | "manual">("manual");
   const [editThumbSource, setEditThumbSource] = useState<"upload" | "preset">("preset");
@@ -255,7 +281,6 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
     setEditCategory(ind.category ?? "Custom");
     setEditCapturesTimeframes(ind.capturesTimeframes === true || ind.id.includes("_timeframe"));
     setEditOtherSignals(Array.isArray(ind.otherSignals) ? ind.otherSignals : []);
-    setEditOtherSignalDraft("");
     const accent = ind.accentColor ?? "#F59E0B";
     setEditAccentColor(accent);
 
@@ -1079,94 +1104,25 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
                   Captures timeframes
                 </label>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "4px" }}>
-                  <div style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 650 }}>Other signals</div>
-                  <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
-                    <input
-                      value={editOtherSignalDraft}
-                      onChange={(e) => setEditOtherSignalDraft(e.target.value)}
-                      placeholder="Add signal label"
-                      disabled={selected?.kind !== "custom"}
-                      style={{
-                        padding: "10px 12px",
-                        background: "var(--bg-secondary)",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: "10px",
-                        color: "var(--text-primary)",
-                        outline: "none",
-                        minWidth: "220px",
-                      }}
-                    />
-                    <button
-                      type="button"
-                      disabled={selected?.kind !== "custom" || !editOtherSignalDraft.trim()}
-                      onClick={() => {
-                        const clean = editOtherSignalDraft.trim();
-                        if (!clean) return;
-                        const lower = clean.toLowerCase();
-                        setEditOtherSignals((prev) => {
-                          if (prev.some((x) => x.toLowerCase() === lower)) return prev;
-                          return [...prev, clean];
-                        });
-                        setEditOtherSignalDraft("");
-                      }}
-                      style={{
-                        padding: "10px 14px",
-                        borderRadius: "10px",
-                        border: "1px solid var(--border-color)",
-                        background: "var(--bg-secondary)",
-                        color: "var(--text-primary)",
-                        cursor: "pointer",
-                        fontWeight: 750,
-                        fontSize: "12px",
-                      }}
-                    >
-                      Add
-                    </button>
-                  </div>
-                  {editOtherSignals.length === 0 ? (
-                    <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>No other signals added yet.</div>
-                  ) : (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
-                      {editOtherSignals.map((sig) => (
-                        <span
-                          key={sig}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "8px",
-                            padding: "6px 10px",
-                            borderRadius: "999px",
-                            border: "1px solid var(--border-color)",
-                            background: "var(--bg-tertiary)",
-                            color: "var(--text-primary)",
-                            fontSize: "12px",
-                            fontWeight: 750,
-                          }}
-                        >
-                          {sig}
-                          <button
-                            type="button"
-                            disabled={selected?.kind !== "custom"}
-                            onClick={() => setEditOtherSignals((prev) => prev.filter((x) => x !== sig))}
-                            style={{
-                              border: "none",
-                              background: "transparent",
-                              color: "var(--text-secondary)",
-                              cursor: "pointer",
-                              display: "inline-flex",
-                              padding: 0,
-                            }}
-                            aria-label={`Remove signal ${sig}`}
-                            title="Remove"
-                          >
-                            <X size={14} />
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                {selected.kind === "custom" && (
+                  <CustomOtherSignalsSettingsPanel
+                    indicatorId={selected.id}
+                    otherSignals={editOtherSignals}
+                    hideInlineAddField
+                    onAddSignalToIndicator={(raw) => {
+                      const clean = raw.trim();
+                      if (!clean) return;
+                      const lower = clean.toLowerCase();
+                      setEditOtherSignals((prev) => {
+                        if (prev.some((x) => x.toLowerCase() === lower)) return prev;
+                        return [...prev, clean];
+                      });
+                    }}
+                    onRemoveSignalFromIndicator={(label) => {
+                      setEditOtherSignals((prev) => prev.filter((x) => x !== label));
+                    }}
+                  />
+                )}
 
                 <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                   <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 650 }}>Description</label>
@@ -1236,9 +1192,46 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
                     }}
                   />
                 )}
-                <div style={{ color: "var(--text-secondary)", lineHeight: 1.7, fontSize: "14px", whiteSpace: "pre-wrap" }}>
-                  {selected.description || "—"}
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ color: "var(--text-secondary)", lineHeight: 1.7, fontSize: "14px", whiteSpace: "pre-wrap" }}>
+                    {selected.description || "—"}
+                  </div>
+
+                  {selected.kind === "custom" && (
+                    <div style={{ border: "1px solid var(--border-color)", borderRadius: 12, overflow: "hidden", background: "var(--bg-secondary)" }}>
+                      <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                        Other signals
+                      </div>
+                      {(selected.otherSignals ?? []).length > 0 ? (
+                        <div style={{ padding: 12, display: "flex", flexWrap: "wrap", gap: 10 }}>
+                          {(selected.otherSignals ?? []).map((sig) => (
+                            <span
+                              key={sig}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                padding: "6px 10px",
+                                borderRadius: 999,
+                                border: "1px solid var(--border-color)",
+                                background: "var(--bg-tertiary)",
+                                color: "var(--text-primary)",
+                                fontSize: 12,
+                                fontWeight: 750,
+                              }}
+                            >
+                              {sig}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      <div style={{ padding: "10px 12px 14px", color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.45 }}>
+                        Open Edit to add signals and set journal layout (values, checkboxes, colors).
+                      </div>
+                    </div>
+                  )}
                 </div>
+
+                {(selected.id === "ema" || selected.id === "ma") && <EmaMaJournalSettingsEditor indicatorId={selected.id} />}
                 <div style={{ border: "1px solid var(--border-color)", borderRadius: "12px", overflow: "hidden", background: "var(--bg-secondary)" }}>
                   <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", fontSize: "12px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     Code

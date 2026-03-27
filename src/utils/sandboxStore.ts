@@ -465,6 +465,62 @@ export function getSandboxEmotionSurveys(): DemoEmotionSurvey[] {
   return loadSandboxState().emotionSurveys;
 }
 
+/** Insert or update the before/during/after survey for a sandbox emotional state (matches DB emotion_surveys columns). */
+/** Remove survey rows for these emotional state ids (before re-inserting one canonical row). */
+export function deleteSandboxEmotionSurveysForStateIds(stateIds: number[]): void {
+  if (stateIds.length === 0) return;
+  const idSet = new Set(stateIds);
+  const state = loadSandboxState();
+  saveSandboxState({
+    ...state,
+    emotionSurveys: state.emotionSurveys.filter((s) => !idSet.has(s.emotional_state_id)),
+  });
+}
+
+export function upsertSandboxEmotionSurveyFromResponses(
+  emotionalStateId: number,
+  sr: Record<string, number>,
+  timestamp: string
+): void {
+  const state = loadSandboxState();
+  const idx = state.emotionSurveys.findIndex((s) => s.emotional_state_id === emotionalStateId);
+  const nextSurvey: Omit<DemoEmotionSurvey, "id"> = {
+    emotional_state_id: emotionalStateId,
+    timestamp,
+    before_calm_clear: sr.before_calm_clear ?? 6,
+    before_urgency_pressure: sr.before_urgency_pressure ?? 6,
+    before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6,
+    before_fomo: sr.before_fomo ?? 6,
+    before_recovering_loss: sr.before_recovering_loss ?? 6,
+    before_patient_detached: sr.before_patient_detached ?? 6,
+    before_trust_process: sr.before_trust_process ?? 6,
+    before_emotional_state: sr.before_emotional_state ?? 6,
+    during_stable: sr.during_stable ?? 6,
+    during_tension_stress: sr.during_tension_stress ?? 6,
+    during_tempted_interfere: sr.during_tempted_interfere ?? 6,
+    during_need_control: sr.during_need_control ?? 6,
+    during_fear_loss: sr.during_fear_loss ?? 6,
+    during_excitement_greed: sr.during_excitement_greed ?? 6,
+    during_mentally_present: sr.during_mentally_present ?? 6,
+    after_accept_outcome: sr.after_accept_outcome ?? 6,
+    after_emotional_reaction: sr.after_emotional_reaction ?? 6,
+    after_confidence_affected: sr.after_confidence_affected ?? 6,
+    after_tempted_another_trade: sr.after_tempted_another_trade ?? 6,
+    after_proud_discipline: sr.after_proud_discipline ?? 6,
+  };
+  if (idx >= 0) {
+    const next = [...state.emotionSurveys];
+    next[idx] = { ...next[idx], ...nextSurvey };
+    saveSandboxState({ ...state, emotionSurveys: next });
+  } else {
+    const id = nextId(state.emotionSurveys);
+    saveSandboxState({
+      ...state,
+      emotionSurveys: [...state.emotionSurveys, { id, ...nextSurvey }],
+    });
+  }
+}
+
 export function getSandboxEmotionalStatesForJournal(entryId: number): SandboxEmotionalState[] {
   const states = loadSandboxState().emotionalStates;
   return states.filter(
@@ -581,6 +637,7 @@ export function getSandboxStrategyChecklistItemMetrics(strategyId: number) {
       times_checked,
       avg_performance: 1.2 + (i.id % 3) * 0.5,
       performance_kind: "r_multiple",
+      description: (i as { description?: string | null }).description ?? null,
     };
   });
 }
@@ -601,6 +658,7 @@ export function getSandboxStrategyChecklistItemMetricsByOutcome(strategyId: numb
       times_checked_good: good,
       times_checked_bad: bad,
       times_not_checked_bad: notCheckedBad,
+      description: (i as { description?: string | null }).description ?? null,
     };
   });
 }
@@ -612,5 +670,6 @@ export function getSandboxCustomSurveyMetrics(strategyId: number) {
     item_text: i.item_text,
     response_count: 24 + (i.id % 10),
     avg_value: 3 + (i.id % 3) * 0.5,
+    description: (i as { description?: string | null }).description ?? null,
   }));
 }

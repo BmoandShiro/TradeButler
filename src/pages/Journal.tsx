@@ -20,9 +20,11 @@ import { CSS } from "@dnd-kit/utilities";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
 import { format, parse } from "date-fns";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
+import { JournalSignalsSettingsModal } from "../components/JournalSignalsSettingsModal";
 import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
 import { getSurveyScoreColor, getSurveyScoreBgRgba } from "../utils/intensityColor";
 import RichTextEditor from "../components/RichTextEditor";
+import { ChecklistItemCaption } from "../components/ChecklistItemCaption";
 import { TradeChart } from "../components/TradeChart";
 import {
   saveAllScrollPositions,
@@ -49,11 +51,15 @@ import {
   getSandboxEmotionalStates,
   getSandboxEmotionalStatesForJournal,
   getSandboxEmotionSurveys,
+  addSandboxEmotionalState,
   addSandboxJournalEntryToEmotionalStates,
   removeSandboxJournalEntryFromEmotionalStates,
   linkSandboxEmotionalStatesToJournal,
   deleteSandboxEmotionalState,
   loadSandboxState,
+  updateSandboxEmotionalState,
+  deleteSandboxEmotionSurveysForStateIds,
+  upsertSandboxEmotionSurveyFromResponses,
 } from "../utils/sandboxStore";
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -71,14 +77,21 @@ import {
   loadStrategyIndicatorIds,
   loadStrategyRuleTexts,
   loadStrategyCustomRuleSets,
+  loadEmaMaJournalRowVisibility,
   loadJournalIndicatorValue,
+  loadJournalIndicatorValueRaw,
+  loadMovingAverageLengthsConfigForIndicator,
   setJournalIndicatorValue,
   migrateJournalIndicatorDraftValues,
   loadJournalIndicatorDivergence,
+  loadJournalIndicatorMaFlags,
   setJournalIndicatorDivergence,
+  setJournalIndicatorMaFlags,
   migrateJournalIndicatorDraftDivergence,
+  loadIndicatorSignalPrefs,
   loadJournalIndicatorOtherSignals,
   setJournalIndicatorOtherSignal,
+  setJournalIndicatorOtherSignalField,
   migrateJournalIndicatorDraftOtherSignals,
   loadJournalTradePatternIndicatorIds,
   setJournalTradePatternIndicatorIds,
@@ -150,6 +163,7 @@ interface ChecklistItem {
   item_order: number;
   checklist_type: string;
   parent_id: number | null;
+  description?: string | null;
 }
 
 interface JournalChecklistResponse {
@@ -161,12 +175,15 @@ interface JournalChecklistResponse {
   response_value?: number | null; // For survey items: 1-10 scale
 }
 
-// All checklist and survey items are scoped per journal trade.
-// Emotional states are the only thing that can be shared at the entry level.
-const ENTRY_LEVEL_CHECKLIST_TYPES: string[] = [];
+// Checklist items in this list are persisted at the *journal entry* level
+// (journal_trade_ids = null), meaning their state is not duplicated per trade.
+// Emotional states are the only thing that can be shared at the entry level besides this.
+const ENTRY_LEVEL_CHECKLIST_TYPES: string[] = ["daily_analysis", "daily_mantra"];
 
 /** Hidden placeholder used in the DB for empty custom checklist types; never show to users. */
 const EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER = "__empty_custom_checklist_placeholder__";
+/** Hidden placeholder emotion so surveys can be saved without selecting chips. */
+const SURVEY_ONLY_EMOTION = "__survey_only__";
 
   /** Emotional state from Emotions (linked to journal entry/implementation) */
 interface JournalEmotionalState {
@@ -264,6 +281,164 @@ function groupEmotionalStatesByTimestamp(states: JournalEmotionalState[]): Journ
   return Array.from(byTs.values()).sort(
     (a, b) => new Date(b[0].timestamp).getTime() - new Date(a[0].timestamp).getTime()
   );
+}
+
+/** If multiple survey rows exist for chips in one group, use the newest (save/re-pin can leave duplicates). */
+function pickLatestSurveyForGroup(surveys: JournalEmotionSurvey[], groupStateIds: Set<number>): JournalEmotionSurvey | undefined {
+  const matching = surveys.filter((s) => groupStateIds.has(s.emotional_state_id));
+  if (matching.length === 0) return undefined;
+  return matching.reduce((a, b) => {
+    const ta = new Date(a.timestamp).getTime();
+    const tb = new Date(b.timestamp).getTime();
+    return tb >= ta ? b : a;
+  });
+}
+
+/** Map responses to the camelCase invoke payload expected by Tauri command args. */
+function buildEmotionSurveyInvokeArgs(sr: Record<string, number>) {
+  return {
+    beforeCalmClear: sr.before_calm_clear ?? 6,
+    beforeUrgencyPressure: sr.before_urgency_pressure ?? 6,
+    beforeConfidenceVsValidation: sr.before_confidence_vs_validation ?? 6,
+    beforeFomo: sr.before_fomo ?? 6,
+    beforeRecoveringLoss: sr.before_recovering_loss ?? 6,
+    beforePatientDetached: sr.before_patient_detached ?? 6,
+    beforeTrustProcess: sr.before_trust_process ?? 6,
+    beforeEmotionalState: sr.before_emotional_state ?? 6,
+    duringStable: sr.during_stable ?? 6,
+    duringTensionStress: sr.during_tension_stress ?? 6,
+    duringTemptedInterfere: sr.during_tempted_interfere ?? 6,
+    duringNeedControl: sr.during_need_control ?? 6,
+    duringFearLoss: sr.during_fear_loss ?? 6,
+    duringExcitementGreed: sr.during_excitement_greed ?? 6,
+    duringMentallyPresent: sr.during_mentally_present ?? 6,
+    afterAcceptOutcome: sr.after_accept_outcome ?? 6,
+    afterEmotionalReaction: sr.after_emotional_reaction ?? 6,
+    afterConfidenceAffected: sr.after_confidence_affected ?? 6,
+    afterTemptedAnotherTrade: sr.after_tempted_another_trade ?? 6,
+    afterProudDiscipline: sr.after_proud_discipline ?? 6,
+  };
+}
+
+function surveyHasNonDefaultResponses(sr: Record<string, number>): boolean {
+  return Object.values(JOURNAL_SURVEY_QUESTIONS)
+    .flat()
+    .some((q) => (sr[q.key] ?? 6) !== 6);
+}
+
+function emotionalStateGroupKey(picked: JournalEmotionalState[]): string {
+  return picked
+    .map((s) => s.id)
+    .sort((a, b) => a - b)
+    .join(",");
+}
+
+function pickEmotionalGroupForTradeIndex(
+  tradeIndex: number,
+  tradesFormData: Array<{ id: number | null }>,
+  tradeIdsInOrder: number[],
+  freshStates: JournalEmotionalState[],
+  entryLevelGroup: JournalEmotionalState[] | undefined
+): JournalEmotionalState[] | null {
+  const t = tradesFormData[tradeIndex];
+  const journalTradeId = t.id ?? tradeIdsInOrder[tradeIndex] ?? null;
+  const tradeGroups = groupEmotionalStatesByTimestamp(
+    freshStates.filter((s) => journalTradeId != null && s.journal_trade_id === journalTradeId)
+  );
+  const picked = tradeGroups[0] ?? entryLevelGroup;
+  if (!picked || picked.length === 0) return null;
+  return picked;
+}
+
+/** Persist emotional state form edits (intensities + before/during/after survey sliders) for already-linked journal entries. */
+async function syncEmotionalStateFormEditsAfterJournalSave(
+  useSandbox: boolean,
+  entryId: number,
+  tradesFormData: Array<{ id: number | null }>,
+  tradeIdsInOrder: number[],
+  emotionalStateFormByTrade: Map<number, { selectedEmotions: Record<string, number>; notes: string; surveyResponses: Record<string, number> }>,
+  paperArgs: { paperOnly?: boolean },
+  activeTradeIndex: number
+): Promise<void> {
+  const nowSync = new Date().toISOString();
+  let freshStates: JournalEmotionalState[];
+  if (useSandbox) {
+    freshStates = getSandboxEmotionalStatesForJournal(entryId) as unknown as JournalEmotionalState[];
+  } else {
+    freshStates = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId, ...paperArgs });
+  }
+  const entryLevelGroups = groupEmotionalStatesByTimestamp(freshStates.filter((s) => s.journal_trade_id == null));
+  const entryLevelGroup = entryLevelGroups[0];
+
+  const activePicked = pickEmotionalGroupForTradeIndex(
+    activeTradeIndex,
+    tradesFormData,
+    tradeIdsInOrder,
+    freshStates,
+    entryLevelGroup
+  );
+  const activeGroupKey = activePicked ? emotionalStateGroupKey(activePicked) : null;
+
+  const syncedGroupKeys = new Set<string>();
+
+  for (let tradeIndex = 0; tradeIndex < tradesFormData.length; tradeIndex++) {
+    const picked = pickEmotionalGroupForTradeIndex(tradeIndex, tradesFormData, tradeIdsInOrder, freshStates, entryLevelGroup);
+    if (!picked) continue;
+    const gk = emotionalStateGroupKey(picked);
+    if (syncedGroupKeys.has(gk)) continue;
+    syncedGroupKeys.add(gk);
+
+    const formTradeIndex =
+      activeGroupKey != null && gk === activeGroupKey ? activeTradeIndex : tradeIndex;
+    let form = emotionalStateFormByTrade.get(formTradeIndex);
+    if (!form && formTradeIndex !== tradeIndex) form = emotionalStateFormByTrade.get(tradeIndex);
+    if (!form) continue;
+
+    const byEmotion = new Map(picked.map((s) => [s.emotion, s]));
+    for (const [emotion, intensity] of Object.entries(form.selectedEmotions)) {
+      const st = byEmotion.get(emotion);
+      if (!st?.id) continue;
+      if (useSandbox) {
+        updateSandboxEmotionalState(st.id, {
+          emotion,
+          intensity,
+          notes: form.notes || null,
+        });
+      } else {
+        await invoke("update_emotional_state", {
+          id: st.id,
+          emotion,
+          intensity,
+          notes: form.notes || null,
+          journalEntryId: st.journal_entry_id ?? entryId,
+          journalTradeId: st.journal_trade_id ?? null,
+        });
+      }
+    }
+
+    const sr = form.surveyResponses;
+    const surveyHasNonDefault = surveyHasNonDefaultResponses(sr);
+    const shouldPersistSurvey =
+      surveyHasNonDefault || Object.keys(sr).length > 0;
+    if (!shouldPersistSurvey) continue;
+
+    const canonicalStateId = picked[0].id;
+    const pickedIds = picked.map((s) => s.id).filter((id): id is number => id != null);
+
+    if (useSandbox) {
+      deleteSandboxEmotionSurveysForStateIds(pickedIds);
+      upsertSandboxEmotionSurveyFromResponses(canonicalStateId, sr, nowSync);
+    } else {
+      for (const sid of pickedIds) {
+        await invoke("delete_emotion_survey_for_state", { emotionalStateId: sid });
+      }
+      await invoke("add_emotion_survey", {
+        emotionalStateId: canonicalStateId,
+        timestamp: nowSync,
+        ...buildEmotionSurveyInvokeArgs(sr),
+      });
+    }
+  }
 }
 
 /** Emotional state IDs that are linked to the given real trade (trade_id or trade_ids JSON). */
@@ -476,8 +651,14 @@ export default function Journal() {
   const [allJournalTrades, setAllJournalTrades] = useState<JournalTrade[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const isCreatingRef = useRef(isCreating);
+  const isEditingRef = useRef(isEditing);
+  useEffect(() => { isCreatingRef.current = isCreating; }, [isCreating]);
+  useEffect(() => { isEditingRef.current = isEditing; }, [isEditing]);
   const [activeTradeIndex, setActiveTradeIndex] = useState(0);
   const [activeTab, setActiveTab] = useState<TabType>("trade");
+  const selectedEntryIdRef = useRef<number | null>(null);
+  useEffect(() => { selectedEntryIdRef.current = selectedEntry?.id ?? null; }, [selectedEntry?.id]);
   // After a successful manual save, suppress background autosaves that could re-enter edit mode
   const [justSaved, setJustSaved] = useState(false);
   const justSavedRef = useRef(justSaved);
@@ -593,6 +774,8 @@ export default function Journal() {
 
   // Checklist state (per trade, but checklists come from strategy)
   const [strategyChecklists, setStrategyChecklists] = useState<Map<number, Map<string, ChecklistItem[]>>>(new Map());
+  /** Section-level blurbs from `get_strategy_checklist_section_descriptions` (same as Strategies checklist description field). */
+  const [strategyChecklistSectionDescriptions, setStrategyChecklistSectionDescriptions] = useState<Map<number, Map<string, string>>>(new Map());
   const [checklistResponses, setChecklistResponses] = useState<Map<number, Map<number, boolean>>>(new Map()); // trade_index -> checklist_item_id -> is_checked
   const [surveyScores, setSurveyScores] = useState<Map<number, Map<number, number>>>(new Map()); // trade_index -> checklist_item_id -> 1-10 (for survey type items)
   // Entry-level (Analysis & Mantra): associated with whole journal by default, optionally with specific trades
@@ -605,12 +788,19 @@ export default function Journal() {
   const [actualTrades, setActualTrades] = useState<ActualTrade[]>([]); // all actual trades for "Link to actual trades" modal
   const [linkActualTradesModalJournalTradeId, setLinkActualTradesModalJournalTradeId] = useState<number | null>(null);
   const [linkActualTradesSelection, setLinkActualTradesSelection] = useState<number[]>([]); // selection in "Link to actual trades" modal
+  const [linkActualTradesSearchQuery, setLinkActualTradesSearchQuery] = useState("");
+  const [linkActualTradesSortBy, setLinkActualTradesSortBy] = useState<"date" | "symbol" | "side">("date");
+  const [linkActualTradesSortDirection, setLinkActualTradesSortDirection] = useState<"asc" | "desc">("desc");
 
   // Emotional states linked to this journal entry/implementation (same as Emotions page)
   const [journalEmotionalStates, setJournalEmotionalStates] = useState<JournalEmotionalState[]>([]);
   const [showAddEmotionalStateForm, setShowAddEmotionalStateForm] = useState(false);
   const DEFAULT_EMOTIONAL_STATE_FORM = useMemo(() => ({ selectedEmotions: {} as Record<string, number>, notes: "", surveyResponses: {} as Record<string, number> }), []);
   const [emotionalStateFormByTrade, setEmotionalStateFormByTrade] = useState<Map<number, { selectedEmotions: Record<string, number>; notes: string; surveyResponses: Record<string, number> }>>(new Map());
+  const emotionalStateFormByTradeRef = useRef(emotionalStateFormByTrade);
+  useEffect(() => {
+    emotionalStateFormByTradeRef.current = emotionalStateFormByTrade;
+  }, [emotionalStateFormByTrade]);
   const newEmotionalStateForm = useMemo(
     () => emotionalStateFormByTrade.get(activeTradeIndex) ?? DEFAULT_EMOTIONAL_STATE_FORM,
     [emotionalStateFormByTrade, activeTradeIndex, DEFAULT_EMOTIONAL_STATE_FORM]
@@ -801,9 +991,14 @@ export default function Journal() {
   /** Previous selected entry id (for resetting overview scroll dirty only when leaving an entry). */
   const prevJournalSelectedEntryIdRef = useRef<number | null>(null);
   const isManualSaveInProgressRef = useRef(false);
+  /** When true, skip persisting draft (prevents effect cleanup from re-writing the old journal after clearWorkInProgress). */
+  const suppressWorkInProgressSaveRef = useRef(false);
+  /** Incremented when starting a new load or "+ Add Entry" so in-flight `loadEntry` cannot overwrite a fresh create form. */
+  const journalLoadTokenRef = useRef(0);
 
   // Save work-in-progress to localStorage
   const saveWorkInProgress = () => {
+    if (suppressWorkInProgressSaveRef.current) return;
     if (isCreating || isEditing) {
       const workInProgress = {
         entryFormData,
@@ -1156,9 +1351,10 @@ export default function Journal() {
       loadStrategyChecklists(entryFormData.strategy_id);
     } else {
       setStrategyChecklists(new Map());
+      setStrategyChecklistSectionDescriptions(new Map());
       setChecklistResponses(new Map());
     }
-  }, [entryFormData.strategy_id]);
+  }, [entryFormData.strategy_id, dataMode]);
 
   useEffect(() => {
     if (!entryFormData.strategy_id) {
@@ -1283,7 +1479,7 @@ export default function Journal() {
           }
           return;
         }
-        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+        const paperArgs = { paperOnly: dataMode === "paper" };
         const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
           journalEntryId: selectedEntry.id,
           journalTradeId: jtId ?? undefined,
@@ -1344,7 +1540,7 @@ export default function Journal() {
           if (!cancelled) setViewEntryEmotionalStates(states);
           return;
         }
-        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+        const paperArgs = { paperOnly: dataMode === "paper" };
         const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
           journalEntryId: selectedEntry.id,
           ...paperArgs,
@@ -1401,7 +1597,7 @@ export default function Journal() {
           })));
           return;
         }
-        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+        const paperArgs = { paperOnly: dataMode === "paper" };
         const [states, trades] = await Promise.all([
           invoke<JournalEmotionalState[]>("get_emotional_states", paperArgs),
           invoke<{ id: number; symbol: string; side: string; timestamp: string; quantity: number; price: number }[]>("get_trades", paperArgs),
@@ -1529,14 +1725,17 @@ export default function Journal() {
     }
   };
 
-  const loadTrades = async (entryId: number): Promise<JournalTrade[]> => {
+  const loadTrades = async (entryId: number, opts?: { loadToken?: number }): Promise<JournalTrade[]> => {
+    const t = opts?.loadToken;
     try {
       if (dataMode === "sandbox") {
         const trades = getSandboxJournalTrades(entryId) as unknown as JournalTrade[];
+        if (t !== undefined && t !== journalLoadTokenRef.current) return trades;
         setSelectedTrades(trades);
         return trades;
       }
       const trades = await invoke<JournalTrade[]>("get_journal_trades", { journalEntryId: entryId });
+      if (t !== undefined && t !== journalLoadTokenRef.current) return trades;
       setSelectedTrades(trades);
       return trades;
     } catch (error) {
@@ -1545,14 +1744,17 @@ export default function Journal() {
     }
   };
 
-  const loadLinkedPairs = async (entryId: number) => {
+  const loadLinkedPairs = async (entryId: number, opts?: { loadToken?: number }) => {
+    const t = opts?.loadToken;
     try {
       if (dataMode === "sandbox") {
         const pairs = getSandboxJournalEntryPairsAsPairedTrades(entryId) as unknown as PairedTrade[];
+        if (t !== undefined && t !== journalLoadTokenRef.current) return;
         setLinkedPairs(pairs);
         return;
       }
       const pairs = await invoke<PairedTrade[]>("get_journal_entry_pairs", { journalEntryId: entryId });
+      if (t !== undefined && t !== journalLoadTokenRef.current) return;
       setLinkedPairs(pairs);
     } catch (error) {
       console.error("Error loading linked pairs:", error);
@@ -1606,7 +1808,7 @@ export default function Journal() {
       end.setDate(end.getDate() + 1);
       const startDate = start.toISOString();
       const endDate = end.toISOString();
-      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+      const paperArgs = { paperOnly: dataMode === "paper" };
       const groups = await invoke<Array<{ entry_trade: { id: number }; position_trades: Array<{ id?: number; symbol: string; side: string; quantity: number; price: number; timestamp: string; order_type?: string; status?: string; fees?: number | null; notes?: string | null; strategy_id?: number | null }> }>>("get_position_groups", { pairing_method: "FIFO", startDate, endDate, ...paperArgs });
       const group = groups.find(
         (g) =>
@@ -1635,10 +1837,24 @@ export default function Journal() {
 
   const loadStrategyChecklists = async (strategyId: number) => {
     try {
-      const allItems = await invoke<ChecklistItem[]>("get_strategy_checklist", {
-        strategyId: strategyId,
-        checklistType: null,
-      });
+      const [allItems, sectionDescRows] = await Promise.all([
+        invoke<ChecklistItem[]>("get_strategy_checklist", {
+          strategyId: strategyId,
+          checklistType: null,
+        }),
+        dataMode !== "sandbox"
+          ? invoke<Array<{ checklist_type: string; description: string | null }>>("get_strategy_checklist_section_descriptions", {
+              strategyId: strategyId,
+            }).catch(() => [] as Array<{ checklist_type: string; description: string | null }>)
+          : Promise.resolve([] as Array<{ checklist_type: string; description: string | null }>),
+      ]);
+
+      const sectionDescMap = new Map<string, string>();
+      for (const row of sectionDescRows) {
+        const d = row.description?.trim();
+        if (d) sectionDescMap.set(row.checklist_type, d);
+      }
+      setStrategyChecklistSectionDescriptions(new Map([[strategyId, sectionDescMap]]));
 
       // Group by checklist_type
       const grouped = new Map<string, ChecklistItem[]>();
@@ -1743,13 +1959,29 @@ export default function Journal() {
   };
 
   const handleCreateNew = () => {
+    journalLoadTokenRef.current += 1;
+    setPendingRestoreEntryId(null);
+    suppressWorkInProgressSaveRef.current = true;
     clearWorkInProgress(); // Clear any old work in progress
     setIsCreating(true);
     setIsEditing(false);
     setSelectedEntry(null);
+    setJustSaved(false);
+    setEditHistory([]);
+    setOriginalEntryData(null);
+    setEmotionalStateFormByTrade(new Map());
+    setShowAddEmotionalStateForm(false);
+    setPendingEmotionalStates([]);
+    setNewEmotionalStateLinkScope("entry");
+    setNewEmotionalStateTradeIndices([]);
     setPendingLinkedPairs([]);
     localStorage.removeItem(`journal_selected_entry_id_${dataMode}`);
     setSelectedTrades([]);
+    setJournalEmotionalStates([]);
+    setViewEntryEmotionalStates([]);
+    setViewEntrySurveys([]);
+    setViewFocusedTradeIndex(0);
+    setSurveyScores(new Map());
     setJournalTradeActualTradeIds(new Map());
     setLinkActualTradesModalJournalTradeId(null);
     setPendingEmotionalStates([]);
@@ -1793,12 +2025,44 @@ export default function Journal() {
     setChecklistTradeAssociations(new Map());
     setLinkedPairs([]);
     tabScrollPositions.current.clear();
+    setTradeAssociationModalItemId(null);
+    setShowLinkPairsModal(false);
+    // Defer until after React runs effect cleanups (draft save) so suppress stays true for that save.
+    setTimeout(() => {
+      suppressWorkInProgressSaveRef.current = false;
+      if (journalScrollContainerRef.current) journalScrollContainerRef.current.scrollTop = 0;
+    }, 0);
+
+    // Defensive: if any in-flight async task re-applies the prior entry's trades after "+ Add Entry",
+    // force-reset the trade tabs/symbol row again as long as we're still creating a new entry.
+    setTimeout(() => {
+      if (!isCreatingRef.current) return;
+      if (isEditingRef.current) return;
+      if (selectedEntryIdRef.current != null) return;
+      setTradesFormData([{
+        id: null,
+        symbol: "",
+        position: "",
+        timeframe: "",
+        entry_type: "",
+        exit_type: "",
+        trade: "",
+        what_went_well: "",
+        what_could_be_improved: "",
+        emotional_state: "",
+        notes: "",
+        outcome: "None",
+        trade_order: 0,
+      }]);
+      setActiveTradeIndex(0);
+    }, 150);
     lastJournalEntryPageScrollRef.current = null;
     journalEntryReadScrollUserDirtyRef.current = false;
   };
 
   const handleEdit = async () => {
     if (selectedEntry) {
+      const editLoadToken = ++journalLoadTokenRef.current;
       setIsEditing(true);
       setIsCreating(false);
       setJustSaved(false);
@@ -1820,19 +2084,21 @@ export default function Journal() {
         linked_emotional_state_ids: [], // synced when Links/Emotional State tab loads journalEmotionalStates
         linked_emotional_state_link_scopes: {},
       });
-      const loadedTrades = await loadTrades(selectedEntry.id);
-      await loadTrades(selectedEntry.id);
-      await loadLinkedPairs(selectedEntry.id);
+      const loadedTrades = await loadTrades(selectedEntry.id, { loadToken: editLoadToken });
+      if (editLoadToken !== journalLoadTokenRef.current) return;
+      await loadLinkedPairs(selectedEntry.id, { loadToken: editLoadToken });
+      if (editLoadToken !== journalLoadTokenRef.current) return;
       if (selectedEntry.strategy_id) {
         await loadStrategyChecklists(selectedEntry.strategy_id);
+        if (editLoadToken !== journalLoadTokenRef.current) return;
         await loadChecklistResponses(selectedEntry.id, selectedEntry.strategy_id, loadedTrades);
+        if (editLoadToken !== journalLoadTokenRef.current) return;
       }
       try {
         if (dataMode === "sandbox") {
           const states = getSandboxEmotionalStatesForJournal(selectedEntry.id) as unknown as JournalEmotionalState[];
           const allSurveys = getSandboxEmotionSurveys() as unknown as JournalEmotionSurvey[];
-          const surveysByStateId = new Map<number, JournalEmotionSurvey>();
-          for (const sv of allSurveys) surveysByStateId.set(sv.emotional_state_id, sv);
+          if (editLoadToken !== journalLoadTokenRef.current) return;
           setJournalEmotionalStates(states);
           const entryLevelGroups = groupEmotionalStatesByTimestamp(states.filter((s) => s.journal_trade_id == null));
           const entryLevelGroup = entryLevelGroups[0];
@@ -1845,7 +2111,7 @@ export default function Journal() {
             picked.forEach((s) => {
               selectedEmotions[s.emotion] = s.intensity;
             });
-            const survey = picked.map((s) => surveysByStateId.get(s.id)).find((sv): sv is JournalEmotionSurvey => sv != null);
+            const survey = pickLatestSurveyForGroup(allSurveys, new Set(picked.map((s) => s.id)));
             const surveyResponses: Record<string, number> = {};
             if (survey) {
               for (const q of [...JOURNAL_SURVEY_QUESTIONS.before, ...JOURNAL_SURVEY_QUESTIONS.during, ...JOURNAL_SURVEY_QUESTIONS.after]) {
@@ -1862,13 +2128,12 @@ export default function Journal() {
           setEmotionalStateFormByTrade(nextForms);
           setShowAddEmotionalStateForm(nextForms.size > 0);
         } else {
-          const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+          const paperArgs = { paperOnly: dataMode === "paper" };
           const [states, allSurveys] = await Promise.all([
             invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry.id, ...paperArgs }),
             invoke<JournalEmotionSurvey[]>("get_all_emotion_surveys"),
           ]);
-          const surveysByStateId = new Map<number, JournalEmotionSurvey>();
-          for (const sv of allSurveys) surveysByStateId.set(sv.emotional_state_id, sv);
+          if (editLoadToken !== journalLoadTokenRef.current) return;
           setJournalEmotionalStates(states);
           const entryLevelGroups = groupEmotionalStatesByTimestamp(states.filter((s) => s.journal_trade_id == null));
           const entryLevelGroup = entryLevelGroups[0];
@@ -1881,7 +2146,7 @@ export default function Journal() {
             picked.forEach((s) => {
               selectedEmotions[s.emotion] = s.intensity;
             });
-            const survey = picked.map((s) => surveysByStateId.get(s.id)).find((sv): sv is JournalEmotionSurvey => sv != null);
+            const survey = pickLatestSurveyForGroup(allSurveys, new Set(picked.map((s) => s.id)));
             const surveyResponses: Record<string, number> = {};
             if (survey) {
               for (const q of [...JOURNAL_SURVEY_QUESTIONS.before, ...JOURNAL_SURVEY_QUESTIONS.during, ...JOURNAL_SURVEY_QUESTIONS.after]) {
@@ -1899,9 +2164,12 @@ export default function Journal() {
           setShowAddEmotionalStateForm(nextForms.size > 0);
         }
       } catch {
+        if (editLoadToken !== journalLoadTokenRef.current) return;
         setEmotionalStateFormByTrade(new Map());
       }
-      
+
+      if (editLoadToken !== journalLoadTokenRef.current) return;
+
       // Convert trades to form data (use loadedTrades, not selectedTrades - state updates are async)
       const tradesData: Array<{
         id: number | null;
@@ -1951,6 +2219,11 @@ export default function Journal() {
         });
       }
       
+      // Re-check token immediately before applying state.
+      // The token can change while we're doing synchronous mapping/push work,
+      // and we want "+ Add Entry" to always win.
+      if (editLoadToken !== journalLoadTokenRef.current) return;
+      
       setTradesFormData(tradesData);
       setActiveTradeIndex(0);
       setActiveTab("trade");
@@ -1959,6 +2232,7 @@ export default function Journal() {
       const assocMap = new Map<number, number[]>();
       for (const jt of loadedTrades) {
         if (jt.id != null) {
+          if (editLoadToken !== journalLoadTokenRef.current) return;
           try {
             const ids = await invoke<number[]>("get_journal_trade_actual_trade_ids", { journalTradeId: jt.id });
             assocMap.set(jt.id, ids);
@@ -1967,8 +2241,9 @@ export default function Journal() {
           }
         }
       }
+      if (editLoadToken !== journalLoadTokenRef.current) return;
       setJournalTradeActualTradeIds(assocMap);
-      
+
       // Store initial state for undo
       const initialState = {
         entry: {
@@ -2042,7 +2317,7 @@ export default function Journal() {
           }
           const jtId = tradesFormData[activeTradeIndex]?.id ?? null;
           if (selectedEntry?.id != null) {
-            const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+            const paperArgs = { paperOnly: dataMode === "paper" };
             const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", {
               journalEntryId: selectedEntry.id,
               journalTradeId: jtId ?? undefined,
@@ -2624,12 +2899,8 @@ export default function Journal() {
         return;
       }
 
-      // In real/paper mode, close the editor immediately for existing entries.
-      // (Closing later can feel broken if the server work for checklist/emotional states is slow.)
-      if (dataMode !== "sandbox" && selectedEntry && !wasCreatingAtStart) {
-        setIsCreating(false);
-        setIsEditing(false);
-      }
+      // Capture emotional state + survey sliders before any await/setState so save cannot lose in-progress edits.
+      const emotionalStateSnapshotForSave = new Map(emotionalStateFormByTradeRef.current);
 
       if (dataMode === "sandbox") {
         // Keep sandbox save path lightweight but align UX with real-mode save:
@@ -2648,8 +2919,119 @@ export default function Journal() {
         await autoSave({ isManualSave: true });
 
         if (selectedEntry) {
-          await loadTrades(selectedEntry.id);
+          const loadedTradesList = await loadTrades(selectedEntry.id);
           await loadLinkedPairs(selectedEntry.id);
+          try {
+            const sortedLoaded = [...loadedTradesList].sort((a, b) => (a.trade_order ?? 0) - (b.trade_order ?? 0));
+            const tradesForSync = tradesFormData.map((td, i) => ({
+              id: td.id ?? sortedLoaded[i]?.id ?? null,
+            }));
+            const tradeIdsForSync = sortedLoaded.map((t) => t.id);
+
+            // Persist in-journal emotional state + survey sliders into sandbox store so view mode reflects edits.
+            // Mirrors the real-mode "Persist emotional states" logic below.
+            try {
+              const toPersist: Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string; surveyResponses?: Record<string, number> }> = [...pendingEmotionalStates];
+              const hasFormContent = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 || (newEmotionalStateForm.notes || "").trim() !== "";
+              if (showAddEmotionalStateForm && hasFormContent) {
+                if (newEmotionalStateLinkScope === "entry") {
+                  toPersist.push({ tradeIndex: -1, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes, surveyResponses: { ...newEmotionalStateSurveyResponses } });
+                } else {
+                  for (const i of newEmotionalStateTradeIndices) {
+                    toPersist.push({ tradeIndex: i, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes, surveyResponses: { ...newEmotionalStateSurveyResponses } });
+                  }
+                }
+              }
+
+              if (toPersist.length > 0) {
+                const entryId = selectedEntry.id;
+                const allStatesForEntry = getSandboxEmotionalStatesForJournal(entryId) as unknown as JournalEmotionalState[];
+                const now = new Date().toISOString();
+
+                const deleteGroup = (group: JournalEmotionalState[]) => {
+                  const ids = group.map((s) => s.id).filter((id): id is number => id != null);
+                  if (ids.length > 0) deleteSandboxEmotionSurveysForStateIds(ids);
+                  for (const s of group) {
+                    if (s.id != null) deleteSandboxEmotionalState(s.id);
+                  }
+                };
+
+                for (const pending of toPersist) {
+                  let firstStateId: number | null = null;
+                  if (pending.tradeIndex === -1) {
+                    const entryLevel = allStatesForEntry.filter((s) => s.journal_trade_id == null);
+                    const groups = groupEmotionalStatesByTimestamp(entryLevel);
+                    for (const g of groups) deleteGroup(g);
+                    for (const emotion of Object.keys(pending.selectedEmotions)) {
+                      const stateId = addSandboxEmotionalState({
+                        timestamp: now,
+                        emotion,
+                        intensity: pending.selectedEmotions[emotion],
+                        notes: pending.notes || null,
+                        trade_id: null,
+                        journal_entry_id: entryId,
+                        journal_trade_id: null,
+                        journal_entry_ids: JSON.stringify([entryId]),
+                      });
+                      if (firstStateId === null) firstStateId = stateId;
+                    }
+                  } else {
+                    const journalTradeId = tradeIdsForSync[pending.tradeIndex];
+                    if (journalTradeId != null) {
+                      const forTrade = allStatesForEntry.filter((s) => s.journal_trade_id === journalTradeId);
+                      const groups = groupEmotionalStatesByTimestamp(forTrade);
+                      for (const g of groups) deleteGroup(g);
+                      for (const emotion of Object.keys(pending.selectedEmotions)) {
+                        const stateId = addSandboxEmotionalState({
+                          timestamp: now,
+                          emotion,
+                          intensity: pending.selectedEmotions[emotion],
+                          notes: pending.notes || null,
+                          trade_id: null,
+                          journal_entry_id: entryId,
+                          journal_trade_id: journalTradeId,
+                          journal_entry_ids: JSON.stringify([entryId]),
+                        });
+                        if (firstStateId === null) firstStateId = stateId;
+                      }
+                    }
+                  }
+
+                  const sr = pending.surveyResponses ?? {};
+                  const shouldSaveSurvey =
+                    firstStateId != null &&
+                    Object.values(JOURNAL_SURVEY_QUESTIONS)
+                      .flat()
+                      .some((q) => (sr[q.key] ?? 6) !== 6);
+                  if (shouldSaveSurvey && firstStateId != null) {
+                    upsertSandboxEmotionSurveyFromResponses(firstStateId, sr, now);
+                  }
+                }
+
+                // Refresh in-memory view of states after persistence.
+                setJournalEmotionalStates(getSandboxEmotionalStatesForJournal(entryId) as unknown as JournalEmotionalState[]);
+                setShowAddEmotionalStateForm(false);
+                setPendingEmotionalStates([]);
+                setNewEmotionalStateForm({ selectedEmotions: {}, notes: "", surveyResponses: {} });
+                setNewEmotionalStateLinkScope("entry");
+                setNewEmotionalStateTradeIndices([]);
+              }
+            } catch (e) {
+              console.error("Failed to persist emotional states (sandbox):", e);
+            }
+
+            await syncEmotionalStateFormEditsAfterJournalSave(
+              true,
+              selectedEntry.id,
+              tradesForSync,
+              tradeIdsForSync,
+              emotionalStateSnapshotForSave,
+              {},
+              activeTradeIndex
+            );
+          } catch (e) {
+            console.error("Failed to sync emotional state form edits (sandbox):", e);
+          }
         }
 
         // Close the edit UI as soon as core sandbox persistence finishes.
@@ -2795,19 +3177,15 @@ export default function Journal() {
         }
       }
 
-      // Exit edit UI immediately after core journal/trade + checklist persistence.
-      // Emotional-state and other follow-up saves can take longer, and the user
-      // expects the journal edit panel to close right away (like demo mode).
-      setIsCreating(false);
-      setIsEditing(false);
-      setEditHistory([]);
-      setOriginalEntryData(null);
-      setJustSaved(true);
-      clearWorkInProgress();
-
       // Persist emotional states: pending list + any form-in-progress (one state per trade or one for entire entry)
       const toPersist: Array<{ tradeIndex: number; selectedEmotions: Record<string, number>; notes: string; surveyResponses?: Record<string, number> }> = [...pendingEmotionalStates];
-      const hasFormContent = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 || (newEmotionalStateForm.notes || "").trim() !== "";
+      const hasSurveyEdits =
+        surveyHasNonDefaultResponses(newEmotionalStateSurveyResponses) ||
+        Object.keys(newEmotionalStateSurveyResponses || {}).length > 0;
+      const hasFormContent =
+        Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 ||
+        (newEmotionalStateForm.notes || "").trim() !== "" ||
+        hasSurveyEdits;
       if (showAddEmotionalStateForm && hasFormContent) {
         if (newEmotionalStateLinkScope === "entry") {
           toPersist.push({ tradeIndex: -1, selectedEmotions: newEmotionalStateForm.selectedEmotions, notes: newEmotionalStateForm.notes, surveyResponses: { ...newEmotionalStateSurveyResponses } });
@@ -2817,7 +3195,7 @@ export default function Journal() {
           }
         }
       }
-      const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+      const paperArgs = { paperOnly: dataMode === "paper" };
       const allStatesForEntry = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId, ...paperArgs });
       const deleteGroup = async (group: JournalEmotionalState[]) => {
         for (const s of group) await invoke("delete_emotional_state", { id: s.id });
@@ -2826,15 +3204,22 @@ export default function Journal() {
       for (const pending of toPersist) {
         try {
           let firstStateId: number | null = null;
+          const sr = pending.surveyResponses ?? {};
+          const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 6) !== 6);
+          const emotionsToPersist = Object.keys(pending.selectedEmotions);
+          const effectiveEmotions =
+            emotionsToPersist.length > 0
+              ? emotionsToPersist
+              : (shouldSaveSurvey ? [SURVEY_ONLY_EMOTION] : []);
           if (pending.tradeIndex === -1) {
             const entryLevel = allStatesForEntry.filter((s) => s.journal_trade_id == null);
             const groups = groupEmotionalStatesByTimestamp(entryLevel);
             for (const g of groups) await deleteGroup(g);
-            for (const emotion of Object.keys(pending.selectedEmotions)) {
+            for (const emotion of effectiveEmotions) {
               const stateId = await invoke<number>("add_emotional_state", {
                 timestamp: now,
                 emotion,
-                intensity: pending.selectedEmotions[emotion],
+                intensity: emotion === SURVEY_ONLY_EMOTION ? 0 : pending.selectedEmotions[emotion],
                 notes: pending.notes || null,
                 tradeId: null,
                 journalEntryId: entryId,
@@ -2849,11 +3234,11 @@ export default function Journal() {
               const forTrade = allStatesForEntry.filter((s) => s.journal_trade_id === journalTradeId);
               const groups = groupEmotionalStatesByTimestamp(forTrade);
               for (const g of groups) await deleteGroup(g);
-              for (const emotion of Object.keys(pending.selectedEmotions)) {
+              for (const emotion of effectiveEmotions) {
                 const stateId = await invoke<number>("add_emotional_state", {
                   timestamp: now,
                   emotion,
-                  intensity: pending.selectedEmotions[emotion],
+                  intensity: emotion === SURVEY_ONLY_EMOTION ? 0 : pending.selectedEmotions[emotion],
                   notes: pending.notes || null,
                   tradeId: null,
                   journalEntryId: entryId,
@@ -2864,33 +3249,12 @@ export default function Journal() {
               }
             }
           }
-          const sr = pending.surveyResponses ?? {};
-          const shouldSaveSurvey = firstStateId != null && Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 6) !== 6);
           if (shouldSaveSurvey && firstStateId != null) {
             try {
               await invoke("add_emotion_survey", {
-                emotional_state_id: firstStateId,
+                emotionalStateId: firstStateId,
                 timestamp: now,
-                before_calm_clear: sr.before_calm_clear ?? 6,
-                before_urgency_pressure: sr.before_urgency_pressure ?? 6,
-                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6,
-                before_fomo: sr.before_fomo ?? 6,
-                before_recovering_loss: sr.before_recovering_loss ?? 6,
-                before_patient_detached: sr.before_patient_detached ?? 6,
-                before_trust_process: sr.before_trust_process ?? 6,
-                before_emotional_state: sr.before_emotional_state ?? 6,
-                during_stable: sr.during_stable ?? 6,
-                during_tension_stress: sr.during_tension_stress ?? 6,
-                during_tempted_interfere: sr.during_tempted_interfere ?? 6,
-                during_need_control: sr.during_need_control ?? 6,
-                during_fear_loss: sr.during_fear_loss ?? 6,
-                during_excitement_greed: sr.during_excitement_greed ?? 6,
-                during_mentally_present: sr.during_mentally_present ?? 6,
-                after_accept_outcome: sr.after_accept_outcome ?? 6,
-                after_emotional_reaction: sr.after_emotional_reaction ?? 6,
-                after_confidence_affected: sr.after_confidence_affected ?? 6,
-                after_tempted_another_trade: sr.after_tempted_another_trade ?? 6,
-                after_proud_discipline: sr.after_proud_discipline ?? 6,
+                ...buildEmotionSurveyInvokeArgs(sr),
               });
             } catch (e) {
               console.error(e);
@@ -2900,6 +3264,30 @@ export default function Journal() {
           console.error(e);
         }
       }
+
+      try {
+        await syncEmotionalStateFormEditsAfterJournalSave(
+          false,
+          entryId,
+          tradesFormData,
+          tradeIdsInOrder,
+          emotionalStateSnapshotForSave,
+          paperArgs,
+          activeTradeIndex
+        );
+      } catch (e) {
+        console.error("Failed to sync emotional state form edits:", e);
+      }
+
+      // Exit edit UI only after emotional state + survey rows are persisted so view-mode effects
+      // (get_emotional_states_for_journal) do not load stale data before sync finishes.
+      setIsCreating(false);
+      setIsEditing(false);
+      setEditHistory([]);
+      setOriginalEntryData(null);
+      setJustSaved(true);
+      clearWorkInProgress();
+
       if (toPersist.length > 0) {
         setShowAddEmotionalStateForm(false);
         setNewEmotionalStateForm({ selectedEmotions: {}, notes: "", surveyResponses: {} });
@@ -3003,10 +3391,12 @@ export default function Journal() {
   };
 
   const loadEntry = async (id: number, options?: { skipTradesFormDataSync?: boolean; restoredTradesCount?: number; openTradeId?: number }) => {
+    const token = ++journalLoadTokenRef.current;
     try {
       if (dataMode === "sandbox") {
         const entry = getSandboxJournalEntry(id) as unknown as JournalEntry | null;
         if (!entry) return;
+        if (token !== journalLoadTokenRef.current) return;
         setSelectedEntry(entry);
         let linkedTradeIds: number[] = [];
         if (entry.linked_trade_ids) {
@@ -3017,12 +3407,14 @@ export default function Journal() {
         }
         setEntryFormData((prev) => ({ ...prev, date: entry.date, title: entry.title, strategy_id: entry.strategy_id, linked_trade_ids: linkedTradeIds }));
         localStorage.setItem(`journal_selected_entry_id_${dataMode}`, id.toString());
-        const loadedTrades = await loadTrades(id);
+        const loadedTrades = await loadTrades(id, { loadToken: token });
+        if (token !== journalLoadTokenRef.current) return;
         if (options?.openTradeId != null && loadedTrades.length > 0) {
           const idx = loadedTrades.findIndex((t) => t.id === options.openTradeId);
           if (idx >= 0) setActiveTradeIndex(idx);
         }
-        await loadLinkedPairs(id);
+        await loadLinkedPairs(id, { loadToken: token });
+        if (token !== journalLoadTokenRef.current) return;
         const shouldSyncTrades = !options?.skipTradesFormDataSync || (options?.restoredTradesCount != null && loadedTrades.length < options.restoredTradesCount);
         if (shouldSyncTrades) {
           setTradesFormData(loadedTrades.map((t, i) => ({
@@ -3044,6 +3436,7 @@ export default function Journal() {
         return;
       }
       const entry = await invoke<JournalEntry>("get_journal_entry", { id });
+      if (token !== journalLoadTokenRef.current) return;
       setSelectedEntry(entry);
       let linkedTradeIds: number[] = [];
       if (entry.linked_trade_ids) {
@@ -3063,7 +3456,8 @@ export default function Journal() {
       }));
       // Save selected entry ID to localStorage (per mode)
       localStorage.setItem(`journal_selected_entry_id_${dataMode}`, id.toString());
-      const loadedTrades = await loadTrades(id);
+      const loadedTrades = await loadTrades(id, { loadToken: token });
+      if (token !== journalLoadTokenRef.current) return;
       if (options?.openTradeId != null && loadedTrades.length > 0) {
         const idx = loadedTrades.findIndex((t) => t.id === options.openTradeId);
         if (idx >= 0) setActiveTradeIndex(idx);
@@ -3114,19 +3508,23 @@ export default function Journal() {
             trade_order: 0,
           });
         }
+        if (token !== journalLoadTokenRef.current) return;
         setTradesFormData(tradesData);
         setActiveTradeIndex(0);
       }
-      await loadTrades(id);
-      await loadLinkedPairs(id);
+      await loadLinkedPairs(id, { loadToken: token });
+      if (token !== journalLoadTokenRef.current) return;
       if (entry.strategy_id) {
         await loadStrategyChecklists(entry.strategy_id);
+        if (token !== journalLoadTokenRef.current) return;
         await loadChecklistResponses(id, entry.strategy_id);
+        if (token !== journalLoadTokenRef.current) return;
       }
-      
+
       // Restore scroll positions after entry is loaded (entry-specific)
       // Use multiple attempts to ensure DOM is ready
       const restoreScroll = (attempt = 0) => {
+        if (token !== journalLoadTokenRef.current) return;
         const storageKey = `journal_entry_${id}`;
         const scrollState = restoreAllScrollPositions(storageKey);
         // Restore tab scroll positions to the ref
@@ -3170,7 +3568,7 @@ export default function Journal() {
           setTimeout(() => restoreScroll(attempt + 1), 100);
         }
       };
-      
+
       setTimeout(() => restoreScroll(), 200);
     } catch (error) {
       console.error("Error loading entry:", error);
@@ -3411,6 +3809,9 @@ export default function Journal() {
     [journalEmotionalStates, currentTrade?.id]
   );
   const currentChecklists = entryFormData.strategy_id ? strategyChecklists.get(entryFormData.strategy_id) : null;
+  const currentChecklistSectionDescriptions = entryFormData.strategy_id
+    ? strategyChecklistSectionDescriptions.get(entryFormData.strategy_id)
+    : undefined;
   // Trades that belong to this journal entry only (for Associate modal). When editing, use tradesFormData (set from loaded trades in handleEdit) so we always show the correct 7; when viewing, use selectedTrades.
   const entryTradesForAssociation = selectedEntry && !isEditing ? selectedTrades : tradesFormData;
   const defaultTypes = ["daily_analysis", "entry", "take_profit"];
@@ -3475,7 +3876,17 @@ export default function Journal() {
     if (!entryFormData.strategy_id || !currentChecklists) return <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load checklists.</p>;
     const rawItems = currentChecklists.get(type) || [];
     const items = rawItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
-    if (items.length === 0) return <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No items for this checklist.</p>;
+    const sectionBlurb = currentChecklistSectionDescriptions?.get(type)?.trim();
+    if (items.length === 0) {
+      return (
+        <div style={{ marginBottom: "4px" }}>
+          {sectionBlurb ? (
+            <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "12px", lineHeight: 1.4 }}>{sectionBlurb}</div>
+          ) : null}
+          <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No items for this checklist.</p>
+        </div>
+      );
+    }
     const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(type);
     const responses = isEntryLevel ? entryLevelChecklistResponses : (checklistResponses.get(activeTradeIndex) || new Map());
     const getChecked = (id: number) => responses.get(id) || false;
@@ -3487,15 +3898,22 @@ export default function Journal() {
     groupedItems.forEach(item => { if (item.parent_id) { const parentId = item.parent_id; if (!itemsByParent.has(parentId)) itemsByParent.set(parentId, []); itemsByParent.get(parentId)!.push(item); } });
     return (
       <div style={{ marginBottom: "4px" }}>
+        {sectionBlurb ? (
+          <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "12px", lineHeight: 1.4 }}>{sectionBlurb}</div>
+        ) : null}
         {groups.map((group) => {
           const children = itemsByParent.get(group.id) || [];
           return (
             <div key={group.id} style={{ marginBottom: "12px" }}>
-              <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px", fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>{group.item_text}</div>
+              <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px" }}>
+                <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }} />
+              </div>
               {children.map((child) => (
                 <div key={child.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 12px", marginLeft: "16px", marginBottom: "2px" }}>
                   <input type="checkbox" checked={getChecked(child.id)} onChange={() => onToggle(child.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
-                  <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }} onClick={() => onToggle(child.id)}>{child.item_text}</label>
+                  <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", cursor: "pointer", display: "flex", minWidth: 0 }} onClick={() => onToggle(child.id)}>
+                    <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }} />
+                  </label>
                   {isEntryLevel && entryTradesForAssociation.length > 1 && (
                     <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                       <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{!(checklistTradeAssociations.get(child.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(child.id)!.length} trade(s)`}</span>
@@ -3510,7 +3928,9 @@ export default function Journal() {
         {regularItems.map((item) => (
           <div key={item.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 12px", marginBottom: "2px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
             <input type="checkbox" checked={getChecked(item.id)} onChange={() => onToggle(item.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
-            <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }} onClick={() => onToggle(item.id)}>{item.item_text}</label>
+            <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", cursor: "pointer", display: "flex", minWidth: 0 }} onClick={() => onToggle(item.id)}>
+              <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }} />
+            </label>
             {isEntryLevel && entryTradesForAssociation.length > 1 && (
               <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                 <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{!(checklistTradeAssociations.get(item.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(item.id)!.length} trade(s)`}</span>
@@ -3528,7 +3948,15 @@ export default function Journal() {
     if (!currentChecklists) return null;
     const rawItems = currentChecklists.get(type) || [];
     const items = rawItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
-    if (items.length === 0) return null;
+    const sectionBlurb = currentChecklistSectionDescriptions?.get(type)?.trim();
+    if (items.length === 0) {
+      if (!sectionBlurb) return null;
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+          <div style={{ fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.4 }}>{sectionBlurb}</div>
+        </div>
+      );
+    }
 
     const isEntryLevel = ENTRY_LEVEL_CHECKLIST_TYPES.includes(type);
     const isSurveyType = type === "survey";
@@ -3550,17 +3978,22 @@ export default function Journal() {
 
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+        {sectionBlurb ? (
+          <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "4px", lineHeight: 1.4 }}>{sectionBlurb}</div>
+        ) : null}
         {groups.map((group) => {
           const children = itemsByParent.get(group.id) || [];
           return (
             <div key={group.id} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-              <div style={{ padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 6, fontWeight: 600, color: "var(--text-primary)", fontSize: 13 }}>
-                {group.item_text}
+              <div style={{ padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 6 }}>
+                <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: 600, color: "var(--text-primary)", fontSize: 13 }} />
               </div>
               {children.map((child) => (
                 <div key={child.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", marginLeft: 16 }}>
                   <input type="checkbox" checked={getChecked(child.id)} disabled style={{ cursor: "default", width: 16, height: 16 }} />
-                  <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)" }}>{child.item_text}</label>
+                  <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
+                    <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: 13, color: "var(--text-primary)" }} />
+                  </label>
                   {isSurveyType && (
                     <span
                       style={{
@@ -3587,7 +4020,9 @@ export default function Journal() {
         {regularItems.map((item) => (
           <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px" }}>
             <input type="checkbox" checked={getChecked(item.id)} disabled style={{ cursor: "default", width: 16, height: 16 }} />
-            <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)" }}>{item.item_text}</label>
+            <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
+              <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: 13, color: "var(--text-primary)" }} />
+            </label>
             {isSurveyType && (
               <span
                 style={{
@@ -4030,19 +4465,18 @@ export default function Journal() {
           <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             Signals ({phaseLabel})
           </div>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "8px" }}>
-                <div style={{ position: "relative" }}>
+              {canEditIndicators ? (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
                   <button
                     type="button"
-                    disabled={!canEditIndicators}
-                    onClick={() => setIndicatorSettingsOpenByPhase((prev) => ({ ...prev, [phase]: !prev[phase] }))}
+                    onClick={() => setJournalSignalsSettingsModalPhase(phase)}
                     style={{
                       padding: "6px 10px",
                       borderRadius: 999,
                       border: "1px solid var(--border-color)",
                       background: "var(--bg-tertiary)",
                       color: "var(--text-primary)",
-                      cursor: canEditIndicators ? "pointer" : "not-allowed",
+                      cursor: "pointer",
                       fontSize: 12,
                       fontWeight: 800,
                       display: "inline-flex",
@@ -4053,94 +4487,8 @@ export default function Journal() {
                   >
                     <Settings size={16} />
                   </button>
-
-                  {indicatorSettingsOpenByPhase[phase] && (
-                    <div
-                      style={{
-                        position: "absolute",
-                        right: 0,
-                        top: "calc(100% + 8px)",
-                        zIndex: 50,
-                        width: 280,
-                        background: "var(--bg-primary)",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: 12,
-                        boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
-                        padding: 12,
-                      }}
-                    >
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                        {phase === "entry" && (
-                          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", color: "var(--text-secondary)", fontSize: 12, fontWeight: 650 }}>
-                            <input
-                              type="checkbox"
-                              checked={showIndicatorColors}
-                              onChange={(e) => setShowIndicatorColors(e.target.checked)}
-                              style={{ width: 16, height: 16 }}
-                            />
-                            Show indicator colors
-                          </label>
-                        )}
-
-                        <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: canEditIndicators ? "pointer" : "default", color: "var(--text-secondary)", fontSize: 12, fontWeight: 650 }}>
-                          <input
-                            type="checkbox"
-                            checked={indicatorSignalGroupFilterByPhase[phase]?.technical ?? true}
-                            disabled={!canEditIndicators}
-                            onChange={(e) => {
-                              if (!canEditIndicators) return;
-                              const next = e.target.checked;
-                              setIndicatorSignalGroupFilterByPhase((prev) => ({
-                                ...prev,
-                                [phase]: { ...prev[phase], technical: next },
-                              }));
-                            }}
-                            style={{ width: 16, height: 16 }}
-                          />
-                          Technical Patterns
-                        </label>
-
-                        <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: canEditIndicators ? "pointer" : "default", color: "var(--text-secondary)", fontSize: 12, fontWeight: 650 }}>
-                          <input
-                            type="checkbox"
-                            checked={indicatorSignalGroupFilterByPhase[phase]?.candlestick ?? true}
-                            disabled={!canEditIndicators}
-                            onChange={(e) => {
-                              if (!canEditIndicators) return;
-                              const next = e.target.checked;
-                              setIndicatorSignalGroupFilterByPhase((prev) => ({
-                                ...prev,
-                                [phase]: { ...prev[phase], candlestick: next },
-                              }));
-                            }}
-                            style={{ width: 16, height: 16 }}
-                          />
-                          Candlesticks
-                        </label>
-                      </div>
-
-                      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-                        <button
-                          type="button"
-                          onClick={() => setIndicatorSettingsOpenByPhase((prev) => ({ ...prev, [phase]: false }))}
-                          style={{
-                            padding: "8px 12px",
-                            borderRadius: 10,
-                            border: "none",
-                            background: "var(--accent)",
-                            color: "white",
-                            cursor: "pointer",
-                            fontSize: 12,
-                            fontWeight: 800,
-                          }}
-                        >
-                          Done
-                        </button>
-                      </div>
-                    </div>
-                  )}
                 </div>
-              </div>
+              ) : null}
         </div>
 
         <TradePatternsPicker
@@ -4204,13 +4552,9 @@ export default function Journal() {
               const isMomentum = (ind.category ?? "").toLowerCase() === "momentum";
               const colTfs = isTfIndicator ? globalSelectedTfs : indSelectedTfs;
               const otherSignals = ind.kind === "custom" ? loadJournalIndicatorOtherSignals(dataMode, entryId, tradeIndex, phase, ind.id) : {};
-              // Prefer labels defined on the Indicator; fall back to any previously-stored draft labels for older sessions.
-              const otherSignalLabels =
-                ind.kind === "custom"
-                  ? (ind.otherSignals ?? []).length > 0
-                    ? ind.otherSignals ?? []
-                    : Object.keys(otherSignals)
-                  : [];
+              void indicatorSignalPrefsTick;
+              const signalPrefs = ind.kind === "custom" ? loadIndicatorSignalPrefs(ind.id, ind.otherSignals ?? []) : null;
+              const otherSignalLabels = ind.kind === "custom" ? (signalPrefs?.order ?? []) : [];
               return (
                 <div
                   key={ind.id}
@@ -4239,9 +4583,9 @@ export default function Journal() {
                               fontWeight: 800,
                               padding: "3px 7px",
                               borderRadius: "8px",
-                              background: showIndicatorColors ? hexToRgba(ind.accentColor ?? "#F59E0B", 0.18) : "var(--bg-secondary)",
-                              border: `1px solid ${showIndicatorColors ? hexToRgba(ind.accentColor ?? "#F59E0B", 0.55) : "var(--border-color)"}`,
-                              color: showIndicatorColors ? ind.accentColor ?? "#F59E0B" : "var(--text-secondary)",
+                              background: hexToRgba(ind.accentColor ?? "#F59E0B", 0.18),
+                              border: `1px solid ${hexToRgba(ind.accentColor ?? "#F59E0B", 0.55)}`,
+                              color: ind.accentColor ?? "#F59E0B",
                             }}
                           >
                             {ind.abbreviation}
@@ -4252,6 +4596,7 @@ export default function Journal() {
                   >
                     {ind.name}
                   </span>
+
                   </div>
                   {colTfs.map((tf) =>
                     isTfIndicator ? (
@@ -4321,33 +4666,296 @@ export default function Journal() {
                         )}
                       </div>
                     ) : (
-                      <div key={`${entryId}:${tradeIndex}:${phase}:${ind.id}:${tf}`} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <div
+                        key={`${entryId}:${tradeIndex}:${phase}:${ind.id}:${tf}`}
+                        style={{ display: "flex", flexDirection: "column", gap: "6px", minWidth: 0, width: "100%" }}
+                      >
                         <div style={{ fontSize: "10px", color: "var(--text-secondary)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", paddingLeft: "2px" }}>
                           {tf}
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                          <input
-                            type="text"
-                            placeholder="Value"
-                            defaultValue={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
-                            onChange={(e) => {
-                              if (!canEditIndicators) return;
-                              setJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.value);
-                            }}
-                            readOnly={!canEditIndicators}
-                            disabled={!canEditIndicators}
-                            spellCheck={false}
-                            style={{
-                              padding: "10px 12px",
-                              background: "var(--bg-tertiary)",
-                              border: "1px solid var(--border-color)",
-                              borderRadius: "10px",
-                              color: "var(--text-primary)",
-                              outline: "none",
-                              flex: "1 1 120px",
-                              minWidth: 0,
-                            }}
-                          />
+                          {(ind.id === "ema" || ind.id === "ma") ? (
+                            (() => {
+                              void maConfigTick; // re-render when EMA/MA config changes
+                              const cfg = loadMovingAverageLengthsConfigForIndicator(ind.id);
+                              const defaults = cfg.map((c) => String(c.len));
+                              const enabledActualIndices = cfg
+                                .map((c, i) => (c.enabled ? i : null))
+                                .filter((x): x is number => x != null);
+
+                              const rawCsv = loadJournalIndicatorValueRaw(dataMode, entryId, tradeIndex, phase, ind.id, tf);
+                              const parts = rawCsv.trim().length ? rawCsv.split(",").map((s) => s.trim()) : [];
+
+                              const shownValueFor = (actualIdx: number) => {
+                                const p = parts[actualIdx] ?? "";
+                                if (!p) return "";
+                                return p === defaults[actualIdx] ? "" : p;
+                              };
+
+                              const checkboxCheckedFor = (actualIdx: number) => {
+                                const p = parts[actualIdx] ?? "";
+                                return p === "1" || p === "true" || p === "yes" || p === "on";
+                              };
+
+                              const setLenAtIndex = (actualIdx: number, next: string) => {
+                                const existingRawCsv = loadJournalIndicatorValueRaw(dataMode, entryId, tradeIndex, phase, ind.id, tf);
+                                const existingParts = existingRawCsv.trim().length ? existingRawCsv.split(",").map((s) => s.trim()) : [];
+
+                                const nextParts = defaults.map((d, i) => {
+                                  const ex = i < existingParts.length ? existingParts[i] : undefined;
+                                  const kind = cfg[i]?.journalKind ?? "value";
+                                  if (kind === "checkbox") {
+                                    if (ex === undefined) return "";
+                                    return ex === "1" || ex === "true" || ex === "yes" || ex === "on" ? "1" : "";
+                                  }
+                                  if (ex !== undefined && ex !== "") return ex;
+                                  return d;
+                                });
+                                const kind = cfg[actualIdx]?.journalKind ?? "value";
+                                if (kind === "checkbox") {
+                                  const on = next === "1" || next === "true";
+                                  nextParts[actualIdx] = on ? "1" : "";
+                                } else {
+                                  const trimmed = next.trim();
+                                  nextParts[actualIdx] = trimmed.length ? trimmed : defaults[actualIdx];
+                                }
+
+                                // Force disabled indices back to defaults so the hidden values are not user-submitted.
+                                for (let i = 0; i < cfg.length; i++) {
+                                  if (!cfg[i]?.enabled) nextParts[i] = defaults[i];
+                                }
+
+                                const isAllDefaults = nextParts.every((p, i) => {
+                                  if (!cfg[i]?.enabled) return p === defaults[i];
+                                  const kind = cfg[i]?.journalKind ?? "value";
+                                  if (kind === "checkbox") return p === "" || p === undefined;
+                                  return p === defaults[i];
+                                });
+                                setJournalIndicatorValue(
+                                  dataMode,
+                                  entryId,
+                                  tradeIndex,
+                                  phase,
+                                  ind.id,
+                                  tf,
+                                  isAllDefaults ? "" : nextParts.join(",")
+                                );
+                              };
+
+                              return (
+                                <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%", minWidth: 0 }}>
+                                  {/* Lengths: exactly 4 columns per row (50/100/200/500 on one line); extra lengths wrap to the next row */}
+                                  <div
+                                    style={{
+                                      display: "grid",
+                                      gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                                      gap: 4,
+                                      width: "100%",
+                                      boxSizing: "border-box",
+                                    }}
+                                  >
+                                    {enabledActualIndices.map((actualIdx) => {
+                                      const label = defaults[actualIdx];
+                                      const jk = cfg[actualIdx]?.journalKind ?? "value";
+                                      const customColor = cfg[actualIdx]?.chipColor;
+                                      return (
+                                        <div
+                                          key={`${label}-${jk}`}
+                                          style={{
+                                            display: "flex",
+                                            flexDirection: "column",
+                                            alignItems: "center",
+                                            gap: 4,
+                                            minWidth: 0,
+                                          }}
+                                        >
+                                          <div
+                                            style={{
+                                              fontSize: 9,
+                                              color: customColor ?? "var(--text-secondary)",
+                                              fontWeight: 800,
+                                              textAlign: "center",
+                                              lineHeight: 1.15,
+                                              userSelect: "none",
+                                              width: "100%",
+                                            }}
+                                          >
+                                            {label}
+                                          </div>
+                                          {jk === "checkbox" ? (
+                                            <label
+                                              style={{
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                justifyContent: "center",
+                                                width: "100%",
+                                                minHeight: 30,
+                                                cursor: canEditIndicators ? "pointer" : "default",
+                                              }}
+                                            >
+                                              <input
+                                                type="checkbox"
+                                                defaultChecked={checkboxCheckedFor(actualIdx)}
+                                                disabled={!canEditIndicators}
+                                                onChange={(e) => {
+                                                  if (!canEditIndicators) return;
+                                                  setLenAtIndex(actualIdx, e.target.checked ? "1" : "");
+                                                  setJournalSignalInputsTick((t) => t + 1);
+                                                }}
+                                                style={{
+                                                  width: 16,
+                                                  height: 16,
+                                                  ...(customColor ? { accentColor: customColor } : {}),
+                                                }}
+                                              />
+                                            </label>
+                                          ) : (
+                                            <input
+                                              type="text"
+                                              inputMode="numeric"
+                                              placeholder=""
+                                              defaultValue={shownValueFor(actualIdx)}
+                                              onChange={(e) => {
+                                                if (!canEditIndicators) return;
+                                                setLenAtIndex(actualIdx, e.target.value);
+                                              }}
+                                              readOnly={!canEditIndicators}
+                                              disabled={!canEditIndicators}
+                                              spellCheck={false}
+                                              style={{
+                                                width: "100%",
+                                                minWidth: 0,
+                                                background: customColor ? hexToRgba(customColor, 0.08) : "var(--bg-tertiary)",
+                                                border: customColor
+                                                  ? `1px solid ${hexToRgba(customColor, 0.45)}`
+                                                  : "1px solid var(--border-color)",
+                                                borderRadius: "8px",
+                                                color: "var(--text-primary)",
+                                                outline: "none",
+                                                textAlign: "center",
+                                                fontSize: 12,
+                                                padding: "6px 2px",
+                                                height: 30,
+                                                boxSizing: "border-box",
+                                              }}
+                                            />
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {/* Crossing / coiling — visibility controlled in Signals (EMA/MA modal) */}
+                                  {(() => {
+                                    const rowVis = loadEmaMaJournalRowVisibility(ind.id as "ema" | "ma");
+                                    if (!rowVis.showCrossingRow && !rowVis.showCoilingRow) return null;
+                                    const flags = loadJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf);
+                                    const twoCols = rowVis.showCrossingRow && rowVis.showCoilingRow;
+                                    return (
+                                      <div
+                                        style={{
+                                          marginTop: 4,
+                                          borderTop: "1px solid var(--border-color)",
+                                          paddingTop: 6,
+                                          display: "grid",
+                                          gridTemplateColumns: twoCols ? "1fr 1fr" : "1fr",
+                                          columnGap: 6,
+                                          rowGap: 4,
+                                          alignItems: "center",
+                                          width: "100%",
+                                          minWidth: 0,
+                                          boxSizing: "border-box",
+                                        }}
+                                      >
+                                        {rowVis.showCrossingRow && (
+                                          <label
+                                            style={{
+                                              display: "inline-flex",
+                                              alignItems: "center",
+                                              justifyContent: "flex-start",
+                                              gap: 5,
+                                              cursor: canEditIndicators ? "pointer" : "default",
+                                              fontSize: 10,
+                                              fontWeight: 650,
+                                              color: "var(--text-secondary)",
+                                              userSelect: "none",
+                                              whiteSpace: "nowrap",
+                                              minWidth: 0,
+                                            }}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              checked={flags.crossing}
+                                              disabled={!canEditIndicators}
+                                              onChange={(e) => {
+                                                setJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf, { ...flags, crossing: e.target.checked });
+                                                setJournalSignalInputsTick((t) => t + 1);
+                                              }}
+                                              style={{ width: 14, height: 14, flexShrink: 0 }}
+                                            />
+                                            Crossing
+                                          </label>
+                                        )}
+
+                                        {rowVis.showCoilingRow && (
+                                          <label
+                                            style={{
+                                              display: "inline-flex",
+                                              alignItems: "center",
+                                              justifyContent: "flex-start",
+                                              gap: 5,
+                                              cursor: canEditIndicators ? "pointer" : "default",
+                                              fontSize: 10,
+                                              fontWeight: 650,
+                                              color: "var(--text-secondary)",
+                                              userSelect: "none",
+                                              whiteSpace: "nowrap",
+                                              minWidth: 0,
+                                            }}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              checked={flags.coiling}
+                                              disabled={!canEditIndicators}
+                                              onChange={(e) => {
+                                                setJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf, { ...flags, coiling: e.target.checked });
+                                                setJournalSignalInputsTick((t) => t + 1);
+                                              }}
+                                              style={{ width: 14, height: 14, flexShrink: 0 }}
+                                            />
+                                            Coiling
+                                          </label>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              );
+                            })()
+                          ) : (
+                            <input
+                              type="text"
+                              placeholder="Value"
+                              defaultValue={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                              onChange={(e) => {
+                                if (!canEditIndicators) return;
+                                setJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.value);
+                              }}
+                              readOnly={!canEditIndicators}
+                              disabled={!canEditIndicators}
+                              spellCheck={false}
+                              style={{
+                                padding: "10px 12px",
+                                background: "var(--bg-tertiary)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "10px",
+                                color: "var(--text-primary)",
+                                outline: "none",
+                                flex: "1 1 120px",
+                                minWidth: 0,
+                              }}
+                            />
+                          )}
 
                           {isMomentum && (
                             <label
@@ -4379,7 +4987,52 @@ export default function Journal() {
                           {ind.kind === "custom" && otherSignalLabels.length > 0 && tf === (colTfs[0] ?? tf) && (
                             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                               {otherSignalLabels.map((label) => {
-                                const checked = !!otherSignals[label];
+                                const osMode = signalPrefs?.journalKindByLabel[label] ?? "checkbox";
+                                const customColor = signalPrefs?.chipColorByLabel?.[label];
+                                const raw = otherSignals[label];
+                                const checked = typeof raw === "boolean" ? raw : raw === "true" || raw === "1";
+                                const textVal = typeof raw === "string" ? raw : "";
+                                if (osMode === "value") {
+                                  return (
+                                    <label
+                                      key={label}
+                                      style={{
+                                        display: "inline-flex",
+                                        flexDirection: "column",
+                                        alignItems: "flex-start",
+                                        gap: 4,
+                                        color: "var(--text-primary)",
+                                        fontSize: 12,
+                                        fontWeight: 650,
+                                        userSelect: "none",
+                                        minWidth: 0,
+                                      }}
+                                    >
+                                      <span style={{ color: customColor ?? "var(--text-secondary)", fontSize: 11, fontWeight: 800 }}>{label}</span>
+                                      <input
+                                        type="text"
+                                        defaultValue={textVal}
+                                        disabled={!canEditIndicators}
+                                        readOnly={!canEditIndicators}
+                                        spellCheck={false}
+                                        onChange={(e) => {
+                                          if (!canEditIndicators) return;
+                                          setJournalIndicatorOtherSignalField(dataMode, entryId, tradeIndex, phase, ind.id, label, e.target.value);
+                                          setJournalSignalInputsTick((t) => t + 1);
+                                        }}
+                                        style={{
+                                          padding: "6px 8px",
+                                          minWidth: 100,
+                                          background: customColor ? hexToRgba(customColor, 0.08) : "var(--bg-tertiary)",
+                                          border: customColor ? `1px solid ${hexToRgba(customColor, 0.45)}` : "1px solid var(--border-color)",
+                                          borderRadius: "8px",
+                                          color: "var(--text-primary)",
+                                          fontSize: 12,
+                                        }}
+                                      />
+                                    </label>
+                                  );
+                                }
                                 return (
                                   <label
                                     key={label}
@@ -4402,9 +5055,9 @@ export default function Journal() {
                                         setJournalIndicatorOtherSignal(dataMode, entryId, tradeIndex, phase, ind.id, label, e.target.checked);
                                         setJournalSignalInputsTick((t) => t + 1);
                                       }}
-                                      style={{ width: 16, height: 16 }}
+                                      style={{ width: 16, height: 16, ...(customColor ? { accentColor: customColor } : {}) }}
                                     />
-                                    {label}
+                                    <span style={{ color: customColor ?? "var(--text-primary)", fontWeight: customColor ? 800 : 650 }}>{label}</span>
                                   </label>
                                 );
                               })}
@@ -4638,20 +5291,7 @@ export default function Journal() {
   // Free-text "custom rule sets" configured in the Strategy "Rules" tab.
   // Each set gets its own Journal section that can be reordered.
   const [strategyCustomRuleSets, setStrategyCustomRuleSets] = useState<StrategyCustomRuleSet[]>([]);
-  const SHOW_INDICATOR_COLORS_KEY = "tradebutler_show_indicator_colors_v1";
-  const [showIndicatorColors, setShowIndicatorColors] = useState<boolean>(() => {
-    try {
-      const raw = typeof window !== "undefined" ? window.localStorage.getItem(SHOW_INDICATOR_COLORS_KEY) : null;
-      if (raw === null) return true;
-      return raw === "1" || raw.toLowerCase() === "true";
-    } catch {
-      return true;
-    }
-  });
-  const [indicatorSettingsOpenByPhase, setIndicatorSettingsOpenByPhase] = useState<Record<IndicatorPhase, boolean>>({
-    entry: false,
-    exit: false,
-  });
+  const [journalSignalsSettingsModalPhase, setJournalSignalsSettingsModalPhase] = useState<IndicatorPhase | null>(null);
   /** Bumped when divergence / other-signal prefs change in localStorage so controlled checkboxes re-render. */
   const [, setJournalSignalInputsTick] = useState(0);
   const [indicatorSignalGroupFilterByPhase, setIndicatorSignalGroupFilterByPhase] = useState<
@@ -4660,6 +5300,16 @@ export default function Journal() {
     entry: { technical: true, candlestick: true },
     exit: { technical: true, candlestick: true },
   });
+
+  const journalSignalsSettingsVisibleIndicators = useMemo(() => {
+    if (journalSignalsSettingsModalPhase === null) return [];
+    const signalFilter = indicatorSignalGroupFilterByPhase[journalSignalsSettingsModalPhase];
+    return strategyIndicators.filter((ind) => {
+      if (ind.signalGroup === "TechnicalPattern") return signalFilter.technical;
+      if (ind.signalGroup === "Candlestick") return signalFilter.candlestick;
+      return true;
+    });
+  }, [journalSignalsSettingsModalPhase, strategyIndicators, indicatorSignalGroupFilterByPhase]);
   const [indicatorTimeframesByPhase, setIndicatorTimeframesByPhase] = useState<Record<IndicatorPhase, string[]>>({
     // Default indicator timeframes (top-of-section buttons).
     entry: ["15m", "1H", "4H"],
@@ -4673,16 +5323,22 @@ export default function Journal() {
     exit: {},
   });
 
-  // Custom-indicator "Other signals" labels are managed on the Indicators page.
+  // EMA/MA length configs are read from storage at render-time
+  // so changes made in the Signals modal reflect immediately.
+  const [maConfigTick, setMaConfigTick] = useState(0);
 
   useEffect(() => {
-    try {
-      if (typeof window === "undefined") return;
-      window.localStorage.setItem(SHOW_INDICATOR_COLORS_KEY, showIndicatorColors ? "1" : "0");
-    } catch {
-      /* optional */
-    }
-  }, [showIndicatorColors]);
+    const handler = () => setMaConfigTick((t) => t + 1);
+    window.addEventListener("tradebutler:ma-config-changed", handler as EventListener);
+    return () => window.removeEventListener("tradebutler:ma-config-changed", handler as EventListener);
+  }, []);
+
+  const [indicatorSignalPrefsTick, setIndicatorSignalPrefsTick] = useState(0);
+  useEffect(() => {
+    const handler = () => setIndicatorSignalPrefsTick((t) => t + 1);
+    window.addEventListener("tradebutler:indicator-signal-prefs-changed", handler as EventListener);
+    return () => window.removeEventListener("tradebutler:indicator-signal-prefs-changed", handler as EventListener);
+  }, []);
 
   const overviewEntriesFiltered = useMemo(() => {
     const { start, end } = getTimeframeDates(chartTimeframe, chartCustomStart || undefined, chartCustomEnd || undefined);
@@ -5250,7 +5906,7 @@ export default function Journal() {
                                           const isCardFocused = targetTradeIndex === (viewFocusedTradeIndex ?? 0);
                                           const notes = first.notes;
                                           const groupStateIds = new Set(group.map((s) => s.id));
-                                          const survey = viewEntrySurveys.find((s) => groupStateIds.has(s.emotional_state_id));
+                                          const survey = pickLatestSurveyForGroup(viewEntrySurveys, groupStateIds);
                                           return (
                                             <div
                                               key={first.timestamp}
@@ -5275,7 +5931,7 @@ export default function Journal() {
                                                   0 = not present - 10 = extremely strong. Rate how strongly you feel each emotion; values are used for trends and insights over time.
                                                 </p>
                                                 <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "14px" }}>
-                                                  {group.map((s) => (
+                                                  {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => (
                                                     <span
                                                       key={`emo-chip-${s.id}`}
                                                       style={{
@@ -6067,12 +6723,16 @@ export default function Journal() {
                                   const children = itemsByParent.get(group.id) || [];
                                   return (
                                     <div key={group.id} style={{ marginBottom: "12px" }}>
-                                      <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px", fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>{group.item_text}</div>
+                                      <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px" }}>
+                                        <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }} />
+                                      </div>
                                       {children.map((child) => {
                                         const score = surveyScores.get(activeTradeIndex)?.get(child.id);
                                         return (
                                           <div key={child.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginLeft: "16px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
-                                            <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{child.item_text}</label>
+                                            <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
+                                              <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)" }} />
+                                            </label>
                                             <div style={{ display: "flex", gap: "4px" }}>
                                               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
                                                 <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(child.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(child.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
@@ -6088,7 +6748,9 @@ export default function Journal() {
                                   const score = surveyScores.get(activeTradeIndex)?.get(item.id);
                                   return (
                                     <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
-                                      <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)" }}>{item.item_text}</label>
+                                      <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
+                                        <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)" }} />
+                                      </label>
                                       <div style={{ display: "flex", gap: "4px" }}>
                                         {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
                                           <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(item.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(item.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
@@ -6168,7 +6830,7 @@ export default function Journal() {
                                       const stateIds = group.map((s) => s.id);
                                       return (
                                         <li key={first.timestamp} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "6px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
-                                          <span style={{ fontSize: "12px", color: "var(--text-primary)" }}>{format(new Date(first.timestamp), "MMM d, HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}</span>
+                                          <span style={{ fontSize: "12px", color: "var(--text-primary)" }}>{format(new Date(first.timestamp), "MMM d, HH:mm")} · {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}</span>
                                           <button type="button" onClick={() => setEntryFormData((prev) => { const next = (prev.linked_emotional_state_ids ?? []).filter((id) => !stateIds.includes(id)); const scopes = { ...(prev.linked_emotional_state_link_scopes ?? {}) }; stateIds.forEach((id) => delete scopes[id]); return { ...prev, linked_emotional_state_ids: next, linked_emotional_state_link_scopes: scopes }; })} style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", cursor: "pointer" }}>Remove</button>
                                         </li>
                                       );
@@ -6191,7 +6853,7 @@ export default function Journal() {
                                           const first = group[0];
                                           return (
                                             <button key={first.timestamp} type="button" onClick={() => { setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: [...(prev.linked_emotional_state_ids ?? []), first.id], linked_emotional_state_link_scopes: { ...(prev.linked_emotional_state_link_scopes ?? {}), [first.id]: scope } })); setJournalLinksStateDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "8px 12px", textAlign: "left", fontSize: "12px", color: "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer" }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
-                                              {format(new Date(first.timestamp), "MMM d, HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
+                                              {format(new Date(first.timestamp), "MMM d, HH:mm")} · {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                             </button>
                                           );
                                         })}
@@ -6522,24 +7184,33 @@ export default function Journal() {
                             <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>Notes for this emotional state.</p>
                             <RichTextEditor value={newEmotionalStateForm.notes} onChange={(content: string) => setNewEmotionalStateForm((f) => ({ ...f, notes: content }))} placeholder="Notes..." readOnly={false} />
                             {showAddEmotionalStateForm && (
-                              <button type="button" disabled={Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 || (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0)} onClick={async () => {
+                              <button type="button" disabled={(
+                                Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 &&
+                                !surveyHasNonDefaultResponses(newEmotionalStateSurveyResponses) &&
+                                Object.keys(newEmotionalStateSurveyResponses || {}).length === 0 &&
+                                !(newEmotionalStateForm.notes || "").trim()
+                              ) || (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0)} onClick={async () => {
                                 const hasAny = Object.keys(newEmotionalStateForm.selectedEmotions).length > 0;
-                                if (!hasAny || (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0)) return;
+                                const hasSurveyEdits = surveyHasNonDefaultResponses(newEmotionalStateSurveyResponses) || Object.keys(newEmotionalStateSurveyResponses || {}).length > 0;
+                                const hasNotes = !!(newEmotionalStateForm.notes || "").trim();
+                                if ((!hasAny && !hasSurveyEdits && !hasNotes) || (newEmotionalStateLinkScope === "trades" && newEmotionalStateTradeIndices.length === 0)) return;
                                 const entryId = selectedEntry?.id;
                                 const savedEntry = entryId != null;
                                 if (savedEntry) {
                                   try {
                                     const now = new Date().toISOString();
-                                    const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+                                    const paperArgs = { paperOnly: dataMode === "paper" };
                                     const allStates = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
                                     const deleteGroup = async (group: JournalEmotionalState[]) => { for (const s of group) await invoke("delete_emotional_state", { id: s.id }); };
                                     let firstStateId: number | null = null;
+                                    const effectiveEmotions =
+                                      hasAny ? Object.keys(newEmotionalStateForm.selectedEmotions) : (hasSurveyEdits ? [SURVEY_ONLY_EMOTION] : []);
                                     if (newEmotionalStateLinkScope === "entry") {
                                       const entryLevel = allStates.filter((s) => s.journal_trade_id == null);
                                       const groups = groupEmotionalStatesByTimestamp(entryLevel);
                                       for (const g of groups) await deleteGroup(g);
-                                      for (const emotion of Object.keys(newEmotionalStateForm.selectedEmotions)) {
-                                        const stateId = await invoke<number>("add_emotional_state", { timestamp: now, emotion, intensity: newEmotionalStateForm.selectedEmotions[emotion], notes: newEmotionalStateForm.notes || null, tradeId: null, journalEntryId: entryId, journalTradeId: null, isPaper: dataMode === "paper" });
+                                      for (const emotion of effectiveEmotions) {
+                                        const stateId = await invoke<number>("add_emotional_state", { timestamp: now, emotion, intensity: emotion === SURVEY_ONLY_EMOTION ? 0 : newEmotionalStateForm.selectedEmotions[emotion], notes: newEmotionalStateForm.notes || null, tradeId: null, journalEntryId: entryId, journalTradeId: null, isPaper: dataMode === "paper" });
                                         if (firstStateId === null) firstStateId = stateId;
                                       }
                                     } else {
@@ -6550,8 +7221,8 @@ export default function Journal() {
                                         const forTrade = allStates.filter((s) => s.journal_trade_id === jtId);
                                         const groups = groupEmotionalStatesByTimestamp(forTrade);
                                         for (const g of groups) await deleteGroup(g);
-                                        for (const emotion of Object.keys(newEmotionalStateForm.selectedEmotions)) {
-                                          const stateId = await invoke<number>("add_emotional_state", { timestamp: now, emotion, intensity: newEmotionalStateForm.selectedEmotions[emotion], notes: newEmotionalStateForm.notes || null, tradeId: null, journalEntryId: entryId, journalTradeId: jtId, isPaper: dataMode === "paper" });
+                                        for (const emotion of effectiveEmotions) {
+                                          const stateId = await invoke<number>("add_emotional_state", { timestamp: now, emotion, intensity: emotion === SURVEY_ONLY_EMOTION ? 0 : newEmotionalStateForm.selectedEmotions[emotion], notes: newEmotionalStateForm.notes || null, tradeId: null, journalEntryId: entryId, journalTradeId: jtId, isPaper: dataMode === "paper" });
                                           if (firstStateId === null) firstStateId = stateId;
                                         }
                                       }
@@ -6560,7 +7231,7 @@ export default function Journal() {
                                     const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS).flat().some((q) => (sr[q.key] ?? 6) !== 6);
                                     if (shouldSaveSurvey && firstStateId != null) {
                                       try {
-                                        await invoke("add_emotion_survey", { emotional_state_id: firstStateId, timestamp: now, before_calm_clear: sr.before_calm_clear ?? 6, before_urgency_pressure: sr.before_urgency_pressure ?? 6, before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6, before_fomo: sr.before_fomo ?? 6, before_recovering_loss: sr.before_recovering_loss ?? 6, before_patient_detached: sr.before_patient_detached ?? 6, before_trust_process: sr.before_trust_process ?? 6, before_emotional_state: sr.before_emotional_state ?? 6, during_stable: sr.during_stable ?? 6, during_tension_stress: sr.during_tension_stress ?? 6, during_tempted_interfere: sr.during_tempted_interfere ?? 6, during_need_control: sr.during_need_control ?? 6, during_fear_loss: sr.during_fear_loss ?? 6, during_excitement_greed: sr.during_excitement_greed ?? 6, during_mentally_present: sr.during_mentally_present ?? 6, after_accept_outcome: sr.after_accept_outcome ?? 6, after_emotional_reaction: sr.after_emotional_reaction ?? 6, after_confidence_affected: sr.after_confidence_affected ?? 6, after_tempted_another_trade: sr.after_tempted_another_trade ?? 6, after_proud_discipline: sr.after_proud_discipline ?? 6 });
+                                        await invoke("add_emotion_survey", { emotionalStateId: firstStateId, timestamp: now, ...buildEmotionSurveyInvokeArgs(sr) });
                                       } catch (err) { console.error("Failed to save emotion survey:", err); }
                                     }
                                     const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
@@ -6587,7 +7258,7 @@ export default function Journal() {
                                   setNewEmotionalStateTradeIndices([]);
                                   setShowAddEmotionalStateForm(false);
                                 }
-                              }} style={{ marginTop: "12px", padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ? "not-allowed" : "pointer", fontSize: "13px", fontWeight: "600", opacity: Object.keys(newEmotionalStateForm.selectedEmotions).length === 0 ? 0.6 : 1 }}>Add emotional state to entry</button>
+                              }} style={{ marginTop: "12px", padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "13px", fontWeight: "600" }}>Add emotional state to entry</button>
                             )}
                           </div>
                         )}
@@ -6672,7 +7343,7 @@ export default function Journal() {
                         </div>
                       </div>
                     )}
-                    {activeTab === "trade" && (
+                    {isTabContentMaximized && activeTab === "trade" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("trade", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -6690,7 +7361,7 @@ export default function Journal() {
                         />
                       </div>
                     )}
-                    {activeTab === "what_went_well" && (
+                    {isTabContentMaximized && activeTab === "what_went_well" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("what_went_well", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -6708,7 +7379,7 @@ export default function Journal() {
                         />
                       </div>
                     )}
-                    {activeTab === "what_could_be_improved" && (
+                    {isTabContentMaximized && activeTab === "what_could_be_improved" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("what_could_be_improved", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -6726,7 +7397,7 @@ export default function Journal() {
                         />
                       </div>
                     )}
-                    {activeTab === "links" && (
+                    {isTabContentMaximized && activeTab === "links" && (
                       <div
                         ref={(el) => { tabContentRefs.current.set("links", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -6777,7 +7448,7 @@ export default function Journal() {
                                     return first ? (
                                       <li key={first.timestamp} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
                                         <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>
-                                          {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group!.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
+                                          {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group!.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                         </span>
                                         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                                           <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--accent)", padding: "2px 6px", backgroundColor: "var(--bg-hover)", borderRadius: "4px" }}>Will link on save</span>
@@ -6804,7 +7475,7 @@ export default function Journal() {
                                         const first = group[0];
                                         return (
                                           <button key={first.timestamp} type="button" onClick={() => { setEntryFormData((prev) => ({ ...prev, linked_emotional_state_ids: [...(prev.linked_emotional_state_ids ?? []), first.id], linked_emotional_state_link_scopes: { ...(prev.linked_emotional_state_link_scopes ?? {}), [first.id]: scope } })); setJournalLinksStateDropdownOpen(false); }} style={{ display: "block", width: "100%", padding: "10px 12px", textAlign: "left", fontSize: "13px", color: "var(--text-primary)", background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer" }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
-                                            {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
+                                            {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                           </button>
                                         );
                                       })}
@@ -6921,7 +7592,7 @@ export default function Journal() {
                                     return (
                                       <li key={first.timestamp} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px", marginBottom: "6px" }}>
                                         <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>
-                                          {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
+                                          {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                         </span>
                                         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                           <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--accent)", padding: "2px 6px", backgroundColor: "var(--bg-hover)", borderRadius: "4px" }} title={scopeLabelLinks}>Linked · {scopeLabelLinks}</span>
@@ -6930,7 +7601,7 @@ export default function Journal() {
                                             onClick={async () => {
                                               try {
                                                 await invoke("remove_journal_entry_from_emotional_states", { journalEntryId: selectedEntry!.id, emotionalStateIds: group.map((s) => s.id) });
-                                                const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+                                                const paperArgs = { paperOnly: dataMode === "paper" };
                                                 const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id, ...paperArgs });
                                                 setJournalEmotionalStates(states);
                                                 const groups = groupEmotionalStatesByTimestamp(states);
@@ -6976,7 +7647,7 @@ export default function Journal() {
                                                 await invoke("add_journal_entry_to_emotional_states", { journalEntryId: selectedEntry!.id, emotionalStateIds: ids });
                                                 const jtId = linkExistingEmotionalStateScope === "entry" ? null : (linkExistingEmotionalStateTradeIndex != null ? tradesFormData[linkExistingEmotionalStateTradeIndex]?.id ?? null : null);
                                                 await invoke("link_emotional_states_to_journal", { emotionalStateIds: ids, journalEntryId: selectedEntry!.id, journalTradeId: jtId ?? undefined });
-                                                const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+                                                const paperArgs = { paperOnly: dataMode === "paper" };
                                                 const states = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: selectedEntry!.id, ...paperArgs });
                                                 setJournalEmotionalStates(states);
                                                 const grps = groupEmotionalStatesByTimestamp(states);
@@ -6995,7 +7666,7 @@ export default function Journal() {
                                             onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--bg-hover)"; }}
                                             onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
                                           >
-                                            {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
+                                            {format(new Date(first.timestamp), "MMM d, yyyy HH:mm")} · {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => `${s.emotion} ${s.intensity}/10`).join(", ")}
                                           </button>
                                         );
                                       })}
@@ -7077,7 +7748,7 @@ export default function Journal() {
                         )}
                       </div>
                     )}
-                    {activeTab === "emotional_state" && (
+                    {isTabContentMaximized && activeTab === "emotional_state" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("emotional_state", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -7189,7 +7860,7 @@ export default function Journal() {
                                   >
                                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", flexWrap: "wrap", gap: "8px" }}>
                                       <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
-                                        {group.map((s) => (
+                                        {group.filter((s) => s.emotion !== SURVEY_ONLY_EMOTION).map((s) => (
                                           <span key={s.id} style={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>
                                             {s.emotion} {s.intensity}/10
                                           </span>
@@ -7305,7 +7976,7 @@ export default function Journal() {
                                       if (savedEntry) {
                                         try {
                                           const now = new Date().toISOString();
-                                          const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+                                          const paperArgs = { paperOnly: dataMode === "paper" };
                                           const allStates = await invoke<JournalEmotionalState[]>("get_emotional_states_for_journal", { journalEntryId: entryId!, ...paperArgs });
                                           const deleteGroup = async (group: JournalEmotionalState[]) => {
                                             for (const s of group) {
@@ -7358,28 +8029,9 @@ export default function Journal() {
                                           if (shouldSaveSurvey && firstStateId != null) {
                                             try {
                                               await invoke("add_emotion_survey", {
-                                                emotional_state_id: firstStateId,
+                                                emotionalStateId: firstStateId,
                                                 timestamp: now,
-                                                before_calm_clear: sr.before_calm_clear ?? 6,
-                                                before_urgency_pressure: sr.before_urgency_pressure ?? 6,
-                                                before_confidence_vs_validation: sr.before_confidence_vs_validation ?? 6,
-                                                before_fomo: sr.before_fomo ?? 6,
-                                                before_recovering_loss: sr.before_recovering_loss ?? 6,
-                                                before_patient_detached: sr.before_patient_detached ?? 6,
-                                                before_trust_process: sr.before_trust_process ?? 6,
-                                                before_emotional_state: sr.before_emotional_state ?? 6,
-                                                during_stable: sr.during_stable ?? 6,
-                                                during_tension_stress: sr.during_tension_stress ?? 6,
-                                                during_tempted_interfere: sr.during_tempted_interfere ?? 6,
-                                                during_need_control: sr.during_need_control ?? 6,
-                                                during_fear_loss: sr.during_fear_loss ?? 6,
-                                                during_excitement_greed: sr.during_excitement_greed ?? 6,
-                                                during_mentally_present: sr.during_mentally_present ?? 6,
-                                                after_accept_outcome: sr.after_accept_outcome ?? 6,
-                                                after_emotional_reaction: sr.after_emotional_reaction ?? 6,
-                                                after_confidence_affected: sr.after_confidence_affected ?? 6,
-                                                after_tempted_another_trade: sr.after_tempted_another_trade ?? 6,
-                                                after_proud_discipline: sr.after_proud_discipline ?? 6,
+                                                ...buildEmotionSurveyInvokeArgs(sr),
                                               });
                                             } catch (err) {
                                               console.error("Failed to save emotion survey:", err);
@@ -7572,7 +8224,7 @@ export default function Journal() {
                         )}
                       </div>
                     )}
-                    {activeTab === "notes" && (
+                    {isTabContentMaximized && activeTab === "notes" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("notes", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -7590,7 +8242,7 @@ export default function Journal() {
                         />
                       </div>
                     )}
-                    {activeTab === "checklists" && (
+                    {isTabContentMaximized && activeTab === "checklists" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("checklists", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -7640,13 +8292,15 @@ export default function Journal() {
                                     const children = itemsByParent.get(group.id) || [];
                                     return (
                                       <div key={group.id} style={{ marginBottom: "16px" }}>
-                                        <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "8px", fontWeight: "600", color: "var(--text-primary)" }}>
-                                          {group.item_text}
+                                        <div style={{ padding: "12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "8px" }}>
+                                          <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "15px" }} />
                                         </div>
                                         {children.map((child) => (
                                           <div key={child.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", marginLeft: "20px", marginBottom: "4px" }}>
                                             <input type="checkbox" checked={getChecked(child.id)} onChange={() => onToggle(child.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
-                                            <label style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)", cursor: "pointer" }} onClick={() => onToggle(child.id)}>{child.item_text}</label>
+                                            <label style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)", cursor: "pointer", display: "flex", minWidth: 0 }} onClick={() => onToggle(child.id)}>
+                                              <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)", cursor: "pointer" }} />
+                                            </label>
                                             {isEntryLevel && entryTradesForAssociation.length > 1 && (
                                               <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                                                 <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
@@ -7665,7 +8319,9 @@ export default function Journal() {
                                   {regularItems.map((item) => (
                                     <div key={item.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                                       <input type="checkbox" checked={getChecked(item.id)} onChange={() => onToggle(item.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
-                                      <label style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)", cursor: "pointer" }} onClick={() => onToggle(item.id)}>{item.item_text}</label>
+                                      <label style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)", cursor: "pointer", display: "flex", minWidth: 0 }} onClick={() => onToggle(item.id)}>
+                                        <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)", cursor: "pointer" }} />
+                                      </label>
                                       {isEntryLevel && entryTradesForAssociation.length > 1 && (
                                         <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                                           <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
@@ -7730,7 +8386,7 @@ export default function Journal() {
                         )}
                       </div>
                     )}
-                    {activeTab === "survey" && (
+                    {isTabContentMaximized && activeTab === "survey" && (
                       <div 
                         ref={(el) => { tabContentRefs.current.set("survey", el); }}
                         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", minHeight: 0 }}
@@ -7792,11 +8448,9 @@ export default function Journal() {
                                             border: "1px solid var(--border-color)",
                                             borderRadius: "6px",
                                             marginBottom: "8px",
-                                            fontWeight: "600",
-                                            color: "var(--text-primary)",
                                           }}
                                         >
-                                          {group.item_text}
+                                          <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "15px" }} />
                                         </div>
                                         {children.map((child) => {
                                           const score = surveyScores.get(activeTradeIndex)?.get(child.id);
@@ -7820,9 +8474,11 @@ export default function Journal() {
                                                   flex: 1,
                                                   fontSize: "14px",
                                                   color: "var(--text-primary)",
+                                                  display: "flex",
+                                                  minWidth: 0,
                                                 }}
                                               >
-                                                {child.item_text}
+                                                <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
                                               </label>
                                               <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
                                                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
@@ -7884,9 +8540,11 @@ export default function Journal() {
                                             flex: 1,
                                             fontSize: "14px",
                                             color: "var(--text-primary)",
+                                            display: "flex",
+                                            minWidth: 0,
                                           }}
                                         >
-                                          {item.item_text}
+                                          <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
                                         </label>
                                         <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
                                           {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
@@ -8986,6 +9644,26 @@ export default function Journal() {
         </div>
       </div>
 
+      <JournalSignalsSettingsModal
+        open={journalSignalsSettingsModalPhase !== null}
+        onClose={() => setJournalSignalsSettingsModalPhase(null)}
+        phase={journalSignalsSettingsModalPhase ?? "entry"}
+        indicators={journalSignalsSettingsVisibleIndicators}
+        signalFilter={
+          journalSignalsSettingsModalPhase
+            ? indicatorSignalGroupFilterByPhase[journalSignalsSettingsModalPhase]
+            : { technical: true, candlestick: true }
+        }
+        onSignalFilter={(next) => {
+          if (journalSignalsSettingsModalPhase === null) return;
+          setIndicatorSignalGroupFilterByPhase((prev) => ({
+            ...prev,
+            [journalSignalsSettingsModalPhase]: next,
+          }));
+        }}
+        canEdit={isCreating || isEditing}
+      />
+
       {/* Link to actual trades modal (journal trade -> real trades from Trades table) */}
       {linkActualTradesModalJournalTradeId !== null && (
         <div
@@ -9002,55 +9680,195 @@ export default function Journal() {
         >
           <div
             style={{
-              background: "var(--bg-primary)",
-              borderRadius: "8px",
-              padding: "20px",
-              maxWidth: "480px",
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              maxWidth: "560px",
               width: "90%",
               maxHeight: "80vh",
+              overflow: "hidden",
               display: "flex",
               flexDirection: "column",
-              border: "1px solid var(--border-color)",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h4 style={{ margin: "0 0 8px", fontSize: "16px" }}>Link to actual trades</h4>
-            <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>
+            <h4 style={{ margin: "0 0 8px", fontSize: "18px", fontWeight: "600", color: "var(--text-primary)" }}>Link to actual trades</h4>
+            <p style={{ margin: "0 0 16px", fontSize: "13px", color: "var(--text-secondary)" }}>
               Select real trades from your Trades list to associate with this journal trade.
             </p>
-            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", marginBottom: "16px", paddingRight: "4px" }}>
-              {actualTrades.filter((t): t is ActualTrade & { id: number } => t.id != null).map((t) => {
-                const tid = t.id as number;
-                const isSelected = linkActualTradesSelection.includes(tid);
-                return (
-                  <label
-                    key={tid}
-                    style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", flexShrink: 0 }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => {
-                        setLinkActualTradesSelection((prev) =>
-                          prev.includes(tid) ? prev.filter((id) => id !== tid) : [...prev, tid]
-                        );
-                      }}
-                    />
-                    <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>
-                      {t.symbol} {t.side} · {t.quantity} @ ${typeof t.price === "number" ? t.price.toFixed(2) : t.price} · {t.timestamp ? format(new Date(t.timestamp), "MMM d, yyyy HH:mm") : ""}
-                    </span>
-                  </label>
-                );
-              })}
-              {actualTrades.length === 0 && (
-                <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No actual trades in your Trades list. Add trades on the Trades page first.</span>
-              )}
+            <div style={{ position: "relative", marginBottom: "12px", flexShrink: 0 }}>
+              <Search
+                size={18}
+                style={{
+                  position: "absolute",
+                  left: "12px",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  color: "var(--text-secondary)",
+                }}
+              />
+              <input
+                type="text"
+                placeholder="Search by symbol, side, or date..."
+                value={linkActualTradesSearchQuery}
+                onChange={(e) => setLinkActualTradesSearchQuery(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px 10px 40px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  outline: "none",
+                }}
+              />
             </div>
-            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+            <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "12px", flexShrink: 0 }}>
+              <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Sort by:</span>
+              <select
+                value={linkActualTradesSortBy}
+                onChange={(e) => setLinkActualTradesSortBy(e.target.value as "date" | "symbol" | "side")}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "13px",
+                  outline: "none",
+                }}
+              >
+                <option value="date">Date</option>
+                <option value="symbol">Symbol</option>
+                <option value="side">Side</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => setLinkActualTradesSortDirection((d) => (d === "asc" ? "desc" : "asc"))}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "13px",
+                  cursor: "pointer",
+                }}
+              >
+                {linkActualTradesSortBy === "date" && (linkActualTradesSortDirection === "desc" ? "Newest first" : "Oldest first")}
+                {linkActualTradesSortBy === "symbol" && (linkActualTradesSortDirection === "desc" ? "Z → A" : "A → Z")}
+                {linkActualTradesSortBy === "side" && (linkActualTradesSortDirection === "desc" ? "Sell → Buy" : "Buy → Sell")}
+              </button>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", marginBottom: "16px", border: "1px solid var(--border-color)", borderRadius: "8px", backgroundColor: "var(--bg-primary)" }}>
+              {(() => {
+                const validTrades = actualTrades.filter((t): t is ActualTrade & { id: number } => t.id != null);
+                if (validTrades.length === 0) {
+                  return <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No actual trades in your Trades list. Add trades on the Trades page first.</div>;
+                }
+                const q = linkActualTradesSearchQuery.toLowerCase().trim();
+                const filtered = q
+                  ? validTrades.filter((t) => {
+                      const dt = t.timestamp ? format(new Date(t.timestamp), "MMM d, yyyy HH:mm").toLowerCase() : "";
+                      return (
+                        t.symbol.toLowerCase().includes(q) ||
+                        t.side.toLowerCase().includes(q) ||
+                        dt.includes(q)
+                      );
+                    })
+                  : [...validTrades];
+                if (filtered.length === 0) {
+                  return <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>No trades match your search.</div>;
+                }
+                const sorted = [...filtered].sort((a, b) => {
+                  let comparison = 0;
+                  if (linkActualTradesSortBy === "date") {
+                    comparison = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+                  } else if (linkActualTradesSortBy === "symbol") {
+                    comparison = a.symbol.localeCompare(b.symbol);
+                  } else {
+                    comparison = a.side.localeCompare(b.side);
+                  }
+                  return linkActualTradesSortDirection === "asc" ? comparison : -comparison;
+                });
+                return (
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
+                        <th style={{ padding: "10px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", width: "40px" }} />
+                        <th style={{ padding: "10px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)" }}>Symbol</th>
+                        <th style={{ padding: "10px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)" }}>Side</th>
+                        <th style={{ padding: "10px 12px", textAlign: "right", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)" }}>Qty @ Price</th>
+                        <th style={{ padding: "10px 12px", textAlign: "left", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)" }}>Timestamp</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sorted.map((t) => {
+                        const tid = t.id as number;
+                        const isSelected = linkActualTradesSelection.includes(tid);
+                        return (
+                          <tr
+                            key={tid}
+                            style={{
+                              borderBottom: "1px solid var(--border-color)",
+                              cursor: "pointer",
+                              backgroundColor: isSelected ? "var(--bg-tertiary)" : "transparent",
+                            }}
+                            onClick={() => {
+                              setLinkActualTradesSelection((prev) =>
+                                prev.includes(tid) ? prev.filter((id) => id !== tid) : [...prev, tid]
+                              );
+                            }}
+                          >
+                            <td style={{ padding: "10px 12px" }}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {
+                                  setLinkActualTradesSelection((prev) =>
+                                    prev.includes(tid) ? prev.filter((id) => id !== tid) : [...prev, tid]
+                                  );
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ cursor: "pointer" }}
+                              />
+                            </td>
+                            <td style={{ padding: "10px 12px", fontSize: "14px", color: "var(--text-primary)" }}>{t.symbol}</td>
+                            <td style={{ padding: "10px 12px", fontSize: "13px", color: "var(--text-secondary)" }}>
+                              <span
+                                style={{
+                                  color:
+                                    (t.side || "").toLowerCase() === "buy"
+                                      ? "var(--success, #22c55e)"
+                                      : "var(--danger, #ef4444)",
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {t.side}
+                              </span>
+                            </td>
+                            <td style={{ padding: "10px 12px", fontSize: "13px", color: "var(--text-primary)", textAlign: "right" }}>
+                              {t.quantity} @ ${typeof t.price === "number" ? t.price.toFixed(2) : t.price}
+                            </td>
+                            <td style={{ padding: "10px 12px", fontSize: "13px", color: "var(--text-secondary)" }}>
+                              {t.timestamp ? format(new Date(t.timestamp), "MMM d, yyyy HH:mm") : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                );
+              })()}
+            </div>
+            <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
               <button
                 type="button"
                 onClick={() => setLinkActualTradesModalJournalTradeId(null)}
-                style={{ padding: "8px 16px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)", cursor: "pointer" }}
+                style={{ padding: "10px 20px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: "var(--text-primary)", cursor: "pointer", fontSize: "14px" }}
               >
                 Cancel
               </button>
@@ -9067,9 +9885,9 @@ export default function Journal() {
                   }
                   setLinkActualTradesModalJournalTradeId(null);
                 }}
-                style={{ padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer" }}
+                style={{ padding: "10px 20px", backgroundColor: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "14px", fontWeight: "500" }}
               >
-                Done
+                Save
               </button>
             </div>
           </div>

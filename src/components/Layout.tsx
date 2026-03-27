@@ -625,17 +625,28 @@ export default function Layout({ children }: LayoutProps) {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger if user is typing in an input/textarea or contenteditable (e.g. Journal Implementation)
-      const target = e.target as HTMLElement;
+      // Don't trigger if user is typing in an input/textarea/select or rich text (Quill / contenteditable).
+      // Note: keydown target can be a child (e.g. <p>) inside .ql-editor; those nodes may not report
+      // isContentEditable === true in all engines, so we use closest() and .ql-editor explicitly.
+      const target = e.target as HTMLElement | null;
       const activeEl = document.activeElement as HTMLElement | null;
+      const inRichText =
+        !!target?.closest?.(".ql-editor") ||
+        !!activeEl?.closest?.(".ql-editor");
+      const inContentEditable =
+        !!target?.closest?.("[contenteditable=\"true\"]") ||
+        !!activeEl?.closest?.("[contenteditable=\"true\"]");
       const isEditable =
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.isContentEditable ||
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.tagName === "SELECT" ||
+        target?.isContentEditable ||
+        inRichText ||
+        inContentEditable ||
         activeEl?.tagName === "INPUT" ||
         activeEl?.tagName === "TEXTAREA" ||
-        activeEl?.isContentEditable ||
-        activeEl?.closest?.("[contenteditable=\"true\"]");
+        activeEl?.tagName === "SELECT" ||
+        activeEl?.isContentEditable;
       if (isEditable || isAppLocked) {
         return;
       }

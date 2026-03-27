@@ -51,14 +51,9 @@ export default function RichTextEditor({
         flexDirection: "column",
         minHeight: 0,
       }}
-      onKeyDown={(e) => {
-        // Ensure Space and other typing keys are not captured by parent (e.g. global shortcuts)
-        if (e.key === " " || e.key.length === 1) {
-          e.stopPropagation();
-        }
-      }}
     >
       <ReactQuill
+        key="rt-editor-reset-v1"
         ref={quillRef}
         theme="snow"
         value={value}
@@ -103,6 +98,7 @@ export default function RichTextEditor({
           color: var(--text-primary);
           font-size: 15px;
           line-height: 1.7;
+          white-space: pre-wrap;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
           border: none !important;
         }
@@ -139,6 +135,7 @@ export default function RichTextEditor({
           color: var(--text-primary);
           font-size: 15px;
           line-height: 1.7;
+          white-space: pre-wrap;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
         }
         `}
