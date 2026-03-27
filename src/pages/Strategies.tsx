@@ -1,10 +1,11 @@
-import React, { useEffect, useState, useRef, Dispatch, SetStateAction } from "react";
+import React, { useEffect, useState, useRef, useCallback, Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
 import { Plus, Edit2, Trash2, Target, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard, BarChart2 } from "lucide-react";
 import { format } from "date-fns";
 import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
+import { LoadingSphere } from "../components/LoadingSphere";
 import { BRUSH_MIN_POINTS, CHART_BAR_FILL_OPACITY } from "../utils/chartDataSampling";
 /** Margin for overview bar charts; minimal bottom so chart area is maximized. */
 const OVERVIEW_CHART_MARGIN = { top: 5, right: 5, left: 5, bottom: 10 };
@@ -72,7 +73,11 @@ import {
 } from "../utils/indicatorsStore";
 import { ColorPicker } from "../components/ColorPicker";
 import { TradeChart } from "../components/TradeChart";
-import { saveAllScrollPositions, restoreAllScrollPositions } from "../utils/scrollManager";
+import {
+  saveAllScrollPositions,
+  restoreAllScrollPositions,
+  restoreTabScrollPositions,
+} from "../utils/scrollManager";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import {
   getSandboxStrategies,
@@ -267,8 +272,7 @@ function SortableStrategy({
   strategyStats,
   expandedStats,
   setExpandedStats,
-  saveAllScrollPositions,
-  tabScrollPositions,
+  flushStrategiesScrollToStorage,
   leftPanelScrollRef,
   rightPanelScrollRef,
   clearWorkInProgress,
@@ -283,8 +287,7 @@ function SortableStrategy({
   strategyStats: Map<number, { totalTrades: number; totalPnL: number; winRate: number }>;
   expandedStats: Set<number>;
   setExpandedStats: React.Dispatch<React.SetStateAction<Set<number>>>;
-  saveAllScrollPositions: (tabPositions: Map<TabType, number>, leftScroll: number | null, rightScroll: number | null, page: string) => void;
-  tabScrollPositions: React.MutableRefObject<Map<TabType, number>>;
+  flushStrategiesScrollToStorage: () => void;
   leftPanelScrollRef: React.RefObject<HTMLDivElement>;
   rightPanelScrollRef: React.RefObject<HTMLDivElement>;
   clearWorkInProgress: () => void;
@@ -317,13 +320,8 @@ function SortableStrategy({
       return;
     }
 
-    // Save scroll position before switching
-    saveAllScrollPositions(
-      tabScrollPositions.current,
-      leftPanelScrollRef.current?.scrollTop ?? null,
-      rightPanelScrollRef.current?.scrollTop ?? null,
-      "strategies"
-    );
+    // Save scroll position before switching (snapshot tab + panels from DOM)
+    flushStrategiesScrollToStorage();
 
     // Clicking an already-selected strategy toggles it off
     if (selectedStrategy === strategy.id) {
@@ -1915,6 +1913,8 @@ export default function Strategies() {
     const saved = localStorage.getItem('strategies_active_tab');
     return (saved as TabType) || "notes";
   });
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
   const [isMaximized, setIsMaximized] = useState(false);
   
   // Refs for scroll containers
@@ -2243,16 +2243,77 @@ export default function Strategies() {
     localStorage.removeItem('strategies_work_in_progress');
   };
 
-  // Save scroll positions using utility (available for programmatic save)
-  const saveScrollPositionsForStrategies = () => {
-    saveAllScrollPositions(
-      tabScrollPositions.current,
-      leftPanelScrollRef.current?.scrollTop ?? null,
-      rightPanelScrollRef.current?.scrollTop ?? null,
-      "strategies"
-    );
+  /** Capture active tab + panel scroll from the DOM and persist (call before route unmount). */
+  const flushStrategiesScrollToStorageRef = useRef<() => void>(() => {});
+
+  flushStrategiesScrollToStorageRef.current = () => {
+    try {
+      const tab = activeTab;
+      const tabEl = tabContentRefs.current.get(tab);
+      // Merge storage + in-memory so a second unmount with an empty ref map cannot wipe keys (React Strict Mode / double cleanup).
+      const merged = new Map<TabType, number>(restoreTabScrollPositions("strategies"));
+      tabScrollPositions.current.forEach((v, k) => merged.set(k, v));
+      let tabScroll = merged.get(tab) ?? 0;
+      if (tabEl) {
+        tabScroll = tabEl.scrollTop;
+        if (
+          tabScroll === 0 &&
+          rightPanelScrollRef.current &&
+          rightPanelScrollRef.current.scrollTop > 0 &&
+          (tab === "trades" || tab === "checklists" || tab === "survey" || tab === "surveys")
+        ) {
+          tabScroll = rightPanelScrollRef.current.scrollTop;
+        }
+      } else if (rightPanelScrollRef.current && tab === "notes") {
+        tabScroll = rightPanelScrollRef.current.scrollTop;
+      }
+      merged.set(tab, tabScroll);
+      tabScrollPositions.current.clear();
+      merged.forEach((v, k) => tabScrollPositions.current.set(k, v));
+      saveAllScrollPositions(
+        merged,
+        leftPanelScrollRef.current?.scrollTop ?? null,
+        rightPanelScrollRef.current?.scrollTop ?? null,
+        "strategies"
+      );
+    } catch {
+      /* ignore */
+    }
   };
-  void saveScrollPositionsForStrategies;
+
+  const strategiesScrollPersistTimerRef = useRef<number | undefined>(undefined);
+  const scheduleStrategiesScrollPersist = useCallback(() => {
+    window.clearTimeout(strategiesScrollPersistTimerRef.current);
+    strategiesScrollPersistTimerRef.current = window.setTimeout(() => {
+      strategiesScrollPersistTimerRef.current = undefined;
+      // Read scroll from the real scrolling element (inner tab panels), not the outer right panel.
+      // Merge with persisted map so we never write a partial map that wipes other tabs.
+      const tab = activeTabRef.current;
+      const tabEl = tabContentRefs.current.get(tab);
+      const merged = new Map<TabType, number>(restoreTabScrollPositions("strategies"));
+      tabScrollPositions.current.forEach((v, k) => merged.set(k, v));
+      if (tabEl) {
+        merged.set(tab, tabEl.scrollTop);
+      } else if (tab === "notes" && rightPanelScrollRef.current) {
+        merged.set("notes", rightPanelScrollRef.current.scrollTop);
+      }
+      tabScrollPositions.current.clear();
+      merged.forEach((v, k) => tabScrollPositions.current.set(k, v));
+      saveAllScrollPositions(
+        merged,
+        leftPanelScrollRef.current?.scrollTop ?? null,
+        rightPanelScrollRef.current?.scrollTop ?? null,
+        "strategies"
+      );
+    }, 120);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      window.clearTimeout(strategiesScrollPersistTimerRef.current);
+      flushStrategiesScrollToStorageRef.current();
+    };
+  }, []);
 
   // Restore scroll positions using utility
   const restoreScrollPositions = () => {
@@ -2420,38 +2481,32 @@ export default function Strategies() {
     };
   }, [editingFormData, newStrategyNotes, notesContent, tempChecklists, editingChecklists, selectedStrategy, activeTab, isCreating, isEditing]);
 
-  // Save scroll positions on scroll
+  // Save scroll positions on scroll (re-attach when layout/refs update)
   useEffect(() => {
     const leftPanel = leftPanelScrollRef.current;
     const rightPanel = rightPanelScrollRef.current;
-    
+
     const handleScroll = () => {
-      // Save all scroll positions when either panel scrolls
-      saveAllScrollPositions(
-        tabScrollPositions.current,
-        leftPanelScrollRef.current?.scrollTop ?? null,
-        rightPanelScrollRef.current?.scrollTop ?? null,
-        "strategies"
-      );
+      scheduleStrategiesScrollPersist();
     };
-    
+
     if (leftPanel) {
-      leftPanel.addEventListener('scroll', handleScroll, { passive: true });
+      leftPanel.addEventListener("scroll", handleScroll, { passive: true });
     }
-    
+
     if (rightPanel) {
-      rightPanel.addEventListener('scroll', handleScroll, { passive: true });
+      rightPanel.addEventListener("scroll", handleScroll, { passive: true });
     }
-    
+
     return () => {
       if (leftPanel) {
-        leftPanel.removeEventListener('scroll', handleScroll);
+        leftPanel.removeEventListener("scroll", handleScroll);
       }
       if (rightPanel) {
-        rightPanel.removeEventListener('scroll', handleScroll);
+        rightPanel.removeEventListener("scroll", handleScroll);
       }
     };
-  }, []);
+  }, [selectedStrategy, activeTab, loading, scheduleStrategiesScrollPersist]);
 
   useEffect(() => {
     // When data mode changes (Demo / Real / Paper), clear
@@ -2508,33 +2563,54 @@ export default function Strategies() {
     }
   }, [strategies]);
 
-  // Restore scroll position when tab changes
+  // Restore scroll when switching tabs (retries: refs mount after paint; content height grows async)
   useEffect(() => {
-    // For tabs with their own scroll containers (trades, checklists, survey)
-    const tabContent = tabContentRefs.current.get(activeTab);
-    if (tabContent) {
-      const savedPosition = tabScrollPositions.current.get(activeTab) || 0;
-      requestAnimationFrame(() => {
-        if (tabContent) {
-          tabContent.scrollTop = savedPosition;
-        }
-      });
-    } else if (rightPanelScrollRef.current) {
-      // For tabs without their own scroll container (notes), use the right panel scroll
-      const savedPosition = tabScrollPositions.current.get(activeTab) || 0;
-      requestAnimationFrame(() => {
-        if (rightPanelScrollRef.current) {
-          rightPanelScrollRef.current.scrollTop = savedPosition;
-        }
-      });
-    }
+    const tab = activeTab;
+    const saved = tabScrollPositions.current.get(tab) ?? 0;
+
+    const apply = () => {
+      const el = tabContentRefs.current.get(tab);
+      if (el) {
+        el.scrollTop = saved;
+        return;
+      }
+      if (tab === "notes" && rightPanelScrollRef.current) {
+        rightPanelScrollRef.current.scrollTop = saved;
+      }
+    };
+
+    apply();
+    const timeouts = [0, 16, 50, 120, 250, 450].map((ms) => window.setTimeout(apply, ms));
+    return () => timeouts.forEach((id) => clearTimeout(id));
   }, [activeTab]);
 
   useEffect(() => {
     if (selectedStrategy) {
-      loadStrategyData(selectedStrategy);
+      void loadStrategyData(selectedStrategy);
     }
+  }, [selectedStrategy, dataMode, modeSwitchReloadKey]);
+
+  // Load paired trades when opening the Trades tab (not on every tab switch via loadStrategyData)
+  useEffect(() => {
+    if (!selectedStrategy) return;
+    if (activeTab !== "trades") return;
+    if (strategyPairs.has(selectedStrategy)) return;
+    void loadTradesForStrategy(selectedStrategy);
   }, [selectedStrategy, activeTab, dataMode, modeSwitchReloadKey]);
+
+  // Re-apply Trades tab scroll after pairs load (layout height changes)
+  useEffect(() => {
+    if (activeTab !== "trades" || selectedStrategy == null) return;
+    if (!strategyPairs.has(selectedStrategy)) return;
+    const saved = tabScrollPositions.current.get("trades") ?? 0;
+    const apply = () => {
+      const el = tabContentRefs.current.get("trades");
+      if (el) el.scrollTop = saved;
+    };
+    apply();
+    const t = window.setTimeout(apply, 100);
+    return () => clearTimeout(t);
+  }, [activeTab, selectedStrategy, strategyPairs]);
 
   // When viewing a strategy (not editing/creating), keep indicator associations loaded
   // so the UI can show them at the top of the details page.
@@ -2911,6 +2987,56 @@ export default function Strategies() {
     }
   };
 
+  const loadTradesForStrategy = async (strategyId: number) => {
+    setLoadingPairs((prev) => new Set([...prev, strategyId]));
+    try {
+      if (dataMode === "sandbox") {
+        const state = loadSandboxState();
+        const pairingMethod = (localStorage.getItem("tradebutler_pairing_method") || "FIFO") as "FIFO" | "LIFO";
+        const { pairs } = buildPositionGroupsAndPairs(
+          state.trades.map((t) => ({
+            id: t.id,
+            symbol: t.symbol,
+            side: t.side,
+            quantity: t.quantity,
+            price: t.price,
+            timestamp: t.timestamp,
+            fees: t.fees,
+            notes: t.notes,
+            strategy_id: t.strategy_id,
+          })),
+          pairingMethod
+        );
+        const tradeById = new Map(state.trades.map((t) => [t.id, t]));
+        const filtered = filterPairsByStrategy(pairs, tradeById, strategyId);
+        setStrategyPairs((prev) => new Map(prev.set(strategyId, filtered as unknown as PairedTrade[])));
+        const stats = calculateStrategyStats(filtered as unknown as PairedTrade[]);
+        setStrategyStats((prev) => new Map(prev.set(strategyId, stats)));
+      } else {
+        const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+        const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
+        const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
+          strategyId: strategyId,
+          pairingMethod: pairingMethod,
+          startDate: null,
+          endDate: null,
+          ...paperArgs,
+        });
+        setStrategyPairs((prev) => new Map(prev.set(strategyId, pairs)));
+        const stats = calculateStrategyStats(pairs);
+        setStrategyStats((prev) => new Map(prev.set(strategyId, stats)));
+      }
+    } catch (error) {
+      console.error("Error loading strategy pairs:", error);
+    } finally {
+      setLoadingPairs((prev) => {
+        const next = new Set(prev);
+        next.delete(strategyId);
+        return next;
+      });
+    }
+  };
+
   const loadStrategyData = async (strategyId: number) => {
     // Save selected strategy ID to localStorage
     localStorage.setItem('strategies_selected_strategy', strategyId.toString());
@@ -2925,100 +3051,13 @@ export default function Strategies() {
         }
       }
     }
-    
-    // Load trades
-    if (activeTab === "trades" && !strategyPairs.has(strategyId)) {
-      setLoadingPairs(new Set([...loadingPairs, strategyId]));
-      try {
-        if (dataMode === "sandbox") {
-          const state = loadSandboxState();
-          const pairingMethod = (localStorage.getItem("tradebutler_pairing_method") || "FIFO") as "FIFO" | "LIFO";
-          const { pairs } = buildPositionGroupsAndPairs(
-            state.trades.map((t) => ({
-              id: t.id,
-              symbol: t.symbol,
-              side: t.side,
-              quantity: t.quantity,
-              price: t.price,
-              timestamp: t.timestamp,
-              fees: t.fees,
-              notes: t.notes,
-              strategy_id: t.strategy_id,
-            })),
-            pairingMethod
-          );
-          const tradeById = new Map(state.trades.map((t) => [t.id, t]));
-          const filtered = filterPairsByStrategy(pairs, tradeById, strategyId);
-          setStrategyPairs(new Map(strategyPairs.set(strategyId, filtered as unknown as PairedTrade[])));
-          const stats = calculateStrategyStats(filtered as unknown as PairedTrade[]);
-          setStrategyStats(new Map(strategyStats.set(strategyId, stats)));
-        } else {
-          const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-          const paperArgs = dataMode === "paper" ? { paperOnly: true } : {};
-          const pairs = await invoke<PairedTrade[]>("get_paired_trades_by_strategy", {
-            strategyId: strategyId,
-            pairingMethod: pairingMethod,
-            startDate: null,
-            endDate: null,
-            ...paperArgs,
-          });
-          setStrategyPairs(new Map(strategyPairs.set(strategyId, pairs)));
-          const stats = calculateStrategyStats(pairs);
-          setStrategyStats(new Map(strategyStats.set(strategyId, stats)));
-        }
-      } catch (error) {
-        console.error("Error loading strategy pairs:", error);
-      } finally {
-        const newLoading = new Set(loadingPairs);
-        newLoading.delete(strategyId);
-        setLoadingPairs(newLoading);
-      }
-    }
+
     // Load checklists - always load when strategy is selected (not creating) to ensure custom checklists are available
     if (!isCreating && !checklists.has(strategyId)) {
       await loadChecklists(strategyId);
     }
-    
-    // Restore scroll positions after strategy data is loaded
-    setTimeout(() => {
-      const scrollState = restoreAllScrollPositions("strategies");
-      // Restore left panel scroll
-      if (leftPanelScrollRef.current && scrollState.leftPanelScroll !== null) {
-        requestAnimationFrame(() => {
-          if (leftPanelScrollRef.current) {
-            leftPanelScrollRef.current.scrollTop = scrollState.leftPanelScroll!;
-          }
-        });
-      }
-      // Restore right panel scroll
-      if (rightPanelScrollRef.current && scrollState.rightPanelScroll !== null) {
-        requestAnimationFrame(() => {
-          if (rightPanelScrollRef.current) {
-            rightPanelScrollRef.current.scrollTop = scrollState.rightPanelScroll!;
-          }
-        });
-      }
-      // Restore active tab scroll
-      const tabContent = tabContentRefs.current.get(activeTab);
-      if (tabContent) {
-        const savedPosition = tabScrollPositions.current.get(activeTab) || scrollState.tabPositions.get(activeTab) || 0;
-        if (savedPosition > 0) {
-          requestAnimationFrame(() => {
-            tabContent.scrollTop = savedPosition;
-          });
-        }
-      } else if (rightPanelScrollRef.current && activeTab === "notes") {
-        // Notes tab uses right panel scroll
-        const savedPosition = tabScrollPositions.current.get(activeTab) || scrollState.tabPositions.get(activeTab) || 0;
-        if (savedPosition > 0) {
-          requestAnimationFrame(() => {
-            if (rightPanelScrollRef.current) {
-              rightPanelScrollRef.current.scrollTop = savedPosition;
-            }
-          });
-        }
-      }
-    }, 200);
+
+    // Trades load when user opens the Trades tab — see useEffect([selectedStrategy, activeTab, ...])
   };
 
   const loadChecklists = async (strategyId: number) => {
@@ -5224,8 +5263,17 @@ export default function Strategies() {
 
   if (loading) {
     return (
-      <div style={{ padding: "40px", textAlign: "center" }}>
-        <p>Loading strategies...</p>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100%",
+          width: "100%",
+          minHeight: "100vh",
+        }}
+      >
+        <LoadingSphere size={100} message="Loading strategies..." />
       </div>
     );
   }
@@ -5338,8 +5386,7 @@ export default function Strategies() {
                         strategyStats={strategyStats}
                         expandedStats={expandedStats}
                         setExpandedStats={setExpandedStats}
-                        saveAllScrollPositions={saveAllScrollPositions}
-                        tabScrollPositions={tabScrollPositions}
+                        flushStrategiesScrollToStorage={() => flushStrategiesScrollToStorageRef.current()}
                         leftPanelScrollRef={leftPanelScrollRef}
                         rightPanelScrollRef={rightPanelScrollRef}
                         clearWorkInProgress={clearWorkInProgress}
@@ -5775,8 +5822,7 @@ export default function Strategies() {
                         // Tab has its own scroll container
                         tabScrollPositions.current.set(activeTab, currentTabContent.scrollTop);
                       } else if (rightPanelScrollRef.current && activeTab === "notes") {
-                        // Notes tab uses the right panel scroll
-                        tabScrollPositions.current.set(activeTab, rightPanelScrollRef.current.scrollTop);
+                        tabScrollPositions.current.set("notes", rightPanelScrollRef.current.scrollTop);
                       }
                       
                       // Save all scroll positions (tabs + panels) to localStorage before switching
@@ -5815,12 +5861,15 @@ export default function Strategies() {
             {/* Tab Content */}
             <div 
               ref={rightPanelScrollRef}
-              style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}
+              style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}
               onScroll={(e) => {
-                // Save scroll position for notes tab (which uses the right panel scroll)
-                if (activeTab === "notes") {
-                  tabScrollPositions.current.set("notes", e.currentTarget.scrollTop);
+                // Only treat the outer panel as the tab scroller when the scroll event originates here.
+                // Inner tab panels (trades, checklists, etc.) bubble; using outer scrollTop would overwrite
+                // saved positions with 0 and break restore on tab switch.
+                if (e.target === e.currentTarget) {
+                  tabScrollPositions.current.set(activeTab, e.currentTarget.scrollTop);
                 }
+                scheduleStrategiesScrollPersist();
               }}
             >
               {activeTab === "notes" && (selectedStrategy !== null || isCreating) && (
@@ -6124,10 +6173,11 @@ export default function Strategies() {
               {activeTab === "trades" && (
                 <div 
                   ref={(el) => { tabContentRefs.current.set("trades", el); }}
-                  style={{ padding: "20px", overflowY: "auto" }}
+                  style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px" }}
                   onScroll={(e) => { 
                     if (activeTab === "trades") {
                       tabScrollPositions.current.set("trades", e.currentTarget.scrollTop);
+                      scheduleStrategiesScrollPersist();
                     }
                   }}
                 >
@@ -6347,9 +6397,9 @@ export default function Strategies() {
                         </div>
                       </div>
                       {isLoadingPairs ? (
-                    <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "40px" }}>
-                      Loading trades...
-                    </p>
+                    <div style={{ display: "flex", justifyContent: "center", padding: "32px 16px" }}>
+                      <LoadingSphere size={72} message="Loading trades..." padding={16} />
+                    </div>
                   ) : pairs.length === 0 ? (
                     <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "40px" }}>
                       No trades found for this strategy.
@@ -6662,10 +6712,11 @@ export default function Strategies() {
                 return (
                   <div 
                     ref={(el) => { tabContentRefs.current.set("checklists", el); }}
-                    style={{ padding: "24px", overflowY: "auto" }}
+                    style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px" }}
                     onScroll={(e) => {
                       if (activeTab === "checklists") {
                         tabScrollPositions.current.set("checklists", e.currentTarget.scrollTop);
+                        scheduleStrategiesScrollPersist();
                       }
                     }}
                   >
@@ -6923,7 +6974,18 @@ export default function Strategies() {
                 const sortableRuleItemIds = selectedRules.map((_, idx) => String(idx));
 
                 return (
-                  <div style={{ padding: "24px", overflowY: "auto" }}>
+                  <div
+                    ref={(el) => {
+                      tabContentRefs.current.set("rules", el);
+                    }}
+                    style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px" }}
+                    onScroll={(e) => {
+                      if (activeTab === "rules") {
+                        tabScrollPositions.current.set("rules", e.currentTarget.scrollTop);
+                        scheduleStrategiesScrollPersist();
+                      }
+                    }}
+                  >
                     <div style={{ marginBottom: "18px" }}>
                       <h3 style={{ fontSize: "18px", fontWeight: "600", marginBottom: "6px" }}>Rules</h3>
                       <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: 0, maxWidth: 680 }}>
@@ -7222,10 +7284,11 @@ export default function Strategies() {
                   {activeTab === "survey" && (
                   <div 
                     ref={(el) => { tabContentRefs.current.set("survey", el); }}
-                    style={{ padding: "24px", overflowY: "auto" }}
+                    style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px" }}
                     onScroll={(e) => {
                       if (activeTab === "survey") {
                         tabScrollPositions.current.set("survey", e.currentTarget.scrollTop);
+                        scheduleStrategiesScrollPersist();
                       }
                     }}
                   >
@@ -8037,10 +8100,11 @@ export default function Strategies() {
                   {activeTab === "surveys" && (
                   <div
                     ref={(el) => { tabContentRefs.current.set("surveys", el); }}
-                    style={{ padding: "24px", overflowY: "auto" }}
+                    style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px" }}
                     onScroll={(e) => {
                       if (activeTab === "surveys") {
                         tabScrollPositions.current.set("surveys", e.currentTarget.scrollTop);
+                        scheduleStrategiesScrollPersist();
                       }
                     }}
                   >
@@ -10006,8 +10070,14 @@ export default function Strategies() {
               </p>
               
               {loadingAssociatedRecords ? (
-                <div style={{ marginBottom: "20px", textAlign: "center", color: "var(--text-secondary)", fontSize: "13px" }}>
-                  Loading associated records...
+                <div style={{ marginBottom: "20px", display: "flex", justifyContent: "center" }}>
+                  <LoadingSphere
+                    size={48}
+                    message="Loading associated records..."
+                    padding={8}
+                    gap={8}
+                    messageFontSize={12}
+                  />
                 </div>
               ) : associatedRecords && (
                 <div style={{ marginBottom: "20px" }}>

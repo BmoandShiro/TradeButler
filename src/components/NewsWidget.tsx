@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useContext } from "react";
+import { CurrentPriceSyncContext } from "../contexts/CurrentPriceSyncContext";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useNavigate } from "react-router-dom";
 import { 
@@ -51,6 +52,8 @@ interface NewsWidgetProps {
   onShowSentimentChange?: (value: boolean) => void;
   hideInternalSettings?: boolean;
   showSearchInHeader?: boolean;
+  /** When true, compact mode omits the built-in "News" label (e.g. section card already has a title). */
+  hideCompactTitle?: boolean;
 }
 
 const NEWS_WATCHED_SYMBOLS_KEY = "tradebutler_news_watched_symbols";
@@ -68,6 +71,40 @@ const NEGATIVE_KEYWORDS = [
   "sell", "underperform", "fail", "struggle", "lawsuit", "investigation"
 ];
 
+let newsSessionCache: {
+  key: string;
+  /** Watched symbols + settings only (instant first paint when unchanged). */
+  syncKey: string;
+  news: NewsItemWithMeta[];
+  lastRefresh: Date | null;
+} | null = null;
+
+function buildNewsSyncKey(dataMode: DataMode, includePositions: boolean, maxItems: number): string {
+  const savedSymbols = localStorage.getItem(NEWS_WATCHED_SYMBOLS_KEY);
+  const watchedSymbols: string[] = savedSymbols ? JSON.parse(savedSymbols) : [];
+  return JSON.stringify({
+    dataMode,
+    includePositions,
+    maxItems,
+    watched: [...watchedSymbols].sort().join(","),
+  });
+}
+
+function analyzeNewsSentiment(title: string): "positive" | "negative" | "neutral" {
+  const lowerTitle = title.toLowerCase();
+  let positiveScore = 0;
+  let negativeScore = 0;
+  POSITIVE_KEYWORDS.forEach((keyword) => {
+    if (lowerTitle.includes(keyword)) positiveScore++;
+  });
+  NEGATIVE_KEYWORDS.forEach((keyword) => {
+    if (lowerTitle.includes(keyword)) negativeScore++;
+  });
+  if (positiveScore > negativeScore) return "positive";
+  if (negativeScore > positiveScore) return "negative";
+  return "neutral";
+}
+
 export default function NewsWidget({ 
   maxItems = 5, 
   showRefresh = true, 
@@ -80,21 +117,35 @@ export default function NewsWidget({
   onShowSentimentChange,
   hideInternalSettings = false,
   showSearchInHeader = false,
+  hideCompactTitle = false,
 }: NewsWidgetProps) {
   const navigate = useNavigate();
+  const priceSync = useContext(CurrentPriceSyncContext);
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
-  const [news, setNews] = useState<NewsItemWithMeta[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  
-  // Settings state - use external values if provided
-  const [showSettings, setShowSettings] = useState(false);
+  // Settings state - use external values if provided (must be before cached news init)
   const [internalSearchQuery, setInternalSearchQuery] = useState("");
   const [internalIncludePositions, setInternalIncludePositions] = useState(() => {
     const saved = localStorage.getItem(NEWS_INCLUDE_POSITIONS_KEY);
     return saved ? JSON.parse(saved) : true;
   });
+  const includePositions = externalIncludePositions !== undefined ? externalIncludePositions : internalIncludePositions;
+
+  const [news, setNews] = useState<NewsItemWithMeta[]>(() => {
+    const dm = getCurrentDataMode();
+    const sk = buildNewsSyncKey(dm, includePositions, maxItems);
+    if (newsSessionCache && newsSessionCache.syncKey === sk) return newsSessionCache.news;
+    return [];
+  });
+  const [isLoading, setIsLoading] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(() => {
+    const dm = getCurrentDataMode();
+    const sk = buildNewsSyncKey(dm, includePositions, maxItems);
+    if (newsSessionCache && newsSessionCache.syncKey === sk) return newsSessionCache.lastRefresh;
+    return null;
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  const [showSettings, setShowSettings] = useState(false);
   const [internalShowSentiment, setInternalShowSentiment] = useState(() => {
     const saved = localStorage.getItem(NEWS_SHOW_SENTIMENT_KEY);
     return saved ? JSON.parse(saved) : true;
@@ -102,7 +153,6 @@ export default function NewsWidget({
 
   // Use external or internal values
   const searchQuery = externalSearchQuery !== undefined ? externalSearchQuery : internalSearchQuery;
-  const includePositions = externalIncludePositions !== undefined ? externalIncludePositions : internalIncludePositions;
   const showSentiment = externalShowSentiment !== undefined ? externalShowSentiment : internalShowSentiment;
 
   // Setters that call external handlers if provided
@@ -123,25 +173,6 @@ export default function NewsWidget({
     return subscribeToDataMode(setDataMode);
   }, []);
 
-  // Analyze sentiment of a news title
-  const analyzeSentiment = (title: string): "positive" | "negative" | "neutral" => {
-    const lowerTitle = title.toLowerCase();
-    let positiveScore = 0;
-    let negativeScore = 0;
-    
-    POSITIVE_KEYWORDS.forEach(keyword => {
-      if (lowerTitle.includes(keyword)) positiveScore++;
-    });
-    
-    NEGATIVE_KEYWORDS.forEach(keyword => {
-      if (lowerTitle.includes(keyword)) negativeScore++;
-    });
-    
-    if (positiveScore > negativeScore) return "positive";
-    if (negativeScore > positiveScore) return "negative";
-    return "neutral";
-  };
-
   const getSentimentColor = (sentiment: "positive" | "negative" | "neutral") => {
     switch (sentiment) {
       case "positive": return "#10B981";
@@ -150,14 +181,10 @@ export default function NewsWidget({
     }
   };
 
-  const fetchNews = useCallback(async () => {
-    // Get watched symbols from localStorage
+  const buildNewsFetchContext = useCallback(async (): Promise<{ key: string; allSymbols: string[] }> => {
     const savedSymbols = localStorage.getItem(NEWS_WATCHED_SYMBOLS_KEY);
     const watchedSymbols: string[] = savedSymbols ? JSON.parse(savedSymbols) : [];
-
     let openPositionSymbols: string[] = [];
-    
-    // Get open position symbols if enabled
     if (includePositions && dataMode !== "sandbox") {
       try {
         const paperOnly = dataMode === "paper";
@@ -169,40 +196,71 @@ export default function NewsWidget({
           includePaper: !paperOnly,
         });
         openPositionSymbols = groups
-          .filter(g => g.final_quantity !== 0)
-          .map(g => g.entry_trade.symbol.toUpperCase());
+          .filter((g) => g.final_quantity !== 0)
+          .map((g) => g.entry_trade.symbol.toUpperCase());
       } catch (e) {
         console.error("Failed to fetch open positions:", e);
       }
     }
-
-    // Combine symbols
     const allSymbols = [...new Set([...watchedSymbols, ...openPositionSymbols])];
-    
-    if (allSymbols.length === 0) {
-      setNews([]);
-      setLastRefresh(new Date());
-      return;
-    }
+    const key = JSON.stringify({
+      dataMode,
+      includePositions,
+      maxItems,
+      symbols: [...allSymbols].sort().join(","),
+    });
+    return { key, allSymbols };
+  }, [dataMode, includePositions, maxItems]);
 
-    setIsLoading(true);
-    setError(null);
+  const fetchNews = useCallback(
+    async (opts?: { force?: boolean; silent?: boolean }) => {
+      const force = opts?.force ?? false;
+      const silent = opts?.silent ?? false;
+      const { key, allSymbols } = await buildNewsFetchContext();
+      const cached = newsSessionCache;
+      const cacheHit = !force && cached?.key === key;
 
-    try {
-      const newsData = await invoke<NewsItem[]>("fetch_news_batch", { symbols: allSymbols });
-      const newsWithMeta: NewsItemWithMeta[] = newsData.map(item => ({
-        ...item,
-        sentiment: analyzeSentiment(item.title),
-      }));
-      setNews(newsWithMeta.slice(0, maxItems * 2)); // Fetch more to account for filtering
-      setLastRefresh(new Date());
-    } catch (e) {
-      console.error("Failed to fetch news:", e);
-      setError(typeof e === "string" ? e : "Failed to fetch news");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [dataMode, maxItems, includePositions]);
+      if (cacheHit && cached) {
+        setNews(cached.news);
+        setLastRefresh(cached.lastRefresh);
+      }
+
+      if (allSymbols.length === 0) {
+        const syncKey = buildNewsSyncKey(dataMode, includePositions, maxItems);
+        const now = new Date();
+        setNews([]);
+        setLastRefresh(now);
+        setError(null);
+        newsSessionCache = { key, syncKey, news: [], lastRefresh: now };
+        setIsLoading(false);
+        return;
+      }
+
+      const shouldShowLoading = !silent && (!cacheHit || force);
+      if (shouldShowLoading) setIsLoading(true);
+      setError(null);
+
+      try {
+        const newsData = await invoke<NewsItem[]>("fetch_news_batch", { symbols: allSymbols });
+        const newsWithMeta: NewsItemWithMeta[] = newsData.map((item) => ({
+          ...item,
+          sentiment: analyzeNewsSentiment(item.title),
+        }));
+        const sliced = newsWithMeta.slice(0, maxItems * 2);
+        const syncKey = buildNewsSyncKey(dataMode, includePositions, maxItems);
+        setNews(sliced);
+        const now = new Date();
+        setLastRefresh(now);
+        newsSessionCache = { key, syncKey, news: sliced, lastRefresh: now };
+      } catch (e) {
+        console.error("Failed to fetch news:", e);
+        setError(typeof e === "string" ? e : "Failed to fetch news");
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [buildNewsFetchContext, dataMode, includePositions, maxItems]
+  );
 
   // Save settings to localStorage only when using internal state
   useEffect(() => {
@@ -236,11 +294,17 @@ export default function NewsWidget({
   // Listen for keyboard shortcut refresh event
   useEffect(() => {
     const handleRefresh = () => {
-      fetchNews();
+      void fetchNews({ force: true });
     };
     window.addEventListener("tradeButlerRefreshNews", handleRefresh);
     return () => window.removeEventListener("tradeButlerRefreshNews", handleRefresh);
   }, [fetchNews]);
+
+  useEffect(() => {
+    if (!priceSync?.enabled) return;
+    if (priceSync.tick === 0) return;
+    void fetchNews({ silent: true });
+  }, [priceSync?.enabled, priceSync?.tick, fetchNews]);
 
   const formatRelativeTime = (dateStr: string) => {
     try {
@@ -253,26 +317,42 @@ export default function NewsWidget({
 
   if (compact) {
     return (
-      <div style={{ height: "100%" }}>
-        {/* Compact header */}
-        <div style={{
+      <div
+        style={{
+          height: "100%",
+          minHeight: 0,
           display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "12px",
-        }}>
-          <span style={{ 
-            fontSize: "14px", 
-            fontWeight: "600", 
-            color: "var(--text-primary)",
+          flexDirection: "column",
+          overflow: "hidden",
+          boxSizing: "border-box",
+        }}
+      >
+        {/* Compact header — fixed; list scrolls below */}
+        <div
+          style={{
             display: "flex",
+            justifyContent: "space-between",
             alignItems: "center",
-            gap: "6px",
+            marginBottom: "12px",
             flexShrink: 0,
-          }}>
-            <Newspaper size={16} />
-            News
-          </span>
+          }}
+        >
+          {!hideCompactTitle && (
+            <span
+              style={{
+                fontSize: "14px",
+                fontWeight: "600",
+                color: "var(--text-primary)",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                flexShrink: 0,
+              }}
+            >
+              <Newspaper size={16} />
+              News
+            </span>
+          )}
           {showSearchInHeader && (
             <div style={{ flex: 1, maxWidth: "200px", margin: "0 12px" }}>
               <input
@@ -315,7 +395,7 @@ export default function NewsWidget({
             )}
             {showRefresh && (
               <button
-                onClick={(e) => { e.stopPropagation(); fetchNews(); }}
+                onClick={(e) => { e.stopPropagation(); void fetchNews({ force: true }); }}
                 disabled={isLoading}
                 style={{
                   background: "none",
@@ -473,14 +553,19 @@ export default function NewsWidget({
           </div>
         )}
 
-        {/* Compact news list */}
-        <div style={{ 
-          display: "flex", 
-          flexDirection: "column", 
-          gap: "8px",
-          overflowY: "auto",
-          maxHeight: showSettings ? "calc(100% - 180px)" : "calc(100% - 40px)",
-        }}>
+        {/* Compact news list — scroll inside fixed dashboard card height */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px",
+            flex: 1,
+            minHeight: 0,
+            overflowY: "auto",
+            overflowX: "hidden",
+            WebkitOverflowScrolling: "touch",
+          }}
+        >
           {error && (
             <div style={{
               padding: "8px",
@@ -652,7 +737,7 @@ export default function NewsWidget({
           )}
           {showRefresh && (
             <button
-              onClick={(e) => { e.stopPropagation(); fetchNews(); }}
+              onClick={(e) => { e.stopPropagation(); void fetchNews({ force: true }); }}
               disabled={isLoading}
               style={{
                 background: "none",

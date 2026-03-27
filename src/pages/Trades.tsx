@@ -3565,7 +3565,9 @@ export default function Trades() {
                                           onClick={(e) => e.stopPropagation()}
                                         >
                                           {journalEntriesByPairKey[`${group.entry_trade.id}_${group.position_trades[group.position_trades.length - 1].id}`] === undefined ? (
-                                            <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Loading...</div>
+                                            <div style={{ display: "flex", justifyContent: "center" }}>
+                                              <LoadingSphere size={44} message="Loading..." padding={8} gap={6} messageFontSize={11} />
+                                            </div>
                                           ) : (() => {
                                             const pairKey = `${group.entry_trade.id}_${group.position_trades[group.position_trades.length - 1].id}`;
                                             const entries = journalEntriesByPairKey[pairKey];
@@ -4413,7 +4415,9 @@ export default function Trades() {
                                             onClick={(e) => e.stopPropagation()}
                                           >
                                             {journalEntriesByPairKey[`${pair.entry_trade_id}_${pair.exit_trade_id}`] === undefined ? (
-                                              <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Loading...</div>
+                                              <div style={{ display: "flex", justifyContent: "center" }}>
+                                                <LoadingSphere size={44} message="Loading..." padding={8} gap={6} messageFontSize={11} />
+                                              </div>
                                             ) : (() => {
                                               const entries = journalEntriesByPairKey[`${pair.entry_trade_id}_${pair.exit_trade_id}`];
                                               const totalPages = Math.max(1, Math.ceil(entries.length / JOURNAL_ENTRIES_PER_PAGE));

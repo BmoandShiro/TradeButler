@@ -17,6 +17,7 @@ import { sampleTimeSeries, CHART_MAX_POINTS, xAxisInterval } from "../utils/char
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import RichTextEditor from "../components/RichTextEditor";
 import { getIntensityColor } from "../utils/intensityColor";
+import { LoadingSphere } from "../components/LoadingSphere";
 
 interface EmotionalState {
   id: number;
@@ -3341,8 +3342,17 @@ export default function Emotions() {
 
   if (loading) {
     return (
-      <div style={{ padding: "40px", textAlign: "center" }}>
-        <p>Loading emotional states...</p>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100%",
+          width: "100%",
+          minHeight: "100vh",
+        }}
+      >
+        <LoadingSphere size={100} message="Loading emotional states..." />
       </div>
     );
   }
