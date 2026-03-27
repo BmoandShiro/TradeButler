@@ -718,6 +718,9 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
 
   const lockRgb = sphereDotHexToRgb(modalDotColor);
   const { r: lockR, g: lockG, b: lockB } = lockRgb;
+  const pinSquareBorder = error
+    ? "2px solid #ef4444"
+    : `1px solid rgba(${lockR}, ${lockG}, ${lockB}, 0.4)`;
 
   return (
     <div
@@ -781,7 +784,7 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
           backgroundColor: "rgba(20, 20, 30, 0.85)",
           borderRadius: "16px",
           border: "1px solid rgba(255, 255, 255, 0.1)",
-          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.5), 0 0 60px rgba(59, 130, 246, 0.1)",
+          boxShadow: `0 8px 32px rgba(0, 0, 0, 0.5), 0 0 60px rgba(${lockR}, ${lockG}, ${lockB}, 0.12)`,
           backdropFilter: "blur(20px)",
           position: "relative",
           zIndex: 1,
@@ -833,7 +836,7 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
                         height: "60px",
                         position: "relative",
                         backgroundColor: "rgba(30, 30, 40, 0.8)",
-                        border: error ? "2px solid #ef4444" : "1px solid rgba(255, 255, 255, 0.15)",
+                        border: pinSquareBorder,
                         borderRadius: "8px",
                         display: "flex",
                         alignItems: "center",
@@ -849,8 +852,8 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
                             width: "12px",
                             height: "12px",
                             borderRadius: "50%",
-                            backgroundColor: "var(--accent)",
-                            boxShadow: "0 0 8px var(--accent)",
+                            backgroundColor: modalDotColor,
+                            boxShadow: `0 0 10px rgba(${lockR}, ${lockG}, ${lockB}, 0.65)`,
                             position: "absolute",
                             pointerEvents: "none",
                           }}
@@ -886,16 +889,23 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
                         onFocus={(e) => {
                           const container = e.target.parentElement;
                           if (container) {
-                            container.style.borderColor = "var(--accent)";
-                            container.style.borderWidth = "2px";
-                            container.style.boxShadow = "0 0 12px var(--accent)";
+                            if (error) {
+                              container.style.border = "2px solid #ef4444";
+                              container.style.boxShadow = "none";
+                            } else {
+                              container.style.border = `2px solid rgba(${lockR}, ${lockG}, ${lockB}, 0.65)`;
+                              container.style.boxShadow = `0 0 14px rgba(${lockR}, ${lockG}, ${lockB}, 0.45)`;
+                            }
                           }
                         }}
                         onBlur={(e) => {
                           const container = e.target.parentElement;
                           if (container) {
-                            container.style.borderColor = error ? "#ef4444" : "rgba(255, 255, 255, 0.15)";
-                            container.style.borderWidth = "1px";
+                            if (error) {
+                              container.style.border = "2px solid #ef4444";
+                            } else {
+                              container.style.border = `1px solid rgba(${lockR}, ${lockG}, ${lockB}, 0.4)`;
+                            }
                             container.style.boxShadow = "none";
                           }
                         }}
