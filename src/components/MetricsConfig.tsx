@@ -53,7 +53,7 @@ const defaultMetrics: MetricConfig[] = [
 
 const STORAGE_KEY = "tradebutler_metrics_config";
 export const COLOR_RANGE_KEY = "tradebutler_color_range";
-/** When enabled, Current Price cards and Open Positions live quotes refresh together on this interval (seconds). */
+/** When enabled, the dashboard shared timer refreshes metrics, sections, quotes, news, and dividend widgets (see Configure copy). */
 export const CURRENT_PRICE_SYNC_ENABLED_KEY = "tradebutler_current_price_sync_enabled";
 export const CURRENT_PRICE_SYNC_SECONDS_KEY = "tradebutler_current_price_sync_seconds";
 export const CURRENT_PRICE_SYNC_INTERVALS = [1, 5, 10, 15, 30, 60, 120] as const;
@@ -218,7 +218,7 @@ function CurrentPriceSyncControls({ onConfigChange }: { onConfigChange?: () => v
         }}
       >
         <span style={{ color: "var(--text-primary)", fontSize: "14px" }}>
-          Sync live quotes (Current Price + Open Positions)
+          Dashboard auto-refresh (timer)
         </span>
         <input
           type="checkbox"
@@ -240,7 +240,7 @@ function CurrentPriceSyncControls({ onConfigChange }: { onConfigChange?: () => v
       </label>
       <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
         <label style={{ fontSize: "13px", color: syncEnabled ? "var(--text-secondary)" : "var(--text-secondary)", opacity: syncEnabled ? 1 : 0.5 }}>
-          Shared refresh interval
+          Auto-refresh interval
         </label>
         <select
           value={syncSeconds}
@@ -269,7 +269,7 @@ function CurrentPriceSyncControls({ onConfigChange }: { onConfigChange?: () => v
           ))}
         </select>
         <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.45 }}>
-          When sync is on, every Current Price card refreshes at the same time on this schedule. Per-card intervals in the gear menu are ignored until sync is turned off.
+          When enabled, the whole dashboard refreshes on this schedule: metrics and section data, open-position and Current Price quotes, news, forward dividend estimates, and dividend tracker widgets. Per-card quote intervals in each card’s gear menu apply only when this is off.
         </div>
       </div>
     </>
@@ -760,7 +760,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
           </div>
         </div>
 
-        {/* Live quotes — synced refresh */}
+        {/* Dashboard-wide auto-refresh (shared timer) */}
         <div style={{ marginBottom: "24px" }}>
           <h3
             style={{
@@ -770,7 +770,7 @@ export function MetricsConfigPanel({ isOpen, onClose, onConfigChange, onAddMetri
               color: "var(--text-primary)",
             }}
           >
-            Live quotes sync
+            Dashboard auto-refresh
           </h3>
           <div
             style={{

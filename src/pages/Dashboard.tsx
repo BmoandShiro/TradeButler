@@ -2670,7 +2670,7 @@ function SortableMetricCard({
                   </select>
                   {currentPriceSyncCtx?.enabled ? (
                     <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "8px", lineHeight: 1.4 }}>
-                      Live quotes sync updates this figure every {currentPriceSyncCtx.seconds}s.
+                      Dashboard auto-refresh (Configure) also reloads this estimate every {currentPriceSyncCtx.seconds}s.
                     </div>
                   ) : null}
                 </div>
@@ -5590,6 +5590,28 @@ export default function Dashboard() {
                 )}
               </div>
               <button
+                type="button"
+                onClick={() => refreshDashboardSections()}
+                disabled={loading || isRefreshingQuotes}
+                title="Refresh all dashboard data: metrics and sections, open-position quotes, news, and dividend widgets. Matches what runs on the Configure → Dashboard auto-refresh timer when that is enabled."
+                style={{
+                  background: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "10px 16px",
+                  color: "var(--text-primary)",
+                  cursor: loading || isRefreshingQuotes ? "not-allowed" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  fontSize: "14px",
+                  opacity: loading || isRefreshingQuotes ? 0.55 : 1,
+                }}
+              >
+                <RefreshCw size={16} />
+                Refresh
+              </button>
+              <button
                 onClick={() => setShowMetricsConfig(true)}
                 style={{
                   background: "var(--bg-secondary)",
@@ -7660,10 +7682,10 @@ export default function Dashboard() {
                                 <>
                                   <div style={{ borderTop: "1px solid var(--border-color)", margin: "4px 0" }} />
                                   <div style={{ padding: "4px 0" }}>
-                                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>Auto-Refresh Prices</div>
+                                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>Dashboard auto-refresh</div>
                                     {currentPriceSync.enabled ? (
                                       <div style={{ fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.4 }}>
-                                        Live quotes sync is on in Dashboard configure — open position prices refresh with Current Price cards every{" "}
+                                        Enabled in Configure — metrics, sections, open-position quotes, Current Price cards, news, and dividend widgets refresh together every{" "}
                                         {currentPriceSync.seconds}s.
                                       </div>
                                     ) : (
