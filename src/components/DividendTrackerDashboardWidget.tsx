@@ -16,11 +16,15 @@ import {
   type ForwardDividendEstimate,
   readDividendTrackerPageSize,
 } from "../utils/dividendTrackerData";
+import { DividendTrackerChartsPanel } from "./DividendTrackerChartsPanel";
+import type { DividendDashboardView } from "../utils/dividendTrackerCharts";
 
 export type DividendTrackerDashboardWidgetProps = {
   /** When set with `onPageSizeChange`, pagination is controlled (e.g. Dashboard header menu). */
   pageSize?: number;
   onPageSizeChange?: (n: number) => void;
+  /** Table only, table + charts, or charts only (Dashboard header dropdown). */
+  viewMode?: DividendDashboardView;
   /** Register `load` so parent can trigger refresh (e.g. Dashboard gear menu). */
   onRegisterRefresh?: (refresh: () => void) => void;
 };
@@ -28,6 +32,7 @@ export type DividendTrackerDashboardWidgetProps = {
 export default function DividendTrackerDashboardWidget({
   pageSize: pageSizeProp,
   onPageSizeChange,
+  viewMode = "table",
   onRegisterRefresh,
 }: DividendTrackerDashboardWidgetProps = {}) {
   const [dataMode, setDataMode] = useState<DataMode>(() => getCurrentDataMode());
@@ -184,8 +189,11 @@ export default function DividendTrackerDashboardWidget({
     );
   }
 
+  const chartOnly = viewMode === "charts";
+  const showChartPanel = viewMode !== "table" && rows.length > 0;
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "10px", minHeight: 0 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "10px", flexShrink: 0, width: "100%", boxSizing: "border-box" }}>
       <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", fontSize: "11px", color: "var(--text-secondary)" }}>
         <span>
           <strong style={{ color: "var(--text-primary)" }}>Future</strong> {summary.futureN}
@@ -202,7 +210,9 @@ export default function DividendTrackerDashboardWidget({
         {loading && <span style={{ opacity: 0.8 }}>(loading…)</span>}
       </div>
 
-      {symbolsLoaded.length > 0 && (
+      {showChartPanel && <DividendTrackerChartsPanel rows={rows} compact={!chartOnly} />}
+
+      {!chartOnly && symbolsLoaded.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px" }}>
             <span style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", marginRight: "2px" }}>PERIOD</span>
@@ -278,14 +288,14 @@ export default function DividendTrackerDashboardWidget({
         </div>
       )}
 
-      {timeFilter === "future" && forwardAnnualFiltered > 0 && (
+      {!chartOnly && timeFilter === "future" && forwardAnnualFiltered > 0 && (
         <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.4 }}>
           <span style={{ fontWeight: "600", color: "var(--profit)" }}>
             Est. forward ~12 mo (latest rate × shares × freq): {formatDividendMoney(forwardAnnualFiltered, 2)}
           </span>
         </div>
       )}
-      {(timeFilter === "all" || timeFilter === "future") && filteredFutureTotal > 0 && (
+      {!chartOnly && (timeFilter === "all" || timeFilter === "future") && filteredFutureTotal > 0 && (
         <div style={{ fontSize: "11px", fontWeight: "600", color: "var(--profit)" }}>
           {timeFilter === "future"
             ? `Sum projected (next 12 mo): ${formatDividendMoney(filteredFutureTotal, 2)}`
@@ -305,7 +315,7 @@ export default function DividendTrackerDashboardWidget({
         </p>
       )}
 
-      {orderedFilteredRows.length > 0 && (
+      {!chartOnly && orderedFilteredRows.length > 0 && (
         <>
           <div style={{ overflowX: "auto", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "11px", minWidth: "520px" }}>
@@ -439,7 +449,7 @@ export default function DividendTrackerDashboardWidget({
         </>
       )}
 
-      {orderedFilteredRows.length === 0 && rows.length > 0 && (
+      {!chartOnly && orderedFilteredRows.length === 0 && rows.length > 0 && (
         <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)" }}>No rows match the selected filters.</p>
       )}
 

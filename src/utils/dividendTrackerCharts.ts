@@ -22,6 +22,25 @@ export type DividendChartDisplayMode = "hidden" | "cumulative" | "monthly" | "qu
 
 export const DIVIDEND_CHART_DISPLAY_MODE_KEY = "tradebutler_dividend_tracker_chart_display_mode";
 
+/** @deprecated Legacy: charts shown alongside table; migrated by readDividendDashboardView. */
+export const DASHBOARD_DIVIDEND_SHOW_CHARTS_KEY = "tradebutler_dashboard_dividend_show_charts";
+
+/** Dashboard Dividend tracker: table only, table + charts, or charts only. */
+export type DividendDashboardView = "table" | "split" | "charts";
+
+export const DASHBOARD_DIVIDEND_VIEW_KEY = "tradebutler_dashboard_dividend_view";
+
+export function readDividendDashboardView(): DividendDashboardView {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_DIVIDEND_VIEW_KEY);
+    if (raw === "table" || raw === "split" || raw === "charts") return raw;
+    if (localStorage.getItem(DASHBOARD_DIVIDEND_SHOW_CHARTS_KEY) === "true") return "split";
+  } catch {
+    /* ignore */
+  }
+  return "table";
+}
+
 export function readDividendChartDisplayMode(): DividendChartDisplayMode {
   try {
     const raw = localStorage.getItem(DIVIDEND_CHART_DISPLAY_MODE_KEY);

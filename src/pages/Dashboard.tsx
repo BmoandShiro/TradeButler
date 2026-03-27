@@ -100,6 +100,11 @@ import {
   DIVIDEND_TRACKER_PAGE_SIZE_KEY,
   DIVIDEND_TRACKER_PAGE_SIZE_OPTIONS,
 } from "../utils/dividendTrackerData";
+import {
+  readDividendDashboardView,
+  DASHBOARD_DIVIDEND_VIEW_KEY,
+  type DividendDashboardView,
+} from "../utils/dividendTrackerCharts";
 import ViewFinancialsButton from "../components/ViewFinancialsButton";
 
 interface Metrics {
@@ -2867,6 +2872,9 @@ export default function Dashboard() {
   const [dividendTrackerDashboardPageSize, setDividendTrackerDashboardPageSize] = useState(() =>
     readDividendTrackerPageSize()
   );
+  const [dividendTrackerView, setDividendTrackerView] = useState<DividendDashboardView>(() =>
+    readDividendDashboardView()
+  );
   const registerDividendTrackerRefresh = useCallback((fn: () => void) => {
     dividendTrackerDashboardRefreshRef.current = fn;
   }, []);
@@ -2875,6 +2883,14 @@ export default function Dashboard() {
     const unsub = subscribeToDataMode(setDataMode);
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DASHBOARD_DIVIDEND_VIEW_KEY, dividendTrackerView);
+    } catch {
+      /* ignore */
+    }
+  }, [dividendTrackerView]);
 
   // Fetch current prices for open position symbols (Real/Paper only)
   const fetchOpenPositionQuotes = useCallback(async (showLoading = true) => {
@@ -7828,7 +7844,32 @@ export default function Dashboard() {
                           <Coins size={20} color="var(--accent)" />
                           <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "600", color: "var(--text-primary)" }}>Dividend tracker</h3>
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: "2px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <select
+                            aria-label="Dividend tracker view"
+                            value={dividendTrackerView}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              setDividendTrackerView(e.target.value as DividendDashboardView);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            title="Switch between table and chart"
+                            style={{
+                              fontSize: "12px",
+                              padding: "5px 8px",
+                              borderRadius: "6px",
+                              border: "1px solid var(--border-color)",
+                              backgroundColor: "var(--bg-tertiary)",
+                              color: "var(--text-primary)",
+                              cursor: "pointer",
+                              maxWidth: "min(160px, 36vw)",
+                            }}
+                          >
+                            <option value="table">Table</option>
+                            <option value="split">Table + charts</option>
+                            <option value="charts">Charts</option>
+                          </select>
                           <button
                             type="button"
                             onClick={(e) => {
@@ -8235,9 +8276,10 @@ export default function Dashboard() {
                           </div>
                         </div>
                       </div>
-                      <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}>
+                      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
                         <DividendTrackerDashboardWidget
                           pageSize={dividendTrackerDashboardPageSize}
+                          viewMode={dividendTrackerView}
                           onPageSizeChange={(n) => {
                             setDividendTrackerDashboardPageSize(n);
                             try {
