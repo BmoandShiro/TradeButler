@@ -4551,7 +4551,6 @@ export default function Journal() {
               const indSelectedTfs = getIndicatorSelectedTfs(ind.id, isTfIndicator);
               const isMomentum = (ind.category ?? "").toLowerCase() === "momentum";
               const colTfs = isTfIndicator ? globalSelectedTfs : indSelectedTfs;
-              const otherSignals = ind.kind === "custom" ? loadJournalIndicatorOtherSignals(dataMode, entryId, tradeIndex, phase, ind.id) : {};
               void indicatorSignalPrefsTick;
               const signalPrefs = ind.kind === "custom" ? loadIndicatorSignalPrefs(ind.id, ind.otherSignals ?? []) : null;
               const otherSignalLabels = ind.kind === "custom" ? (signalPrefs?.order ?? []) : [];
@@ -4673,7 +4672,7 @@ export default function Journal() {
                         <div style={{ fontSize: "10px", color: "var(--text-secondary)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", paddingLeft: "2px" }}>
                           {tf}
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px", width: "100%", minWidth: 0 }}>
                           {(ind.id === "ema" || ind.id === "ma") ? (
                             (() => {
                               void maConfigTick; // re-render when EMA/MA config changes
@@ -4933,134 +4932,156 @@ export default function Journal() {
                               );
                             })()
                           ) : (
-                            <input
-                              type="text"
-                              placeholder="Value"
-                              defaultValue={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
-                              onChange={(e) => {
-                                if (!canEditIndicators) return;
-                                setJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.value);
-                              }}
-                              readOnly={!canEditIndicators}
-                              disabled={!canEditIndicators}
-                              spellCheck={false}
-                              style={{
-                                padding: "10px 12px",
-                                background: "var(--bg-tertiary)",
-                                border: "1px solid var(--border-color)",
-                                borderRadius: "10px",
-                                color: "var(--text-primary)",
-                                outline: "none",
-                                flex: "1 1 120px",
-                                minWidth: 0,
-                              }}
-                            />
-                          )}
-
-                          {isMomentum && (
-                            <label
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "6px",
-                                cursor: canEditIndicators ? "pointer" : "default",
-                                color: "var(--text-secondary)",
-                                fontSize: "11px",
-                                fontWeight: 650,
-                                userSelect: "none",
-                              }}
-                            >
+                            <>
                               <input
-                                type="checkbox"
-                                checked={loadJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
-                                disabled={!canEditIndicators}
+                                type="text"
+                                placeholder="Value"
+                                defaultValue={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
                                 onChange={(e) => {
-                                  setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.checked);
-                                  setJournalSignalInputsTick((t) => t + 1);
+                                  if (!canEditIndicators) return;
+                                  setJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.value);
                                 }}
-                                style={{ width: "16px", height: "16px" }}
+                                readOnly={!canEditIndicators}
+                                disabled={!canEditIndicators}
+                                spellCheck={false}
+                                style={{
+                                  padding: "10px 12px",
+                                  background: "var(--bg-tertiary)",
+                                  border: "1px solid var(--border-color)",
+                                  borderRadius: "10px",
+                                  color: "var(--text-primary)",
+                                  outline: "none",
+                                  width: "100%",
+                                  minWidth: 0,
+                                  boxSizing: "border-box",
+                                }}
                               />
-                              Divergence
-                            </label>
+                              {ind.kind === "custom" &&
+                                otherSignalLabels
+                                  .filter((lbl) => (signalPrefs?.journalKindByLabel[lbl] ?? "checkbox") === "value")
+                                  .map((label) => {
+                                    const customColor = signalPrefs?.chipColorByLabel?.[label];
+                                    const otherSignalsTf = loadJournalIndicatorOtherSignals(dataMode, entryId, tradeIndex, phase, ind.id, tf);
+                                    const raw = otherSignalsTf[label];
+                                    const textVal = typeof raw === "string" ? raw : "";
+                                    return (
+                                      <div key={`${label}-val-${tf}`} style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
+                                        <span style={{ fontSize: "11px", fontWeight: 650, color: "var(--text-secondary)", userSelect: "none" }}>{label}</span>
+                                        <input
+                                          type="text"
+                                          placeholder="Value"
+                                          defaultValue={textVal}
+                                          disabled={!canEditIndicators}
+                                          readOnly={!canEditIndicators}
+                                          spellCheck={false}
+                                          onChange={(e) => {
+                                            if (!canEditIndicators) return;
+                                            setJournalIndicatorOtherSignalField(
+                                              dataMode,
+                                              entryId,
+                                              tradeIndex,
+                                              phase,
+                                              ind.id,
+                                              tf,
+                                              label,
+                                              e.target.value
+                                            );
+                                            setJournalSignalInputsTick((t) => t + 1);
+                                          }}
+                                          style={{
+                                            padding: "10px 12px",
+                                            width: "100%",
+                                            minWidth: 0,
+                                            boxSizing: "border-box",
+                                            background: customColor ? hexToRgba(customColor, 0.08) : "var(--bg-tertiary)",
+                                            border: customColor ? `1px solid ${hexToRgba(customColor, 0.45)}` : "1px solid var(--border-color)",
+                                            borderRadius: "10px",
+                                            color: "var(--text-primary)",
+                                            fontSize: 12,
+                                            outline: "none",
+                                          }}
+                                        />
+                                      </div>
+                                    );
+                                  })}
+                            </>
                           )}
 
-                          {ind.kind === "custom" && otherSignalLabels.length > 0 && tf === (colTfs[0] ?? tf) && (
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                              {otherSignalLabels.map((label) => {
-                                const osMode = signalPrefs?.journalKindByLabel[label] ?? "checkbox";
-                                const customColor = signalPrefs?.chipColorByLabel?.[label];
-                                const raw = otherSignals[label];
-                                const checked = typeof raw === "boolean" ? raw : raw === "true" || raw === "1";
-                                const textVal = typeof raw === "string" ? raw : "";
-                                if (osMode === "value") {
-                                  return (
-                                    <label
-                                      key={label}
-                                      style={{
-                                        display: "inline-flex",
-                                        flexDirection: "column",
-                                        alignItems: "flex-start",
-                                        gap: 4,
-                                        color: "var(--text-primary)",
-                                        fontSize: 12,
-                                        fontWeight: 650,
-                                        userSelect: "none",
-                                        minWidth: 0,
-                                      }}
-                                    >
-                                      <span style={{ color: customColor ?? "var(--text-secondary)", fontSize: 11, fontWeight: 800 }}>{label}</span>
-                                      <input
-                                        type="text"
-                                        defaultValue={textVal}
-                                        disabled={!canEditIndicators}
-                                        readOnly={!canEditIndicators}
-                                        spellCheck={false}
-                                        onChange={(e) => {
-                                          if (!canEditIndicators) return;
-                                          setJournalIndicatorOtherSignalField(dataMode, entryId, tradeIndex, phase, ind.id, label, e.target.value);
-                                          setJournalSignalInputsTick((t) => t + 1);
-                                        }}
-                                        style={{
-                                          padding: "6px 8px",
-                                          minWidth: 100,
-                                          background: customColor ? hexToRgba(customColor, 0.08) : "var(--bg-tertiary)",
-                                          border: customColor ? `1px solid ${hexToRgba(customColor, 0.45)}` : "1px solid var(--border-color)",
-                                          borderRadius: "8px",
-                                          color: "var(--text-primary)",
-                                          fontSize: 12,
-                                        }}
-                                      />
-                                    </label>
-                                  );
-                                }
-                                return (
-                                  <label
-                                    key={label}
-                                    style={{
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      gap: 8,
-                                      color: "var(--text-primary)",
-                                      fontSize: 12,
-                                      fontWeight: 650,
-                                      userSelect: "none",
-                                      cursor: canEditIndicators ? "pointer" : "default",
+                          {(isMomentum ||
+                            (ind.kind === "custom" &&
+                              otherSignalLabels.some((lbl) => (signalPrefs?.journalKindByLabel[lbl] ?? "checkbox") === "checkbox"))) && (
+                            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px" }}>
+                              {isMomentum && (
+                                <label
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "6px",
+                                    cursor: canEditIndicators ? "pointer" : "default",
+                                    color: "var(--text-secondary)",
+                                    fontSize: "11px",
+                                    fontWeight: 650,
+                                    userSelect: "none",
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={loadJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                                    disabled={!canEditIndicators}
+                                    onChange={(e) => {
+                                      setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.checked);
+                                      setJournalSignalInputsTick((t) => t + 1);
                                     }}
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      checked={checked}
-                                      disabled={!canEditIndicators}
-                                      onChange={(e) => {
-                                        setJournalIndicatorOtherSignal(dataMode, entryId, tradeIndex, phase, ind.id, label, e.target.checked);
-                                        setJournalSignalInputsTick((t) => t + 1);
-                                      }}
-                                      style={{ width: 16, height: 16, ...(customColor ? { accentColor: customColor } : {}) }}
-                                    />
-                                    <span style={{ color: customColor ?? "var(--text-primary)", fontWeight: customColor ? 800 : 650 }}>{label}</span>
-                                  </label>
-                                );
-                              })}
+                                    style={{ width: "16px", height: "16px" }}
+                                  />
+                                  Divergence
+                                </label>
+                              )}
+                              {ind.kind === "custom" &&
+                                otherSignalLabels
+                                  .filter((lbl) => (signalPrefs?.journalKindByLabel[lbl] ?? "checkbox") === "checkbox")
+                                  .map((label) => {
+                                    const customColor = signalPrefs?.chipColorByLabel?.[label];
+                                    const otherSignalsTf = loadJournalIndicatorOtherSignals(dataMode, entryId, tradeIndex, phase, ind.id, tf);
+                                    const raw = otherSignalsTf[label];
+                                    const checked = typeof raw === "boolean" ? raw : raw === "true" || raw === "1";
+                                    return (
+                                      <label
+                                        key={`${label}-chk-${tf}`}
+                                        style={{
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          gap: "6px",
+                                          cursor: canEditIndicators ? "pointer" : "default",
+                                          color: "var(--text-secondary)",
+                                          fontSize: "11px",
+                                          fontWeight: 650,
+                                          userSelect: "none",
+                                        }}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={checked}
+                                          disabled={!canEditIndicators}
+                                          onChange={(e) => {
+                                            setJournalIndicatorOtherSignal(
+                                              dataMode,
+                                              entryId,
+                                              tradeIndex,
+                                              phase,
+                                              ind.id,
+                                              tf,
+                                              label,
+                                              e.target.checked
+                                            );
+                                            setJournalSignalInputsTick((t) => t + 1);
+                                          }}
+                                          style={{ width: 16, height: 16, ...(customColor ? { accentColor: customColor } : {}) }}
+                                        />
+                                        {label}
+                                      </label>
+                                    );
+                                  })}
                             </div>
                           )}
                         </div>
@@ -5539,133 +5560,146 @@ export default function Journal() {
               style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px" }}
             >
               <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12, minWidth: 260, flex: "1 1 520px" }}>
-                    <div style={{ flex: "1 1 220px", minWidth: 200, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
-                      <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
-                        Date
-                      </label>
-                      <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
-                        {selectedEntry.date}
-                      </div>
-                    </div>
-
-                    <div style={{ flex: "2 1 260px", minWidth: 240, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
-                      <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
-                        Title
-                      </label>
-                      <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={selectedEntry.title}>
-                        {selectedEntry.title}
-                      </div>
-                    </div>
-
-                    {selectedEntry.strategy_id && (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "stretch", gap: 16, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 260, flex: "1 1 520px", alignSelf: "stretch" }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
                       <div style={{ flex: "1 1 220px", minWidth: 200, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
                         <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
-                          Strategy
+                          Date
                         </label>
-                        <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={strategies.find(s => s.id === selectedEntry.strategy_id)?.name || "Unknown"}>
-                          {strategies.find(s => s.id === selectedEntry.strategy_id)?.name || "Unknown"}
+                        <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
+                          {selectedEntry.date}
+                        </div>
+                      </div>
+
+                      <div style={{ flex: "2 1 260px", minWidth: 240, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
+                        <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
+                          Title
+                        </label>
+                        <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={selectedEntry.title}>
+                          {selectedEntry.title}
+                        </div>
+                      </div>
+
+                      {selectedEntry.strategy_id && (
+                        <div style={{ flex: "1 1 220px", minWidth: 200, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
+                          <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
+                            Strategy
+                          </label>
+                          <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={strategies.find(s => s.id === selectedEntry.strategy_id)?.name || "Unknown"}>
+                            {strategies.find(s => s.id === selectedEntry.strategy_id)?.name || "Unknown"}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {selectedTrades.length > 0 && (
+                      <div
+                        style={{
+                          padding: "10px 12px",
+                          background: "var(--bg-tertiary)",
+                          border: "1px solid var(--border-color)",
+                          borderLeft: "3px solid var(--accent)",
+                          borderRadius: 10,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <h3
+                          style={{
+                            fontSize: "13px",
+                            fontWeight: "900",
+                            margin: 0,
+                            color: "var(--text-primary)",
+                            letterSpacing: "0.04em",
+                            textTransform: "uppercase",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Trades ({selectedTrades.length})
+                        </h3>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            flexWrap: "wrap",
+                            minWidth: 0,
+                          }}
+                        >
+                          {selectedTrades.map((trade, index) => {
+                            const tabLabel = trade.symbol
+                              ? (trade.position ? `${trade.symbol} ${trade.position}` : trade.symbol)
+                              : `Trade ${index + 1}`;
+                            const isActiveTab = index === (viewFocusedTradeIndex ?? 0);
+                            return (
+                              <button
+                                key={trade.id || `trade-tab-${index}`}
+                                type="button"
+                                onClick={() => setViewFocusedTradeIndex(index)}
+                                style={{
+                                  border: `1px solid ${isActiveTab ? "var(--accent)" : "var(--border-color)"}`,
+                                  background: isActiveTab ? "var(--bg-secondary)" : "var(--bg-primary)",
+                                  color: isActiveTab ? "var(--text-primary)" : "var(--text-secondary)",
+                                  borderRadius: 8,
+                                  padding: "6px 10px",
+                                  fontSize: 12,
+                                  fontWeight: isActiveTab ? 700 : 600,
+                                  cursor: "pointer",
+                                  maxWidth: 180,
+                                  whiteSpace: "nowrap",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                }}
+                                title={tabLabel}
+                              >
+                                {tabLabel}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
                   </div>
 
-                  <div style={{ flex: "1 1 280px", minWidth: 280 }}>
-                    <div style={{ padding: "14px 14px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10, display: "flex", flexDirection: "column", gap: 10 }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <div style={{ flex: "1 1 280px", minWidth: 280, display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
+                    <div
+                      style={{
+                        flex: 1,
+                        minHeight: 0,
+                        padding: "12px 12px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 10,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexShrink: 0 }}>
                         <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Overview</span>
                         <span style={{ fontSize: 12, fontWeight: 700, color: "var(--accent)" }}>{selectedEntry.strategy_id ? "Strategy-backed" : "Unassigned"}</span>
                       </div>
-                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                        <div style={{ flex: "1 1 120px", minWidth: 120, padding: "10px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
+                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", flex: 1, alignContent: "stretch", minHeight: 0 }}>
+                        <div style={{ flex: "1 1 120px", minWidth: 120, padding: "10px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: 8, display: "flex", flexDirection: "column", justifyContent: "center" }}>
                           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Trades</div>
                           <div style={{ fontSize: 16, fontWeight: 900, color: "var(--text-primary)" }}>{selectedTrades.length}</div>
                         </div>
-                        <div style={{ flex: "1 1 120px", minWidth: 120, padding: "10px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
+                        <div style={{ flex: "1 1 120px", minWidth: 120, padding: "10px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: 8, display: "flex", flexDirection: "column", justifyContent: "center" }}>
                           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Emotions</div>
                           <div style={{ fontSize: 16, fontWeight: 900, color: "var(--text-primary)" }}>{viewEntryEmotionalStates.length > 0 ? groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).length : 0}</div>
                         </div>
-                      </div>
-                      <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.4 }}>
-                        Click a trade card to expand checklists and details. Use the Emotions cards to jump to the related trade.
                       </div>
                     </div>
                   </div>
                 </div>
 
                 {/* Display all trades */}
-                {selectedTrades.length > 0 && (
-                  <div style={{ marginTop: "24px" }}>
-                    <div
-                      style={{
-                        marginBottom: "16px",
-                        padding: "10px 12px",
-                        background: "var(--bg-tertiary)",
-                        border: "1px solid var(--border-color)",
-                        borderLeft: "3px solid var(--accent)",
-                        borderRadius: 10,
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        flexWrap: "wrap",
-                      }}
-                    >
-                      <h3
-                        style={{
-                          fontSize: "13px",
-                          fontWeight: "900",
-                          margin: 0,
-                          color: "var(--text-primary)",
-                          letterSpacing: "0.04em",
-                          textTransform: "uppercase",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        Trades ({selectedTrades.length})
-                      </h3>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          flexWrap: "wrap",
-                          minWidth: 0,
-                        }}
-                      >
-                        {selectedTrades.map((trade, index) => {
-                          const tabLabel = trade.symbol
-                            ? (trade.position ? `${trade.symbol} ${trade.position}` : trade.symbol)
-                            : `Trade ${index + 1}`;
-                          const isActiveTab = index === (viewFocusedTradeIndex ?? 0);
-                          return (
-                            <button
-                              key={trade.id || `trade-tab-${index}`}
-                              type="button"
-                              onClick={() => setViewFocusedTradeIndex(index)}
-                              style={{
-                                border: `1px solid ${isActiveTab ? "var(--accent)" : "var(--border-color)"}`,
-                                background: isActiveTab ? "var(--bg-secondary)" : "var(--bg-primary)",
-                                color: isActiveTab ? "var(--text-primary)" : "var(--text-secondary)",
-                                borderRadius: 8,
-                                padding: "6px 10px",
-                                fontSize: 12,
-                                fontWeight: isActiveTab ? 700 : 600,
-                                cursor: "pointer",
-                                maxWidth: 180,
-                                whiteSpace: "nowrap",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                              }}
-                              title={tabLabel}
-                            >
-                              {tabLabel}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    {selectedTrades.map((trade, index) => {
+                {selectedTrades.length > 0 &&
+                  selectedTrades.map((trade, index) => {
                       const tradeName = trade.symbol
                         ? (trade.position ? `${trade.symbol} (${trade.position})` : trade.symbol)
                         : `Trade ${index + 1}`;
@@ -6010,9 +6044,7 @@ export default function Journal() {
                         )}
                       </div>
                     );
-                    })}
-                  </div>
-                )}
+                  })}
 
                 {/* Links */}
                 {linkedPairs.length > 0 && (

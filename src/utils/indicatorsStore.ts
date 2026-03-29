@@ -2187,7 +2187,7 @@ type JournalIndicatorDivergenceMap = Record<
 type JournalIndicatorOtherSignalsMap = Record<
   string,
   Record<string, boolean | string>
->; // signalLabel -> checked or text (value mode)
+>; // key `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}` or `...:${indicatorId}:${timeframe}` -> signalLabel -> checked or text
 
 function safeParse<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
@@ -2758,11 +2758,13 @@ export function loadJournalIndicatorOtherSignals(
   entryId: number,
   tradeIndex: number,
   phase: IndicatorPhase,
-  indicatorId: string
+  indicatorId: string,
+  timeframe: string
 ): Record<string, boolean | string> {
   const data = safeParse<JournalIndicatorOtherSignalsMap>(localStorage.getItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY), {});
-  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}`;
-  return data[key] ?? {};
+  const keyTf = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}`;
+  const keyLegacy = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}`;
+  return data[keyTf] ?? data[keyLegacy] ?? {};
 }
 
 export function setJournalIndicatorOtherSignalField(
@@ -2771,13 +2773,14 @@ export function setJournalIndicatorOtherSignalField(
   tradeIndex: number,
   phase: IndicatorPhase,
   indicatorId: string,
+  timeframe: string,
   signalLabel: string,
   value: boolean | string
 ) {
   const clean = signalLabel.trim();
   if (!clean) return;
   const data = safeParse<JournalIndicatorOtherSignalsMap>(localStorage.getItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY), {});
-  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}`;
+  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}`;
   const cur: Record<string, boolean | string> = { ...(data[key] ?? {}) };
   if (typeof value === "boolean") {
     cur[clean] = value;
@@ -2796,10 +2799,11 @@ export function setJournalIndicatorOtherSignal(
   tradeIndex: number,
   phase: IndicatorPhase,
   indicatorId: string,
+  timeframe: string,
   signalLabel: string,
   checked: boolean
 ) {
-  setJournalIndicatorOtherSignalField(mode, entryId, tradeIndex, phase, indicatorId, signalLabel, checked);
+  setJournalIndicatorOtherSignalField(mode, entryId, tradeIndex, phase, indicatorId, timeframe, signalLabel, checked);
 }
 
 export function migrateJournalIndicatorDraftOtherSignals(
