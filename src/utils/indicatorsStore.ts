@@ -2443,9 +2443,22 @@ function sanitizeCustomRuleSets(sets: StrategyCustomRuleSet[]): StrategyCustomRu
   return out;
 }
 
-function makeRuleSetId(): string {
-  // Avoid external deps; good enough for local ids.
-  return `crs_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+/**
+ * Reads only persisted rule lines for a type — never synthesizes "Legacy indicator rule: …" placeholders
+ * (those come from {@link loadStrategyRuleTexts} when nothing is stored).
+ */
+function loadStoredStrategyRuleTextsArrayOnly(
+  mode: DataMode,
+  strategyId: number,
+  ruleType: StrategyRuleType
+): string[] | undefined {
+  if (strategyId < 0) return undefined;
+  const data = safeParse<StrategyRuleTextMap>(localStorage.getItem(STRATEGY_RULE_TEXT_KEY), {} as any);
+  const byMode = data[mode] ?? {};
+  const stored = byMode[String(strategyId)] ?? {};
+  const ruleTexts = stored?.[ruleType];
+  if (!Array.isArray(ruleTexts)) return undefined;
+  return sanitizeRuleTextRules(ruleTexts);
 }
 
 export function loadStrategyCustomRuleSets(mode: DataMode, strategyId: number): StrategyCustomRuleSet[] {
@@ -2453,23 +2466,27 @@ export function loadStrategyCustomRuleSets(mode: DataMode, strategyId: number): 
 
   const data = safeParse<StrategyCustomRuleSetsMap>(localStorage.getItem(STRATEGY_CUSTOM_RULE_SETS_KEY), {} as any);
   const byMode = data[mode] ?? {};
-  const stored = byMode[String(strategyId)] ?? [];
-  const cleaned = sanitizeCustomRuleSets(stored);
-  if (cleaned.length > 0) return cleaned;
+  const raw = byMode[String(strategyId)];
 
-  // Back-compat: if the old single "custom" rule text array exists,
-  // convert it into one default set.
-  const legacy = loadStrategyRuleTexts(mode, strategyId, "custom");
-  const legacyClean = sanitizeRuleTextRules(legacy);
-  if (legacyClean.length === 0) return [];
+  // Any explicit value (including []) means "use saved custom sets only" — do not resurrect legacy rows.
+  if (raw !== undefined) {
+    return sanitizeCustomRuleSets(Array.isArray(raw) ? raw : []);
+  }
 
-  return [
-    {
-      id: makeRuleSetId(),
-      title: "Custom Rules",
-      rules: legacyClean,
-    },
-  ];
+  // First load for this strategy: migrate only *explicitly stored* legacy "custom" lines (user/strategy data),
+  // not indicator-derived placeholder text from loadStrategyRuleTexts.
+  const explicitLegacy = loadStoredStrategyRuleTextsArrayOnly(mode, strategyId, "custom");
+  if (explicitLegacy !== undefined && explicitLegacy.length > 0) {
+    return [
+      {
+        id: `crs_mig_${mode}_${strategyId}`,
+        title: "Custom Rules",
+        rules: explicitLegacy,
+      },
+    ];
+  }
+
+  return [];
 }
 
 export function saveStrategyCustomRuleSets(mode: DataMode, strategyId: number, sets: StrategyCustomRuleSet[]) {

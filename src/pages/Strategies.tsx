@@ -113,6 +113,57 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
+/** Undo stack for Entry / Take Profit / custom rule sets while editing or creating a strategy. */
+type RulesUndoSnapshot = {
+  entryRuleTexts: string[];
+  takeProfitRuleTexts: string[];
+  customRuleSets: StrategyCustomRuleSet[];
+};
+
+function cloneRulesSnapshot(entry: string[], tp: string[], custom: StrategyCustomRuleSet[]): RulesUndoSnapshot {
+  return {
+    entryRuleTexts: [...entry],
+    takeProfitRuleTexts: [...tp],
+    customRuleSets: custom.map((s) => ({ ...s, rules: [...s.rules] })),
+  };
+}
+
+function rulesSnapshotsEqual(a: RulesUndoSnapshot, b: RulesUndoSnapshot): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Keep Journal section order in sync when a custom rule set is removed (keys match Journal.tsx). */
+function pruneJournalStorageForDeletedCustomRuleSet(ruleSetId: string) {
+  const sectionId = `custom_rules:${ruleSetId}`;
+  const orderKeys = ["tradebutler_journal_section_order", "tradebutler_journal_default_section_order"] as const;
+  for (const key of orderKeys) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) continue;
+      const next = parsed.filter((id) => id !== sectionId);
+      if (next.length !== parsed.length) {
+        localStorage.setItem(key, JSON.stringify(next));
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  try {
+    const hidRaw = localStorage.getItem("tradebutler_journal_hidden_section_ids");
+    if (!hidRaw) return;
+    const hid = JSON.parse(hidRaw) as unknown;
+    if (!Array.isArray(hid) || !hid.every((x) => typeof x === "string")) return;
+    const next = hid.filter((id) => id !== sectionId);
+    if (next.length !== hid.length) {
+      localStorage.setItem("tradebutler_journal_hidden_section_ids", JSON.stringify(next));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 interface Strategy {
   id: number;
   name: string;
@@ -732,6 +783,8 @@ function SortableRuleRow({
   onCancelEdit,
   onRemove,
   canEdit,
+  moveToOptions,
+  onMoveTo,
 }: {
   id: string;
   text: string;
@@ -743,6 +796,9 @@ function SortableRuleRow({
   onCancelEdit: () => void;
   onRemove: () => void;
   canEdit: boolean;
+  /** When non-empty, shows a "Move to…" control (e.g. another ruleset). */
+  moveToOptions?: { value: string; label: string }[];
+  onMoveTo?: (destinationValue: string) => void;
 }) {
   const {
     attributes,
@@ -874,7 +930,17 @@ function SortableRuleRow({
       )}
 
       {canEdit && !isEditingThis && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            flexShrink: 0,
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+          }}
+        >
           <button
             type="button"
             onClick={(e) => {
@@ -891,10 +957,12 @@ function SortableRuleRow({
               fontSize: 12,
               fontWeight: 650,
               height: 30,
+              width: 30,
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
               gap: 6,
+              flexShrink: 0,
             }}
             title="Edit rule"
           >
@@ -916,11 +984,54 @@ function SortableRuleRow({
               fontSize: 12,
               fontWeight: 650,
               height: 30,
+              width: 30,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
             }}
             title="Remove"
           >
             ✕
           </button>
+          {moveToOptions && moveToOptions.length > 0 && onMoveTo && (
+            <select
+              aria-label="Move rule to another ruleset"
+              defaultValue=""
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v) {
+                  onMoveTo(v);
+                  e.target.selectedIndex = 0;
+                }
+              }}
+              style={{
+                height: 30,
+                minWidth: 88,
+                maxWidth: 148,
+                padding: "0 8px",
+                borderRadius: 8,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-primary)",
+                color: "var(--text-primary)",
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: "pointer",
+                boxSizing: "border-box",
+                flexShrink: 1,
+              }}
+            >
+              <option value="" disabled>
+                Move to…
+              </option>
+              {moveToOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       )}
     </div>
@@ -1995,6 +2106,40 @@ export default function Strategies() {
   const [editingItemText, setEditingItemText] = useState<string>("");
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [strategyToDelete, setStrategyToDelete] = useState<number | null>(null);
+  /** In-app confirmation for deleting a custom rule set (matches app theme; native dialogs do not). */
+  const [pendingCustomRuleSetDelete, setPendingCustomRuleSetDelete] = useState<{ id: string; title: string } | null>(null);
+  /** Themed modal instead of window.prompt for custom rule set name / rename. */
+  const [customRuleSetNameModal, setCustomRuleSetNameModal] = useState<
+    null | { kind: "add" } | { kind: "rename"; id: string; initialTitle: string }
+  >(null);
+  const [customRuleSetNameDraft, setCustomRuleSetNameDraft] = useState("");
+  /** Undo stack for rules (entry / take profit / custom sets); see cloneRulesSnapshot. */
+  const [rulesEditHistory, setRulesEditHistory] = useState<RulesUndoSnapshot[]>([]);
+
+  const appendRulesHistoryTransition = useCallback((before: RulesUndoSnapshot, after: RulesUndoSnapshot) => {
+    if (!isEditing && !isCreating) return;
+    if (rulesSnapshotsEqual(before, after)) return;
+    setRulesEditHistory((prev) => {
+      const base = prev.length === 0 ? [before] : prev;
+      const last = base[base.length - 1];
+      if (rulesSnapshotsEqual(last, after)) return prev;
+      return [...base, after].slice(-15);
+    });
+  }, [isEditing, isCreating]);
+
+  const handleRulesUndo = useCallback(() => {
+    setRulesEditHistory((prev) => {
+      if (prev.length <= 1) return prev;
+      const newH = prev.slice(0, -1);
+      const restore = newH[newH.length - 1];
+      setEntryRuleTexts([...restore.entryRuleTexts]);
+      setTakeProfitRuleTexts([...restore.takeProfitRuleTexts]);
+      setCustomRuleSets(restore.customRuleSets.map((s) => ({ ...s, rules: [...s.rules] })));
+      setEditingRuleIndex(null);
+      setEditingRuleText("");
+      return newH;
+    });
+  }, []);
   const [associatedRecords, setAssociatedRecords] = useState<{
     trade_count: number;
     journal_entry_count: number;
@@ -4022,6 +4167,20 @@ export default function Strategies() {
     setEditingFormData({ name: "", description: "", color: "#3b82f6", author: "" });
     setNewStrategyNotes("");
     setTempChecklists(new Map()); // Explicitly clear temp checklists when creating new strategy
+    setStrategyIndicatorIds([]);
+    setEntryRulesEnabled(true);
+    setTakeProfitRulesEnabled(true);
+    setEntryRuleTexts([]);
+    setTakeProfitRuleTexts([]);
+    setCustomRuleSets([]);
+    setActiveRulesPanel("entry");
+    setActiveCustomRuleSetId(null);
+    setRuleDraftText("");
+    setEditingRuleIndex(null);
+    setEditingRuleText("");
+    setIndicatorSearch("");
+    setSignalSelectorKindFilter("all");
+    setRulesEditHistory([cloneRulesSnapshot([], [], [])]);
     setActiveTab("notes");
     tabScrollPositions.current.clear();
   };
@@ -4645,6 +4804,7 @@ export default function Strategies() {
     setEditingRuleText("");
     setIndicatorSearch("");
     setSignalSelectorKindFilter("all");
+    setRulesEditHistory([]);
   };
 
   const handleEditClick = () => {
@@ -4694,10 +4854,13 @@ export default function Strategies() {
       const enabled = loadStrategyRulesEnabled(dataMode, selectedStrategyData.id);
       setEntryRulesEnabled(enabled.entryRulesEnabled);
       setTakeProfitRulesEnabled(enabled.takeProfitRulesEnabled);
-      setEntryRuleTexts(loadStrategyRuleTexts(dataMode, selectedStrategyData.id, "entry"));
-      setTakeProfitRuleTexts(loadStrategyRuleTexts(dataMode, selectedStrategyData.id, "takeProfit"));
+      const entryRules = loadStrategyRuleTexts(dataMode, selectedStrategyData.id, "entry");
+      const tpRules = loadStrategyRuleTexts(dataMode, selectedStrategyData.id, "takeProfit");
       const sets = loadStrategyCustomRuleSets(dataMode, selectedStrategyData.id);
+      setEntryRuleTexts(entryRules);
+      setTakeProfitRuleTexts(tpRules);
       setCustomRuleSets(sets);
+      setRulesEditHistory([cloneRulesSnapshot(entryRules, tpRules, sets)]);
       setActiveRulesPanel("entry");
       setActiveCustomRuleSetId(null);
       setIndicatorDropdownOpen(false);
@@ -4856,6 +5019,7 @@ export default function Strategies() {
         });
         setIsEditing(false);
         setEditHistory([]);
+        setRulesEditHistory([]);
         if (selectedStrategyData.id) {
           const updatedEditing = new Map(editingChecklists);
           updatedEditing.delete(selectedStrategyData.id);
@@ -4916,6 +5080,7 @@ export default function Strategies() {
       
       setIsEditing(false);
       setEditHistory([]); // Clear edit history after saving
+      setRulesEditHistory([]);
       // Clear checklist editing state
       if (selectedStrategyData.id) {
         const updatedEditing = new Map(editingChecklists);
@@ -4989,6 +5154,7 @@ export default function Strategies() {
       setNotesContent(new Map(notesContent.set(selectedStrategyData.id, selectedStrategyData.notes || "")));
       // Clear edit history
       setEditHistory([]);
+      setRulesEditHistory([]);
       
       // Revert checklists to original state
       if (selectedStrategyData.id && originalChecklists.has(selectedStrategyData.id)) {
@@ -5300,6 +5466,40 @@ export default function Strategies() {
   }
 
   const selectedStrategyData = strategies.find((s) => s.id === selectedStrategy);
+
+  const commitCustomRuleSetNameModal = () => {
+    const title = customRuleSetNameDraft.trim();
+    if (!title) return;
+    const m = customRuleSetNameModal;
+    if (!m) return;
+    const sid = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+    if (m.kind === "add") {
+      const before = cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, customRuleSets);
+      const id = `crs_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      const newSet: StrategyCustomRuleSet = { id, title, rules: [] };
+      const nextSets = [...customRuleSets, newSet];
+      setCustomRuleSets(nextSets);
+      setActiveRulesPanel("customSet");
+      setActiveCustomRuleSetId(id);
+      if (!isCreating && sid > 0) saveStrategyCustomRuleSets(dataMode, sid, nextSets);
+      appendRulesHistoryTransition(
+        before,
+        cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, nextSets)
+      );
+    } else {
+      const before = cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, customRuleSets);
+      const nextSets = customRuleSets.map((s) => (s.id === m.id ? { ...s, title } : s));
+      setCustomRuleSets(nextSets);
+      if (!isCreating && sid > 0) saveStrategyCustomRuleSets(dataMode, sid, nextSets);
+      appendRulesHistoryTransition(
+        before,
+        cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, nextSets)
+      );
+    }
+    setCustomRuleSetNameModal(null);
+    setCustomRuleSetNameDraft("");
+  };
+
   const pairs = isCreating 
     ? (strategyPairs.get(-1) || []) 
     : (selectedStrategy ? strategyPairs.get(selectedStrategy) || [] : []);
@@ -5512,6 +5712,27 @@ export default function Strategies() {
                 </button>
                 {isCreating ? (
                   <div style={{ display: "flex", gap: "8px" }}>
+                    {rulesEditHistory.length > 1 && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRulesUndo();
+                        }}
+                        style={{
+                          background: "var(--bg-tertiary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "6px",
+                          padding: "8px",
+                          color: "var(--text-primary)",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                        }}
+                        title="Undo"
+                      >
+                        <RotateCcw size={16} />
+                      </button>
+                    )}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -5632,7 +5853,8 @@ export default function Strategies() {
                     {isEditing && (() => {
                       const canUndoNotes = editHistory.length > 1;
                       const canUndoChecklists = selectedStrategy && checklistEditHistory.has(selectedStrategy) && checklistEditHistory.get(selectedStrategy)!.length > 1;
-                      const canUndo = canUndoNotes || canUndoChecklists;
+                      const canUndoRules = rulesEditHistory.length > 1;
+                      const canUndo = canUndoNotes || canUndoChecklists || canUndoRules;
                       
                       return canUndo ? (
                         <button
@@ -5644,6 +5866,9 @@ export default function Strategies() {
                             // Undo checklists if there's history
                             if (canUndoChecklists) {
                               handleChecklistUndo();
+                            }
+                            if (canUndoRules) {
+                              handleRulesUndo();
                             }
                           }}
                           style={{
@@ -7083,14 +7308,17 @@ export default function Strategies() {
                       : selectedCustomRuleSet?.rules ?? [];
 
                 const saveSelectedRules = (next: string[]) => {
+                  const before = cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, customRuleSets);
                   if (activeRulesPanel === "entry") {
                     setEntryRuleTexts(next);
                     if (!isCreating && strategyId > 0) saveStrategyRuleTexts(dataMode, strategyId, "entry", next);
+                    appendRulesHistoryTransition(before, cloneRulesSnapshot(next, takeProfitRuleTexts, customRuleSets));
                     return;
                   }
                   if (activeRulesPanel === "takeProfit") {
                     setTakeProfitRuleTexts(next);
                     if (!isCreating && strategyId > 0) saveStrategyRuleTexts(dataMode, strategyId, "takeProfit", next);
+                    appendRulesHistoryTransition(before, cloneRulesSnapshot(entryRuleTexts, next, customRuleSets));
                     return;
                   }
 
@@ -7103,6 +7331,7 @@ export default function Strategies() {
                   );
                   setCustomRuleSets(nextSets);
                   if (!isCreating && strategyId > 0) saveStrategyCustomRuleSets(dataMode, strategyId, nextSets);
+                  appendRulesHistoryTransition(before, cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, nextSets));
                 };
 
                 const cancelEditingRule = () => {
@@ -7156,6 +7385,126 @@ export default function Strategies() {
                 };
 
                 const sortableRuleItemIds = selectedRules.map((_, idx) => String(idx));
+
+                type RulePanelRef =
+                  | { kind: "entry" }
+                  | { kind: "takeProfit" }
+                  | { kind: "custom"; id: string };
+
+                const currentRulePanelRef = (): RulePanelRef => {
+                  if (activeRulesPanel === "entry") return { kind: "entry" };
+                  if (activeRulesPanel === "takeProfit") return { kind: "takeProfit" };
+                  if (activeRulesPanel === "customSet" && activeCustomRuleSetId)
+                    return { kind: "custom", id: activeCustomRuleSetId };
+                  return { kind: "entry" };
+                };
+
+                const snapshotRulesForPanel = (panel: RulePanelRef): string[] => {
+                  if (panel.kind === "entry") return entryRuleTexts;
+                  if (panel.kind === "takeProfit") return takeProfitRuleTexts;
+                  return customRuleSets.find((s) => s.id === panel.id)?.rules ?? [];
+                };
+
+                const applyRulesForPanel = (panel: RulePanelRef, rules: string[]) => {
+                  if (panel.kind === "entry") {
+                    setEntryRuleTexts(rules);
+                    if (!isCreating && strategyId > 0) saveStrategyRuleTexts(dataMode, strategyId, "entry", rules);
+                    return;
+                  }
+                  if (panel.kind === "takeProfit") {
+                    setTakeProfitRuleTexts(rules);
+                    if (!isCreating && strategyId > 0) saveStrategyRuleTexts(dataMode, strategyId, "takeProfit", rules);
+                    return;
+                  }
+                  const nextSets = customRuleSets.map((s) => (s.id === panel.id ? { ...s, rules } : s));
+                  setCustomRuleSets(nextSets);
+                  if (!isCreating && strategyId > 0) saveStrategyCustomRuleSets(dataMode, strategyId, nextSets);
+                };
+
+                const parseMoveDestination = (value: string): RulePanelRef | null => {
+                  if (value === "entry") return { kind: "entry" };
+                  if (value === "takeProfit") return { kind: "takeProfit" };
+                  if (value.startsWith("custom:")) {
+                    const id = value.slice("custom:".length);
+                    if (customRuleSets.some((s) => s.id === id)) return { kind: "custom", id };
+                  }
+                  return null;
+                };
+
+                const panelsMatch = (a: RulePanelRef, b: RulePanelRef) => {
+                  if (a.kind !== b.kind) return false;
+                  if (a.kind === "custom" && b.kind === "custom") return a.id === b.id;
+                  return true;
+                };
+
+                const ruleMoveDestinations: { value: string; label: string }[] = [];
+                if (activeRulesPanel !== "entry") {
+                  ruleMoveDestinations.push({ value: "entry", label: "Entry Rules" });
+                }
+                if (activeRulesPanel !== "takeProfit") {
+                  ruleMoveDestinations.push({ value: "takeProfit", label: "Take Profit Rules" });
+                }
+                for (const s of customRuleSets) {
+                  if (activeRulesPanel === "customSet" && activeCustomRuleSetId === s.id) continue;
+                  ruleMoveDestinations.push({ value: `custom:${s.id}`, label: s.title });
+                }
+
+                const moveRuleToDestination = (ruleIndex: number, destinationValue: string) => {
+                  const dest = parseMoveDestination(destinationValue);
+                  if (!dest) return;
+                  const src = currentRulePanelRef();
+                  if (panelsMatch(src, dest)) return;
+
+                  const srcRules = [...snapshotRulesForPanel(src)];
+                  const moved = srcRules[ruleIndex];
+                  if (moved === undefined || !String(moved).trim()) return;
+
+                  cancelEditingRule();
+
+                  const nextSrc = srcRules.filter((_, i) => i !== ruleIndex);
+                  const nextDest = [...snapshotRulesForPanel(dest), moved];
+
+                  const before = cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, customRuleSets);
+                  const afterSnapshot = (() => {
+                    let e = [...entryRuleTexts];
+                    let tp = [...takeProfitRuleTexts];
+                    let cs = customRuleSets.map((s) => ({ ...s, rules: [...s.rules] }));
+                    const applyPanel = (p: RulePanelRef, rules: string[]) => {
+                      if (p.kind === "entry") e = rules;
+                      else if (p.kind === "takeProfit") tp = rules;
+                      else cs = cs.map((s) => (s.id === p.id ? { ...s, rules } : s));
+                    };
+                    applyPanel(src, nextSrc);
+                    applyPanel(dest, nextDest);
+                    return cloneRulesSnapshot(e, tp, cs);
+                  })();
+
+                  if (src.kind === "custom" && dest.kind === "custom" && src.id !== dest.id) {
+                    const nextSets = customRuleSets.map((s) => {
+                      if (s.id === src.id) return { ...s, rules: nextSrc };
+                      if (s.id === dest.id) return { ...s, rules: nextDest };
+                      return s;
+                    });
+                    setCustomRuleSets(nextSets);
+                    if (!isCreating && strategyId > 0) saveStrategyCustomRuleSets(dataMode, strategyId, nextSets);
+                  } else {
+                    applyRulesForPanel(src, nextSrc);
+                    applyRulesForPanel(dest, nextDest);
+                  }
+
+                  appendRulesHistoryTransition(before, afterSnapshot);
+
+                  if (dest.kind === "entry") {
+                    setActiveRulesPanel("entry");
+                    setActiveCustomRuleSetId(null);
+                  } else if (dest.kind === "takeProfit") {
+                    setActiveRulesPanel("takeProfit");
+                    setActiveCustomRuleSetId(null);
+                  } else {
+                    setActiveRulesPanel("customSet");
+                    setActiveCustomRuleSetId(dest.id);
+                  }
+                };
 
                 return (
                   <div
@@ -7245,35 +7594,88 @@ export default function Strategies() {
                       ))}
 
                       {canEditRules && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            cancelEditingRule();
-                            const name = window.prompt("Custom rule set name:");
-                            const title = (name ?? "").trim();
-                            if (!title) return;
-                            const id = `crs_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-                            const newSet: StrategyCustomRuleSet = { id, title, rules: [] };
-                            const nextSets = [...customRuleSets, newSet];
-                            setCustomRuleSets(nextSets);
-                            setActiveRulesPanel("customSet");
-                            setActiveCustomRuleSetId(id);
-                            if (!isCreating && strategyId > 0) saveStrategyCustomRuleSets(dataMode, strategyId, nextSets);
-                          }}
-                          style={{
-                            padding: "8px 12px",
-                            borderRadius: "999px",
-                            border: `1px solid var(--accent)`,
-                            background: "var(--bg-tertiary)",
-                            color: "var(--accent)",
-                            cursor: "pointer",
-                            fontSize: "13px",
-                            fontWeight: 650,
-                          }}
-                          title="Add custom rule set"
-                        >
-                          + Add custom set
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              cancelEditingRule();
+                              setCustomRuleSetNameModal({ kind: "add" });
+                              setCustomRuleSetNameDraft("");
+                            }}
+                            style={{
+                              padding: "8px 12px",
+                              borderRadius: "999px",
+                              border: `1px solid var(--accent)`,
+                              background: "var(--bg-tertiary)",
+                              color: "var(--accent)",
+                              cursor: "pointer",
+                              fontSize: "13px",
+                              fontWeight: 650,
+                            }}
+                            title="Add custom rule set"
+                          >
+                            + Add custom set
+                          </button>
+                          {activeRulesPanel === "customSet" && activeCustomRuleSetId && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  cancelEditingRule();
+                                  const cur = customRuleSets.find((x) => x.id === activeCustomRuleSetId);
+                                  if (!cur) return;
+                                  setCustomRuleSetNameModal({ kind: "rename", id: cur.id, initialTitle: cur.title });
+                                  setCustomRuleSetNameDraft(cur.title);
+                                }}
+                                style={{
+                                  padding: "8px 12px",
+                                  borderRadius: "999px",
+                                  border: "1px solid var(--border-color)",
+                                  background: "var(--bg-tertiary)",
+                                  color: "var(--text-primary)",
+                                  cursor: "pointer",
+                                  fontSize: "13px",
+                                  fontWeight: 650,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                }}
+                                title="Rename this rule set"
+                              >
+                                <Edit2 size={14} />
+                                Rename set
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  cancelEditingRule();
+                                  const id = activeCustomRuleSetId;
+                                  if (!id) return;
+                                  const cur = customRuleSets.find((x) => x.id === id);
+                                  if (!cur) return;
+                                  setPendingCustomRuleSetDelete({ id, title: cur.title });
+                                }}
+                                style={{
+                                  padding: "8px 12px",
+                                  borderRadius: "999px",
+                                  border: "1px solid var(--border-color)",
+                                  background: "var(--bg-tertiary)",
+                                  color: "var(--danger)",
+                                  cursor: "pointer",
+                                  fontSize: "13px",
+                                  fontWeight: 650,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                }}
+                                title="Delete this rule set"
+                              >
+                                <Trash2 size={14} />
+                                Delete set
+                              </button>
+                            </>
+                          )}
+                        </>
                       )}
                     </div>
 
@@ -7311,6 +7713,8 @@ export default function Strategies() {
                                         onCancelEdit={cancelEditingRule}
                                         onRemove={() => removeAt(idx)}
                                         canEdit={canEditRules}
+                                        moveToOptions={canEditRules ? ruleMoveDestinations : undefined}
+                                        onMoveTo={canEditRules ? (v) => moveRuleToDestination(idx, v) : undefined}
                                       />
                                     ))}
                                   </div>
@@ -10458,6 +10862,265 @@ export default function Strategies() {
           </div>
         );
       })()}
+
+      {/* Delete custom rule set — themed modal (not OS dialog) */}
+      {pendingCustomRuleSetDelete && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.72)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => setPendingCustomRuleSetDelete(null)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setPendingCustomRuleSetDelete(null);
+          }}
+          role="presentation"
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "22px 24px",
+              width: "90%",
+              maxWidth: "440px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.45)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="custom-ruleset-delete-title"
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 14 }}>
+              <div
+                style={{
+                  flexShrink: 0,
+                  width: 40,
+                  height: 40,
+                  borderRadius: 10,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "color-mix(in srgb, var(--accent) 18%, transparent)",
+                  border: "1px solid color-mix(in srgb, var(--accent) 45%, transparent)",
+                }}
+              >
+                <AlertTriangle size={22} style={{ color: "var(--accent)" }} aria-hidden />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <h3
+                  id="custom-ruleset-delete-title"
+                  style={{
+                    fontSize: "17px",
+                    fontWeight: 700,
+                    margin: "0 0 6px",
+                    color: "var(--text-primary)",
+                  }}
+                >
+                  Delete rule set?
+                </h3>
+                <p style={{ fontSize: "14px", color: "var(--text-secondary)", margin: 0, lineHeight: 1.5 }}>
+                  Are you sure you want to delete{" "}
+                  <strong style={{ color: "var(--text-primary)" }}>&ldquo;{pendingCustomRuleSetDelete.title}&rdquo;</strong>?
+                  All rules in this set will be removed. This cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
+              <button
+                type="button"
+                onClick={() => setPendingCustomRuleSetDelete(null)}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "10px 18px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const pending = pendingCustomRuleSetDelete;
+                  if (!pending) return;
+                  const delId = pending.id;
+                  setPendingCustomRuleSetDelete(null);
+                  setEditingRuleIndex(null);
+                  setEditingRuleText("");
+                  const sid = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+                  const before = cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, customRuleSets);
+                  const nextSets = customRuleSets.filter((s) => s.id !== delId);
+                  setCustomRuleSets(nextSets);
+                  appendRulesHistoryTransition(
+                    before,
+                    cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, nextSets)
+                  );
+                  pruneJournalStorageForDeletedCustomRuleSet(delId);
+                  if (!isCreating && sid > 0) {
+                    saveStrategyCustomRuleSets(dataMode, sid, nextSets);
+                  }
+                  if (nextSets.length > 0) {
+                    setActiveCustomRuleSetId(nextSets[0].id);
+                    setActiveRulesPanel("customSet");
+                  } else {
+                    setActiveCustomRuleSetId(null);
+                    setActiveRulesPanel("entry");
+                  }
+                }}
+                style={{
+                  background: "var(--danger)",
+                  border: "none",
+                  borderRadius: "8px",
+                  padding: "10px 18px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom rule set name / rename — themed modal */}
+      {customRuleSetNameModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.72)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => {
+            setCustomRuleSetNameModal(null);
+            setCustomRuleSetNameDraft("");
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setCustomRuleSetNameModal(null);
+              setCustomRuleSetNameDraft("");
+            }
+          }}
+          role="presentation"
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "22px 24px",
+              width: "90%",
+              maxWidth: "440px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.45)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="custom-ruleset-name-title"
+          >
+            <h3
+              id="custom-ruleset-name-title"
+              style={{
+                fontSize: "17px",
+                fontWeight: 700,
+                margin: "0 0 14px",
+                color: "var(--text-primary)",
+              }}
+            >
+              {customRuleSetNameModal.kind === "add" ? "New custom rule set" : "Rename rule set"}
+            </h3>
+            <label
+              htmlFor="custom-ruleset-name-input"
+              style={{ fontSize: "13px", color: "var(--text-secondary)", display: "block", marginBottom: 8 }}
+            >
+              Name
+            </label>
+            <input
+              id="custom-ruleset-name-input"
+              type="text"
+              value={customRuleSetNameDraft}
+              onChange={(e) => setCustomRuleSetNameDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitCustomRuleSetNameModal();
+                }
+              }}
+              autoFocus
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "10px 12px",
+                borderRadius: "8px",
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-tertiary)",
+                color: "var(--text-primary)",
+                fontSize: "14px",
+                marginBottom: 18,
+              }}
+            />
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomRuleSetNameModal(null);
+                  setCustomRuleSetNameDraft("");
+                }}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "10px 18px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={commitCustomRuleSetNameModal}
+                style={{
+                  background: "var(--accent)",
+                  border: "none",
+                  borderRadius: "8px",
+                  padding: "10px 18px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Name Required Modal */}
       {showNameRequiredModal && (
