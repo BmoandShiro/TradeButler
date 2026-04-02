@@ -6558,7 +6558,10 @@ export default function Journal() {
               {/* Main scrolling content: sections in trader order */}
               {currentTrade && (
                 <>
-                  <div style={{ flex: 1, minHeight: 0, overflow: "visible", display: "flex", flexDirection: "column", padding: "16px 20px" }}>
+                  <div
+                    ref={journalScrollContainerRef}
+                    style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", padding: "16px 20px" }}
+                  >
                     {effectiveSectionOrder.map((sectionId) => {
                       const hideUntilEmoStarted = EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId as JournalSectionId) && !showAddEmotionalStateForm;
                       if (hideUntilEmoStarted) return null;
