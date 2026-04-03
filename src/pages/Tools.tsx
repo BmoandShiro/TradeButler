@@ -36,7 +36,9 @@ export default function Tools() {
     : "average-down";
 
   const setCalc = (value: ToolTab) => {
-    // Preserve symbol parameter when switching to basic-financials
+    // Must run before setSearchParams: "average-down" clears the URL, so the next
+    // render reads calc from localStorage — it must already match or the tab appears stuck.
+    localStorage.setItem(TOOLS_LAST_CALC_KEY, value);
     const symbol = searchParams.get("symbol");
     if (value === "average-down") {
       setSearchParams({});
