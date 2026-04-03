@@ -4965,11 +4965,17 @@ pub struct StrategyChecklistItem {
     pub item_order: i64,
     pub checklist_type: String,
     pub parent_id: Option<i64>,
-    /// For survey items: true = high (e.g. 5) is good, false = low (e.g. 1) is good. Mirrors emotional survey.
+    /// For survey items: true = high (e.g. 10) is good, false = low (e.g. 1) is good. Mirrors emotional survey.
     pub high_is_good: Option<bool>,
     /// Optional description for this checklist item (kept for backward compatibility; currently we show
     /// one description per checklist section instead).
     pub description: Option<String>,
+    /// For survey items: "scale" (1–10) or "yes_no". None/legacy = scale. Legacy "scale_5" may exist in old DB rows.
+    #[serde(default)]
+    pub survey_format: Option<String>,
+    /// When true, journal shows an N/A control that clears the numeric answer.
+    #[serde(default)]
+    pub survey_allow_na: Option<bool>,
 }
 
 #[tauri::command]
@@ -4989,16 +4995,60 @@ pub fn get_strategy_checklist(strategy_id: i64, checklist_type: Option<String>) 
         [],
         |row| row.get::<_, i64>(0),
     ).unwrap_or(0) > 0;
+    let has_survey_format_col = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='survey_format'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let has_survey_allow_na_col = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='survey_allow_na'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    let mut extra_cols = String::new();
+    if has_high_is_good_col {
+        extra_cols.push_str(", high_is_good");
+    }
+    if has_description_col {
+        extra_cols.push_str(", description");
+    }
+    if has_survey_format_col {
+        extra_cols.push_str(", survey_format");
+    }
+    if has_survey_allow_na_col {
+        extra_cols.push_str(", survey_allow_na");
+    }
 
     let map_row = |row: &rusqlite::Row| -> Result<StrategyChecklistItem, rusqlite::Error> {
+        let mut ci: usize = 7;
         let high_is_good = if has_high_is_good_col {
-            row.get::<_, Option<i64>>(7).ok().flatten().map(|v| v != 0)
+            let v = row
+                .get::<_, Option<i64>>(ci)
+                .ok()
+                .flatten()
+                .map(|x| x != 0);
+            ci += 1;
+            v
         } else {
             None
         };
         let description = if has_description_col {
-            let idx = if has_high_is_good_col { 8 } else { 7 };
-            row.get::<_, Option<String>>(idx).ok().flatten()
+            let v = row.get::<_, Option<String>>(ci).ok().flatten();
+            ci += 1;
+            v
+        } else {
+            None
+        };
+        let survey_format = if has_survey_format_col {
+            let v = row.get::<_, Option<String>>(ci).ok().flatten();
+            ci += 1;
+            v
+        } else {
+            None
+        };
+        let survey_allow_na = if has_survey_allow_na_col {
+            row.get::<_, Option<i64>>(ci).ok().flatten().map(|x| x != 0)
         } else {
             None
         };
@@ -5012,29 +5062,28 @@ pub fn get_strategy_checklist(strategy_id: i64, checklist_type: Option<String>) 
             parent_id: row.get(6).ok(),
             high_is_good,
             description,
+            survey_format,
+            survey_allow_na,
         })
     };
 
+    let base = format!(
+        "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id{} FROM strategy_checklists",
+        extra_cols
+    );
     if let Some(ct) = checklist_type {
-        let sql = match (has_high_is_good_col, has_description_col) {
-            (true, true) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, description FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = ?2 ORDER BY item_order ASC, id ASC",
-            (true, false) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = ?2 ORDER BY item_order ASC, id ASC",
-            (false, true) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, description FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = ?2 ORDER BY item_order ASC, id ASC",
-            (false, false) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id FROM strategy_checklists WHERE strategy_id = ?1 AND checklist_type = ?2 ORDER BY item_order ASC, id ASC",
-        };
-        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let sql = format!(
+            "{} WHERE strategy_id = ?1 AND checklist_type = ?2 ORDER BY item_order ASC, id ASC",
+            base
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let items_iter = stmt.query_map(params![strategy_id, ct], map_row).map_err(|e| e.to_string())?;
         for item_result in items_iter {
             items.push(item_result.map_err(|e| e.to_string())?);
         }
     } else {
-        let sql = match (has_high_is_good_col, has_description_col) {
-            (true, true) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, description FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY item_order ASC, id ASC",
-            (true, false) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY item_order ASC, id ASC",
-            (false, true) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, description FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY item_order ASC, id ASC",
-            (false, false) => "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id FROM strategy_checklists WHERE strategy_id = ?1 ORDER BY item_order ASC, id ASC",
-        };
-        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let sql = format!("{} WHERE strategy_id = ?1 ORDER BY item_order ASC, id ASC", base);
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let items_iter = stmt.query_map(params![strategy_id], map_row).map_err(|e| e.to_string())?;
         for item_result in items_iter {
             items.push(item_result.map_err(|e| e.to_string())?);
@@ -5456,12 +5505,15 @@ pub fn save_strategy_checklist_item(
     parent_id: Option<i64>,
     high_is_good: Option<bool>,
     description: Option<String>,
+    survey_format: Option<String>,
+    survey_allow_na: Option<bool>,
 ) -> Result<i64, String> {
     let db_path = get_db_path();
     let conn = get_connection(&db_path).map_err(|e| e.to_string())?;
     
     let checked_int = if is_checked { 1 } else { 0 };
     let high_is_good_int: Option<i64> = high_is_good.map(|b| if b { 1 } else { 0 });
+    let survey_allow_na_int: Option<i64> = survey_allow_na.map(|b| if b { 1 } else { 0 });
 
     let has_high_is_good_col = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='high_is_good'",
@@ -5473,28 +5525,51 @@ pub fn save_strategy_checklist_item(
         [],
         |row| row.get::<_, i64>(0),
     ).unwrap_or(0) > 0;
+    let has_survey_format_col = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='survey_format'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let has_survey_allow_na_col = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='survey_allow_na'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
     
     if let Some(item_id) = id {
-        match (has_high_is_good_col, has_description_col) {
-            (true, true) => {
+        match (has_high_is_good_col, has_description_col, has_survey_format_col) {
+            (true, true, true) => {
+                if has_survey_allow_na_col {
+                    conn.execute(
+                        "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, checklist_type = ?4, parent_id = ?5, high_is_good = ?6, description = ?7, survey_format = ?8, survey_allow_na = ?9, updated_at = datetime('now') WHERE id = ?10",
+                        params![item_text, checked_int, item_order, checklist_type, parent_id, high_is_good_int, description, survey_format, survey_allow_na_int, item_id],
+                    ).map_err(|e| e.to_string())?;
+                } else {
+                    conn.execute(
+                        "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, checklist_type = ?4, parent_id = ?5, high_is_good = ?6, description = ?7, survey_format = ?8, updated_at = datetime('now') WHERE id = ?9",
+                        params![item_text, checked_int, item_order, checklist_type, parent_id, high_is_good_int, description, survey_format, item_id],
+                    ).map_err(|e| e.to_string())?;
+                }
+            }
+            (true, true, false) => {
                 conn.execute(
                     "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, checklist_type = ?4, parent_id = ?5, high_is_good = ?6, description = ?7, updated_at = datetime('now') WHERE id = ?8",
                     params![item_text, checked_int, item_order, checklist_type, parent_id, high_is_good_int, description, item_id],
                 ).map_err(|e| e.to_string())?;
             }
-            (true, false) => {
+            (true, false, _) => {
                 conn.execute(
                     "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, checklist_type = ?4, parent_id = ?5, high_is_good = ?6, updated_at = datetime('now') WHERE id = ?7",
                     params![item_text, checked_int, item_order, checklist_type, parent_id, high_is_good_int, item_id],
                 ).map_err(|e| e.to_string())?;
             }
-            (false, true) => {
+            (false, true, _) => {
                 conn.execute(
                     "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, checklist_type = ?4, parent_id = ?5, description = ?6, updated_at = datetime('now') WHERE id = ?7",
                     params![item_text, checked_int, item_order, checklist_type, parent_id, description, item_id],
                 ).map_err(|e| e.to_string())?;
             }
-            (false, false) => {
+            (false, false, _) => {
                 conn.execute(
                     "UPDATE strategy_checklists SET item_text = ?1, is_checked = ?2, item_order = ?3, checklist_type = ?4, parent_id = ?5, updated_at = datetime('now') WHERE id = ?6",
                     params![item_text, checked_int, item_order, checklist_type, parent_id, item_id],
@@ -5503,29 +5578,44 @@ pub fn save_strategy_checklist_item(
         }
         Ok(item_id)
     } else {
-        match (has_high_is_good_col, has_description_col) {
-            (true, true) => {
+        match (has_high_is_good_col, has_description_col, has_survey_format_col) {
+            (true, true, true) => {
+                if has_survey_allow_na_col {
+                    conn.execute(
+                        "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, description, survey_format, survey_allow_na, created_at, updated_at) 
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'), datetime('now'))",
+                        params![strategy_id, item_text, checked_int, item_order, checklist_type, parent_id, high_is_good_int, description, survey_format, survey_allow_na_int],
+                    ).map_err(|e| e.to_string())?;
+                } else {
+                    conn.execute(
+                        "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, description, survey_format, created_at, updated_at) 
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'), datetime('now'))",
+                        params![strategy_id, item_text, checked_int, item_order, checklist_type, parent_id, high_is_good_int, description, survey_format],
+                    ).map_err(|e| e.to_string())?;
+                }
+            }
+            (true, true, false) => {
                 conn.execute(
                     "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, description, created_at, updated_at) 
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now'))",
                     params![strategy_id, item_text, checked_int, item_order, checklist_type, parent_id, high_is_good_int, description],
                 ).map_err(|e| e.to_string())?;
             }
-            (true, false) => {
+            (true, false, _) => {
                 conn.execute(
                     "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, created_at, updated_at) 
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'), datetime('now'))",
                     params![strategy_id, item_text, checked_int, item_order, checklist_type, parent_id, high_is_good_int],
                 ).map_err(|e| e.to_string())?;
             }
-            (false, true) => {
+            (false, true, _) => {
                 conn.execute(
                     "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, description, created_at, updated_at) 
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'), datetime('now'))",
                     params![strategy_id, item_text, checked_int, item_order, checklist_type, parent_id, description],
                 ).map_err(|e| e.to_string())?;
             }
-            (false, false) => {
+            (false, false, _) => {
                 conn.execute(
                     "INSERT INTO strategy_checklists (strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, created_at, updated_at) 
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))",
@@ -7326,17 +7416,42 @@ pub fn export_data() -> Result<String, String> {
         [],
         |row| row.get::<_, i64>(0),
     ).unwrap_or(0) > 0;
+    let has_survey_format_export = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='survey_format'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    let has_survey_allow_na_export = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='survey_allow_na'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
     let mut strategy_checklists = Vec::new();
     if has_high_is_good_export {
         // high_is_good column exists
         if has_description_export {
-            // Both high_is_good and description
-            let mut stmt = conn
-                .prepare("SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, description FROM strategy_checklists ORDER BY strategy_id, checklist_type, item_order")
-                .map_err(|e| e.to_string())?;
+            // Both high_is_good and description (optionally survey_format, survey_allow_na)
+            let sql = if has_survey_format_export && has_survey_allow_na_export {
+                "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, description, survey_format, survey_allow_na FROM strategy_checklists ORDER BY strategy_id, checklist_type, item_order"
+            } else if has_survey_format_export {
+                "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, description, survey_format FROM strategy_checklists ORDER BY strategy_id, checklist_type, item_order"
+            } else {
+                "SELECT id, strategy_id, item_text, is_checked, item_order, checklist_type, parent_id, high_is_good, description FROM strategy_checklists ORDER BY strategy_id, checklist_type, item_order"
+            };
+            let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
             let checklist_iter = stmt.query_map([], |row| {
                 let high_is_good = row.get::<_, Option<i64>>(7).ok().flatten().map(|v| v != 0);
                 let description = row.get::<_, Option<String>>(8).ok().flatten();
+                let (survey_format, survey_allow_na) = if has_survey_format_export && has_survey_allow_na_export {
+                    (
+                        row.get::<_, Option<String>>(9).ok().flatten(),
+                        row.get::<_, Option<i64>>(10).ok().flatten().map(|v| v != 0),
+                    )
+                } else if has_survey_format_export {
+                    (row.get::<_, Option<String>>(9).ok().flatten(), None)
+                } else {
+                    (None, None)
+                };
                 Ok(StrategyChecklistItem {
                     id: Some(row.get(0)?),
                     strategy_id: row.get(1)?,
@@ -7347,6 +7462,8 @@ pub fn export_data() -> Result<String, String> {
                     parent_id: row.get(6).ok(),
                     high_is_good,
                     description,
+                    survey_format,
+                    survey_allow_na,
                 })
             }).map_err(|e| e.to_string())?;
             for item in checklist_iter {
@@ -7369,6 +7486,8 @@ pub fn export_data() -> Result<String, String> {
                     parent_id: row.get(6).ok(),
                     high_is_good,
                     description: None,
+                    survey_format: None,
+                    survey_allow_na: None,
                 })
             }).map_err(|e| e.to_string())?;
             for item in checklist_iter {
@@ -7393,6 +7512,8 @@ pub fn export_data() -> Result<String, String> {
                     parent_id: row.get(6).ok(),
                     high_is_good: None,
                     description,
+                    survey_format: None,
+                    survey_allow_na: None,
                 })
             }).map_err(|e| e.to_string())?;
             for item in checklist_iter {
@@ -7413,6 +7534,8 @@ pub fn export_data() -> Result<String, String> {
                     parent_id: row.get(6).ok(),
                     high_is_good: None,
                     description: None,
+                    survey_format: None,
+                    survey_allow_na: None,
                 })
             }).map_err(|e| e.to_string())?;
             for item in checklist_iter {

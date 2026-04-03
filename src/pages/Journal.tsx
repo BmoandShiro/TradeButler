@@ -164,6 +164,24 @@ interface ChecklistItem {
   checklist_type: string;
   parent_id: number | null;
   description?: string | null;
+  high_is_good?: boolean | null;
+  /** "scale" (1–10) or "yes_no"; omitted = scale */
+  survey_format?: string | null;
+  survey_allow_na?: boolean | null;
+}
+
+function isSurveyChecklistTypeJournal(t: string): boolean {
+  return t === "survey" || t.startsWith("survey_");
+}
+
+function isYesNoSurveyItem(item: ChecklistItem): boolean {
+  return isSurveyChecklistTypeJournal(item.checklist_type) && item.survey_format === "yes_no";
+}
+
+/** Map Yes/No to stored 1–10 value using high_is_good polarity. */
+function yesNoResponseValue(highIsGood: boolean, yes: boolean): number {
+  if (highIsGood) return yes ? 10 : 1;
+  return yes ? 1 : 10;
 }
 
 interface JournalChecklistResponse {
@@ -3976,6 +3994,15 @@ export default function Journal() {
       itemsByParent.get(parentId)!.push(item);
     });
 
+    const surveyScoreLabel = (row: ChecklistItem, sc: number | undefined) => {
+      if (sc == null) return "—";
+      if (isYesNoSurveyItem(row)) {
+        const hi = row.high_is_good !== false;
+        return sc === yesNoResponseValue(hi, true) ? "Yes" : "No";
+      }
+      return String(sc);
+    };
+
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
         {sectionBlurb ? (
@@ -4008,7 +4035,7 @@ export default function Journal() {
                         textAlign: "center",
                       }}
                     >
-                      {getScore(child.id) != null ? getScore(child.id) : "—"}
+                      {surveyScoreLabel(child, getScore(child.id))}
                     </span>
                   )}
                 </div>
@@ -4037,7 +4064,7 @@ export default function Journal() {
                   textAlign: "center",
                 }}
               >
-                {getScore(item.id) != null ? getScore(item.id) : "—"}
+                {surveyScoreLabel(item, getScore(item.id))}
               </span>
             )}
           </div>
@@ -6752,6 +6779,131 @@ export default function Journal() {
                             const groupedItems = surveyItems.filter(item => item.parent_id !== null && surveyItems.some(p => p.id === item.parent_id));
                             const itemsByParent = new Map<number, ChecklistItem[]>();
                             groupedItems.forEach(item => { if (item.parent_id) { const pid = item.parent_id; if (!itemsByParent.has(pid)) itemsByParent.set(pid, []); itemsByParent.get(pid)!.push(item); } });
+                            const setSurveyScore = (checklistItemId: number, n: number) => {
+                              setSurveyScores((prev) => {
+                                const next = new Map(prev);
+                                const tradeMap = new Map(next.get(activeTradeIndex));
+                                tradeMap.set(checklistItemId, n);
+                                next.set(activeTradeIndex, tradeMap);
+                                return next;
+                              });
+                              setChecklistResponses((prev) => {
+                                const m = new Map(prev);
+                                const tr = new Map(m.get(activeTradeIndex) || new Map());
+                                tr.set(checklistItemId, true);
+                                m.set(activeTradeIndex, tr);
+                                return m;
+                              });
+                            };
+                            const clearSurveyScore = (checklistItemId: number) => {
+                              setSurveyScores((prev) => {
+                                const next = new Map(prev);
+                                const tradeMap = new Map(next.get(activeTradeIndex));
+                                tradeMap.delete(checklistItemId);
+                                next.set(activeTradeIndex, tradeMap);
+                                return next;
+                              });
+                              setChecklistResponses((prev) => {
+                                const m = new Map(prev);
+                                const tr = new Map(m.get(activeTradeIndex) || new Map());
+                                tr.set(checklistItemId, false);
+                                m.set(activeTradeIndex, tr);
+                                return m;
+                              });
+                            };
+                            const naBtnCompact = (onClick: () => void) => (
+                              <button
+                                type="button"
+                                onClick={onClick}
+                                style={{
+                                  minWidth: "40px",
+                                  padding: "6px 8px",
+                                  borderRadius: "8px",
+                                  border: "1px solid var(--border-color)",
+                                  backgroundColor: "var(--bg-primary)",
+                                  color: "var(--text-secondary)",
+                                  cursor: "pointer",
+                                  fontSize: "11px",
+                                  fontWeight: 600,
+                                }}
+                              >
+                                N/A
+                              </button>
+                            );
+                            const renderSurveyControls = (row: ChecklistItem) => {
+                              const score = surveyScores.get(activeTradeIndex)?.get(row.id);
+                              const highGood = row.high_is_good !== false;
+                              const allowNa = row.survey_allow_na === true;
+                              if (isYesNoSurveyItem(row)) {
+                                const yesV = yesNoResponseValue(highGood, true);
+                                const noV = yesNoResponseValue(highGood, false);
+                                return (
+                                  <div style={{ display: "flex", gap: "8px", flexShrink: 0, alignItems: "center", flexWrap: "wrap" }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => setSurveyScore(row.id, yesV)}
+                                      style={{
+                                        minWidth: "52px",
+                                        padding: "6px 12px",
+                                        borderRadius: "8px",
+                                        border: `1px solid ${score === yesV ? "var(--accent)" : "var(--border-color)"}`,
+                                        backgroundColor: score === yesV ? "var(--accent)" : "var(--bg-secondary)",
+                                        color: score === yesV ? "white" : "var(--text-primary)",
+                                        cursor: "pointer",
+                                        fontSize: "12px",
+                                        fontWeight: 700,
+                                      }}
+                                    >
+                                      Yes
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setSurveyScore(row.id, noV)}
+                                      style={{
+                                        minWidth: "52px",
+                                        padding: "6px 12px",
+                                        borderRadius: "8px",
+                                        border: `1px solid ${score === noV ? "var(--accent)" : "var(--border-color)"}`,
+                                        backgroundColor: score === noV ? "var(--accent)" : "var(--bg-secondary)",
+                                        color: score === noV ? "white" : "var(--text-primary)",
+                                        cursor: "pointer",
+                                        fontSize: "12px",
+                                        fontWeight: 700,
+                                      }}
+                                    >
+                                      No
+                                    </button>
+                                    {allowNa ? naBtnCompact(() => clearSurveyScore(row.id)) : null}
+                                  </div>
+                                );
+                              }
+                              return (
+                                <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", justifyContent: "flex-end", alignItems: "center" }}>
+                                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                                    <button
+                                      key={n}
+                                      type="button"
+                                      onClick={() => setSurveyScore(row.id, n)}
+                                      style={{
+                                        width: "28px",
+                                        height: "28px",
+                                        padding: 0,
+                                        borderRadius: "6px",
+                                        border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`,
+                                        backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)",
+                                        color: score === n ? "white" : "var(--text-primary)",
+                                        cursor: "pointer",
+                                        fontSize: "12px",
+                                        fontWeight: "600",
+                                      }}
+                                    >
+                                      {n}
+                                    </button>
+                                  ))}
+                                  {allowNa ? naBtnCompact(() => clearSurveyScore(row.id)) : null}
+                                </div>
+                              );
+                            };
                             return (
                               <div>
                                 {groups.map((group) => {
@@ -6761,39 +6913,25 @@ export default function Journal() {
                                       <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px" }}>
                                         <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }} />
                                       </div>
-                                      {children.map((child) => {
-                                        const score = surveyScores.get(activeTradeIndex)?.get(child.id);
-                                        return (
-                                          <div key={child.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginLeft: "16px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
-                                            <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
-                                              <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)" }} />
-                                            </label>
-                                            <div style={{ display: "flex", gap: "4px" }}>
-                                              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-                                                <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(child.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(child.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
-                                              ))}
-                                            </div>
-                                          </div>
-                                        );
-                                      })}
+                                      {children.map((child) => (
+                                        <div key={child.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginLeft: "16px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
+                                          <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
+                                            <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)" }} />
+                                          </label>
+                                          {renderSurveyControls(child)}
+                                        </div>
+                                      ))}
                                     </div>
                                   );
                                 })}
-                                {regularItems.map((item) => {
-                                  const score = surveyScores.get(activeTradeIndex)?.get(item.id);
-                                  return (
-                                    <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
-                                      <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
-                                        <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)" }} />
-                                      </label>
-                                      <div style={{ display: "flex", gap: "4px" }}>
-                                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-                                          <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(item.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(item.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
+                                {regularItems.map((item) => (
+                                  <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
+                                    <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
+                                      <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)" }} />
+                                    </label>
+                                    {renderSurveyControls(item)}
+                                  </div>
+                                ))}
                               </div>
                             );
                           }
@@ -8466,6 +8604,132 @@ export default function Journal() {
                                 }
                               });
 
+                              const setSurveyScoreTab = (checklistItemId: number, n: number) => {
+                                setSurveyScores((prev) => {
+                                  const next = new Map(prev);
+                                  const tradeMap = new Map(next.get(activeTradeIndex));
+                                  tradeMap.set(checklistItemId, n);
+                                  next.set(activeTradeIndex, tradeMap);
+                                  return next;
+                                });
+                                setChecklistResponses((prev) => {
+                                  const newMap = new Map(prev);
+                                  const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
+                                  tradeResponses.set(checklistItemId, true);
+                                  newMap.set(activeTradeIndex, tradeResponses);
+                                  return newMap;
+                                });
+                              };
+                              const clearSurveyScoreTab = (checklistItemId: number) => {
+                                setSurveyScores((prev) => {
+                                  const next = new Map(prev);
+                                  const tradeMap = new Map(next.get(activeTradeIndex));
+                                  tradeMap.delete(checklistItemId);
+                                  next.set(activeTradeIndex, tradeMap);
+                                  return next;
+                                });
+                                setChecklistResponses((prev) => {
+                                  const newMap = new Map(prev);
+                                  const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
+                                  tradeResponses.set(checklistItemId, false);
+                                  newMap.set(activeTradeIndex, tradeResponses);
+                                  return newMap;
+                                });
+                              };
+                              const naBtnTab = (onClick: () => void) => (
+                                <button
+                                  type="button"
+                                  onClick={onClick}
+                                  style={{
+                                    minWidth: "48px",
+                                    padding: "8px 10px",
+                                    borderRadius: "8px",
+                                    border: "1px solid var(--border-color)",
+                                    backgroundColor: "var(--bg-primary)",
+                                    color: "var(--text-secondary)",
+                                    cursor: "pointer",
+                                    fontSize: "12px",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  N/A
+                                </button>
+                              );
+                              const renderSurveyControlsTab = (row: ChecklistItem) => {
+                                const score = surveyScores.get(activeTradeIndex)?.get(row.id);
+                                const highGood = row.high_is_good !== false;
+                                const allowNa = row.survey_allow_na === true;
+                                if (isYesNoSurveyItem(row)) {
+                                  const yesV = yesNoResponseValue(highGood, true);
+                                  const noV = yesNoResponseValue(highGood, false);
+                                  return (
+                                    <div style={{ display: "flex", gap: "10px", alignItems: "center", flexShrink: 0, flexWrap: "wrap" }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSurveyScoreTab(row.id, yesV)}
+                                        style={{
+                                          minWidth: "64px",
+                                          padding: "8px 14px",
+                                          borderRadius: "8px",
+                                          border: `1px solid ${score === yesV ? "var(--accent)" : "var(--border-color)"}`,
+                                          backgroundColor: score === yesV ? "var(--accent)" : "var(--bg-secondary)",
+                                          color: score === yesV ? "white" : "var(--text-primary)",
+                                          cursor: "pointer",
+                                          fontSize: "13px",
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        Yes
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSurveyScoreTab(row.id, noV)}
+                                        style={{
+                                          minWidth: "64px",
+                                          padding: "8px 14px",
+                                          borderRadius: "8px",
+                                          border: `1px solid ${score === noV ? "var(--accent)" : "var(--border-color)"}`,
+                                          backgroundColor: score === noV ? "var(--accent)" : "var(--bg-secondary)",
+                                          color: score === noV ? "white" : "var(--text-primary)",
+                                          cursor: "pointer",
+                                          fontSize: "13px",
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        No
+                                      </button>
+                                      {allowNa ? naBtnTab(() => clearSurveyScoreTab(row.id)) : null}
+                                    </div>
+                                  );
+                                }
+                                return (
+                                  <div style={{ display: "flex", gap: "4px", alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                                      <button
+                                        key={n}
+                                        type="button"
+                                        onClick={() => setSurveyScoreTab(row.id, n)}
+                                        style={{
+                                          width: "32px",
+                                          height: "32px",
+                                          padding: 0,
+                                          borderRadius: "6px",
+                                          border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`,
+                                          backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)",
+                                          color: score === n ? "white" : "var(--text-primary)",
+                                          cursor: "pointer",
+                                          fontSize: "13px",
+                                          fontWeight: "600",
+                                        }}
+                                      >
+                                        {n}
+                                      </button>
+                                    ))}
+                                    {allowNa ? naBtnTab(() => clearSurveyScoreTab(row.id)) : null}
+                                  </div>
+                                );
+                              };
+
                               return (
                                 <div style={{ marginBottom: "24px" }}>
                                   <h4 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>
@@ -8487,135 +8751,67 @@ export default function Journal() {
                                         >
                                           <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "15px" }} />
                                         </div>
-                                        {children.map((child) => {
-                                          const score = surveyScores.get(activeTradeIndex)?.get(child.id);
-                                          return (
-                                            <div
-                                              key={child.id}
+                                        {children.map((child) => (
+                                          <div
+                                            key={child.id}
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "center",
+                                              justifyContent: "space-between",
+                                              gap: "12px",
+                                              padding: "12px",
+                                              marginLeft: "20px",
+                                              marginBottom: "8px",
+                                              backgroundColor: "var(--bg-tertiary)",
+                                              borderRadius: "6px",
+                                            }}
+                                          >
+                                            <label
                                               style={{
+                                                flex: 1,
+                                                fontSize: "14px",
+                                                color: "var(--text-primary)",
                                                 display: "flex",
-                                                alignItems: "center",
-                                                justifyContent: "space-between",
-                                                gap: "12px",
-                                                padding: "12px",
-                                                marginLeft: "20px",
-                                                marginBottom: "8px",
-                                                backgroundColor: "var(--bg-tertiary)",
-                                                borderRadius: "6px",
+                                                minWidth: 0,
                                               }}
                                             >
-                                              <label
-                                                style={{
-                                                  flex: 1,
-                                                  fontSize: "14px",
-                                                  color: "var(--text-primary)",
-                                                  display: "flex",
-                                                  minWidth: 0,
-                                                }}
-                                              >
-                                                <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
-                                              </label>
-                                              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                                                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-                                                  <button
-                                                    key={n}
-                                                    type="button"
-                                                    onClick={() => {
-                                                      setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(child.id, n); next.set(activeTradeIndex, tradeMap); return next; });
-                                                      setChecklistResponses(prev => {
-                                                        const newMap = new Map(prev);
-                                                        const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
-                                                        tradeResponses.set(child.id, true);
-                                                        newMap.set(activeTradeIndex, tradeResponses);
-                                                        return newMap;
-                                                      });
-                                                    }}
-                                                    style={{
-                                                      width: "32px",
-                                                      height: "32px",
-                                                      padding: 0,
-                                                      borderRadius: "6px",
-                                                      border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`,
-                                                      backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)",
-                                                      color: score === n ? "white" : "var(--text-primary)",
-                                                      cursor: "pointer",
-                                                      fontSize: "13px",
-                                                      fontWeight: "600",
-                                                    }}
-                                                  >
-                                                    {n}
-                                                  </button>
-                                                ))}
-                                              </div>
-                                            </div>
-                                          );
-                                        })}
+                                              <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
+                                            </label>
+                                            {renderSurveyControlsTab(child)}
+                                          </div>
+                                        ))}
                                       </div>
                                     );
                                   })}
                                   {/* Render regular items */}
-                                  {regularItems.map((item) => {
-                                    const score = surveyScores.get(activeTradeIndex)?.get(item.id);
-                                    return (
-                                      <div
-                                        key={item.id}
+                                  {regularItems.map((item) => (
+                                    <div
+                                      key={item.id}
+                                      style={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "space-between",
+                                        gap: "12px",
+                                        padding: "12px",
+                                        marginBottom: "8px",
+                                        backgroundColor: "var(--bg-tertiary)",
+                                        borderRadius: "6px",
+                                      }}
+                                    >
+                                      <label
                                         style={{
+                                          flex: 1,
+                                          fontSize: "14px",
+                                          color: "var(--text-primary)",
                                           display: "flex",
-                                          alignItems: "center",
-                                          justifyContent: "space-between",
-                                          gap: "12px",
-                                          padding: "12px",
-                                          marginBottom: "8px",
-                                          backgroundColor: "var(--bg-tertiary)",
-                                          borderRadius: "6px",
+                                          minWidth: 0,
                                         }}
                                       >
-                                        <label
-                                          style={{
-                                            flex: 1,
-                                            fontSize: "14px",
-                                            color: "var(--text-primary)",
-                                            display: "flex",
-                                            minWidth: 0,
-                                          }}
-                                        >
-                                          <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
-                                        </label>
-                                        <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-                                            <button
-                                              key={n}
-                                              type="button"
-                                              onClick={() => {
-                                                setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(item.id, n); next.set(activeTradeIndex, tradeMap); return next; });
-                                                setChecklistResponses(prev => {
-                                                  const newMap = new Map(prev);
-                                                  const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
-                                                  tradeResponses.set(item.id, true);
-                                                  newMap.set(activeTradeIndex, tradeResponses);
-                                                  return newMap;
-                                                });
-                                              }}
-                                              style={{
-                                                width: "32px",
-                                                height: "32px",
-                                                padding: 0,
-                                                borderRadius: "6px",
-                                                border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`,
-                                                backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)",
-                                                color: score === n ? "white" : "var(--text-primary)",
-                                                cursor: "pointer",
-                                                fontSize: "13px",
-                                                fontWeight: "600",
-                                              }}
-                                            >
-                                              {n}
-                                            </button>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
+                                        <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
+                                      </label>
+                                      {renderSurveyControlsTab(item)}
+                                    </div>
+                                  ))}
                                 </div>
                               );
                             })()}

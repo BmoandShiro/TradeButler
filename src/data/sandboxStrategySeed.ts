@@ -13,6 +13,7 @@ export interface SandboxChecklistItem {
   parent_id: number | null;
   /** For survey items: true = high (10) is good, false = low (1) is good. */
   high_is_good?: boolean | null;
+  survey_format?: string | null;
 }
 
 export interface SandboxSurveyMetricWithValue {

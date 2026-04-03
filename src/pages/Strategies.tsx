@@ -201,11 +201,51 @@ interface ChecklistItem {
   item_order: number;
   checklist_type: string;
   parent_id: number | null;
-  /** For survey items: true = high (5) is good, false = low (1) is good. Mirrors emotional survey. */
+  /** For survey items: true = high (10) is good, false = low (1) is good. Same flag encodes “Yes is favorable” vs “No is favorable” for yes/no items. */
   high_is_good?: boolean | null;
+  /** For survey items: "scale" (1–10) or "yes_no". Null/undefined = scale (legacy). */
+  survey_format?: string | null;
+  /** When true, journal shows N/A to explicitly skip the question. */
+  survey_allow_na?: boolean | null;
   /** Optional description for this checklist item (kept for backward compatibility; section-level descriptions are preferred). */
   description?: string | null;
 }
+
+/** Post-Trade Survey or custom `survey_*` checklist types. */
+function isSurveyChecklistType(checklistType: string): boolean {
+  return checklistType === "survey" || checklistType.startsWith("survey_");
+}
+
+export type SurveyFormatKind = "scale" | "yes_no";
+
+export type SurveyItemConfig = {
+  survey_format: SurveyFormatKind;
+  high_is_good: boolean;
+  survey_allow_na: boolean;
+};
+
+/** Legacy `scale_5` is treated as 1–10 scale everywhere in the UI. */
+function normalizedSurveyFormat(f: string | null | undefined): SurveyFormatKind {
+  if (f === "yes_no") return "yes_no";
+  return "scale";
+}
+
+/** Persist N/A toggle: false clears the flag in the DB. */
+function surveyNaForInvoke(checklistType: string, item: { survey_allow_na?: boolean | null }): boolean | undefined {
+  if (!isSurveyChecklistType(checklistType)) return undefined;
+  return Boolean(item.survey_allow_na);
+}
+
+/** Suggested post-trade survey questions (insert into the add field). */
+const SURVEY_QUESTION_PRESETS: string[] = [
+  "How well did I follow my plan?",
+  "Calm / clear mindset during the trade",
+  "Confidence in this specific setup",
+  "Stress or pressure felt",
+  "Urge to move stops or override rules",
+  "Discipline right after exit",
+  "Would I take this setup again tomorrow?",
+];
 
 /** Checklist item metrics by outcome (winning/losing, checked/not checked) for overview insights. */
 interface ChecklistItemMetricByOutcomeRow {
@@ -617,6 +657,7 @@ function SortableChecklistItem({
   onEditingTextChange,
   onSaveEdit,
   onCancelEdit,
+  onSurveyConfigChange,
   isGroup = false
 }: { 
   item: ChecklistItem; 
@@ -630,6 +671,12 @@ function SortableChecklistItem({
   onEditingTextChange: (text: string) => void;
   onSaveEdit: () => void;
   onCancelEdit: () => void;
+  /** Survey / custom survey_* items: inline type & polarity editor */
+  onSurveyConfigChange?: (config: {
+    survey_format: SurveyFormatKind;
+    high_is_good: boolean;
+    survey_allow_na: boolean;
+  }) => void;
   isGroup?: boolean;
 }) {
   const {
@@ -647,12 +694,53 @@ function SortableChecklistItem({
     opacity: isDragging ? 0.5 : 1,
   };
 
+  const showSurveyConfig =
+    Boolean(onSurveyConfigChange) &&
+    isEditing &&
+    !isEditingText &&
+    !isGroup &&
+    isSurveyChecklistType(item.checklist_type);
+  const surveyFmt = normalizedSurveyFormat(item.survey_format);
+  const polarGood = item.high_is_good !== false;
+  const allowNa = item.survey_allow_na === true;
+
+  const pillBase = (active: boolean) => ({
+    padding: "5px 11px",
+    fontSize: "11px",
+    fontWeight: 600,
+    borderRadius: "999px",
+    border: `1px solid ${active ? "var(--accent)" : "var(--border-color)"}`,
+    background: active ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+    color: active ? "var(--accent)" : "var(--text-secondary)",
+    cursor: "pointer",
+    transition: "border-color 0.15s, background 0.15s, color 0.15s",
+  } as const);
+
+  const labelColor = isSelected ? "rgba(255,255,255,0.85)" : "var(--text-secondary)";
+  const configDivider = isSelected ? "rgba(255,255,255,0.25)" : "var(--border-color)";
+  const configGroupStyle = {
+    display: "inline-flex" as const,
+    alignItems: "center" as const,
+    gap: "6px",
+    flexShrink: 0,
+    whiteSpace: "nowrap" as const,
+  };
+  const configLabelStyle = {
+    fontSize: "10px",
+    fontWeight: 700,
+    color: labelColor,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.06em",
+  };
+
   return (
     <div
       ref={setNodeRef}
       style={{
         ...style,
         display: "flex",
+        flexDirection: "row",
+        flexWrap: "wrap",
         alignItems: "center",
         gap: isGroup ? "10px" : "8px",
         padding: isGroup ? "14px 16px" : "12px 14px",
@@ -713,7 +801,8 @@ function SortableChecklistItem({
           onBlur={onSaveEdit}
           autoFocus
           style={{
-            flex: 1,
+            flex: "1 1 200px",
+            minWidth: "120px",
             padding: "6px 8px",
             backgroundColor: "var(--bg-primary)",
             border: "1px solid var(--accent)",
@@ -750,6 +839,137 @@ function SortableChecklistItem({
           />
         </div>
       )}
+      {(showSurveyConfig && onSurveyConfigChange) || (isEditing && !isEditingText) ? (
+        <div
+          style={{
+            marginLeft: "auto",
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            flexShrink: 0,
+          }}
+        >
+      {showSurveyConfig && onSurveyConfigChange && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "nowrap",
+            alignItems: "center",
+            gap: "12px",
+            flexShrink: 0,
+            paddingLeft: "10px",
+            borderLeft: `1px solid ${configDivider}`,
+            overflowX: "auto",
+          }}
+        >
+          <div style={configGroupStyle}>
+            <span style={configLabelStyle}>Type</span>
+            <button
+              type="button"
+              onClick={() => onSurveyConfigChange({ survey_format: "scale", high_is_good: polarGood, survey_allow_na: allowNa })}
+              style={pillBase(surveyFmt === "scale")}
+            >
+              1–10 scale
+            </button>
+            <button
+              type="button"
+              onClick={() => onSurveyConfigChange({ survey_format: "yes_no", high_is_good: polarGood, survey_allow_na: allowNa })}
+              style={pillBase(surveyFmt === "yes_no")}
+            >
+              Yes / No
+            </button>
+          </div>
+          <div
+            style={{
+              width: "1px",
+              height: "22px",
+              backgroundColor: configDivider,
+              flexShrink: 0,
+            }}
+            aria-hidden
+          />
+          <div style={configGroupStyle}>
+            <span style={configLabelStyle}>{surveyFmt === "yes_no" ? "Polarity" : "Scale"}</span>
+            {surveyFmt === "yes_no" ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onSurveyConfigChange({ survey_format: "yes_no", high_is_good: true, survey_allow_na: allowNa })}
+                  style={pillBase(polarGood)}
+                >
+                  Yes = favorable
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSurveyConfigChange({ survey_format: "yes_no", high_is_good: false, survey_allow_na: allowNa })}
+                  style={pillBase(!polarGood)}
+                >
+                  No = favorable
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onSurveyConfigChange({ survey_format: "scale", high_is_good: true, survey_allow_na: allowNa })
+                  }
+                  style={pillBase(polarGood)}
+                >
+                  10 = better
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onSurveyConfigChange({ survey_format: "scale", high_is_good: false, survey_allow_na: allowNa })
+                  }
+                  style={pillBase(!polarGood)}
+                >
+                  1 = better
+                </button>
+              </>
+            )}
+          </div>
+          <div
+            style={{
+              width: "1px",
+              height: "22px",
+              backgroundColor: configDivider,
+              flexShrink: 0,
+            }}
+            aria-hidden
+          />
+          <div style={configGroupStyle}>
+            <span style={configLabelStyle}>N/A</span>
+            <button
+              type="button"
+              onClick={() =>
+                onSurveyConfigChange({
+                  survey_format: surveyFmt,
+                  high_is_good: polarGood,
+                  survey_allow_na: true,
+                })
+              }
+              style={pillBase(allowNa)}
+            >
+              On
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                onSurveyConfigChange({
+                  survey_format: surveyFmt,
+                  high_is_good: polarGood,
+                  survey_allow_na: false,
+                })
+              }
+              style={pillBase(!allowNa)}
+            >
+              Off
+            </button>
+          </div>
+        </div>
+      )}
       {isEditing && !isEditingText && (
         <button
           onClick={onDelete}
@@ -761,12 +981,15 @@ function SortableChecklistItem({
             padding: "4px",
             display: "flex",
             alignItems: "center",
+            flexShrink: 0,
           }}
           title="Delete"
         >
           <X size={16} />
         </button>
       )}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1361,6 +1584,7 @@ function ChecklistSection({
   sectionDescription = "",
   onSectionDescriptionChange,
   onSectionDescriptionBlur,
+  onSurveyItemConfigChange,
 }: { 
   type: string; 
   title: string; 
@@ -1380,7 +1604,14 @@ function ChecklistSection({
   startEditingItem: (item: ChecklistItem) => void;
   saveEditedItem: (itemId: number, newText: string) => Promise<void>;
   cancelEditingItem: () => void;
-  addChecklistItem: (strategyId: number, type: string, text: string, parentId?: number | null, highIsGood?: boolean) => Promise<void>;
+  addChecklistItem: (
+    strategyId: number,
+    type: string,
+    text: string,
+    parentId?: number | null,
+    surveyOpts?: { highIsGood?: boolean; surveyFormat?: SurveyFormatKind; allowNa?: boolean }
+  ) => Promise<void>;
+  onSurveyItemConfigChange?: (itemId: number, config: SurveyItemConfig) => void | Promise<void>;
   setPendingGroupAction: Dispatch<SetStateAction<{ strategyId: number; type: string; itemIds: number[] } | null>>;
   setGroupName: Dispatch<SetStateAction<string>>;
   setShowGroupModal: Dispatch<SetStateAction<boolean>>;
@@ -1402,6 +1633,8 @@ function ChecklistSection({
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState("");
   const [surveyHighIsGood, setSurveyHighIsGood] = useState(true);
+  const [surveyFormatNew, setSurveyFormatNew] = useState<SurveyFormatKind>("scale");
+  const [surveyAllowNaNew, setSurveyAllowNaNew] = useState(false);
   // Deduplicate by id (first occurrence wins), then hide internal placeholders (used in DB for empty custom checklist types)
   const dedupedById = (() => {
     const byId = new Map<number, ChecklistItem>();
@@ -1598,6 +1831,7 @@ function ChecklistSection({
                       onEditingTextChange={setEditingItemText}
                       onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
                       onCancelEdit={cancelEditingItem}
+                      onSurveyConfigChange={onSurveyItemConfigChange ? (cfg) => { void onSurveyItemConfigChange(item.id, cfg); } : undefined}
                       isGroup={true}
                     />
                     {children.length > 0 && (
@@ -1619,6 +1853,7 @@ function ChecklistSection({
                               onEditingTextChange={setEditingItemText}
                               onSaveEdit={() => saveEditedItem(child.id, editingItemText)}
                               onCancelEdit={cancelEditingItem}
+                              onSurveyConfigChange={onSurveyItemConfigChange ? (cfg) => { void onSurveyItemConfigChange(child.id, cfg); } : undefined}
                               isGroup={false}
                             />
                           </div>
@@ -1642,6 +1877,7 @@ function ChecklistSection({
                   onEditingTextChange={setEditingItemText}
                   onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
                   onCancelEdit={cancelEditingItem}
+                  onSurveyConfigChange={onSurveyItemConfigChange ? (cfg) => { void onSurveyItemConfigChange(item.id, cfg); } : undefined}
                   isGroup={false}
                 />
               );
@@ -1675,6 +1911,7 @@ function ChecklistSection({
                       onEditingTextChange={setEditingItemText}
                       onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
                       onCancelEdit={cancelEditingItem}
+                      onSurveyConfigChange={onSurveyItemConfigChange ? (cfg) => { void onSurveyItemConfigChange(item.id, cfg); } : undefined}
                       isGroup={true}
                     />
                     {/* Group Children - with visual connection */}
@@ -1711,6 +1948,7 @@ function ChecklistSection({
                               onEditingTextChange={setEditingItemText}
                               onSaveEdit={() => saveEditedItem(child.id, editingItemText)}
                               onCancelEdit={cancelEditingItem}
+                              onSurveyConfigChange={onSurveyItemConfigChange ? (cfg) => { void onSurveyItemConfigChange(child.id, cfg); } : undefined}
                             />
                           </div>
                         ))}
@@ -1734,6 +1972,7 @@ function ChecklistSection({
                     onEditingTextChange={setEditingItemText}
                     onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
                     onCancelEdit={cancelEditingItem}
+                    onSurveyConfigChange={onSurveyItemConfigChange ? (cfg) => { void onSurveyItemConfigChange(item.id, cfg); } : undefined}
                   />
                 );
               }
@@ -1931,7 +2170,39 @@ function ChecklistSection({
             borderRadius: "8px",
             border: "1px dashed var(--border-color)",
           }}>
-            <div style={{ display: "flex", gap: "10px", alignItems: "flex-start" }}>
+            {isSurveyChecklistType(type) && (
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", marginBottom: "12px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)" }}>Quick add:</span>
+                {SURVEY_QUESTION_PRESETS.map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    onClick={() => {
+                      setNewChecklistItem((prev) => {
+                        const m = new Map(prev);
+                        m.set(type, q);
+                        return m;
+                      });
+                    }}
+                    style={{
+                      padding: "4px 10px",
+                      fontSize: "11px",
+                      fontWeight: 500,
+                      borderRadius: "999px",
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-primary)",
+                      color: "var(--text-secondary)",
+                      cursor: "pointer",
+                      maxWidth: "100%",
+                      textAlign: "left",
+                    }}
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
             <input
               type="text"
               value={currentValue}
@@ -1945,12 +2216,21 @@ function ChecklistSection({
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  addChecklistItem(selectedStrategy, type, currentValue, null, type === "survey" ? surveyHighIsGood : undefined);
+                  addChecklistItem(
+                    selectedStrategy,
+                    type,
+                    currentValue,
+                    null,
+                    isSurveyChecklistType(type)
+                      ? { highIsGood: surveyHighIsGood, surveyFormat: surveyFormatNew, allowNa: surveyAllowNaNew }
+                      : undefined
+                  );
                 }
               }}
               placeholder={`Add ${title.toLowerCase()} item...`}
               style={{
-                flex: 1,
+                flex: "1 1 200px",
+                minWidth: "160px",
                 padding: "12px 14px",
                 backgroundColor: "var(--bg-primary)",
                 border: "1px solid var(--border-color)",
@@ -1963,21 +2243,17 @@ function ChecklistSection({
               onFocus={(e) => e.target.style.borderColor = "var(--accent)"}
               onBlur={(e) => e.target.style.borderColor = "var(--border-color)"}
             />
-            {type === "survey" && (
-              <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-                <span style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>Scale:</span>
-                <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px", color: "var(--text-primary)" }}>
-                  <input type="radio" name={`survey-high-${type}`} checked={surveyHighIsGood === true} onChange={() => setSurveyHighIsGood(true)} />
-                  High is good (e.g. 5 = desirable)
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px", color: "var(--text-primary)" }}>
-                  <input type="radio" name={`survey-high-${type}`} checked={surveyHighIsGood === false} onChange={() => setSurveyHighIsGood(false)} />
-                  Low is good (e.g. 1 = desirable)
-                </label>
-              </div>
-            )}
             <button
-              onClick={() => addChecklistItem(selectedStrategy, type, currentValue, null, type === "survey" ? surveyHighIsGood : undefined)}
+              type="button"
+              onClick={() => addChecklistItem(
+                selectedStrategy,
+                type,
+                currentValue,
+                null,
+                isSurveyChecklistType(type)
+                  ? { highIsGood: surveyHighIsGood, surveyFormat: surveyFormatNew, allowNa: surveyAllowNaNew }
+                  : undefined
+              )}
               style={{
                 background: "var(--accent)",
                 border: "none",
@@ -1990,6 +2266,7 @@ function ChecklistSection({
                 gap: "6px",
                 fontSize: "14px",
                 fontWeight: "600",
+                flexShrink: 0,
                 transition: "opacity 0.2s, transform 0.2s",
               }}
               onMouseEnter={(e) => {
@@ -2004,6 +2281,173 @@ function ChecklistSection({
               <Plus size={16} />
               Add
             </button>
+            {isSurveyChecklistType(type) && (
+              <>
+                <div style={{ width: "1px", height: "28px", backgroundColor: "var(--border-color)", flexShrink: 0, alignSelf: "center" }} aria-hidden />
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "nowrap",
+                    alignItems: "center",
+                    gap: "12px",
+                    flex: "1 1 auto",
+                    minWidth: 0,
+                    overflowX: "auto",
+                  }}
+                >
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", flexShrink: 0, whiteSpace: "nowrap" }}>
+                    <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Type</span>
+                    <button
+                      type="button"
+                      onClick={() => setSurveyFormatNew("scale")}
+                      style={{
+                        padding: "5px 11px",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        borderRadius: "999px",
+                        border: `1px solid ${surveyFormatNew === "scale" ? "var(--accent)" : "var(--border-color)"}`,
+                        background: surveyFormatNew === "scale" ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                        color: surveyFormatNew === "scale" ? "var(--accent)" : "var(--text-secondary)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      1–10 scale
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSurveyFormatNew("yes_no")}
+                      style={{
+                        padding: "5px 11px",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        borderRadius: "999px",
+                        border: `1px solid ${surveyFormatNew === "yes_no" ? "var(--accent)" : "var(--border-color)"}`,
+                        background: surveyFormatNew === "yes_no" ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                        color: surveyFormatNew === "yes_no" ? "var(--accent)" : "var(--text-secondary)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Yes / No
+                    </button>
+                  </div>
+                  <div style={{ width: "1px", height: "22px", backgroundColor: "var(--border-color)", flexShrink: 0 }} aria-hidden />
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", flexShrink: 0, whiteSpace: "nowrap" }}>
+                    <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                      {surveyFormatNew === "yes_no" ? "Polarity" : "Scale"}
+                    </span>
+                    {surveyFormatNew === "yes_no" ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setSurveyHighIsGood(true)}
+                          style={{
+                            padding: "5px 11px",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            borderRadius: "999px",
+                            border: `1px solid ${surveyHighIsGood ? "var(--accent)" : "var(--border-color)"}`,
+                            background: surveyHighIsGood ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                            color: surveyHighIsGood ? "var(--accent)" : "var(--text-secondary)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Yes = favorable
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSurveyHighIsGood(false)}
+                          style={{
+                            padding: "5px 11px",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            borderRadius: "999px",
+                            border: `1px solid ${!surveyHighIsGood ? "var(--accent)" : "var(--border-color)"}`,
+                            background: !surveyHighIsGood ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                            color: !surveyHighIsGood ? "var(--accent)" : "var(--text-secondary)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          No = favorable
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setSurveyHighIsGood(true)}
+                          style={{
+                            padding: "5px 11px",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            borderRadius: "999px",
+                            border: `1px solid ${surveyHighIsGood ? "var(--accent)" : "var(--border-color)"}`,
+                            background: surveyHighIsGood ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                            color: surveyHighIsGood ? "var(--accent)" : "var(--text-secondary)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          10 = better
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSurveyHighIsGood(false)}
+                          style={{
+                            padding: "5px 11px",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            borderRadius: "999px",
+                            border: `1px solid ${!surveyHighIsGood ? "var(--accent)" : "var(--border-color)"}`,
+                            background: !surveyHighIsGood ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                            color: !surveyHighIsGood ? "var(--accent)" : "var(--text-secondary)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          1 = better
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <div style={{ width: "1px", height: "22px", backgroundColor: "var(--border-color)", flexShrink: 0 }} aria-hidden />
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", flexShrink: 0, whiteSpace: "nowrap" }}>
+                    <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                      N/A
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSurveyAllowNaNew(true)}
+                      style={{
+                        padding: "5px 11px",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        borderRadius: "999px",
+                        border: `1px solid ${surveyAllowNaNew ? "var(--accent)" : "var(--border-color)"}`,
+                        background: surveyAllowNaNew ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                        color: surveyAllowNaNew ? "var(--accent)" : "var(--text-secondary)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      On
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSurveyAllowNaNew(false)}
+                      style={{
+                        padding: "5px 11px",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        borderRadius: "999px",
+                        border: `1px solid ${!surveyAllowNaNew ? "var(--accent)" : "var(--border-color)"}`,
+                        background: !surveyAllowNaNew ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                        color: !surveyAllowNaNew ? "var(--accent)" : "var(--text-secondary)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Off
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
             </div>
           </div>
         </>
@@ -3389,8 +3833,23 @@ export default function Strategies() {
     }
   };
 
-  const addChecklistItem = async (strategyId: number, type: string, text: string, parentId: number | null = null, highIsGood?: boolean) => {
+  const addChecklistItem = async (
+    strategyId: number,
+    type: string,
+    text: string,
+    parentId: number | null = null,
+    surveyOpts?: { highIsGood?: boolean; surveyFormat?: SurveyFormatKind; allowNa?: boolean }
+  ) => {
     if (!text.trim()) return;
+    const surveyHigh = surveyOpts?.highIsGood ?? true;
+    const surveyFmt: SurveyFormatKind = surveyOpts?.surveyFormat === "yes_no" ? "yes_no" : "scale";
+    const surveyExtras = isSurveyChecklistType(type)
+      ? {
+          high_is_good: surveyHigh,
+          survey_format: surveyFmt,
+          survey_allow_na: Boolean(surveyOpts?.allowNa),
+        }
+      : {};
     
     // If creating (virtual strategy ID), use tempChecklists
     if (strategyId === -1) {
@@ -3417,7 +3876,7 @@ export default function Strategies() {
         item_order: itemOrder,
         checklist_type: type,
         parent_id: parentId,
-        ...(type === "survey" && { high_is_good: highIsGood ?? true }),
+        ...surveyExtras,
       };
 
       const updatedChecklist = new Map(currentChecklist);
@@ -3479,7 +3938,7 @@ export default function Strategies() {
         item_order: itemOrder,
         checklist_type: type,
         parent_id: parentId,
-        ...(type === "survey" && { high_is_good: highIsGood ?? true }),
+        ...surveyExtras,
       };
 
       const updatedChecklist = new Map(currentChecklist);
@@ -3525,7 +3984,10 @@ export default function Strategies() {
         itemOrder: itemOrder,
         checklistType: type,
         parentId: parentId,
-        high_is_good: type === "survey" ? (highIsGood ?? true) : undefined,
+        high_is_good: isSurveyChecklistType(type) ? surveyHigh : undefined,
+        description: null,
+        survey_format: isSurveyChecklistType(type) ? surveyFmt : undefined,
+        survey_allow_na: isSurveyChecklistType(type) ? Boolean(surveyOpts?.allowNa) : undefined,
       });
 
       const newItem: ChecklistItem = {
@@ -3536,7 +3998,7 @@ export default function Strategies() {
         item_order: itemOrder,
         checklist_type: type,
         parent_id: parentId,
-        ...(type === "survey" && { high_is_good: highIsGood ?? true }),
+        ...surveyExtras,
       };
 
       const updatedChecklist = new Map(currentChecklist);
@@ -3935,7 +4397,10 @@ export default function Strategies() {
             itemOrder: newOrder,
             checklistType: checklistType,
             parentId: groupId,
-            high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
+            high_is_good: isSurveyChecklistType(item.checklist_type) ? (item.high_is_good ?? true) : undefined,
+            description: item.description ?? null,
+            survey_format: isSurveyChecklistType(item.checklist_type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+            survey_allow_na: surveyNaForInvoke(item.checklist_type, item),
           });
           orderOffset++;
         }
@@ -4074,7 +4539,10 @@ export default function Strategies() {
           itemOrder: item.item_order,
           checklistType: item.checklist_type,
           parentId: item.parent_id,
-          high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
+          high_is_good: isSurveyChecklistType(item.checklist_type) ? (item.high_is_good ?? true) : undefined,
+          description: item.description ?? null,
+          survey_format: isSurveyChecklistType(item.checklist_type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+          survey_allow_na: surveyNaForInvoke(item.checklist_type, item),
         });
         await loadChecklists(selectedStrategy);
       }
@@ -4090,6 +4558,78 @@ export default function Strategies() {
   const cancelEditingItem = () => {
     setEditingItemId(null);
     setEditingItemText("");
+  };
+
+  const handleSurveyItemConfigChange = async (itemId: number, config: SurveyItemConfig) => {
+    const findAndMap = (
+      checklistMap: Map<string, ChecklistItem[]>,
+      fn: (item: ChecklistItem) => ChecklistItem
+    ): Map<string, ChecklistItem[]> | null => {
+      let found = false;
+      const next = new Map<string, ChecklistItem[]>();
+      for (const [t, items] of checklistMap.entries()) {
+        next.set(
+          t,
+          items.map((it) => {
+            if (it.id !== itemId) return it;
+            found = true;
+            return fn(it);
+          })
+        );
+      }
+      return found ? next : null;
+    };
+
+    const patchItem = (it: ChecklistItem): ChecklistItem => ({
+      ...it,
+      survey_format: config.survey_format,
+      high_is_good: config.high_is_good,
+      survey_allow_na: config.survey_allow_na,
+    });
+
+    if (isCreating) {
+      const updated = findAndMap(tempChecklists, patchItem);
+      if (updated) setTempChecklists(updated);
+      return;
+    }
+    if (isEditing && selectedStrategy != null && editingChecklists.has(selectedStrategy)) {
+      const cur = editingChecklists.get(selectedStrategy)!;
+      const updated = findAndMap(cur, patchItem);
+      if (updated) {
+        setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, updated)));
+        const history = checklistEditHistory.get(selectedStrategy) || [];
+        const newHistory = [...history, new Map(updated)].slice(-10);
+        setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, newHistory)));
+      }
+      return;
+    }
+    if (selectedStrategy == null) return;
+    const checklistMap = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
+    let item: ChecklistItem | undefined;
+    for (const arr of checklistMap.values()) {
+      item = arr.find((i) => i.id === itemId);
+      if (item) break;
+    }
+    if (!item) return;
+    try {
+      await invoke("save_strategy_checklist_item", {
+        id: itemId,
+        strategyId: selectedStrategy,
+        itemText: item.item_text,
+        isChecked: item.is_checked,
+        itemOrder: item.item_order,
+        checklistType: item.checklist_type,
+        parentId: item.parent_id,
+        high_is_good: isSurveyChecklistType(item.checklist_type) ? config.high_is_good : undefined,
+        description: item.description ?? null,
+        survey_format: isSurveyChecklistType(item.checklist_type) ? config.survey_format : undefined,
+        survey_allow_na: isSurveyChecklistType(item.checklist_type) ? config.survey_allow_na : undefined,
+      });
+      await loadChecklists(selectedStrategy);
+    } catch (error) {
+      console.error("Error saving survey item settings:", error);
+      alert("Failed to save survey settings: " + error);
+    }
   };
 
   const reorderChecklistItems = async (strategyId: number, type: string, activeId: number, overId: number) => {
@@ -4145,7 +4685,10 @@ export default function Strategies() {
           itemOrder: item.item_order,
           checklistType: type,
           parentId: item.parent_id,
-          high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
+          high_is_good: isSurveyChecklistType(item.checklist_type) ? (item.high_is_good ?? true) : undefined,
+          description: item.description ?? null,
+          survey_format: isSurveyChecklistType(item.checklist_type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+          survey_allow_na: surveyNaForInvoke(item.checklist_type, item),
         });
       }
     } catch (error) {
@@ -4614,7 +5157,10 @@ export default function Strategies() {
               itemOrder: item.item_order,
               checklistType: type,
               parentId: null,
-              high_is_good: type === "survey" ? (item.high_is_good ?? true) : undefined,
+              high_is_good: isSurveyChecklistType(type) ? (item.high_is_good ?? true) : undefined,
+              description: item.description ?? null,
+              survey_format: isSurveyChecklistType(type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+              survey_allow_na: surveyNaForInvoke(type, item),
             });
             idMap.set(item.id, newId);
           }
@@ -4634,7 +5180,10 @@ export default function Strategies() {
                 itemOrder: item.item_order,
                 checklistType: type,
                 parentId: newParentId,
-                high_is_good: type === "survey" ? (item.high_is_good ?? true) : undefined,
+                high_is_good: isSurveyChecklistType(type) ? (item.high_is_good ?? true) : undefined,
+                description: item.description ?? null,
+                survey_format: isSurveyChecklistType(type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+                survey_allow_na: surveyNaForInvoke(type, item),
               });
               idMap.set(item.id, newId);
             }
@@ -4654,6 +5203,10 @@ export default function Strategies() {
             itemOrder: 0,
             checklistType: type,
             parentId: null,
+            high_is_good: undefined,
+            description: null,
+            survey_format: undefined,
+            survey_allow_na: undefined,
           });
         }
       }
@@ -4913,7 +5466,12 @@ export default function Strategies() {
           originalItem.item_text !== item.item_text ||
           originalItem.item_order !== item.item_order ||
           originalItem.parent_id !== item.parent_id ||
-          originalItem.checklist_type !== item.checklist_type
+          originalItem.checklist_type !== item.checklist_type ||
+          (isSurveyChecklistType(type) && (
+            (originalItem.high_is_good ?? true) !== (item.high_is_good ?? true) ||
+            normalizedSurveyFormat(originalItem.survey_format) !== normalizedSurveyFormat(item.survey_format) ||
+            (originalItem.survey_allow_na ?? false) !== (item.survey_allow_na ?? false)
+          ))
         ));
         
         if (isNew || hasChanged) {
@@ -4925,7 +5483,10 @@ export default function Strategies() {
             itemOrder: item.item_order,
             checklistType: type,
             parentId: null,
-            high_is_good: type === "survey" ? (item.high_is_good ?? true) : undefined,
+            high_is_good: isSurveyChecklistType(type) ? (item.high_is_good ?? true) : undefined,
+            description: item.description ?? null,
+            survey_format: isSurveyChecklistType(type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+            survey_allow_na: surveyNaForInvoke(type, item),
           });
           
           // If it's a new item, map the old temporary ID to the new database ID
@@ -4954,7 +5515,12 @@ export default function Strategies() {
           originalItem.item_text !== item.item_text ||
           originalItem.item_order !== item.item_order ||
           originalItem.parent_id !== correctParentId ||
-          originalItem.checklist_type !== item.checklist_type
+          originalItem.checklist_type !== item.checklist_type ||
+          (isSurveyChecklistType(type) && (
+            (originalItem.high_is_good ?? true) !== (item.high_is_good ?? true) ||
+            normalizedSurveyFormat(originalItem.survey_format) !== normalizedSurveyFormat(item.survey_format) ||
+            (originalItem.survey_allow_na ?? false) !== (item.survey_allow_na ?? false)
+          ))
         ));
         
         if (isNew || hasChanged) {
@@ -4966,7 +5532,10 @@ export default function Strategies() {
             itemOrder: item.item_order,
             checklistType: type,
             parentId: correctParentId,
-            high_is_good: type === "survey" ? (item.high_is_good ?? true) : undefined,
+            high_is_good: isSurveyChecklistType(type) ? (item.high_is_good ?? true) : undefined,
+            description: item.description ?? null,
+            survey_format: isSurveyChecklistType(type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+            survey_allow_na: surveyNaForInvoke(type, item),
           });
           
           // If it's a new item, map the old temporary ID to the new database ID
@@ -4995,6 +5564,10 @@ export default function Strategies() {
           itemOrder: 0,
           checklistType: type,
           parentId: null,
+          high_is_good: undefined,
+          description: null,
+          survey_format: undefined,
+          survey_allow_na: undefined,
         });
       }
     }
@@ -5380,7 +5953,10 @@ export default function Strategies() {
             itemOrder: item.item_order,
             checklistType: item.checklist_type,
             parentId: null,
-            high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
+            high_is_good: isSurveyChecklistType(item.checklist_type) ? (item.high_is_good ?? true) : undefined,
+            description: item.description ?? null,
+            survey_format: isSurveyChecklistType(item.checklist_type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+            survey_allow_na: surveyNaForInvoke(item.checklist_type, item),
           });
           idMap.set(item.id, newId);
         }
@@ -5398,7 +5974,10 @@ export default function Strategies() {
               itemOrder: item.item_order,
               checklistType: item.checklist_type,
               parentId: newParentId,
-              high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
+              high_is_good: isSurveyChecklistType(item.checklist_type) ? (item.high_is_good ?? true) : undefined,
+              description: item.description ?? null,
+              survey_format: isSurveyChecklistType(item.checklist_type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+              survey_allow_na: surveyNaForInvoke(item.checklist_type, item),
             });
           }
         }
@@ -7261,6 +7840,7 @@ export default function Strategies() {
                                   startEditingItem={startEditingItem}
                                   saveEditedItem={saveEditedItem}
                                   cancelEditingItem={cancelEditingItem}
+                                  onSurveyItemConfigChange={handleSurveyItemConfigChange}
                                   addChecklistItem={addChecklistItem}
                                   setPendingGroupAction={setPendingGroupAction}
                                   setGroupName={setGroupName}
@@ -8794,6 +9374,7 @@ export default function Strategies() {
                               startEditingItem={startEditingItem}
                               saveEditedItem={saveEditedItem}
                               cancelEditingItem={cancelEditingItem}
+                              onSurveyItemConfigChange={handleSurveyItemConfigChange}
                               addChecklistItem={addChecklistItem}
                               setPendingGroupAction={setPendingGroupAction}
                               setGroupName={setGroupName}
