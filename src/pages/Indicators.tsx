@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Code2, Plus, Search, Star, X } from "lucide-react";
+import { Code2, Copy, Plus, Search, Star, Trash2, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
 import {
   addIndicator,
+  deleteIndicator,
   getPrebuiltIndicatorThumbnails,
   loadIndicators,
   loadStrategyIndicatorIds,
@@ -44,6 +45,25 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+/** Default abbreviation from a signal title; user can override in the form. */
+function abbreviateFromTitle(title: string): string {
+  const cleaned = title
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^\w\s]/g, " ")
+    .trim();
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "";
+  if (words.length === 1) {
+    const w = words[0];
+    return w.length <= 8 ? w.toUpperCase() : w.slice(0, 8).toUpperCase();
+  }
+  return words
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 8);
+}
+
 
 export default function IndicatorsPage({ view = "signals" }: { view?: SignalsView }) {
   const FAVORITES_KEY = "tradebutler_favorite_indicators_v1";
@@ -81,6 +101,10 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
   const [strategyFilterId, setStrategyFilterId] = useState<number | "all">("all");
 
   const [selected, setSelected] = useState<Indicator | null>(null);
+  /** Bumps when the saved indicator list changes so `loadIndicators()` is re-run. */
+  const [indicatorsTick, setIndicatorsTick] = useState(0);
+  /** Themed delete confirmation (replaces OS `confirm`); z-index above detail modal. */
+  const [indicatorPendingDelete, setIndicatorPendingDelete] = useState<Indicator | null>(null);
 
   useEffect(() => {
     const focus = searchParams.get("focus");
@@ -102,6 +126,9 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
 
   const [newName, setNewName] = useState("");
   const [newAbbr, setNewAbbr] = useState("");
+  /** When false, abbreviation stays in sync with the title; set true if the user edits Abbrev. */
+  const [newAbbrUserEdited, setNewAbbrUserEdited] = useState(false);
+  const [favoriteNewOnCreate, setFavoriteNewOnCreate] = useState(false);
   const [newDesc, setNewDesc] = useState("");
   const [newCode, setNewCode] = useState("");
   const [newImage, setNewImage] = useState<string>("");
@@ -114,6 +141,8 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
 
   const [editName, setEditName] = useState("");
   const [editAbbr, setEditAbbr] = useState("");
+  /** When false, abbreviation follows the title like create flow; true if stored abbr was custom or user edited Abbrev. */
+  const [editAbbrUserEdited, setEditAbbrUserEdited] = useState(false);
   const [editDesc, setEditDesc] = useState("");
   const [editCode, setEditCode] = useState("");
   const [editImage, setEditImage] = useState<string>("");
@@ -124,9 +153,72 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
   const [editThemeMode, setEditThemeMode] = useState<"auto" | "manual">("manual");
   const [editThumbSource, setEditThumbSource] = useState<"upload" | "preset">("preset");
   const [editThumbPresetId, setEditThumbPresetId] = useState<string>("rsi");
-  const [showThumbGallery, setShowThumbGallery] = useState(false);
+  /** Preset thumbnail picker: which flow opened it (add vs edit detail). */
+  const [thumbGalleryFor, setThumbGalleryFor] = useState<null | "add" | "edit">(null);
 
-  const indicators = useMemo(() => loadIndicators(), [showAdd, selected]);
+  const [codeCopyFeedback, setCodeCopyFeedback] = useState<null | "preview" | "edit">(null);
+  const codeCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearCodeCopyTimer = () => {
+    if (codeCopyTimerRef.current != null) {
+      clearTimeout(codeCopyTimerRef.current);
+      codeCopyTimerRef.current = null;
+    }
+  };
+
+  const copyIndicatorCode = async (text: string, which: "preview" | "edit") => {
+    clearCodeCopyTimer();
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand("copy");
+      } finally {
+        document.body.removeChild(ta);
+      }
+    }
+    setCodeCopyFeedback(which);
+    codeCopyTimerRef.current = setTimeout(() => {
+      setCodeCopyFeedback(null);
+      codeCopyTimerRef.current = null;
+    }, 2000);
+  };
+
+  useEffect(() => {
+    setCodeCopyFeedback(null);
+    clearCodeCopyTimer();
+  }, [selected?.id, showEdit]);
+
+  useEffect(
+    () => () => {
+      clearCodeCopyTimer();
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!showAdd) setThumbGalleryFor((prev) => (prev === "add" ? null : prev));
+  }, [showAdd]);
+
+  useEffect(() => {
+    if (!showAdd) return;
+    if (newAbbrUserEdited) return;
+    setNewAbbr(abbreviateFromTitle(newName));
+  }, [newName, showAdd, newAbbrUserEdited]);
+
+  useEffect(() => {
+    if (!showEdit || !selected) return;
+    if (editAbbrUserEdited) return;
+    setEditAbbr(abbreviateFromTitle(editName));
+  }, [editName, showEdit, selected?.id, editAbbrUserEdited]);
+
+  const indicators = useMemo(() => loadIndicators(), [showAdd, selected, indicatorsTick]);
 
   const getBias = (i: Indicator): "bullish" | "bearish" | "neutral" => {
     const text = `${i.name ?? ""} ${i.abbreviation ?? ""} ${i.description ?? ""}`.toLowerCase();
@@ -246,6 +338,11 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
     return getPrebuiltIndicatorThumbnails(editAbbr.trim() || selected?.abbreviation || "IND", editAccentColor);
   }, [showEdit, editAbbr, selected?.abbreviation, editAccentColor]);
 
+  const addPrebuiltThumbnails = useMemo(() => {
+    if (!showAdd) return [];
+    return getPrebuiltIndicatorThumbnails(newAbbr.trim() || "IND", newAccentColor);
+  }, [showAdd, newAbbr, newAccentColor]);
+
   const filteredSignals = useMemo(() => {
     if (view !== "all") return filtered;
     // Keep candlestick patterns out of the main indicators library.
@@ -255,6 +352,8 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
   function resetAddModal() {
     setNewName("");
     setNewAbbr("");
+    setNewAbbrUserEdited(false);
+    setFavoriteNewOnCreate(false);
     setNewDesc("");
     setNewCode("");
     setNewImage("");
@@ -262,6 +361,7 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
     setNewCapturesTimeframes(false);
     setNewThemeMode("auto");
     setNewThumbSource("preset");
+    setThumbGalleryFor(null);
     const randomAccent = THEME_COLOR_PRESETS[Math.floor(Math.random() * THEME_COLOR_PRESETS.length)];
     const presets = getPrebuiltIndicatorThumbnails("IND", randomAccent);
     const randomPreset = presets[Math.floor(Math.random() * presets.length)];
@@ -271,9 +371,12 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
 
   function resetEditModal(ind: Indicator | null) {
     setShowEdit(false);
-    setShowThumbGallery(false);
+    setThumbGalleryFor(null);
     if (!ind) return;
     setEditName(ind.name ?? "");
+    const storedAbbr = (ind.abbreviation ?? "").trim().toUpperCase();
+    const autoAbbr = abbreviateFromTitle(ind.name ?? "");
+    setEditAbbrUserEdited(storedAbbr !== autoAbbr);
     setEditAbbr(ind.abbreviation ?? "");
     setEditDesc(ind.description ?? "");
     setEditCode(ind.code ?? "");
@@ -376,6 +479,8 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
       {list.map((i) => (
         <button
           key={i.id}
+          type="button"
+          title={i.name}
           onClick={() => {
             setSelected(i);
             setShowEdit(false);
@@ -406,7 +511,7 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
             />
           )}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
-            <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={i.name}>
+            <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
               {i.name}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
@@ -625,6 +730,32 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
           />
         </div>
         {(view === "signals" || view === "all") && (
+          <button
+            type="button"
+            onClick={() => setCategoryFilter((prev) => (prev === "custom" ? "all" : "custom"))}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "10px 14px",
+              borderRadius: "10px",
+              fontWeight: 650,
+              cursor: "pointer",
+              border: `1px solid ${categoryFilter === "custom" ? "var(--accent)" : "var(--border-color)"}`,
+              background: categoryFilter === "custom" ? "rgba(139, 92, 246, 0.18)" : "var(--bg-secondary)",
+              color: categoryFilter === "custom" ? "var(--accent)" : "var(--text-primary)",
+              whiteSpace: "nowrap",
+            }}
+            aria-pressed={categoryFilter === "custom"}
+            aria-label={categoryFilter === "custom" ? "Showing custom signals only. Click to show all categories." : "Show custom signals only"}
+          >
+            Custom signals
+            {categoryFilter === "custom" ? (
+              <span style={{ fontSize: "11px", fontWeight: 800, opacity: 0.9 }}>ON</span>
+            ) : null}
+          </button>
+        )}
+        {(view === "signals" || view === "all") && (
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
@@ -636,10 +767,10 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
               color: "var(--text-primary)",
               outline: "none",
             }}
-            aria-label="Filter indicators"
+            aria-label="Filter indicators by category"
           >
-            <option value="all">All</option>
-            <option value="custom">Custom</option>
+            <option value="all">All categories</option>
+            <option value="custom">Custom signals</option>
             <option value="Momentum">Momentum</option>
             <option value="Trend">Trend</option>
             <option value="Volatility">Volatility</option>
@@ -755,6 +886,7 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
         <div
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 250, display: "flex", alignItems: "center", justifyContent: "center", padding: "18px" }}
           onClick={() => {
+            setIndicatorPendingDelete(null);
             setSelected(null);
             setShowEdit(false);
           }}
@@ -765,7 +897,18 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
           >
             <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
-                <div style={{ fontSize: "18px", fontWeight: 750, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <div
+                  title={selected.name}
+                  style={{
+                    fontSize: "18px",
+                    fontWeight: 750,
+                    color: "var(--text-primary)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    minWidth: 0,
+                  }}
+                >
                   {selected.name}
                 </div>
                 <span
@@ -835,26 +978,49 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                 {selected.kind === "custom" && (
-                  <button
-                    onClick={() => {
-                      resetEditModal(selected);
-                      setShowEdit(true);
-                    }}
-                    style={{
-                      border: `1px solid ${hexToRgba(selected.accentColor ?? "#F59E0B", 0.45)}`,
-                      background: hexToRgba(selected.accentColor ?? "#F59E0B", 0.14),
-                      color: selected.accentColor ?? "#F59E0B",
-                      borderRadius: "10px",
-                      padding: "8px 10px",
-                      cursor: "pointer",
-                      fontWeight: 750,
-                    }}
-                  >
-                    Edit
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      title="Delete custom indicator"
+                      onClick={() => setIndicatorPendingDelete(selected)}
+                      style={{
+                        border: "1px solid rgba(239, 68, 68, 0.45)",
+                        background: "rgba(239, 68, 68, 0.12)",
+                        color: "#F87171",
+                        borderRadius: "10px",
+                        padding: "8px 10px",
+                        cursor: "pointer",
+                        fontWeight: 750,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                      }}
+                    >
+                      <Trash2 size={16} aria-hidden />
+                      Delete
+                    </button>
+                    <button
+                      onClick={() => {
+                        resetEditModal(selected);
+                        setShowEdit(true);
+                      }}
+                      style={{
+                        border: `1px solid ${hexToRgba(selected.accentColor ?? "#F59E0B", 0.45)}`,
+                        background: hexToRgba(selected.accentColor ?? "#F59E0B", 0.14),
+                        color: selected.accentColor ?? "#F59E0B",
+                        borderRadius: "10px",
+                        padding: "8px 10px",
+                        cursor: "pointer",
+                        fontWeight: 750,
+                      }}
+                    >
+                      Edit
+                    </button>
+                  </>
                 )}
                 <button
                   onClick={() => {
+                    setIndicatorPendingDelete(null);
                     setSelected(null);
                     setShowEdit(false);
                   }}
@@ -892,7 +1058,7 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
                     </label>
                     <button
                       type="button"
-                      onClick={() => setShowThumbGallery(true)}
+                      onClick={() => setThumbGalleryFor("edit")}
                       style={{ border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", borderRadius: "10px", padding: "10px 12px", cursor: "pointer", fontWeight: 650 }}
                     >
                       Choose preset thumbnails
@@ -912,83 +1078,6 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
                     </button>
                   </div>
                 </div>
-
-                {showThumbGallery && (
-                  <div
-                    style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 280, display: "flex", alignItems: "center", justifyContent: "center", padding: "18px" }}
-                    onClick={() => setShowThumbGallery(false)}
-                  >
-                    <div
-                      style={{ width: "100%", maxWidth: "860px", maxHeight: "86vh", overflow: "auto", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "14px", boxShadow: "0 18px 48px rgba(0,0,0,0.55)" }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
-                        <div style={{ fontSize: "18px", fontWeight: 750, color: "var(--text-primary)" }}>Pick a thumbnail</div>
-                        <button
-                          type="button"
-                          onClick={() => setShowThumbGallery(false)}
-                          style={{ border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", borderRadius: "10px", padding: "8px 10px", cursor: "pointer", display: "flex" }}
-                        >
-                          <X size={16} />
-                        </button>
-                      </div>
-
-                      <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: "12px" }}>
-                        <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>Select a preset preview image (your indicator abbreviation is applied).</div>
-
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "12px" }}>
-                          {prebuiltThumbnails.map((t, idx) => {
-                            const isSelected = editImage && t.image && editImage === t.image;
-                            return (
-                              <button
-                                key={t.id}
-                                type="button"
-                                onClick={() => {
-                                  setEditThumbSource("preset");
-                                  setEditThumbPresetId(t.id);
-                                  setEditImage(t.image);
-                                  setShowThumbGallery(false);
-                                }}
-                                style={{
-                                  background: isSelected ? hexToRgba(editAccentColor, 0.14) : "var(--bg-secondary)",
-                                  border: `1px solid ${isSelected ? hexToRgba(editAccentColor, 0.55) : "var(--border-color)"}`,
-                                  borderRadius: "12px",
-                                  padding: "10px",
-                                  cursor: "pointer",
-                                  textAlign: "left",
-                                }}
-                              >
-                                <img
-                                  src={t.image}
-                                  alt={`Preset ${idx + 1}`}
-                                  style={{ width: "100%", height: "92px", objectFit: "cover", borderRadius: "10px", border: "1px solid var(--border-color)" }}
-                                />
-                                <div style={{ marginTop: "8px", fontSize: "12px", fontWeight: 800, color: "var(--text-primary)" }}>Preset {idx + 1}</div>
-                              </button>
-                            );
-                          })}
-                        </div>
-
-                        <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!prebuiltThumbnails.length) return;
-                              const random = prebuiltThumbnails[Math.floor(Math.random() * prebuiltThumbnails.length)];
-                              setEditThumbSource("preset");
-                              setEditThumbPresetId(random.id);
-                              setEditImage(random.image);
-                              setShowThumbGallery(false);
-                            }}
-                            style={{ border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", borderRadius: "10px", padding: "10px 12px", cursor: "pointer", fontWeight: 650 }}
-                          >
-                            Auto thumbnail
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
 
                 <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                   <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 650 }}>Theme color</label>
@@ -1072,9 +1161,16 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
                     <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 650 }}>Abbrev</label>
                     <input
                       value={editAbbr}
-                      onChange={(e) => setEditAbbr(e.target.value)}
+                      onChange={(e) => {
+                        setEditAbbr(e.target.value);
+                        setEditAbbrUserEdited(true);
+                      }}
+                      placeholder="Auto from title"
                       style={{ padding: "10px 12px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "10px", color: "var(--text-primary)", outline: "none", textTransform: "uppercase" }}
                     />
+                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.35 }}>
+                      {editAbbrUserEdited ? "Custom abbreviation; change the title without updating this field." : "Updates when you change the name; edit here to set a custom abbreviation."}
+                    </div>
                   </div>
                 </div>
 
@@ -1130,7 +1226,36 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
                 </div>
 
                 <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                  <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 650 }}>Code</label>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+                    <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 650 }}>Code</label>
+                    <button
+                      type="button"
+                      onClick={() => void copyIndicatorCode(editCode, "edit")}
+                      title="Copy code"
+                      style={{
+                        border: "1px solid var(--border-color)",
+                        background: "var(--bg-tertiary)",
+                        color: "var(--text-primary)",
+                        borderRadius: "8px",
+                        padding: "4px 10px",
+                        cursor: "pointer",
+                        fontSize: "11px",
+                        fontWeight: 750,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                      }}
+                    >
+                      {codeCopyFeedback === "edit" ? (
+                        "Copied"
+                      ) : (
+                        <>
+                          <Copy size={14} aria-hidden />
+                          Copy
+                        </>
+                      )}
+                    </button>
+                  </div>
                   <textarea
                     value={editCode}
                     onChange={(e) => setEditCode(e.target.value)}
@@ -1233,8 +1358,46 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
 
                 {(selected.id === "ema" || selected.id === "ma") && <EmaMaJournalSettingsEditor indicatorId={selected.id} />}
                 <div style={{ border: "1px solid var(--border-color)", borderRadius: "12px", overflow: "hidden", background: "var(--bg-secondary)" }}>
-                  <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", fontSize: "12px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                    Code
+                  <div
+                    style={{
+                      padding: "10px 12px",
+                      borderBottom: "1px solid var(--border-color)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "10px",
+                    }}
+                  >
+                    <div style={{ color: "var(--text-secondary)", fontSize: "12px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>Code</div>
+                    <button
+                      type="button"
+                      onClick={() => void copyIndicatorCode(selected.code ?? "", "preview")}
+                      title="Copy code"
+                      style={{
+                        border: "1px solid var(--border-color)",
+                        background: "var(--bg-tertiary)",
+                        color: "var(--text-primary)",
+                        borderRadius: "8px",
+                        padding: "4px 10px",
+                        cursor: "pointer",
+                        fontSize: "11px",
+                        fontWeight: 750,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        textTransform: "none",
+                        letterSpacing: "normal",
+                      }}
+                    >
+                      {codeCopyFeedback === "preview" ? (
+                        "Copied"
+                      ) : (
+                        <>
+                          <Copy size={14} aria-hidden />
+                          Copy
+                        </>
+                      )}
+                    </button>
                   </div>
                   <pre
                     style={{
@@ -1262,6 +1425,131 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
         </div>
       )}
 
+      {/* Delete custom indicator — themed modal (matches Journal / Strategies) */}
+      {indicatorPendingDelete && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 300,
+          }}
+          onClick={() => setIndicatorPendingDelete(null)}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "450px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="indicator-delete-title"
+          >
+            <h3
+              id="indicator-delete-title"
+              style={{
+                fontSize: "18px",
+                fontWeight: 600,
+                marginBottom: "12px",
+                color: "var(--danger)",
+              }}
+            >
+              Delete custom signal
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-primary)",
+                marginBottom: "8px",
+                lineHeight: 1.5,
+              }}
+            >
+              Are you sure you want to delete{" "}
+              <strong>&quot;{(indicatorPendingDelete.name ?? "").trim() || "this indicator"}&quot;</strong>?
+            </p>
+            <p
+              style={{
+                fontSize: "13px",
+                color: "var(--text-secondary)",
+                marginBottom: "20px",
+                lineHeight: 1.5,
+              }}
+            >
+              This removes it from your library, favorites, and saved journal data for this signal. This cannot be undone.
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIndicatorPendingDelete(null);
+                }}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: 500,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const id = indicatorPendingDelete.id;
+                  if (deleteIndicator(id)) {
+                    setFavoriteIds((prev) => {
+                      const next = new Set(prev);
+                      next.delete(id);
+                      return next;
+                    });
+                    setIndicatorPendingDelete(null);
+                    setShowEdit(false);
+                    setSelected(null);
+                    setIndicatorsTick((t) => t + 1);
+                  }
+                }}
+                style={{
+                  background: "var(--danger)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: 500,
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add modal */}
       {showAdd && (
         <div
@@ -1269,25 +1557,68 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
           onClick={() => setShowAdd(false)}
         >
           <div
-            style={{ width: "100%", maxWidth: "860px", maxHeight: "86vh", overflow: "auto", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "14px", boxShadow: "0 18px 48px rgba(0,0,0,0.55)" }}
+            style={{
+              width: "100%",
+              maxWidth: "860px",
+              maxHeight: "86vh",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+              background: "var(--bg-primary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "14px",
+              boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
+            }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
-              <div style={{ fontSize: "18px", fontWeight: 750, color: "var(--text-primary)" }}>Add indicator</div>
-              <button
-                onClick={() => setShowAdd(false)}
-                style={{ border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", borderRadius: "10px", padding: "8px 10px", cursor: "pointer", display: "flex" }}
-              >
-                <X size={16} />
-              </button>
+            <div
+              style={{
+                flexShrink: 0,
+                padding: "14px 18px",
+                borderBottom: "1px solid var(--border-color)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+                background: "var(--bg-primary)",
+                zIndex: 2,
+              }}
+            >
+              <div style={{ fontSize: "18px", fontWeight: 750, color: "var(--text-primary)", minWidth: 0 }}>Add indicator</div>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowAdd(false)}
+                  style={{ border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", borderRadius: "10px", padding: "10px 14px", cursor: "pointer", fontWeight: 650 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  form="add-indicator-form"
+                  style={{ border: "none", background: "var(--accent)", color: "var(--bg-primary)", borderRadius: "10px", padding: "10px 14px", cursor: "pointer", fontWeight: 750 }}
+                >
+                  Save indicator
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAdd(false)}
+                  style={{ border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", borderRadius: "10px", padding: "8px 10px", cursor: "pointer", display: "flex" }}
+                  aria-label="Close"
+                >
+                  <X size={16} />
+                </button>
+              </div>
             </div>
             <form
+              id="add-indicator-form"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (!newName.trim() || !newAbbr.trim()) return;
-                addIndicator({
+                const abbr = newAbbr.trim() || abbreviateFromTitle(newName).trim();
+                if (!newName.trim() || !abbr) return;
+                const created = addIndicator({
                   name: newName,
-                  abbreviation: newAbbr,
+                  abbreviation: abbr,
                   description: newDesc,
                   code: newCode,
                   exampleImage: newImage || undefined,
@@ -1295,9 +1626,17 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
                   capturesTimeframes: newCapturesTimeframes,
                   accentColor: newAccentColor,
                 });
+                if (favoriteNewOnCreate) {
+                  setFavoriteIds((prev) => {
+                    const next = new Set(prev);
+                    next.add(created.id);
+                    return next;
+                  });
+                }
                 setShowAdd(false);
+                setIndicatorsTick((t) => t + 1);
               }}
-              style={{ padding: "18px", display: "flex", flexDirection: "column", gap: "12px" }}
+              style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "18px", display: "flex", flexDirection: "column", gap: "12px" }}
             >
               <div style={{ display: "grid", gridTemplateColumns: "1fr 180px", gap: "10px" }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
@@ -1314,11 +1653,16 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
                   <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 650 }}>Abbrev</label>
                   <input
                     value={newAbbr}
-                    onChange={(e) => setNewAbbr(e.target.value)}
-                    placeholder="RSI"
-                    required
+                    onChange={(e) => {
+                      setNewAbbr(e.target.value);
+                      setNewAbbrUserEdited(true);
+                    }}
+                    placeholder="Auto from title"
                     style={{ padding: "10px 12px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "10px", color: "var(--text-primary)", outline: "none", textTransform: "uppercase" }}
                   />
+                  <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.35 }}>
+                    Filled from the title by default; edit to override.
+                  </div>
                 </div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
@@ -1434,6 +1778,15 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
                 />
                 Captures timeframes
               </label>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "10px", cursor: "pointer", color: "var(--text-secondary)", fontSize: "13px", fontWeight: 650 }}>
+                <input
+                  type="checkbox"
+                  checked={favoriteNewOnCreate}
+                  onChange={(e) => setFavoriteNewOnCreate(e.target.checked)}
+                  style={{ width: "16px", height: "16px" }}
+                />
+                Add to favorites
+              </label>
               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                 <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 650 }}>Custom image (optional)</label>
                 {newImage ? (
@@ -1443,34 +1796,139 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
                     No image selected; auto thumbnail will be used.
                   </div>
                 )}
-                <label style={{ display: "inline-flex", alignItems: "center", gap: "10px", cursor: "pointer", padding: "10px 12px", borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", fontWeight: 650, width: "fit-content" }}>
-                  <span>Upload image</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    style={{ display: "none" }}
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      const dataUrl = await fileToDataUrl(file);
-                      setNewImage(dataUrl);
-                      setNewThumbSource("upload");
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: "10px", cursor: "pointer", padding: "10px 12px", borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", fontWeight: 650, width: "fit-content" }}>
+                    <span>Upload image</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      style={{ display: "none" }}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const dataUrl = await fileToDataUrl(file);
+                        setNewImage(dataUrl);
+                        setNewThumbSource("upload");
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setThumbGalleryFor("add")}
+                    style={{ border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", borderRadius: "10px", padding: "10px 12px", cursor: "pointer", fontWeight: 650 }}
+                  >
+                    Choose preset thumbnails
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!addPrebuiltThumbnails.length) return;
+                      const random = addPrebuiltThumbnails[Math.floor(Math.random() * addPrebuiltThumbnails.length)];
+                      setNewThumbSource("preset");
+                      setNewThumbPresetId(random.id);
+                      setNewImage(random.image);
+                      setNewThemeMode("manual");
                     }}
-                  />
-                </label>
-              </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
-                <button type="button" onClick={() => setShowAdd(false)} style={{ border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", borderRadius: "10px", padding: "10px 14px", cursor: "pointer", fontWeight: 650 }}>
-                  Cancel
-                </button>
-                <button type="submit" style={{ border: "none", background: "var(--accent)", color: "var(--bg-primary)", borderRadius: "10px", padding: "10px 14px", cursor: "pointer", fontWeight: 750 }}>
-                  Save indicator
-                </button>
+                    style={{ border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", borderRadius: "10px", padding: "10px 12px", cursor: "pointer", fontWeight: 650 }}
+                  >
+                    Use auto thumbnail
+                  </button>
+                </div>
               </div>
             </form>
           </div>
         </div>
       )}
+
+      {thumbGalleryFor !== null &&
+        (() => {
+          const mode = thumbGalleryFor;
+          const galleryThumbs = mode === "add" ? addPrebuiltThumbnails : prebuiltThumbnails;
+          const galleryAccent = mode === "add" ? newAccentColor : editAccentColor;
+          const galleryCurImage = mode === "add" ? newImage : editImage;
+          const pickPreset = (t: { id: string; image: string }) => {
+            if (mode === "add") {
+              setNewThumbSource("preset");
+              setNewThumbPresetId(t.id);
+              setNewImage(t.image);
+              setNewThemeMode("manual");
+            } else {
+              setEditThumbSource("preset");
+              setEditThumbPresetId(t.id);
+              setEditImage(t.image);
+            }
+            setThumbGalleryFor(null);
+          };
+          const pickRandom = () => {
+            if (!galleryThumbs.length) return;
+            const random = galleryThumbs[Math.floor(Math.random() * galleryThumbs.length)];
+            pickPreset(random);
+          };
+          return (
+            <div
+              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 280, display: "flex", alignItems: "center", justifyContent: "center", padding: "18px" }}
+              onClick={() => setThumbGalleryFor(null)}
+            >
+              <div
+                style={{ width: "100%", maxWidth: "860px", maxHeight: "86vh", overflow: "auto", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "14px", boxShadow: "0 18px 48px rgba(0,0,0,0.55)" }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
+                  <div style={{ fontSize: "18px", fontWeight: 750, color: "var(--text-primary)" }}>Pick a thumbnail</div>
+                  <button
+                    type="button"
+                    onClick={() => setThumbGalleryFor(null)}
+                    style={{ border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", borderRadius: "10px", padding: "8px 10px", cursor: "pointer", display: "flex" }}
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>Select a preset preview image (your indicator abbreviation is applied).</div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "12px" }}>
+                    {galleryThumbs.map((t, idx) => {
+                      const isSelected = galleryCurImage && t.image && galleryCurImage === t.image;
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => pickPreset(t)}
+                          style={{
+                            background: isSelected ? hexToRgba(galleryAccent, 0.14) : "var(--bg-secondary)",
+                            border: `1px solid ${isSelected ? hexToRgba(galleryAccent, 0.55) : "var(--border-color)"}`,
+                            borderRadius: "12px",
+                            padding: "10px",
+                            cursor: "pointer",
+                            textAlign: "left",
+                          }}
+                        >
+                          <img
+                            src={t.image}
+                            alt={`Preset ${idx + 1}`}
+                            style={{ width: "100%", height: "92px", objectFit: "cover", borderRadius: "10px", border: "1px solid var(--border-color)" }}
+                          />
+                          <div style={{ marginTop: "8px", fontSize: "12px", fontWeight: 800, color: "var(--text-primary)" }}>Preset {idx + 1}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+                    <button
+                      type="button"
+                      onClick={pickRandom}
+                      style={{ border: "1px solid var(--border-color)", background: "var(--bg-secondary)", color: "var(--text-primary)", borderRadius: "10px", padding: "10px 12px", cursor: "pointer", fontWeight: 650 }}
+                    >
+                      Auto thumbnail
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
     </div>
   );
 }

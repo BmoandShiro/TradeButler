@@ -82,6 +82,11 @@ import {
 } from "../utils/scrollManager";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import {
+  isPlanestationDemoSyncEnabled,
+  MY_STRATEGY_NAME_FOR_PLANESTATION_SYNC,
+} from "../utils/planestationConstants";
+import { syncPlanestationDemoFromMyStrategy } from "../utils/planestationDemoMirror";
+import {
   getSandboxStrategies,
   addSandboxStrategy,
   updateSandboxStrategy,
@@ -3196,7 +3201,8 @@ export default function Strategies() {
     if (selectedStrategy) {
       void loadStrategyData(selectedStrategy);
     }
-  }, [selectedStrategy, dataMode, modeSwitchReloadKey]);
+    // Re-run when `strategies` fills in (e.g. switching to Demo) so notes/signals match persisted sandbox data.
+  }, [selectedStrategy, dataMode, modeSwitchReloadKey, strategies]);
 
   // Load paired trades when opening the Trades tab (not on every tab switch via loadStrategyData)
   useEffect(() => {
@@ -3226,7 +3232,7 @@ export default function Strategies() {
     if (selectedStrategy == null) return;
     if (isEditing || isCreating) return;
     setStrategyIndicatorIds(loadStrategyIndicatorIds(dataMode, selectedStrategy));
-  }, [selectedStrategy, dataMode, isEditing, isCreating]);
+  }, [selectedStrategy, dataMode, isEditing, isCreating, strategies]);
 
   // When viewing a strategy (not editing/creating), load text rules so the Rules tab can display them.
   useEffect(() => {
@@ -3238,7 +3244,7 @@ export default function Strategies() {
     setCustomRuleSets(sets);
     setActiveRulesPanel("entry");
     setActiveCustomRuleSetId(null);
-  }, [selectedStrategy, dataMode, isEditing, isCreating]);
+  }, [selectedStrategy, dataMode, isEditing, isCreating, strategies]);
 
   useEffect(() => {
     if ((activeTab === "survey" || activeTab === "surveys") && selectedStrategy != null && !isCreating) {
@@ -3540,8 +3546,16 @@ export default function Strategies() {
           created_at: s.created_at,
           color: s.color,
           display_order: null as number | null,
+          author: s.author ?? null,
         }));
         setStrategies(data);
+        if (!preserveEditingState) {
+          const notesMap = new Map<number, string>();
+          data.forEach((s) => {
+            if (s.id != null) notesMap.set(s.id, s.notes || "");
+          });
+          setNotesContent(notesMap);
+        }
         const state = loadSandboxState();
         const pairingMethod = (localStorage.getItem("tradebutler_pairing_method") || "FIFO") as "FIFO" | "LIFO";
         const { pairs } = buildPositionGroupsAndPairs(
@@ -5605,6 +5619,18 @@ export default function Strategies() {
           setChecklistEditHistory(updatedHistory);
         }
         const savedStrategyId = selectedStrategyData.id;
+        if (
+          isPlanestationDemoSyncEnabled() &&
+          editingFormData.name.trim() === MY_STRATEGY_NAME_FOR_PLANESTATION_SYNC &&
+          savedStrategyId
+        ) {
+          await syncPlanestationDemoFromMyStrategy("sandbox", savedStrategyId, {
+            description: editingFormData.description ?? null,
+            notes: currentNotes || null,
+            color: editingFormData.color ?? null,
+            author: editingFormData.author?.trim() || null,
+          });
+        }
         await loadStrategies(true);
         clearWorkInProgress();
         if (savedStrategyId) {
@@ -5689,6 +5715,20 @@ export default function Strategies() {
         
         await loadStrategyData(savedStrategyId);
         await loadChecklists(savedStrategyId);
+
+        if (
+          isPlanestationDemoSyncEnabled() &&
+          editingFormData.name.trim() === MY_STRATEGY_NAME_FOR_PLANESTATION_SYNC &&
+          savedStrategyId &&
+          (dataMode === "real" || dataMode === "paper")
+        ) {
+          await syncPlanestationDemoFromMyStrategy(dataMode, savedStrategyId, {
+            description: editingFormData.description || null,
+            notes: currentNotes || null,
+            color: editingFormData.color || null,
+            author: editingFormData.author?.trim() || null,
+          });
+        }
         
         // Switch to Details tab after saving
         setActiveTab("notes");

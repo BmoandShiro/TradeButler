@@ -48,3 +48,5 @@ Thumbs.db
 # Note: app-icon.png should NOT be ignored - it's required for the app
 # If you need to ignore a specific app-icon.png, use a more specific path
 
+DTSI-Plus.pine
+DTSI-Plus-RSI.pine

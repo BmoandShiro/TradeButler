@@ -1,4 +1,5 @@
 import type { DataMode } from "./dataMode";
+import { PLANESTATION_DEMO_STRATEGY_ID } from "./planestationConstants";
 
 export interface Indicator {
   id: string; // uuid-ish
@@ -2293,8 +2294,85 @@ export function getPrebuiltIndicatorThumbnails(abbreviation: string, accentColor
   }));
 }
 
-export function deleteIndicator(id: string) {
-  saveIndicators(loadIndicators().filter((i) => i.id !== id));
+const FAVORITE_INDICATORS_STORAGE_KEY = "tradebutler_favorite_indicators_v1";
+
+function pruneJournalStorageKeysForIndicatorId(indicatorId: string) {
+  if (typeof window === "undefined") return;
+
+  const dropMatchingSegment = (storageKey: string) => {
+    const data = safeParse<Record<string, unknown>>(localStorage.getItem(storageKey), {});
+    let changed = false;
+    for (const key of Object.keys(data)) {
+      const parts = key.split(":");
+      if (parts.length >= 5 && parts[4] === indicatorId) {
+        delete data[key];
+        changed = true;
+      }
+    }
+    if (changed) localStorage.setItem(storageKey, JSON.stringify(data));
+  };
+
+  dropMatchingSegment(JOURNAL_INDICATOR_VALUES_KEY);
+  dropMatchingSegment(JOURNAL_INDICATOR_DIVERGENCE_KEY);
+  dropMatchingSegment(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY);
+  dropMatchingSegment(JOURNAL_INDICATOR_MA_FLAGS_KEY);
+
+  const tradePatterns = safeParse<Record<string, string[]>>(localStorage.getItem(JOURNAL_TRADE_PATTERN_INDICATOR_IDS_KEY), {});
+  let tpChanged = false;
+  for (const [key, arr] of Object.entries(tradePatterns)) {
+    if (!Array.isArray(arr)) continue;
+    const filtered = arr.filter((x) => String(x) !== indicatorId);
+    if (filtered.length !== arr.length) {
+      tpChanged = true;
+      if (filtered.length === 0) delete tradePatterns[key];
+      else tradePatterns[key] = filtered;
+    }
+  }
+  if (tpChanged) localStorage.setItem(JOURNAL_TRADE_PATTERN_INDICATOR_IDS_KEY, JSON.stringify(tradePatterns));
+}
+
+/**
+ * Permanently removes a user-created indicator and related local preferences/journal drafts.
+ * Built-in library indicators cannot be deleted.
+ */
+export function deleteIndicator(id: string): boolean {
+  if (typeof window === "undefined") return false;
+  const all = loadIndicators();
+  const target = all.find((i) => i.id === id);
+  if (!target || target.kind !== "custom") return false;
+
+  saveIndicators(all.filter((i) => i.id !== id));
+
+  try {
+    let rawPrefs: Record<string, unknown> = {};
+    const s = window.localStorage.getItem(INDICATOR_SIGNAL_PREFS_KEY);
+    if (s) rawPrefs = JSON.parse(s) as Record<string, unknown>;
+    if (rawPrefs[id]) {
+      delete rawPrefs[id];
+      window.localStorage.setItem(INDICATOR_SIGNAL_PREFS_KEY, JSON.stringify(rawPrefs));
+    }
+  } catch {
+    /* optional */
+  }
+
+  try {
+    const favRaw = window.localStorage.getItem(FAVORITE_INDICATORS_STORAGE_KEY);
+    if (favRaw) {
+      const arr = JSON.parse(favRaw) as unknown;
+      if (Array.isArray(arr)) {
+        const next = arr.map((x) => String(x)).filter((x) => x && x !== id);
+        window.localStorage.setItem(FAVORITE_INDICATORS_STORAGE_KEY, JSON.stringify(next));
+      }
+    }
+  } catch {
+    /* optional */
+  }
+
+  pruneJournalStorageKeysForIndicatorId(id);
+
+  window.dispatchEvent(new CustomEvent("tradebutler:indicator-signal-prefs-changed"));
+  window.dispatchEvent(new CustomEvent("tradebutler:custom-indicators-changed"));
+  return true;
 }
 
 export function loadStrategyIndicatorIds(mode: DataMode, strategyId: number): string[] {
@@ -2302,6 +2380,15 @@ export function loadStrategyIndicatorIds(mode: DataMode, strategyId: number): st
   const byMode = data[mode] ?? {};
   const stored = byMode[String(strategyId)];
   const indicatorIds = new Set(loadIndicators().map((i) => i.id));
+
+  // Demo "Planestation's Strategy" (sandbox id 7): do not use the global default starter set.
+  // Missing storage previously produced 19 generic signals instead of mirroring "My Strategy" after sync.
+  if (mode === "sandbox" && strategyId === PLANESTATION_DEMO_STRATEGY_ID) {
+    if (!Array.isArray(stored)) {
+      return [];
+    }
+    return stored.filter((id) => indicatorIds.has(id));
+  }
 
   if (Array.isArray(stored)) {
     const cleaned = stored.filter((id) => indicatorIds.has(id));
@@ -2382,20 +2469,11 @@ export function loadStrategyRuleTexts(mode: DataMode, strategyId: number, ruleTy
   const ruleTexts = stored?.[ruleType];
 
   if (Array.isArray(ruleTexts)) {
-    const cleaned = sanitizeRuleTextRules(ruleTexts);
+    const cleaned = sanitizeRuleTextRules(ruleTexts).filter((r) => !/^Legacy indicator rule:/i.test(r.trim()));
     if (cleaned.length > 0) return cleaned;
   }
 
-  // Back-compat: if text rules aren't stored yet, fall back to the legacy indicator-id
-  // rule associations by converting selected indicator abbreviations into placeholder text.
-  const legacyIndicatorIds = loadStrategyRuleIndicatorIds(mode, strategyId, ruleType);
-  if (legacyIndicatorIds.length === 0) return [];
-
-  const allIndicators = loadIndicators();
-  const selected = allIndicators.filter((i) => legacyIndicatorIds.includes(i.id));
-  const fallback = selected.map((ind) => `Legacy indicator rule: ${ind.abbreviation}`);
-
-  return sanitizeRuleTextRules(fallback);
+  return [];
 }
 
 export function saveStrategyRuleTexts(mode: DataMode, strategyId: number, ruleType: StrategyRuleType, rules: string[]) {
@@ -2443,10 +2521,7 @@ function sanitizeCustomRuleSets(sets: StrategyCustomRuleSet[]): StrategyCustomRu
   return out;
 }
 
-/**
- * Reads only persisted rule lines for a type — never synthesizes "Legacy indicator rule: …" placeholders
- * (those come from {@link loadStrategyRuleTexts} when nothing is stored).
- */
+/** Reads only persisted rule lines for a type (no legacy indicator placeholder synthesis). */
 function loadStoredStrategyRuleTextsArrayOnly(
   mode: DataMode,
   strategyId: number,
