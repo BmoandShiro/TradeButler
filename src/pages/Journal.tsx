@@ -21,6 +21,8 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { format, parse } from "date-fns";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { JournalSignalsSettingsModal } from "../components/JournalSignalsSettingsModal";
+import { JournalChecklistStrategyConfigureModal } from "../components/JournalChecklistStrategyConfigureModal";
+import { JournalRulesStrategyConfigureModal } from "../components/JournalRulesStrategyConfigureModal";
 import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
 import { getSurveyScoreColor, getSurveyScoreBgRgba } from "../utils/intensityColor";
 import RichTextEditor from "../components/RichTextEditor";
@@ -75,11 +77,79 @@ function hexToRgba(hex: string, alpha: number): string {
   const b = parseInt(m[3], 16);
   return `rgba(${r},${g},${b},${alpha})`;
 }
+
+/** Pill container: title + configure cog share one border (cog stays visually top-right of the title row). */
+function JournalStrategySectionTitlePill({ children }: { children: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 10,
+        width: "100%",
+        boxSizing: "border-box",
+        flex: "1 1 auto",
+        minWidth: 0,
+        padding: "6px 12px",
+        borderRadius: 9999,
+        border: "1px solid var(--border-color)",
+        background: "var(--bg-tertiary)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function JournalStrategySectionCard({ children }: { children: ReactNode }) {
+  return (
+    <div
+      style={{
+        flex: "1 1 0",
+        minWidth: 280,
+        border: "1px solid var(--border-color)",
+        borderRadius: 12,
+        padding: "10px",
+        background: "color-mix(in srgb, var(--bg-secondary) 86%, var(--bg-primary))",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function JournalStrategyConfigureCogButton({ title, onClick, disabled }: { title: string; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        flexShrink: 0,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "4px",
+        border: "none",
+        borderRadius: 8,
+        background: "transparent",
+        color: "var(--text-secondary)",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.45 : 1,
+      }}
+    >
+      <Settings size={16} aria-hidden />
+    </button>
+  );
+}
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 import { sanitizeHtml, normalizeRichTextHtml } from "../utils/sanitizeHtml";
 import {
   loadIndicators,
   loadStrategyIndicatorIds,
+  saveStrategyIndicatorIds,
   loadStrategyRuleTexts,
   loadStrategyCustomRuleSets,
   loadEmaMaJournalRowVisibility,
@@ -4330,15 +4400,24 @@ export default function Journal() {
   })();
 
   const fullSectionOrder = useMemo(() => {
-    const base = journalSectionOrder.filter((id) => id !== "custom_checklists_surveys");
     const surveyItems = (currentChecklists?.get("survey") || []).filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
     const customRuleSectionIds = entryFormData.strategy_id
       ? loadStrategyCustomRuleSets(dataMode, entryFormData.strategy_id).map((s) => `custom_rules:${s.id}`)
       : [];
+    const validCustomChecklistSectionIds = new Set(customTypes.map((t) => `custom:${t}`));
+    const validCustomRuleSectionIds = new Set(customRuleSectionIds);
+    const shouldShowSurveySection = surveyItems.length > 0;
+    const base = journalSectionOrder.filter((id) => {
+      if (id === "custom_checklists_surveys") return false;
+      if (!id.startsWith("custom:") && !id.startsWith("custom_rules:")) return true;
+      if (id === "custom:survey") return shouldShowSurveySection;
+      if (id.startsWith("custom_rules:")) return validCustomRuleSectionIds.has(id);
+      return validCustomChecklistSectionIds.has(id);
+    });
     const customSectionIds = [
       ...customTypes.map((t) => `custom:${t}`),
       ...customRuleSectionIds,
-      ...(surveyItems.length > 0 ? ["custom:survey"] : []),
+      ...(shouldShowSurveySection ? ["custom:survey"] : []),
     ];
     const newCustom = customSectionIds.filter((id) => !base.includes(id));
     return [...base, ...newCustom];
@@ -5176,7 +5255,7 @@ export default function Journal() {
                       alignItems: "center",
                       gap: 8,
                     }}
-                    title="Signal settings"
+                    title="Configure signals (order & display affect this strategy for all journal entries)"
                   >
                     <Settings size={16} />
                   </button>
@@ -6006,6 +6085,10 @@ export default function Journal() {
   // Each set gets its own Journal section that can be reordered.
   const [strategyCustomRuleSets, setStrategyCustomRuleSets] = useState<StrategyCustomRuleSet[]>([]);
   const [journalSignalsSettingsModalPhase, setJournalSignalsSettingsModalPhase] = useState<IndicatorPhase | null>(null);
+  const [journalChecklistConfigureType, setJournalChecklistConfigureType] = useState<string | null>(null);
+  const [journalRulesConfigure, setJournalRulesConfigure] = useState<
+    null | { kind: "entry" | "takeProfit" } | { kind: "custom"; ruleSetId: string }
+  >(null);
   /** Bumped when divergence / other-signal prefs change in localStorage so controlled checkboxes re-render. */
   const [, setJournalSignalInputsTick] = useState(0);
   const [indicatorSignalGroupFilterByPhase, setIndicatorSignalGroupFilterByPhase] = useState<
@@ -7333,9 +7416,57 @@ export default function Journal() {
                       return (
                       <div key={sectionId} id={`section-${sectionId}`} ref={(el) => { sectionRefs.current.set(sectionId, el); }} style={{ marginBottom: "28px", scrollMarginTop: !isTabContentMaximized ? (journalEntryMetaCollapsed ? "100px" : "56px") : "12px" }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
-                          <h3 style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                            {getSectionLabelScroll(sectionId)}
-                          </h3>
+                          {(() => {
+                            const canCfg = Boolean(entryFormData.strategy_id && (isCreating || isEditing));
+                            let configureCog: ReactNode = null;
+                            if (canCfg && sectionId === "analysis_checklist") {
+                              configureCog = (
+                                <JournalStrategyConfigureCogButton
+                                  title="Configure analysis checklist on strategy (affects all journal entries using this strategy)"
+                                  onClick={() => setJournalChecklistConfigureType("daily_analysis")}
+                                />
+                              );
+                            } else if (canCfg && sectionId === "mantra_checklist") {
+                              configureCog = (
+                                <JournalStrategyConfigureCogButton
+                                  title="Configure mantra checklist on strategy (affects all journal entries using this strategy)"
+                                  onClick={() => setJournalChecklistConfigureType("daily_mantra")}
+                                />
+                              );
+                            } else if (canCfg && sectionId.startsWith("custom:")) {
+                              const t = sectionId.slice(7);
+                              configureCog = (
+                                <JournalStrategyConfigureCogButton
+                                  title={
+                                    t === "survey" || t.startsWith("survey_")
+                                      ? "Configure survey on strategy (affects all journal entries using this strategy)"
+                                      : "Configure checklist on strategy (affects all journal entries using this strategy)"
+                                  }
+                                  onClick={() => setJournalChecklistConfigureType(t)}
+                                />
+                              );
+                            } else if (canCfg && sectionId.startsWith("custom_rules:")) {
+                              configureCog = (
+                                <JournalStrategyConfigureCogButton
+                                  title="Configure this rule set on strategy (affects all journal entries using this strategy)"
+                                  onClick={() => setJournalRulesConfigure({ kind: "custom", ruleSetId: sectionId.slice("custom_rules:".length) })}
+                                />
+                              );
+                            }
+                            const heading = (
+                              <h3 style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em", margin: 0, flex: "1 1 auto", minWidth: 0 }}>
+                                {getSectionLabelScroll(sectionId)}
+                              </h3>
+                            );
+                            return configureCog ? (
+                              <JournalStrategySectionTitlePill>
+                                {heading}
+                                {configureCog}
+                              </JournalStrategySectionTitlePill>
+                            ) : (
+                              heading
+                            );
+                          })()}
                           {sectionId === "emotional_state_before" && (isCreating || isEditing) && showAddEmotionalStateForm && (
                             <button
                               type="button"
@@ -7377,22 +7508,60 @@ export default function Journal() {
                         {sectionId === "notes" && (
                           <RichTextEditor value={currentTrade.notes} onChange={(content: string) => updateTradeFormData(activeTradeIndex, "notes", content)} placeholder="Notes..." readOnly={false} />
                         )}
-                        {sectionId === "analysis_checklist" && renderChecklistForType("daily_analysis", { checklistLayout: "list", splitSidePanel: true })}
-                        {sectionId === "mantra_checklist" && renderChecklistForType("daily_mantra", { checklistLayout: "list", splitSidePanel: true })}
+                        {sectionId === "analysis_checklist" && (
+                          <JournalStrategySectionCard>
+                            {renderChecklistForType("daily_analysis", { checklistLayout: "list", splitSidePanel: true })}
+                          </JournalStrategySectionCard>
+                        )}
+                        {sectionId === "mantra_checklist" && (
+                          <JournalStrategySectionCard>
+                            {renderChecklistForType("daily_mantra", { checklistLayout: "list", splitSidePanel: true })}
+                          </JournalStrategySectionCard>
+                        )}
                         {sectionId === "entry_checklist" && (
                           <>
                           <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
-                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
-                                <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
-                                <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Entry Checklist</span>
+                            <JournalStrategySectionCard>
+                              <div style={{ marginBottom: "10px" }}>
+                                {entryFormData.strategy_id && (isCreating || isEditing) ? (
+                                  <JournalStrategySectionTitlePill>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                                      <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                                      <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Entry Checklist</span>
+                                    </div>
+                                    <JournalStrategyConfigureCogButton
+                                      title="Configure entry checklist on strategy (affects all journal entries using this strategy)"
+                                      onClick={() => setJournalChecklistConfigureType("entry")}
+                                    />
+                                  </JournalStrategySectionTitlePill>
+                                ) : (
+                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                    <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Entry Checklist</span>
+                                  </div>
+                                )}
                               </div>
                               {renderChecklistForType("entry", { checklistLayout: "list" })}
-                            </div>
-                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
-                                <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
-                                <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Entry Rules</span>
+                            </JournalStrategySectionCard>
+                            <JournalStrategySectionCard>
+                              <div style={{ marginBottom: "10px" }}>
+                                {entryFormData.strategy_id && (isCreating || isEditing) ? (
+                                  <JournalStrategySectionTitlePill>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                                      <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                                      <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Entry Rules</span>
+                                    </div>
+                                    <JournalStrategyConfigureCogButton
+                                      title="Configure entry rules on strategy (affects all journal entries using this strategy)"
+                                      onClick={() => setJournalRulesConfigure({ kind: "entry" })}
+                                    />
+                                  </JournalStrategySectionTitlePill>
+                                ) : (
+                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                    <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Entry Rules</span>
+                                  </div>
+                                )}
                               </div>
                               {strategyEntryRuleTexts.length === 0 ? (
                                 <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
@@ -7405,7 +7574,7 @@ export default function Journal() {
                                   ))}
                                 </div>
                               )}
-                            </div>
+                            </JournalStrategySectionCard>
                           </div>
                           <div style={{ marginTop: "12px" }}>{renderIndicatorInputs("entry")}</div>
                           </>
@@ -7413,17 +7582,47 @@ export default function Journal() {
                         {sectionId === "take_profit_checklist" && (
                           <>
                           <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
-                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
-                                <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
-                                <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Take Profit Checklist</span>
+                            <JournalStrategySectionCard>
+                              <div style={{ marginBottom: "10px" }}>
+                                {entryFormData.strategy_id && (isCreating || isEditing) ? (
+                                  <JournalStrategySectionTitlePill>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                                      <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                                      <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Take Profit Checklist</span>
+                                    </div>
+                                    <JournalStrategyConfigureCogButton
+                                      title="Configure take profit checklist on strategy (affects all journal entries using this strategy)"
+                                      onClick={() => setJournalChecklistConfigureType("take_profit")}
+                                    />
+                                  </JournalStrategySectionTitlePill>
+                                ) : (
+                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                    <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Take Profit Checklist</span>
+                                  </div>
+                                )}
                               </div>
                               {renderChecklistForType("take_profit", { checklistLayout: "list" })}
-                            </div>
-                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
-                                <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
-                                <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Take Profit Rules</span>
+                            </JournalStrategySectionCard>
+                            <JournalStrategySectionCard>
+                              <div style={{ marginBottom: "10px" }}>
+                                {entryFormData.strategy_id && (isCreating || isEditing) ? (
+                                  <JournalStrategySectionTitlePill>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                                      <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                                      <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Take Profit Rules</span>
+                                    </div>
+                                    <JournalStrategyConfigureCogButton
+                                      title="Configure take profit rules on strategy (affects all journal entries using this strategy)"
+                                      onClick={() => setJournalRulesConfigure({ kind: "takeProfit" })}
+                                    />
+                                  </JournalStrategySectionTitlePill>
+                                ) : (
+                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                    <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Take Profit Rules</span>
+                                  </div>
+                                )}
                               </div>
                               {strategyTakeProfitRuleTexts.length === 0 ? (
                                 <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
@@ -7436,20 +7635,23 @@ export default function Journal() {
                                   ))}
                                 </div>
                               )}
-                            </div>
+                            </JournalStrategySectionCard>
                           </div>
                           <div style={{ marginTop: "12px" }}>{renderIndicatorInputs("exit")}</div>
                           </>
                         )}
                         {sectionId.startsWith("custom_rules:") && (!entryFormData.strategy_id || !strategyCustomRuleSets) && (
-                          <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load custom rules.</p>
+                          <JournalStrategySectionCard>
+                            <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: 0 }}>Select a strategy to load custom rules.</p>
+                          </JournalStrategySectionCard>
                         )}
                         {sectionId.startsWith("custom_rules:") && entryFormData.strategy_id && (() => {
                           const ruleSetId = sectionId.slice("custom_rules:".length);
                           const ruleSet = strategyCustomRuleSets.find((s) => s.id === ruleSetId);
                           const rules = ruleSet?.rules ?? [];
                           return (
-                            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            <JournalStrategySectionCard>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                               {rules.length === 0 ? (
                                 <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
                                   No custom rules configured.
@@ -7474,18 +7676,27 @@ export default function Journal() {
                                   </div>
                                 ))
                               )}
-                            </div>
+                              </div>
+                            </JournalStrategySectionCard>
                           );
                         })()}
                         {sectionId.startsWith("custom:") && (!entryFormData.strategy_id || !currentChecklists) && (
-                          <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load custom checklists and surveys.</p>
+                          <JournalStrategySectionCard>
+                            <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: 0 }}>Select a strategy to load custom checklists and surveys.</p>
+                          </JournalStrategySectionCard>
                         )}
                         {sectionId.startsWith("custom:") && entryFormData.strategy_id && currentChecklists && (() => {
                           const type = sectionId.slice(7);
                           if (type === "survey") {
                             const rawSurveyItems = currentChecklists.get("survey") || [];
                             const surveyItems = rawSurveyItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
-                            if (surveyItems.length === 0) return <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No survey items.</p>;
+                            if (surveyItems.length === 0) {
+                              return (
+                                <JournalStrategySectionCard>
+                                  <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: 0 }}>No survey items.</p>
+                                </JournalStrategySectionCard>
+                              );
+                            }
                             const groups = surveyItems.filter(item => !item.parent_id && surveyItems.some(child => child.parent_id === item.id));
                             const regularItems = surveyItems.filter(item => !item.parent_id && !surveyItems.some(child => child.parent_id === item.id));
                             const groupedItems = surveyItems.filter(item => item.parent_id !== null && surveyItems.some(p => p.id === item.parent_id));
@@ -7618,7 +7829,8 @@ export default function Journal() {
                               );
                             };
                             return (
-                              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                              <JournalStrategySectionCard>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                                   <div
                                     style={{
@@ -7693,10 +7905,15 @@ export default function Journal() {
                                     ))}
                                   </JournalChecklistListShell>
                                 ) : null}
-                              </div>
+                                </div>
+                              </JournalStrategySectionCard>
                             );
                           }
-                          return renderChecklistForType(type, { checklistLayout: "list", accentVariant: "warning" });
+                          return (
+                            <JournalStrategySectionCard>
+                              {renderChecklistForType(type, { checklistLayout: "list", accentVariant: "warning" })}
+                            </JournalStrategySectionCard>
+                          );
                         })()}
                         {sectionId === "links" && (isCreating || isEditing) && (
                           <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
@@ -10655,7 +10872,73 @@ export default function Journal() {
           }));
         }}
         canEdit={isCreating || isEditing}
+        strategyIndicatorsInOrder={entryFormData.strategy_id ? strategyIndicators : undefined}
+        onPersistIndicatorOrder={
+          entryFormData.strategy_id && (isCreating || isEditing)
+            ? (ids) => {
+                const sid = entryFormData.strategy_id!;
+                saveStrategyIndicatorIds(dataMode, sid, ids);
+                const all = loadIndicators();
+                setStrategyIndicators(ids.map((id) => all.find((i) => i.id === id)).filter((x): x is Indicator => Boolean(x)));
+              }
+            : undefined
+        }
+        showStrategyTemplateNotice={Boolean(entryFormData.strategy_id && (isCreating || isEditing))}
       />
+
+      {journalChecklistConfigureType && entryFormData.strategy_id ? (
+        <JournalChecklistStrategyConfigureModal
+          open
+          onClose={() => setJournalChecklistConfigureType(null)}
+          dataMode={dataMode}
+          strategyId={entryFormData.strategy_id}
+          checklistType={journalChecklistConfigureType}
+          sectionTitle={getChecklistTitle(journalChecklistConfigureType)}
+          sourceItems={strategyChecklists.get(entryFormData.strategy_id)?.get(journalChecklistConfigureType) ?? []}
+          onAfterSave={() => {
+            const sid = entryFormData.strategy_id!;
+            void loadStrategyChecklists(sid);
+            if (selectedEntry?.id) {
+              void loadChecklistResponses(selectedEntry.id, sid);
+            }
+          }}
+        />
+      ) : null}
+
+      {journalRulesConfigure && entryFormData.strategy_id ? (
+        <JournalRulesStrategyConfigureModal
+          open
+          onClose={() => setJournalRulesConfigure(null)}
+          dataMode={dataMode}
+          strategyId={entryFormData.strategy_id}
+          title={(() => {
+            const jr = journalRulesConfigure;
+            if (jr.kind === "entry") return "Entry rules";
+            if (jr.kind === "takeProfit") return "Take profit rules";
+            if (jr.kind === "custom") return strategyCustomRuleSets.find((s) => s.id === jr.ruleSetId)?.title ?? "Custom rules";
+            return "Custom rules";
+          })()}
+          mode={journalRulesConfigure.kind === "custom" ? "customSet" : journalRulesConfigure.kind}
+          entryOrTpRules={
+            journalRulesConfigure.kind === "entry"
+              ? strategyEntryRuleTexts
+              : journalRulesConfigure.kind === "takeProfit"
+                ? strategyTakeProfitRuleTexts
+                : undefined
+          }
+          customSets={strategyCustomRuleSets}
+          ruleSetId={(() => {
+            const jr = journalRulesConfigure;
+            return jr.kind === "custom" ? jr.ruleSetId : undefined;
+          })()}
+          onAfterSave={() => {
+            const sid = entryFormData.strategy_id!;
+            setStrategyEntryRuleTexts(loadStrategyRuleTexts(dataMode, sid, "entry"));
+            setStrategyTakeProfitRuleTexts(loadStrategyRuleTexts(dataMode, sid, "takeProfit"));
+            setStrategyCustomRuleSets(loadStrategyCustomRuleSets(dataMode, sid));
+          }}
+        />
+      ) : null}
 
       {/* Link to actual trades modal (journal trade -> real trades from Trades table) */}
       {linkActualTradesModalJournalTradeId !== null && (

@@ -3,7 +3,7 @@ import { ChecklistItemCaption } from "../components/ChecklistItemCaption";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
-import { Plus, Edit2, Trash2, Target, Activity, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard, BarChart2 } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Activity, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard, BarChart2, Scale, Star } from "lucide-react";
 import { format } from "date-fns";
 import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
 import { LoadingSphere } from "../components/LoadingSphere";
@@ -42,6 +42,21 @@ function hexToRgba(hex: string, alpha: number): string {
   const b = parseInt(m[3], 16);
   return `rgba(${r},${g},${b},${alpha})`;
 }
+
+const FAVORITE_INDICATORS_STORAGE_KEY = "tradebutler_favorite_indicators_v1";
+
+function readFavoriteIndicatorIdsFromStorage(): Set<string> {
+  try {
+    const raw = localStorage.getItem(FAVORITE_INDICATORS_STORAGE_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.map((x) => String(x)).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
 /** Custom X-axis tick that wraps strategy names onto multiple lines. Uses fullName when present to avoid truncated labels. */
 function OverviewChartAxisTick(props: { x?: number; y?: number; payload?: { value?: string; name?: string; fullName?: string }; fontSize?: number }) {
   const { x = 0, y = 0, payload } = props;
@@ -2557,6 +2572,13 @@ export default function Strategies() {
   const [strategyToDelete, setStrategyToDelete] = useState<number | null>(null);
   /** In-app confirmation for deleting a custom rule set (matches app theme; native dialogs do not). */
   const [pendingCustomRuleSetDelete, setPendingCustomRuleSetDelete] = useState<{ id: string; title: string } | null>(null);
+  /** Themed confirm before removing a single checklist item (group, child, or regular row). */
+  const [pendingChecklistItemDelete, setPendingChecklistItemDelete] = useState<{
+    strategyId: number;
+    itemId: number;
+    checklistType: string;
+    itemLabel: string;
+  } | null>(null);
   /** Themed modal instead of window.prompt for custom rule set name / rename. */
   const [customRuleSetNameModal, setCustomRuleSetNameModal] = useState<
     null | { kind: "add" } | { kind: "rename"; id: string; initialTitle: string }
@@ -2644,7 +2666,11 @@ export default function Strategies() {
   const [indicatorSearch, setIndicatorSearch] = useState("");
   const [indicatorDropdownOpen, setIndicatorDropdownOpen] = useState(false);
   /** Narrow the strategy signal picker list (matches Signals page groupings). */
-  const [signalSelectorKindFilter, setSignalSelectorKindFilter] = useState<"all" | "indicator" | "technical" | "candlestick">("all");
+  const [signalSelectorKindFilter, setSignalSelectorKindFilter] = useState<
+    "all" | "indicator" | "technical" | "candlestick" | "custom"
+  >("all");
+  /** When true, signal picker list only shows starred favorites (Signals page). */
+  const [signalSelectorFavoritesOnly, setSignalSelectorFavoritesOnly] = useState(false);
   const [presetModal, setPresetModal] = useState<null | "add" | number>(null);
   const [presetForm, setPresetForm] = useState<{ name: string; formula_expression: string }>({ name: "", formula_expression: "" });
   /** When true, preset modal was opened from Add/Edit metric; after saving new preset we select it in the metric form. */
@@ -4030,40 +4056,58 @@ export default function Strategies() {
     }
   };
 
-  const deleteChecklistItem = async (strategyId: number, itemId: number, type: string) => {
-    if (!confirm("Delete this item? This cannot be undone.")) return;
-    // If creating (virtual strategy ID), use tempChecklists
+  const deleteChecklistItem = (strategyId: number, itemId: number, type: string) => {
+    let itemLabel = "this item";
+    if (strategyId === -1) {
+      const it = (tempChecklists.get(type) || []).find((i) => i.id === itemId);
+      if (it?.item_text?.trim()) itemLabel = it.item_text.trim();
+    } else if (isEditing && editingChecklists.has(strategyId)) {
+      const it = (editingChecklists.get(strategyId)!.get(type) || []).find((i) => i.id === itemId);
+      if (it?.item_text?.trim()) itemLabel = it.item_text.trim();
+    } else {
+      const it = (checklists.get(strategyId)?.get(type) || []).find((i) => i.id === itemId);
+      if (it?.item_text?.trim()) itemLabel = it.item_text.trim();
+    }
+    setPendingChecklistItemDelete({ strategyId, itemId, checklistType: type, itemLabel });
+  };
+
+  const handleChecklistItemDeleteCancel = () => setPendingChecklistItemDelete(null);
+
+  const confirmDeleteChecklistItem = async () => {
+    const pending = pendingChecklistItemDelete;
+    if (!pending) return;
+    const { strategyId, itemId, checklistType: type } = pending;
+    setPendingChecklistItemDelete(null);
+
     if (strategyId === -1) {
       const currentChecklist = tempChecklists;
       const items = currentChecklist.get(type) || [];
-      const updatedItems = items.filter(item => item.id !== itemId);
+      const updatedItems = items.filter((item) => item.id !== itemId);
       const updatedChecklist = new Map(currentChecklist);
       updatedChecklist.set(type, updatedItems);
       setTempChecklists(updatedChecklist);
       return;
     }
-    
-    // If editing, use editingChecklists instead of deleting directly
+
     if (isEditing && editingChecklists.has(strategyId)) {
       const currentChecklist = editingChecklists.get(strategyId)!;
       const items = currentChecklist.get(type) || [];
-      const updatedItems = items.filter(item => item.id !== itemId);
+      const updatedItems = items.filter((item) => item.id !== itemId);
       const updatedChecklist = new Map(currentChecklist);
       updatedChecklist.set(type, updatedItems);
       setEditingChecklists(new Map(editingChecklists.set(strategyId, updatedChecklist)));
-      
-      // Update history
+
       const history = checklistEditHistory.get(strategyId) || [];
       const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
       setChecklistEditHistory(new Map(checklistEditHistory.set(strategyId, newHistory)));
       return;
     }
-    
+
     try {
       await invoke("delete_strategy_checklist_item", { id: itemId });
       const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
       const items = currentChecklist.get(type) || [];
-      const updatedItems = items.filter(item => item.id !== itemId);
+      const updatedItems = items.filter((item) => item.id !== itemId);
       const updatedChecklist = new Map(currentChecklist);
       updatedChecklist.set(type, updatedItems);
       setChecklists(new Map(checklists.set(strategyId, updatedChecklist)));
@@ -6818,10 +6862,21 @@ export default function Strategies() {
                     </div>
                   </div>
 
-                  <div style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "12px", padding: "14px" }}>
+                  <div
+                    style={{
+                      background: "color-mix(in srgb, var(--warning) 10%, var(--bg-secondary))",
+                      border: "1px solid color-mix(in srgb, var(--warning) 38%, var(--border-color))",
+                      borderRadius: "12px",
+                      padding: "14px",
+                      boxShadow: "0 0 0 1px color-mix(in srgb, var(--warning) 14%, transparent)",
+                    }}
+                  >
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", marginBottom: "10px" }}>
-                      <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                        Select signals for this strategy
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                        <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                        <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                          Select signals for this strategy
+                        </div>
                       </div>
                       {isCreating && (
                         <div style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
@@ -6878,6 +6933,7 @@ export default function Strategies() {
                               [
                                 { id: "all" as const, label: "All" },
                                 { id: "indicator" as const, label: "Indicators" },
+                                { id: "custom" as const, label: "Custom" },
                                 { id: "technical" as const, label: "TA patterns" },
                                 { id: "candlestick" as const, label: "Candlestick" },
                               ] as const
@@ -6903,6 +6959,27 @@ export default function Strategies() {
                                 </button>
                               );
                             })}
+                            <button
+                              type="button"
+                              onClick={() => setSignalSelectorFavoritesOnly((v) => !v)}
+                              title="Show only signals you starred on the Signals page"
+                              style={{
+                                padding: "5px 10px",
+                                borderRadius: "999px",
+                                border: `1px solid ${signalSelectorFavoritesOnly ? "rgba(251, 191, 36, 0.75)" : "var(--border-color)"}`,
+                                background: signalSelectorFavoritesOnly ? "rgba(251, 191, 36, 0.14)" : "var(--bg-tertiary)",
+                                color: signalSelectorFavoritesOnly ? "#FBBF24" : "var(--text-secondary)",
+                                fontSize: "11px",
+                                fontWeight: 650,
+                                cursor: "pointer",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 6,
+                              }}
+                            >
+                              <Star size={12} fill={signalSelectorFavoritesOnly ? "#FBBF24" : "transparent"} aria-hidden />
+                              Favorites
+                            </button>
                           </div>
                           <input
                             value={indicatorSearch}
@@ -6926,21 +7003,29 @@ export default function Strategies() {
                               let base = all;
                               if (signalSelectorKindFilter === "indicator") {
                                 base = base.filter((i) => i.category !== "Pattern");
+                              } else if (signalSelectorKindFilter === "custom") {
+                                base = base.filter((i) => i.kind === "custom");
                               } else if (signalSelectorKindFilter === "technical") {
                                 base = base.filter((i) => i.category === "Pattern" && i.signalGroup === "TechnicalPattern");
                               } else if (signalSelectorKindFilter === "candlestick") {
                                 base = base.filter((i) => i.category === "Pattern" && i.signalGroup === "Candlestick");
                               }
                               const q = indicatorSearch.trim().toLowerCase();
-                              const shown = q ? base.filter((i) => `${i.name} ${i.abbreviation} ${i.description}`.toLowerCase().includes(q)) : base;
+                              let shown = q ? base.filter((i) => `${i.name} ${i.abbreviation} ${i.description}`.toLowerCase().includes(q)) : base;
+                              if (signalSelectorFavoritesOnly) {
+                                const fav = readFavoriteIndicatorIdsFromStorage();
+                                shown = shown.filter((i) => fav.has(i.id));
+                              }
                               if (shown.length === 0) {
                                 return (
                                   <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
-                                    {q
-                                      ? "No signals match your search."
-                                      : signalSelectorKindFilter === "all"
-                                        ? "No signals available."
-                                        : "No signals in this category."}
+                                    {signalSelectorFavoritesOnly
+                                      ? "No favorite signals in this view. Star signals on the Signals page, or turn off Favorites."
+                                      : q
+                                        ? "No signals match your search."
+                                        : signalSelectorKindFilter === "all"
+                                          ? "No signals available."
+                                          : "No signals in this category."}
                                   </div>
                                 );
                               }
@@ -6948,9 +7033,11 @@ export default function Strategies() {
                               return shown.map((i) => {
                                 const checked = strategyIndicatorIds.includes(i.id);
                                 const kindLabel =
-                                  i.category === "Pattern"
-                                    ? (i.signalGroup === "Candlestick" ? "Candlestick" : "Technical")
-                                    : "Indicator";
+                                  i.kind === "custom"
+                                    ? "Custom"
+                                    : i.category === "Pattern"
+                                      ? (i.signalGroup === "Candlestick" ? "Candlestick" : "Technical")
+                                      : "Indicator";
                                 return (
                                   <label key={i.id} style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
                                     <input
@@ -6997,6 +7084,7 @@ export default function Strategies() {
                               onClick={() => {
                                 setIndicatorSearch("");
                                 setSignalSelectorKindFilter("all");
+                                setSignalSelectorFavoritesOnly(false);
                                 setIndicatorDropdownOpen(false);
                               }}
                               style={{
@@ -11483,6 +11571,113 @@ export default function Strategies() {
           </div>
         );
       })()}
+
+      {pendingChecklistItemDelete && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={handleChecklistItemDeleteCancel}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "450px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="checklist-item-delete-title"
+          >
+            <h3
+              id="checklist-item-delete-title"
+              style={{
+                fontSize: "18px",
+                fontWeight: "600",
+                marginBottom: "12px",
+                color: "var(--danger)",
+              }}
+            >
+              Delete checklist item
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-primary)",
+                marginBottom: "8px",
+                lineHeight: "1.5",
+              }}
+            >
+              Are you sure you want to delete{" "}
+              <strong>&quot;{pendingChecklistItemDelete.itemLabel}&quot;</strong>?
+            </p>
+            <p
+              style={{
+                fontSize: "13px",
+                color: "var(--text-secondary)",
+                marginBottom: "20px",
+                lineHeight: "1.5",
+              }}
+            >
+              This action cannot be undone.
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                onClick={handleChecklistItemDeleteCancel}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmDeleteChecklistItem()}
+                style={{
+                  background: "var(--danger)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete custom rule set — themed modal (not OS dialog) */}
       {pendingCustomRuleSetDelete && (

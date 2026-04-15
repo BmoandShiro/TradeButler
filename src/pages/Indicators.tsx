@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
-import { Code2, Copy, Plus, Search, Star, Trash2, X } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { Code2, Copy, Plus, Scale, Search, Star, Trash2, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/tauri";
 import {
   addIndicator,
@@ -8,6 +8,7 @@ import {
   getPrebuiltIndicatorThumbnails,
   loadIndicators,
   loadStrategyIndicatorIds,
+  saveStrategyIndicatorIds,
   updateIndicator,
   type Indicator,
 } from "../utils/indicatorsStore";
@@ -101,6 +102,9 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
   const [strategyFilterId, setStrategyFilterId] = useState<number | "all">("all");
 
   const [selected, setSelected] = useState<Indicator | null>(null);
+  /** Strategy to attach the open signal to (Strategies page indicator list). */
+  const [linkStrategyId, setLinkStrategyId] = useState<number | "">("");
+  const [linkStrategyMessage, setLinkStrategyMessage] = useState<string | null>(null);
   /** Bumps when the saved indicator list changes so `loadIndicators()` is re-run. */
   const [indicatorsTick, setIndicatorsTick] = useState(0);
   /** Themed delete confirmation (replaces OS `confirm`); z-index above detail modal. */
@@ -120,6 +124,11 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
       { replace: true }
     );
   }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    setLinkStrategyId("");
+    setLinkStrategyMessage(null);
+  }, [selected?.id]);
 
   const [showAdd, setShowAdd] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -463,6 +472,19 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
       else next.add(indicatorId);
       return next;
     });
+  }
+
+  function addSelectedSignalToStrategy() {
+    if (!selected || linkStrategyId === "") return;
+    const sid = linkStrategyId;
+    const current = loadStrategyIndicatorIds(dataMode, sid);
+    if (current.includes(selected.id)) {
+      setLinkStrategyMessage("This signal is already on that strategy.");
+      return;
+    }
+    saveStrategyIndicatorIds(dataMode, sid, [...current, selected.id]);
+    const label = strategies.find((s) => s.id === sid)?.name ?? "strategy";
+    setLinkStrategyMessage(`Added to “${label}”. Open Strategies → Signals to reorder or remove.`);
   }
 
   async function fileToDataUrl(file: File): Promise<string> {
@@ -1320,6 +1342,88 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   <div style={{ color: "var(--text-secondary)", lineHeight: 1.7, fontSize: "14px", whiteSpace: "pre-wrap" }}>
                     {selected.description || "—"}
+                  </div>
+
+                  <div
+                    style={{
+                      border: "1px solid color-mix(in srgb, var(--warning) 38%, var(--border-color))",
+                      borderRadius: 12,
+                      padding: 12,
+                      background: "color-mix(in srgb, var(--warning) 8%, var(--bg-secondary))",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                      <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                      <div style={{ fontSize: 12, fontWeight: 800, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Link to strategy</div>
+                    </div>
+                    <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-primary)", lineHeight: 1.45 }}>
+                      Add this signal to a strategy&apos;s list (same as <strong>Select signals for this strategy</strong> on the{" "}
+                      <Link to="/strategies" style={{ color: "var(--accent)", fontWeight: 700 }}>
+                        Strategies
+                      </Link>{" "}
+                      page).
+                    </p>
+                    {strategies.length === 0 ? (
+                      <p style={{ margin: 0, fontSize: 13, color: "var(--text-secondary)" }}>
+                        No strategies yet. Create one on the{" "}
+                        <Link to="/strategies" style={{ color: "var(--accent)", fontWeight: 700 }}>
+                          Strategies
+                        </Link>{" "}
+                        page.
+                      </p>
+                    ) : (
+                      <>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                          <select
+                            value={linkStrategyId === "" ? "" : String(linkStrategyId)}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setLinkStrategyId(v === "" ? "" : Number(v));
+                              setLinkStrategyMessage(null);
+                            }}
+                            style={{
+                              flex: "1 1 220px",
+                              minWidth: 180,
+                              padding: "10px 12px",
+                              background: "var(--bg-primary)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: 10,
+                              color: "var(--text-primary)",
+                              fontSize: 13,
+                              outline: "none",
+                            }}
+                          >
+                            <option value="">Choose a strategy…</option>
+                            {strategies.map((s) => (
+                              <option key={s.id} value={String(s.id)}>
+                                {s.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            disabled={linkStrategyId === ""}
+                            onClick={addSelectedSignalToStrategy}
+                            style={{
+                              padding: "10px 14px",
+                              borderRadius: 10,
+                              border: "none",
+                              background: linkStrategyId === "" ? "var(--bg-tertiary)" : "var(--accent)",
+                              color: linkStrategyId === "" ? "var(--text-secondary)" : "white",
+                              cursor: linkStrategyId === "" ? "not-allowed" : "pointer",
+                              fontSize: 13,
+                              fontWeight: 750,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            Add to strategy
+                          </button>
+                        </div>
+                        {linkStrategyMessage ? (
+                          <p style={{ margin: "10px 0 0", fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.45 }}>{linkStrategyMessage}</p>
+                        ) : null}
+                      </>
+                    )}
                   </div>
 
                   {selected.kind === "custom" && (
