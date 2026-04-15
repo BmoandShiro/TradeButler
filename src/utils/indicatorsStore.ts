@@ -335,20 +335,65 @@ function pointsToPath(points: Array<[number, number]>): string {
     .join(" ");
 }
 
-function makeIndicatorExampleImageForId(id: string, abbreviation: string, accentColor: string): string {
+function escapeXml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** Built-in pattern signals: 512×288 neutral chart + caption (matches Signals page titles). */
+const BUILTIN_PATTERN_THUMBNAIL_IDS = new Set<string>([
+  "sfp",
+  "fvg",
+  "divergence",
+  "harmonics",
+  "ascending_triangle",
+  "bearish_symmetric_triangle",
+  "bullish_symmetric_triangle",
+  "cup_and_handle",
+  "descending_triangle",
+  "falling_wedge",
+  "rising_wedge",
+  "flag",
+  "pennant",
+  "head_and_shoulders_top",
+  "inverted_head_and_shoulders",
+  "double_top",
+  "double_bottom",
+  "broadening_triangle_wedge",
+  "descending_broadening_wedge",
+  "right_angled_broadening_wedge",
+  "three_drive_pattern",
+  "quad_theory",
+  "triple_bottom",
+  "rounding_bottom",
+  "doji",
+  "hammer",
+  "hanging_man",
+  "shooting_star",
+  "bullish_engulfing",
+  "bearish_engulfing",
+  "morning_star",
+  "evening_star",
+  "bullish_marubozu",
+  "bearish_marubozu",
+]);
+
+function makeIndicatorExampleImageForId(id: string, abbreviation: string, accentColor: string, displayName?: string): string {
   const bg = "rgba(255,255,255,0.06)";
   const border = "rgba(255,255,255,0.22)";
   const grid = "rgba(255,255,255,0.10)";
-  // Keep the thumbnail purely visual (no text), but still vary it per indicator.
-  const dotR = 5.8 + (hashString(abbreviation) % 30) / 10; // 5.8..8.7
-  const dotOpacity = 0.14 + (hashString(abbreviation + "_o") % 20) / 100; // 0.14..0.33
-  const w = 360;
-  const h = 200;
-  const pad = 18;
-  const innerX = pad + 8;
+  const gridPattern = "rgba(255,255,255,0.08)";
+  const dotR = 5.8 + (hashString(abbreviation) % 30) / 10;
+  const dotOpacity = 0.14 + (hashString(abbreviation + "_o") % 20) / 100;
+
+  const isPattern = BUILTIN_PATTERN_THUMBNAIL_IDS.has(id);
+  const w = isPattern ? 512 : 360;
+  const h = isPattern ? 288 : 200;
+  const pad = isPattern ? 14 : 18;
+  const captionH = isPattern ? 26 : 0;
+  const innerX = pad + (isPattern ? 6 : 8);
   const innerY = pad + 6;
-  const innerW = w - pad * 2 - 8;
-  const innerH = h - pad * 2 - 10;
+  const innerW = w - pad * 2 - (isPattern ? 12 : 8);
+  const innerH = h - pad * 2 - 10 - captionH;
 
   const x0 = innerX;
   const x1 = innerX + innerW;
@@ -356,9 +401,19 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
   const y1 = innerY + innerH;
 
   const accent = accentColor;
+  const captionText = escapeXml((displayName ?? abbreviation).trim() || abbreviation);
 
-  // Shared scaffolding: gradient + framed chart area.
-  const header = `
+  const header = isPattern
+    ? `
+    <rect x="0" y="0" width="${w}" height="${h}" rx="14" fill="#1a1d24"/>
+    <rect x="${pad}" y="${pad}" width="${w - pad * 2}" height="${h - pad * 2}" rx="11" fill="rgba(255,255,255,0.035)" stroke="rgba(255,255,255,0.11)"/>
+    <g opacity="1">
+      <path d="M ${x0} ${y0} L ${x1} ${y0}" stroke="${gridPattern}" stroke-width="1"/>
+      <path d="M ${x0} ${y0 + innerH * 0.5} L ${x1} ${y0 + innerH * 0.5}" stroke="${gridPattern}" stroke-width="1"/>
+      <path d="M ${x0} ${y1} L ${x1} ${y1}" stroke="${gridPattern}" stroke-width="1"/>
+    </g>
+  `
+    : `
     <defs>
       <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
         <stop offset="0" stop-color="${accent}" stop-opacity="0.95"/>
@@ -829,6 +884,30 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
       )}" stroke="rgba(255,255,255,0.16)" stroke-width="1" />
         <circle cx="${right.toFixed(2)}" cy="${y1b.toFixed(2)}" r="4.2" fill="${accent}" opacity="0.90"/>
         <circle cx="${right.toFixed(2)}" cy="${y2b.toFixed(2)}" r="4.2" fill="rgba(255,255,255,0.75)" opacity="0.65"/>
+      `;
+      break;
+    }
+    case "harmonics": {
+      // Generic XABCD harmonic swing + PRZ (Gartley/Bat family stand-in).
+      const x = x0 + innerW * 0.10;
+      const xa = x0 + innerW * 0.26;
+      const xb = x0 + innerW * 0.42;
+      const xc = x0 + innerW * 0.58;
+      const xd = x0 + innerW * 0.82;
+      const yx = mapY(0.56);
+      const ya = mapY(0.38);
+      const yb = mapY(0.64);
+      const yc = mapY(0.36);
+      const yd = mapY(0.58);
+      const przLeft = xd - innerW * 0.1;
+      const przTop = Math.min(yc, yd) - innerH * 0.05;
+      const przH = Math.abs(yd - yc) + innerH * 0.14;
+      glyph = `
+        <path d="M ${x.toFixed(2)} ${yx.toFixed(2)} L ${xa.toFixed(2)} ${ya.toFixed(2)} L ${xb.toFixed(2)} ${yb.toFixed(2)} L ${xc.toFixed(2)} ${yc.toFixed(2)} L ${xd.toFixed(2)} ${yd.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <rect x="${przLeft.toFixed(2)}" y="${przTop.toFixed(2)}" width="${(innerW * 0.12).toFixed(2)}" height="${przH.toFixed(
+          2
+        )}" rx="6" fill="${accent}" opacity="0.12" stroke="rgba(255,255,255,0.22)"/>
       `;
       break;
     }
@@ -1668,10 +1747,16 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
     }
   }
 
+  const caption =
+    isPattern
+      ? `<text x="${(w / 2).toFixed(2)}" y="${(h - 8).toFixed(2)}" text-anchor="middle" fill="rgba(255,255,255,0.9)" font-size="12" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">${captionText}</text>`
+      : "";
+
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
       ${header}
       <g>${glyph}</g>
+      ${caption}
     </svg>
   `;
 
@@ -1694,7 +1779,7 @@ function withLibraryMeta(
   const kind = ind.kind ?? "builtin";
   const accentColor = ind.accentColor ?? (kind === "custom" ? CUSTOM_ACCENT_COLOR : getBuiltinAccentColor(ind.id));
   const exampleImage =
-    ind.exampleImage ?? makeIndicatorExampleImageForId(ind.id, ind.abbreviation, accentColor);
+    ind.exampleImage ?? makeIndicatorExampleImageForId(ind.id, ind.abbreviation, accentColor, ind.name);
   const category =
     ind.category ??
     (kind === "custom"
@@ -2252,7 +2337,7 @@ export function addIndicator(input: Omit<Indicator, "id" | "createdAt">): Indica
     code: input.code,
     capturesTimeframes: input.capturesTimeframes === true,
     accentColor,
-    exampleImage: providedImage ?? makeIndicatorExampleImageForId(indicatorId, abbreviation, accentColor),
+    exampleImage: providedImage ?? makeIndicatorExampleImageForId(indicatorId, abbreviation, accentColor, input.name.trim()),
     category: input.category ?? ("Custom" as const),
     otherSignals: Array.isArray(input.otherSignals) ? input.otherSignals : [],
   };
@@ -2290,7 +2375,7 @@ export function getPrebuiltIndicatorThumbnails(abbreviation: string, accentColor
     id: i.id,
     name: i.name,
     abbreviation: i.abbreviation,
-    image: makeIndicatorExampleImageForId(i.id, abbr, accentColor),
+    image: makeIndicatorExampleImageForId(i.id, abbr, accentColor, i.name),
   }));
 }
 
