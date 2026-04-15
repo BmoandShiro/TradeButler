@@ -2671,6 +2671,9 @@ export default function Strategies() {
   >("all");
   /** When true, signal picker list only shows starred favorites (Signals page). */
   const [signalSelectorFavoritesOnly, setSignalSelectorFavoritesOnly] = useState(false);
+  /** Confirm before removing a signal from the strategy list (draft until Save). */
+  const [pendingStrategySignalRemove, setPendingStrategySignalRemove] = useState<null | { indicatorId: string; label: string }>(null);
+  const canEditStrategySignals = isEditing || isCreating;
   const [presetModal, setPresetModal] = useState<null | "add" | number>(null);
   const [presetForm, setPresetForm] = useState<{ name: string; formula_expression: string }>({ name: "", formula_expression: "" });
   /** When true, preset modal was opened from Add/Edit metric; after saving new preset we select it in the metric form. */
@@ -3259,6 +3262,10 @@ export default function Strategies() {
     if (isEditing || isCreating) return;
     setStrategyIndicatorIds(loadStrategyIndicatorIds(dataMode, selectedStrategy));
   }, [selectedStrategy, dataMode, isEditing, isCreating, strategies]);
+
+  useEffect(() => {
+    if (!isEditing && !isCreating) setIndicatorDropdownOpen(false);
+  }, [isEditing, isCreating]);
 
   // When viewing a strategy (not editing/creating), load text rules so the Rules tab can display them.
   useEffect(() => {
@@ -4072,6 +4079,19 @@ export default function Strategies() {
   };
 
   const handleChecklistItemDeleteCancel = () => setPendingChecklistItemDelete(null);
+
+  const handleStrategySignalRemoveCancel = () => setPendingStrategySignalRemove(null);
+
+  const confirmRemoveStrategySignal = () => {
+    const pending = pendingStrategySignalRemove;
+    if (!pending) return;
+    setPendingStrategySignalRemove(null);
+    setStrategyIndicatorIds((prev) => prev.filter((id) => id !== pending.indicatorId));
+  };
+
+  const requestRemoveStrategySignal = (indicatorId: string, label: string) => {
+    setPendingStrategySignalRemove({ indicatorId, label: label.trim() || indicatorId });
+  };
 
   const confirmDeleteChecklistItem = async () => {
     const pending = pendingChecklistItemDelete;
@@ -5166,6 +5186,9 @@ export default function Strategies() {
         saveStrategyRuleTexts(dataMode, newStrategyId, "entry", entryRuleTexts);
         saveStrategyRuleTexts(dataMode, newStrategyId, "takeProfit", takeProfitRuleTexts);
         saveStrategyCustomRuleSets(dataMode, newStrategyId, customRuleSets);
+        if (strategyIndicatorIds.length > 0) {
+          saveStrategyIndicatorIds(dataMode, newStrategyId, strategyIndicatorIds);
+        }
         return;
       }
       // Create the strategy - returns just the ID
@@ -5415,6 +5438,8 @@ export default function Strategies() {
     setEditingRuleText("");
     setIndicatorSearch("");
     setSignalSelectorKindFilter("all");
+    setSignalSelectorFavoritesOnly(false);
+    setPendingStrategySignalRemove(null);
     setRulesEditHistory([]);
   };
 
@@ -5477,6 +5502,8 @@ export default function Strategies() {
       setIndicatorDropdownOpen(false);
       setIndicatorSearch("");
       setSignalSelectorKindFilter("all");
+      setSignalSelectorFavoritesOnly(false);
+      setPendingStrategySignalRemove(null);
     }
   };
 
@@ -5648,6 +5675,7 @@ export default function Strategies() {
           color: editingFormData.color ?? null,
           author: editingFormData.author?.trim() || null,
         });
+        saveStrategyIndicatorIds(dataMode, selectedStrategyData.id, strategyIndicatorIds);
         setIsEditing(false);
         setEditHistory([]);
         setRulesEditHistory([]);
@@ -5697,7 +5725,9 @@ export default function Strategies() {
         color: editingFormData.color || null,
         author: editingFormData.author?.trim() || null,
       });
-      
+
+      saveStrategyIndicatorIds(dataMode, selectedStrategyData.id, strategyIndicatorIds);
+
       // Save checklist changes if any
       if (selectedStrategyData.id && editingChecklists.has(selectedStrategyData.id)) {
         await handleSaveChecklists(selectedStrategyData.id);
@@ -5798,6 +5828,7 @@ export default function Strategies() {
   const handleCancelEdit = () => {
     isSavingOrCancelingRef.current = true; // Prevent state restoration during cancel
     clearWorkInProgress(); // Clear work in progress when canceling
+    setPendingStrategySignalRemove(null);
     setIsEditing(false);
     if (selectedStrategyData) {
       // Revert to original values from database
@@ -6880,7 +6911,12 @@ export default function Strategies() {
                       </div>
                       {isCreating && (
                         <div style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
-                          Saved after strategy is created
+                          Saved when you create the strategy
+                        </div>
+                      )}
+                      {!canEditStrategySignals && !isCreating && (
+                        <div style={{ color: "var(--text-secondary)", fontSize: "12px", maxWidth: 420, lineHeight: 1.4 }}>
+                          Edit the strategy to add or remove signals. Nothing is saved until you click Save.
                         </div>
                       )}
                     </div>
@@ -6888,7 +6924,8 @@ export default function Strategies() {
                     <div style={{ position: "relative" }}>
                       <button
                         type="button"
-                        onClick={() => setIndicatorDropdownOpen((o) => !o)}
+                        disabled={!canEditStrategySignals}
+                        onClick={() => canEditStrategySignals && setIndicatorDropdownOpen((o) => !o)}
                         style={{
                           width: "100%",
                           display: "flex",
@@ -6900,7 +6937,8 @@ export default function Strategies() {
                           border: "1px solid var(--border-color)",
                           borderRadius: "10px",
                           color: "var(--text-primary)",
-                          cursor: "pointer",
+                          cursor: canEditStrategySignals ? "pointer" : "not-allowed",
+                          opacity: canEditStrategySignals ? 1 : 0.72,
                           fontSize: "13px",
                           fontWeight: 650,
                         }}
@@ -7029,7 +7067,6 @@ export default function Strategies() {
                                   </div>
                                 );
                               }
-                              const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
                               return shown.map((i) => {
                                 const checked = strategyIndicatorIds.includes(i.id);
                                 const kindLabel =
@@ -7044,12 +7081,10 @@ export default function Strategies() {
                                       type="checkbox"
                                       checked={checked}
                                       onChange={(e) => {
-                                        const next = e.target.checked
-                                          ? [...strategyIndicatorIds, i.id]
-                                          : strategyIndicatorIds.filter((id) => id !== i.id);
-                                        setStrategyIndicatorIds(next);
-                                        if (!isCreating && strategyId > 0) {
-                                          saveStrategyIndicatorIds(dataMode, strategyId, next);
+                                        if (e.target.checked) {
+                                          setStrategyIndicatorIds((prev) => (prev.includes(i.id) ? prev : [...prev, i.id]));
+                                        } else {
+                                          requestRemoveStrategySignal(i.id, i.name);
                                         }
                                       }}
                                       style={{ width: "16px", height: "16px", cursor: "pointer" }}
@@ -7105,54 +7140,68 @@ export default function Strategies() {
                       )}
                     </div>
 
-                    {(() => {
+                                       {(() => {
                       const all = loadIndicators();
                       const selected = all.filter((i) => strategyIndicatorIds.includes(i.id));
                       if (selected.length === 0) return null;
-                      const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+                      const chipStyle = {
+                        display: "inline-flex" as const,
+                        alignItems: "center" as const,
+                        gap: "8px",
+                        padding: "6px 10px",
+                        borderRadius: "999px",
+                        border: "1px solid var(--border-color)",
+                        background: "var(--bg-tertiary)",
+                        color: "var(--text-primary)",
+                        fontSize: "12px",
+                        fontWeight: 650,
+                      };
                       return (
                         <div style={{ marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                          {selected.map((i) => (
-                            <button
-                              type="button"
-                              key={i.id}
-                              onClick={() => {
-                                const next = strategyIndicatorIds.filter((id) => id !== i.id);
-                                setStrategyIndicatorIds(next);
-                                if (!isCreating && strategyId > 0) saveStrategyIndicatorIds(dataMode, strategyId, next);
-                              }}
-                              title="Remove"
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "8px",
-                                padding: "6px 10px",
-                                borderRadius: "999px",
-                                border: "1px solid var(--border-color)",
-                                background: "var(--bg-tertiary)",
-                                color: "var(--text-primary)",
-                                cursor: "pointer",
-                                fontSize: "12px",
-                                fontWeight: 650,
-                              }}
-                            >
-                              <span
-                                style={{
-                                  fontSize: "11px",
-                                  fontWeight: 800,
-                                  padding: "2px 7px",
-                                  borderRadius: "999px",
-                                  background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
-                                  border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
-                                  color: i.accentColor ?? "#F59E0B",
-                                }}
+                          {selected.map((i) =>
+                            canEditStrategySignals ? (
+                              <button
+                                type="button"
+                                key={i.id}
+                                onClick={() => requestRemoveStrategySignal(i.id, i.name)}
+                                title="Remove from strategy"
+                                style={{ ...chipStyle, cursor: "pointer" }}
                               >
-                                {i.abbreviation}
-                              </span>
-                              <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
-                              <span style={{ color: "var(--text-secondary)", fontWeight: 900 }}>×</span>
-                            </button>
-                          ))}
+                                <span
+                                  style={{
+                                    fontSize: "11px",
+                                    fontWeight: 800,
+                                    padding: "2px 7px",
+                                    borderRadius: "999px",
+                                    background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
+                                    border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
+                                    color: i.accentColor ?? "#F59E0B",
+                                  }}
+                                >
+                                  {i.abbreviation}
+                                </span>
+                                <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
+                                <span style={{ color: "var(--text-secondary)", fontWeight: 900 }}>×</span>
+                              </button>
+                            ) : (
+                              <div key={i.id} style={{ ...chipStyle, cursor: "default" }}>
+                                <span
+                                  style={{
+                                    fontSize: "11px",
+                                    fontWeight: 800,
+                                    padding: "2px 7px",
+                                    borderRadius: "999px",
+                                    background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
+                                    border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
+                                    color: i.accentColor ?? "#F59E0B",
+                                  }}
+                                >
+                                  {i.abbreviation}
+                                </span>
+                                <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
+                              </div>
+                            )
+                          )}
                         </div>
                       );
                     })()}
@@ -11673,6 +11722,112 @@ export default function Strategies() {
                 }}
               >
                 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingStrategySignalRemove && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={handleStrategySignalRemoveCancel}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "450px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="strategy-signal-remove-title"
+          >
+            <h3
+              id="strategy-signal-remove-title"
+              style={{
+                fontSize: "18px",
+                fontWeight: "600",
+                marginBottom: "12px",
+                color: "var(--warning)",
+              }}
+            >
+              Remove signal from strategy?
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-primary)",
+                marginBottom: "8px",
+                lineHeight: "1.5",
+              }}
+            >
+              Remove <strong>&quot;{pendingStrategySignalRemove.label}&quot;</strong> from this strategy&apos;s signal list?
+            </p>
+            <p
+              style={{
+                fontSize: "13px",
+                color: "var(--text-secondary)",
+                marginBottom: "20px",
+                lineHeight: "1.5",
+              }}
+            >
+              The signal stays in your Signals library. Changes to this list are only saved when you save the strategy.
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                onClick={handleStrategySignalRemoveCancel}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmRemoveStrategySignal}
+                style={{
+                  background: "var(--danger)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Remove
               </button>
             </div>
           </div>

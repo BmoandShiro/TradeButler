@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useState, useRef, useMemo, useCallback, type ReactNode, type CSSProperties } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronUp, Search, LayoutDashboard, GripVertical, Eye, EyeOff, Settings, ListChecks, Scale, Sparkles } from "lucide-react";
+import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronUp, Search, LayoutDashboard, GripVertical, Eye, EyeOff, Settings, ListChecks, Scale, Sparkles, Activity } from "lucide-react";
 import {
   DndContext,
   closestCenter,
@@ -144,6 +144,26 @@ function JournalStrategyConfigureCogButton({ title, onClick, disabled }: { title
     </button>
   );
 }
+
+/** Unified typography for journal section titles (scroll headers, pills, cards, sub-panels). */
+function journalSectionTitleStyle(
+  tone: "accent" | "warning" | "muted",
+  opts?: { size?: "xs" | "sm" | "md" | "lg" }
+): CSSProperties {
+  const size = opts?.size ?? "md";
+  const fontSize =
+    size === "xs" ? "10px" : size === "sm" ? "11px" : size === "lg" ? "13px" : "12px";
+  const color =
+    tone === "accent" ? "var(--accent)" : tone === "warning" ? "var(--warning)" : "var(--text-secondary)";
+  return {
+    fontSize,
+    fontWeight: 700,
+    color,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+  };
+}
+
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 import { sanitizeHtml, normalizeRichTextHtml } from "../utils/sanitizeHtml";
 import {
@@ -601,9 +621,9 @@ export type JournalSectionId =
 /** Core section order (no custom blocks); custom checklist/survey sections are added per-strategy. */
 const CORE_SECTION_ORDER: JournalSectionId[] = [
   "analysis_checklist",
+  "entry_checklist",
   "emotional_state_before",
   "implementation",
-  "entry_checklist",
   "emotional_state_during",
   "take_profit_checklist",
   "emotional_state_after",
@@ -647,9 +667,18 @@ const JOURNAL_SECTION_ORDER_KEY = "tradebutler_journal_section_order";
 const JOURNAL_DEFAULT_STRATEGY_ID_KEY = "tradebutler_journal_default_strategy_id";
 const JOURNAL_DEFAULT_SECTION_ORDER_KEY = "tradebutler_journal_default_section_order";
 const JOURNAL_HIDDEN_SECTION_IDS_KEY = "tradebutler_journal_hidden_section_ids";
-/** Hysteresis for sticky header collapse (wider gap + scroll compensation reduces oscillation). */
+/**
+ * Bump when `CORE_SECTION_ORDER` changes so existing users get a one-time migration:
+ * core sections follow the new default order; `custom:*` / `custom_rules:*` entries stay grouped after core in their prior relative order.
+ */
+const JOURNAL_SECTION_ORDER_SCHEMA_VERSION = 2;
+const JOURNAL_SECTION_ORDER_VERSION_KEY = "tradebutler_journal_section_order_schema_v1";
+/** Legacy minimum collapse threshold when metadata height is not yet measured. */
 const JOURNAL_META_COLLAPSE_SCROLL_PX = 120;
+/** Hysteresis: expand when scrollTop is at or below this (collapsed → expanded). */
 const JOURNAL_META_EXPAND_SCROLL_PX = 12;
+/** Extra scroll allowance past measured metadata height so layout scroll compensation after expand does not immediately re-collapse. */
+const JOURNAL_META_EXPAND_LAYOUT_SLACK_PX = JOURNAL_META_EXPAND_SCROLL_PX + 8;
 
 /** Sortable row for the Reorder sections modal (uses @dnd-kit). */
 function SortableSectionRow({
@@ -874,7 +903,7 @@ function JournalChecklistSideRail({
           <ListChecks size={22} strokeWidth={2.2} aria-hidden />
         </div>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.08em", lineHeight: 1.2 }}>At a glance</div>
+          <div style={{ ...journalSectionTitleStyle("accent", { size: "sm" }), lineHeight: 1.2 }}>At a glance</div>
           <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)", marginTop: 2 }}>{title}</div>
         </div>
       </div>
@@ -1144,8 +1173,12 @@ export default function Journal() {
       try {
         const parsed = JSON.parse(raw) as string[];
         if (Array.isArray(parsed) && parsed.length > 0) {
-                        const normalized = parsed.map((id) => (id === "mantra_checklist" ? "custom:daily_mantra" : id));
-                        const valid = normalized.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:") || id.startsWith("custom_rules:")));
+          const normalized = parsed.map((id) => (id === "mantra_checklist" ? "custom:daily_mantra" : id));
+          const valid = normalized.filter(
+            (id) =>
+              id !== "custom_checklists_surveys" &&
+              (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:") || id.startsWith("custom_rules:"))
+          );
           const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
           return [...valid, ...missing];
         }
@@ -1154,10 +1187,36 @@ export default function Journal() {
       }
       return null;
     };
+
+    let storedSchemaVersion = 0;
+    try {
+      const v = localStorage.getItem(JOURNAL_SECTION_ORDER_VERSION_KEY);
+      if (v != null) storedSchemaVersion = parseInt(v, 10) || 0;
+    } catch {
+      /* ignore */
+    }
+
     const saved = parseOrder(localStorage.getItem(JOURNAL_SECTION_ORDER_KEY));
-    if (saved) return saved;
     const defaultOrder = parseOrder(localStorage.getItem(JOURNAL_DEFAULT_SECTION_ORDER_KEY));
-    return defaultOrder ?? [...CORE_SECTION_ORDER];
+
+    if (storedSchemaVersion < JOURNAL_SECTION_ORDER_SCHEMA_VERSION) {
+      const base = saved ?? defaultOrder ?? [...CORE_SECTION_ORDER];
+      const coresInOrder = CORE_SECTION_ORDER.filter((id) => base.includes(id));
+      const customs = base.filter((id) => id.startsWith("custom:") || id.startsWith("custom_rules:"));
+      const missing = CORE_SECTION_ORDER.filter((id) => !base.includes(id));
+      const migrated = [...coresInOrder, ...customs, ...missing];
+      try {
+        localStorage.setItem(JOURNAL_SECTION_ORDER_VERSION_KEY, String(JOURNAL_SECTION_ORDER_SCHEMA_VERSION));
+        localStorage.setItem(JOURNAL_SECTION_ORDER_KEY, JSON.stringify(migrated));
+      } catch {
+        /* ignore */
+      }
+      return migrated;
+    }
+
+    if (saved) return saved;
+    if (defaultOrder) return defaultOrder;
+    return [...CORE_SECTION_ORDER];
   });
   const [hiddenSectionIds, setHiddenSectionIds] = useState<string[]>(() => {
     try {
@@ -1724,29 +1783,39 @@ export default function Journal() {
     }
   }, [journalEntryMetaCollapsed, isTabContentMaximized]);
 
-  const handleJournalBodyScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    if (performance.now() < ignoreJournalMetaScrollUntilRef.current) return;
-    const el = e.currentTarget;
-    const t = el.scrollTop;
-    setJournalEntryMetaCollapsed((prev) => {
-      let next: boolean;
-      if (prev) {
-        next = t > JOURNAL_META_EXPAND_SCROLL_PX;
-      } else {
-        next = t > JOURNAL_META_COLLAPSE_SCROLL_PX;
-      }
-      if (!prev && next && journalMetaFormOuterRef.current) {
-        journalMetaCollapseHeightRef.current = journalMetaFormOuterRef.current.offsetHeight;
-        journalMetaScrollTopBeforeCollapseRef.current = t;
-      }
-      if (prev && !next) {
-        journalMetaScrollTopBeforeExpandRef.current = t;
-        journalMetaExpandPendingRef.current = true;
-      }
-      return next;
-    });
-    if (t <= JOURNAL_META_EXPAND_SCROLL_PX + 8) setJournalEntryMetaDropdownOpen(false);
-  }, []);
+  const handleJournalBodyScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      if (performance.now() < ignoreJournalMetaScrollUntilRef.current) return;
+      const el = e.currentTarget;
+      const t = el.scrollTop;
+
+      const outerH = journalMetaFormOuterRef.current?.offsetHeight ?? 0;
+      const metaBlockH =
+        outerH > 0
+          ? outerH
+          : journalMetaCollapseHeightRef.current > 0
+            ? journalMetaCollapseHeightRef.current
+            : JOURNAL_META_COLLAPSE_SCROLL_PX;
+      const stayExpandedMaxScroll = metaBlockH + JOURNAL_META_EXPAND_LAYOUT_SLACK_PX;
+      const shouldShowFullMeta = t <= stayExpandedMaxScroll;
+
+      setJournalEntryMetaCollapsed((prev) => {
+        const next = !shouldShowFullMeta;
+        if (!prev && next && journalMetaFormOuterRef.current) {
+          journalMetaCollapseHeightRef.current = journalMetaFormOuterRef.current.offsetHeight;
+          journalMetaScrollTopBeforeCollapseRef.current = t;
+        }
+        if (prev && !next) {
+          journalMetaScrollTopBeforeExpandRef.current = t;
+          journalMetaExpandPendingRef.current = true;
+        }
+        return next;
+      });
+
+      if (shouldShowFullMeta) setJournalEntryMetaDropdownOpen(false);
+    },
+    []
+  );
 
   // Drag-and-drop for Reorder sections modal (handler is defined after effectiveSectionOrder)
   const sectionOrderSensors = useSensors(
@@ -4916,9 +4985,7 @@ export default function Journal() {
           }}
         >
           <div style={{ flex: "1 1 240px", minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              Patterns
-            </div>
+            <div style={journalSectionTitleStyle("muted")}>Patterns</div>
             <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>Select which patterns are present in this trade.</div>
           </div>
 
@@ -5039,9 +5106,7 @@ export default function Journal() {
               {[{ label: "Technical Patterns", items: filteredTechnical }, { label: "Candlesticks", items: filteredCandlesticks }].map(
                 ({ label, items }) => (
                   <div key={label} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                      {label}
-                    </div>
+                    <div style={journalSectionTitleStyle("muted")}>{label}</div>
                     {items.length === 0 ? (
                       <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>None available.</div>
                     ) : (
@@ -5233,34 +5298,28 @@ export default function Journal() {
           pointerEvents: isReadOnlySignals ? "none" : "auto",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
-          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Signals ({phaseLabel})
-          </div>
-              {canEditIndicators ? (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
-                  <button
-                    type="button"
-                    onClick={() => setJournalSignalsSettingsModalPhase(phase)}
-                    style={{
-                      padding: "6px 10px",
-                      borderRadius: 999,
-                      border: "1px solid var(--border-color)",
-                      background: "var(--bg-tertiary)",
-                      color: "var(--text-primary)",
-                      cursor: "pointer",
-                      fontSize: 12,
-                      fontWeight: 800,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 8,
-                    }}
-                    title="Configure signals (order & display affect this strategy for all journal entries)"
-                  >
-                    <Settings size={16} />
-                  </button>
-                </div>
-              ) : null}
+        <div style={{ marginBottom: "10px" }}>
+          {canEditIndicators ? (
+            <JournalStrategySectionTitlePill>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                <Activity size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                <span style={journalSectionTitleStyle("accent")}>
+                  Signals ({phaseLabel})
+                </span>
+              </div>
+              <JournalStrategyConfigureCogButton
+                title="Configure signals (order & display affect this strategy for all journal entries)"
+                onClick={() => setJournalSignalsSettingsModalPhase(phase)}
+              />
+            </JournalStrategySectionTitlePill>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <Activity size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+              <span style={journalSectionTitleStyle("accent")}>
+                Signals ({phaseLabel})
+              </span>
+            </div>
+          )}
         </div>
 
         <TradePatternsPicker
@@ -5273,9 +5332,7 @@ export default function Journal() {
 
         <div style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "nowrap" }}>
           <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              Indicators
-            </div>
+            <div style={journalSectionTitleStyle("muted")}>Indicators</div>
             <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
               Select one or more timeframes to enter indicator values (optional).
             </div>
@@ -5441,9 +5498,7 @@ export default function Journal() {
                         key={`${entryId}:${tradeIndex}:${phase}:${ind.id}:${tf}`}
                         style={{ display: "flex", flexDirection: "column", gap: "6px", minWidth: 0, width: "100%" }}
                       >
-                        <div style={{ fontSize: "10px", color: "var(--text-secondary)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", paddingLeft: "2px" }}>
-                          {tf}
-                        </div>
+                        <div style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), paddingLeft: "2px" }}>{tf}</div>
                         <div style={{ display: "flex", flexDirection: "column", gap: "6px", width: "100%", minWidth: 0 }}>
                           {(ind.id === "ema" || ind.id === "ma") ? (
                             (() => {
@@ -6220,7 +6275,7 @@ export default function Journal() {
       {/* Consolidated top bar: Date, Title, Strategy, Trade selector */}
       <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)", display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "flex-end" }}>
         <div style={{ flex: "0 0 110px", minWidth: "90px" }}>
-          <label style={{ display: "block", marginBottom: "2px", fontSize: "11px", fontWeight: "500", color: "var(--text-secondary)" }}>Date</label>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), display: "block", marginBottom: "2px" }}>Date</label>
           <input
             type="date"
             value={entryFormData.date}
@@ -6229,7 +6284,7 @@ export default function Journal() {
           />
         </div>
         <div style={{ flex: "1 1 160px", minWidth: "120px" }}>
-          <label style={{ display: "block", marginBottom: "2px", fontSize: "11px", fontWeight: "500", color: "var(--text-secondary)" }}>Title</label>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), display: "block", marginBottom: "2px" }}>Title</label>
           <input
             ref={titleInputRef}
             type="text"
@@ -6247,7 +6302,7 @@ export default function Journal() {
           />
         </div>
         <div style={{ flex: "0 0 140px", minWidth: "100px" }} ref={strategyDropdownRef}>
-          <label style={{ display: "block", marginBottom: "2px", fontSize: "11px", fontWeight: "500", color: "var(--text-secondary)" }}>Strategy</label>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), display: "block", marginBottom: "2px" }}>Strategy</label>
           <div style={{ position: "relative" }}>
             <button
               type="button"
@@ -6431,12 +6486,12 @@ export default function Journal() {
       {currentTrade && (
         <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)", display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "flex-end" }}>
         <div style={{ minWidth: "80px", flex: "1 1 80px" }}>
-          <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Symbol</label>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>Symbol</label>
           <input type="text" list={`symbol-list-${activeTradeIndex}`} value={currentTrade.symbol} onChange={(e) => updateTradeFormData(activeTradeIndex, "symbol", e.target.value)} placeholder="Symbol" style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }} />
           <datalist id={`symbol-list-${activeTradeIndex}`}>{availableSymbols.map((sym) => <option key={sym} value={sym} />)}</datalist>
         </div>
         <div style={{ minWidth: "70px", flex: "0 0 70px" }}>
-          <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Position</label>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>Position</label>
           <select value={currentTrade.position} onChange={(e) => updateTradeFormData(activeTradeIndex, "position", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
             <option value="">Pos.</option>
             <option value="Long">Long</option>
@@ -6446,7 +6501,7 @@ export default function Journal() {
           </select>
         </div>
         <div style={{ minWidth: "75px", flex: "0 0 75px" }}>
-          <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>TF</label>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>TF</label>
           <select value={currentTrade.timeframe} onChange={(e) => updateTradeFormData(activeTradeIndex, "timeframe", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
             <option value="">TF</option>
             <option value="1m">1m</option>
@@ -6457,7 +6512,7 @@ export default function Journal() {
           </select>
         </div>
         <div style={{ minWidth: "60px", flex: "0 0 60px" }}>
-          <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Entry</label>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>Entry</label>
           <select value={currentTrade.entry_type} onChange={(e) => updateTradeFormData(activeTradeIndex, "entry_type", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
             <option value="">—</option>
             <option value="Market">Market</option>
@@ -6465,7 +6520,7 @@ export default function Journal() {
           </select>
         </div>
         <div style={{ minWidth: "60px", flex: "0 0 60px" }}>
-          <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Exit</label>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>Exit</label>
           <select value={currentTrade.exit_type} onChange={(e) => updateTradeFormData(activeTradeIndex, "exit_type", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
             <option value="">—</option>
             <option value="Market">Market</option>
@@ -6473,7 +6528,7 @@ export default function Journal() {
           </select>
         </div>
         <div style={{ minWidth: "70px", flex: "0 0 70px" }}>
-          <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Outcome</label>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>Outcome</label>
           <select value={currentTrade.outcome} onChange={(e) => updateTradeFormData(activeTradeIndex, "outcome", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
             <option value="None">None</option>
             <option value="Positive">+</option>
@@ -6482,7 +6537,7 @@ export default function Journal() {
           </select>
         </div>
         <div style={{ minWidth: "55px", flex: "0 0 55px" }}>
-          <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>R</label>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>R</label>
           <input type="text" inputMode="decimal" value={(currentTrade as { r_multiple?: string }).r_multiple ?? ""} onChange={(e) => updateTradeFormData(activeTradeIndex, "r_multiple", e.target.value)} placeholder="R" style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }} />
         </div>
         {((isEditing && currentTrade.id != null) || selectedEntry?.id) && (
@@ -6645,7 +6700,7 @@ export default function Journal() {
                   <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 260, flex: "1 1 520px", alignSelf: "stretch" }}>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
                       <div style={{ flex: "1 1 220px", minWidth: 200, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
-                        <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
+                        <label style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), display: "block", marginBottom: 6 }}>
                           Date
                         </label>
                         <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
@@ -6654,7 +6709,7 @@ export default function Journal() {
                       </div>
 
                       <div style={{ flex: "2 1 260px", minWidth: 240, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
-                        <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
+                        <label style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), display: "block", marginBottom: 6 }}>
                           Title
                         </label>
                         <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={selectedEntry.title}>
@@ -6664,7 +6719,7 @@ export default function Journal() {
 
                       {selectedEntry.strategy_id && (
                         <div style={{ flex: "1 1 220px", minWidth: 200, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
-                          <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
+                          <label style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), display: "block", marginBottom: 6 }}>
                             Strategy
                           </label>
                           <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={strategies.find(s => s.id === selectedEntry.strategy_id)?.name || "Unknown"}>
@@ -6691,10 +6746,10 @@ export default function Journal() {
                         <h3
                           style={{
                             fontSize: "13px",
-                            fontWeight: "900",
+                            fontWeight: 900,
                             margin: 0,
                             color: "var(--text-primary)",
-                            letterSpacing: "0.04em",
+                            letterSpacing: "0.06em",
                             textTransform: "uppercase",
                             whiteSpace: "nowrap",
                           }}
@@ -6761,16 +6816,16 @@ export default function Journal() {
                       }}
                     >
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexShrink: 0 }}>
-                        <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Overview</span>
+                        <span style={journalSectionTitleStyle("muted")}>Overview</span>
                         <span style={{ fontSize: 12, fontWeight: 700, color: "var(--accent)" }}>{selectedEntry.strategy_id ? "Strategy-backed" : "Unassigned"}</span>
                       </div>
                       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", flex: 1, alignContent: "stretch", minHeight: 0 }}>
                         <div style={{ flex: "1 1 120px", minWidth: 120, padding: "10px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: 8, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Trades</div>
+                          <div style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), marginBottom: 4 }}>Trades</div>
                           <div style={{ fontSize: 16, fontWeight: 900, color: "var(--text-primary)" }}>{selectedTrades.length}</div>
                         </div>
                         <div style={{ flex: "1 1 120px", minWidth: 120, padding: "10px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: 8, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Emotions</div>
+                          <div style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), marginBottom: 4 }}>Emotions</div>
                           <div style={{ fontSize: 16, fontWeight: 900, color: "var(--text-primary)" }}>{viewEntryEmotionalStates.length > 0 ? groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).length : 0}</div>
                         </div>
                       </div>
@@ -6805,7 +6860,7 @@ export default function Journal() {
                         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "10px", marginBottom: "14px" }}>
                           {trade.symbol && (
                             <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                              <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "4px", display: "block" }}>
                                 Symbol
                               </label>
                               <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
@@ -6815,7 +6870,7 @@ export default function Journal() {
                           )}
                           {trade.position && (
                             <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                              <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "4px", display: "block" }}>
                                 Position
                               </label>
                               <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
@@ -6825,7 +6880,7 @@ export default function Journal() {
                           )}
                           {trade.timeframe && (
                             <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                              <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "4px", display: "block" }}>
                                 Trade Timeframe
                               </label>
                               <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
@@ -6835,7 +6890,7 @@ export default function Journal() {
                           )}
                           {isFocused && trade.entry_type && (
                             <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                              <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "4px", display: "block" }}>
                                 Entry Type
                               </label>
                               <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
@@ -6845,7 +6900,7 @@ export default function Journal() {
                           )}
                           {isFocused && trade.exit_type && (
                             <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                              <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "4px", display: "block" }}>
                                 Exit Type
                               </label>
                               <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
@@ -6855,7 +6910,7 @@ export default function Journal() {
                           )}
                           {trade.outcome != null && (
                             <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                              <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "4px", display: "block" }}>
                                 Outcome
                               </label>
                               <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
@@ -6866,7 +6921,7 @@ export default function Journal() {
                         </div>
                         {trade.trade != null && (
                           <div style={{ marginBottom: isFocused ? "24px" : "14px", padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                            <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px", display: "block" }}>
+                            <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "8px", display: "block" }}>
                               Implementation
                             </label>
                             {isFocused ? (
@@ -6900,7 +6955,7 @@ export default function Journal() {
                               if (sectionId === "implementation") return null; // already rendered above
                               return (
                                 <div key={`readonly-${sectionId}`}>
-                                  <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "8px", display: "block" }}>
+                                  <label style={{ ...journalSectionTitleStyle("accent"), marginBottom: "8px", display: "block" }}>
                                     {getSectionLabelScroll(sectionId)}
                                   </label>
 
@@ -6926,14 +6981,14 @@ export default function Journal() {
                                         <div style={{ flex: "1 1 0", minWidth: 280 }}>
                                           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
                                             <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
-                                            <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Entry Checklist</span>
+                                            <span style={journalSectionTitleStyle("accent")}>Entry Checklist</span>
                                           </div>
                                           {renderChecklistReadOnlyForType("entry", index, { checklistLayout: "list" })}
                                         </div>
                                         <div style={{ flex: "1 1 0", minWidth: 280 }}>
                                           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
                                             <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
-                                            <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Entry Rules</span>
+                                            <span style={journalSectionTitleStyle("warning")}>Entry Rules</span>
                                           </div>
                                           {strategyEntryRuleTexts.length === 0 ? (
                                             <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>No entry rules configured.</p>
@@ -6955,14 +7010,14 @@ export default function Journal() {
                                         <div style={{ flex: "1 1 0", minWidth: 280 }}>
                                           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
                                             <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
-                                            <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Take Profit Checklist</span>
+                                            <span style={journalSectionTitleStyle("accent")}>Take Profit Checklist</span>
                                           </div>
                                           {renderChecklistReadOnlyForType("take_profit", index, { checklistLayout: "list" })}
                                         </div>
                                         <div style={{ flex: "1 1 0", minWidth: 280 }}>
                                           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
                                             <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
-                                            <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Take Profit Rules</span>
+                                            <span style={journalSectionTitleStyle("warning")}>Take Profit Rules</span>
                                           </div>
                                           {strategyTakeProfitRuleTexts.length === 0 ? (
                                             <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>No take profit rules configured.</p>
@@ -7454,7 +7509,7 @@ export default function Journal() {
                               );
                             }
                             const heading = (
-                              <h3 style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em", margin: 0, flex: "1 1 auto", minWidth: 0 }}>
+                              <h3 style={{ ...journalSectionTitleStyle("accent"), margin: 0, flex: "1 1 auto", minWidth: 0 }}>
                                 {getSectionLabelScroll(sectionId)}
                               </h3>
                             );
@@ -7527,7 +7582,7 @@ export default function Journal() {
                                   <JournalStrategySectionTitlePill>
                                     <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
                                       <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
-                                      <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Entry Checklist</span>
+                                      <span style={journalSectionTitleStyle("accent")}>Entry Checklist</span>
                                     </div>
                                     <JournalStrategyConfigureCogButton
                                       title="Configure entry checklist on strategy (affects all journal entries using this strategy)"
@@ -7537,7 +7592,7 @@ export default function Journal() {
                                 ) : (
                                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                     <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
-                                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Entry Checklist</span>
+                                    <span style={journalSectionTitleStyle("accent")}>Entry Checklist</span>
                                   </div>
                                 )}
                               </div>
@@ -7549,7 +7604,7 @@ export default function Journal() {
                                   <JournalStrategySectionTitlePill>
                                     <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
                                       <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
-                                      <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Entry Rules</span>
+                                      <span style={journalSectionTitleStyle("warning")}>Entry Rules</span>
                                     </div>
                                     <JournalStrategyConfigureCogButton
                                       title="Configure entry rules on strategy (affects all journal entries using this strategy)"
@@ -7559,7 +7614,7 @@ export default function Journal() {
                                 ) : (
                                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                     <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
-                                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Entry Rules</span>
+                                    <span style={journalSectionTitleStyle("warning")}>Entry Rules</span>
                                   </div>
                                 )}
                               </div>
@@ -7588,7 +7643,7 @@ export default function Journal() {
                                   <JournalStrategySectionTitlePill>
                                     <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
                                       <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
-                                      <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Take Profit Checklist</span>
+                                      <span style={journalSectionTitleStyle("accent")}>Take Profit Checklist</span>
                                     </div>
                                     <JournalStrategyConfigureCogButton
                                       title="Configure take profit checklist on strategy (affects all journal entries using this strategy)"
@@ -7598,7 +7653,7 @@ export default function Journal() {
                                 ) : (
                                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                     <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
-                                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Take Profit Checklist</span>
+                                    <span style={journalSectionTitleStyle("accent")}>Take Profit Checklist</span>
                                   </div>
                                 )}
                               </div>
@@ -7610,7 +7665,7 @@ export default function Journal() {
                                   <JournalStrategySectionTitlePill>
                                     <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
                                       <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
-                                      <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Take Profit Rules</span>
+                                      <span style={journalSectionTitleStyle("warning")}>Take Profit Rules</span>
                                     </div>
                                     <JournalStrategyConfigureCogButton
                                       title="Configure take profit rules on strategy (affects all journal entries using this strategy)"
@@ -7620,7 +7675,7 @@ export default function Journal() {
                                 ) : (
                                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                     <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
-                                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Take Profit Rules</span>
+                                    <span style={journalSectionTitleStyle("warning")}>Take Profit Rules</span>
                                   </div>
                                 )}
                               </div>
@@ -7849,7 +7904,7 @@ export default function Journal() {
                                     <Sparkles size={18} strokeWidth={2.2} aria-hidden />
                                   </div>
                                   <div>
-                                    <div style={{ fontSize: 11, fontWeight: 700, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.07em" }}>Survey</div>
+                                    <div style={journalSectionTitleStyle("warning", { size: "sm" })}>Survey</div>
                                     <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>Rate each item.</div>
                                   </div>
                                 </div>
@@ -8277,7 +8332,7 @@ export default function Journal() {
                                     ))}
                                   </div>
                                 )}
-                                <h4 style={{ margin: "12px 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>Before trade</h4>
+                                <h4 style={{ margin: "12px 0 8px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Before trade</h4>
                                 {JOURNAL_SURVEY_QUESTIONS.before.map((q) => (
                                   <div key={q.key} style={{ marginBottom: "12px" }}>
                                     <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>{q.question}</label>
@@ -8298,7 +8353,7 @@ export default function Journal() {
                         )}
                         {sectionId === "emotional_state_during" && (isCreating || isEditing) && showAddEmotionalStateForm && (
                           <div style={{ padding: "12px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
-                            <h4 style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>During trade</h4>
+                            <h4 style={{ margin: "0 0 8px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>During trade</h4>
                             {JOURNAL_SURVEY_QUESTIONS.during.map((q) => (
                               <div key={q.key} style={{ marginBottom: "12px" }}>
                                 <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>{q.question}</label>
@@ -8315,7 +8370,7 @@ export default function Journal() {
                         )}
                         {sectionId === "emotional_state_after" && (isCreating || isEditing) && showAddEmotionalStateForm && (
                           <div style={{ padding: "12px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
-                            <h4 style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>After trade</h4>
+                            <h4 style={{ margin: "0 0 8px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>After trade</h4>
                             {JOURNAL_SURVEY_QUESTIONS.after.map((q) => (
                               <div key={q.key} style={{ marginBottom: "12px" }}>
                                 <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>{q.question}</label>
@@ -8564,10 +8619,10 @@ export default function Journal() {
                         ) : !selectedEntry?.id ? (
                           <>
                             <div style={{ marginBottom: "20px", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                              <h4 style={{ margin: "0 0 10px", fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Emotions</h4>
+                              <h4 style={{ margin: "0 0 10px", ...journalSectionTitleStyle("muted", { size: "lg" }) }}>Emotions</h4>
                               <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal to emotional state entries. Links are saved when you save the journal entry.</p>
                               <div style={{ marginBottom: "16px" }}>
-                                <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
+                                <h3 style={{ margin: "0 0 6px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Link to</h3>
                                 <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry. This applies to the <strong>next</strong> state you link—change the selection before each link to associate different states with different trades.</p>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                                   <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
@@ -8637,7 +8692,7 @@ export default function Journal() {
                               </div>
                             </div>
                             <div style={{ padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                              <h4 style={{ margin: "0 0 10px", fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Trades</h4>
+                              <h4 style={{ margin: "0 0 10px", ...journalSectionTitleStyle("muted", { size: "lg" }) }}>Trades</h4>
                               <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal to real trades. Links are saved when you save the journal entry.</p>
                               <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "600" }}>Link to real trades</label>
                               {(entryFormData.linked_trade_ids?.length ?? 0) > 0 && (
@@ -8709,10 +8764,10 @@ export default function Journal() {
                           <>
                             {/* Emotions — clear separation of link categories */}
                             <div style={{ marginBottom: "20px", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                              <h4 style={{ margin: "0 0 10px", fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Emotions</h4>
+                              <h4 style={{ margin: "0 0 10px", ...journalSectionTitleStyle("muted", { size: "lg" }) }}>Emotions</h4>
                               <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal entry to emotional state entries.</p>
                               <div style={{ marginBottom: "16px" }}>
-                                <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
+                                <h3 style={{ margin: "0 0 6px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Link to</h3>
                                 <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry. This applies to the <strong>next</strong> state you link—change the selection before each link to associate different states with different trades.</p>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                                   <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
@@ -8829,7 +8884,7 @@ export default function Journal() {
                             </div>
                             {/* Trades — clear separation of link categories */}
                             <div style={{ padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                              <h4 style={{ margin: "0 0 10px", fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Trades</h4>
+                              <h4 style={{ margin: "0 0 10px", ...journalSectionTitleStyle("muted", { size: "lg" }) }}>Trades</h4>
                               <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal entry to real trades.</p>
                               <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "600" }}>Link to real trades</label>
                               {(entryFormData.linked_trade_ids?.length ?? 0) > 0 && (
@@ -8914,7 +8969,7 @@ export default function Journal() {
                           <>
                             {/* Single "Link to" scope for both linking existing states and adding new ones */}
                             <div style={{ marginBottom: "20px", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                              <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
+                              <h3 style={{ margin: "0 0 6px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Link to</h3>
                               <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry. The choice below applies to the <strong>next</strong> state you link or add—change it before each action to link different states to different trades (e.g. one state for Trade 1, another for Trade 2).</p>
                               <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                                 <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
@@ -9240,7 +9295,7 @@ export default function Journal() {
                                     <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.5 }}>{INTENSITY_SCALE_LABEL}</p>
                                   </div>
                                   <div>
-                                    <h3 style={{ margin: "0 0 4px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Emotions</h3>
+                                    <h3 style={{ margin: "0 0 4px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Emotions</h3>
                                     <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>Tap to add or remove; then set strength below.</p>
                                     <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
                                       {JOURNAL_EMOTIONS.map((emotion) => {
@@ -9283,7 +9338,7 @@ export default function Journal() {
                                   </div>
                                   {Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 && (
                                     <div style={{ padding: "16px", backgroundColor: "var(--bg-tertiary)", borderRadius: "12px", border: "1px solid var(--border-color)" }}>
-                                      <h3 style={{ margin: "0 0 4px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Set intensity</h3>
+                                      <h3 style={{ margin: "0 0 4px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Set intensity</h3>
                                       <div style={{ marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-secondary)" }}>
                                         <span>0</span>
                                         <div style={{ flex: 1, height: "2px", background: "var(--border-color)", borderRadius: 1 }} />
@@ -9328,7 +9383,7 @@ export default function Journal() {
                                   {/* Same question groups as Emotions page — unified format */}
                                   {(["before", "during", "after"] as const).map((phase) => (
                                     <div key={phase} style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--border-color)" }}>
-                                      <h3 style={{ margin: "0 0 12px", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                                      <h3 style={{ margin: "0 0 12px", ...journalSectionTitleStyle("muted") }}>
                                         {phase === "before" ? "Before Trade" : phase === "during" ? "During Trade" : "After Trade"}
                                       </h3>
                                       {JOURNAL_SURVEY_QUESTIONS[phase].map((q, idx) => (
@@ -9354,7 +9409,7 @@ export default function Journal() {
                                   ))}
                                   {/* Notes at the very bottom (under all questions) */}
                                   <div style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--border-color)" }}>
-                                    <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Notes (for this whole entry)</h3>
+                                    <h3 style={{ margin: "0 0 6px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Notes (for this whole entry)</h3>
                                     <RichTextEditor
                                       value={newEmotionalStateForm.notes}
                                       onChange={(content: string) => setNewEmotionalStateForm((f) => ({ ...f, notes: content }))}
@@ -11223,7 +11278,11 @@ export default function Journal() {
                         const parsed = JSON.parse(raw) as string[];
                         if (Array.isArray(parsed) && parsed.length > 0) {
                           const normalized = parsed.map((id) => (id === "mantra_checklist" ? "custom:daily_mantra" : id));
-                          const valid = normalized.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:")));
+                        const valid = normalized.filter(
+                            (id) =>
+                              id !== "custom_checklists_surveys" &&
+                              (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:") || id.startsWith("custom_rules:"))
+                          );
                           const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
                           setJournalSectionOrder([...valid, ...missing]);
                         }
