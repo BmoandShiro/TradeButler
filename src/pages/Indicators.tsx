@@ -354,8 +354,16 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
 
   const filteredSignals = useMemo(() => {
     if (view !== "all") return filtered;
-    // Keep candlestick patterns out of the main indicators library.
-    return filtered.filter((i) => i.signalGroup !== "Candlestick").filter(passesBiasFilter);
+    // Signals page: pattern cards live under Technical / Candlestick only — not under Indicators.
+    return filtered
+      .filter(
+        (i) =>
+          !(
+            i.category === "Pattern" &&
+            (i.signalGroup === "TechnicalPattern" || i.signalGroup === "Candlestick")
+          )
+      )
+      .filter(passesBiasFilter);
   }, [filtered, view, showBullish, showBearish]);
 
   function resetAddModal() {
