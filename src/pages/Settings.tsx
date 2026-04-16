@@ -160,6 +160,7 @@ export default function Settings() {
 
     try {
       await invoke("clear_all_trades");
+      window.dispatchEvent(new CustomEvent("tradebutlerTradesChanged"));
       setShowClearDataModal(false);
       setDeleteConfirmText("");
       alert("All trade data has been cleared successfully!");
