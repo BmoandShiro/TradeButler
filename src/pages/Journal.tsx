@@ -1,4 +1,10 @@
 import { useEffect, useLayoutEffect, useState, useRef, useMemo, useCallback, type ReactNode, type CSSProperties } from "react";
+import {
+  clearJournalWip,
+  hasJournalNavDraft,
+  journalStickyKeyForMode,
+  migrateLegacyJournalWipToSession,
+} from "../utils/journalStickySession";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronUp, Search, LayoutDashboard, GripVertical, Eye, EyeOff, Settings, ListChecks, Scale, Sparkles, Activity } from "lucide-react";
@@ -1443,8 +1449,25 @@ export default function Journal() {
   useEffect(() => {
     setSelectedEntry(null);
     setPendingRestoreEntryId(null);
-    setIsCreating(false);
-    setIsEditing(false);
+    migrateLegacyJournalWipToSession(dataMode);
+    let hasStickyForMode = false;
+    try {
+      if (typeof sessionStorage !== "undefined") {
+        const raw = sessionStorage.getItem(journalStickyKeyForMode(dataMode));
+        if (raw) {
+          const p = JSON.parse(raw) as { dataMode?: DataMode; isCreating?: boolean; isEditing?: boolean };
+          if ((p.isCreating || p.isEditing) && (p.dataMode == null || p.dataMode === dataMode)) {
+            hasStickyForMode = true;
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    if (!hasStickyForMode) {
+      setIsCreating(false);
+      setIsEditing(false);
+    }
   }, [dataMode]);
 
   // When entering view mode for a selected entry, default focus to the first trade.
@@ -1538,12 +1561,15 @@ export default function Journal() {
   const suppressWorkInProgressSaveRef = useRef(false);
   /** Incremented when starting a new load or "+ Add Entry" so in-flight `loadEntry` cannot overwrite a fresh create form. */
   const journalLoadTokenRef = useRef(0);
+  /** After restoring sticky session on mount, skip loading `journal_selected_entry_id_*` once (same tab session). */
+  const skipInitialSavedEntryRestoreRef = useRef(false);
 
-  // Save work-in-progress to localStorage
+  // Save work-in-progress to sessionStorage (per data mode); includes `dataMode` in JSON for validation.
   const saveWorkInProgress = () => {
     if (suppressWorkInProgressSaveRef.current) return;
     if (isCreating || isEditing) {
       const workInProgress = {
+        dataMode,
         entryFormData,
         tradesFormData,
         checklistResponses: Array.from(checklistResponses.entries()).map(([tradeIndex, responses]) => [
@@ -1562,25 +1588,76 @@ export default function Journal() {
         isEditing,
         selectedEntryId: selectedEntry?.id || null,
         scrollPositions: Array.from(tabScrollPositions.current.entries()),
+        pendingLinkedPairs,
+        linkedPairs,
+        journalTradeActualTradeIds: Array.from(journalTradeActualTradeIds.entries()),
+        emotionalStateFormByTrade: Array.from(emotionalStateFormByTrade.entries()),
+        pendingEmotionalStates,
+        journalEmotionalStates,
+        showAddEmotionalStateForm,
+        newEmotionalStateLinkScope,
+        newEmotionalStateTradeIndices,
       };
-      localStorage.setItem('journal_work_in_progress', JSON.stringify(workInProgress));
+      try {
+        if (typeof sessionStorage !== "undefined") {
+          sessionStorage.setItem(journalStickyKeyForMode(dataMode), JSON.stringify(workInProgress));
+        }
+        localStorage.removeItem("journal_work_in_progress");
+      } catch {
+        /* ignore */
+      }
     }
   };
 
-  // Restore work-in-progress from localStorage (used by "Restore draft" on Overview)
+  // Restore work-in-progress from session (or legacy local) — used by sticky remount and "Restore draft" on Overview
   const restoreWorkInProgress = () => {
     try {
-      const saved = localStorage.getItem('journal_work_in_progress');
+      migrateLegacyJournalWipToSession(dataMode);
+      let saved: string | null = null;
+      if (typeof sessionStorage !== "undefined") {
+        saved = sessionStorage.getItem(journalStickyKeyForMode(dataMode));
+      }
+      if (!saved) {
+        saved = localStorage.getItem("journal_work_in_progress");
+      }
       if (saved) {
-        const workInProgress = JSON.parse(saved);
+        const workInProgress = JSON.parse(saved) as {
+          dataMode?: DataMode;
+          entryFormData: typeof entryFormData;
+          tradesFormData: typeof tradesFormData;
+          checklistResponses: [number, [number, boolean][]][];
+          surveyScores?: [number, [number, number][]][];
+          entryLevelChecklistResponses?: [number, boolean][];
+          checklistTradeAssociations?: [number, number[] | null][];
+          activeTradeIndex: number;
+          activeTab: TabType;
+          isCreating: boolean;
+          isEditing: boolean;
+          selectedEntryId: number | null;
+          scrollPositions: [TabType, number][];
+          pendingLinkedPairs?: PairedTrade[];
+          linkedPairs?: PairedTrade[];
+          journalTradeActualTradeIds?: [number, number[]][];
+          emotionalStateFormByTrade?: [number, { selectedEmotions: Record<string, number>; notes: string; surveyResponses: Record<string, number> }][];
+          pendingEmotionalStates?: typeof pendingEmotionalStates;
+          journalEmotionalStates?: JournalEmotionalState[];
+          showAddEmotionalStateForm?: boolean;
+          newEmotionalStateLinkScope?: "entry" | "trades";
+          newEmotionalStateTradeIndices?: number[];
+        };
+        if (workInProgress.dataMode != null && workInProgress.dataMode !== dataMode) {
+          return;
+        }
         setEntryFormData(workInProgress.entryFormData);
         setTradesFormData(workInProgress.tradesFormData);
-        
+
         // Restore checklist responses
         const restoredResponses = new Map<number, Map<number, boolean>>();
-        workInProgress.checklistResponses.forEach(([tradeIndex, responses]: [number, [number, boolean][]]) => {
-          restoredResponses.set(tradeIndex, new Map(responses));
-        });
+        if (Array.isArray(workInProgress.checklistResponses)) {
+          workInProgress.checklistResponses.forEach(([tradeIndex, responses]: [number, [number, boolean][]]) => {
+            restoredResponses.set(tradeIndex, new Map(responses));
+          });
+        }
         setChecklistResponses(restoredResponses);
         if (workInProgress.entryLevelChecklistResponses) {
           setEntryLevelChecklistResponses(new Map(workInProgress.entryLevelChecklistResponses));
@@ -1595,17 +1672,33 @@ export default function Journal() {
           });
           setSurveyScores(restoredScores);
         }
-        
+
         setActiveTradeIndex(workInProgress.activeTradeIndex);
         setActiveTab(workInProgress.activeTab);
         setIsCreating(workInProgress.isCreating);
         setIsEditing(workInProgress.isEditing);
-        
+
+        if (workInProgress.pendingLinkedPairs) setPendingLinkedPairs(workInProgress.pendingLinkedPairs);
+        if (workInProgress.linkedPairs) setLinkedPairs(workInProgress.linkedPairs);
+        if (workInProgress.journalTradeActualTradeIds) {
+          setJournalTradeActualTradeIds(new Map(workInProgress.journalTradeActualTradeIds));
+        }
+        if (workInProgress.emotionalStateFormByTrade) {
+          setEmotionalStateFormByTrade(new Map(workInProgress.emotionalStateFormByTrade));
+        }
+        if (workInProgress.pendingEmotionalStates) setPendingEmotionalStates(workInProgress.pendingEmotionalStates);
+        if (workInProgress.journalEmotionalStates) setJournalEmotionalStates(workInProgress.journalEmotionalStates);
+        if (workInProgress.showAddEmotionalStateForm != null) setShowAddEmotionalStateForm(workInProgress.showAddEmotionalStateForm);
+        if (workInProgress.newEmotionalStateLinkScope) setNewEmotionalStateLinkScope(workInProgress.newEmotionalStateLinkScope);
+        if (workInProgress.newEmotionalStateTradeIndices) setNewEmotionalStateTradeIndices(workInProgress.newEmotionalStateTradeIndices);
+
         // Restore scroll positions
-        workInProgress.scrollPositions.forEach(([tab, pos]: [TabType, number]) => {
-          tabScrollPositions.current.set(tab, pos);
-        });
-        
+        if (Array.isArray(workInProgress.scrollPositions)) {
+          workInProgress.scrollPositions.forEach(([tab, pos]: [TabType, number]) => {
+            tabScrollPositions.current.set(tab, pos);
+          });
+        }
+
         // If editing an existing entry, load it. Pass restored count so we sync from DB if saved state was bloated.
         if (workInProgress.selectedEntryId && !workInProgress.isCreating) {
           loadEntry(workInProgress.selectedEntryId, {
@@ -1613,7 +1706,7 @@ export default function Journal() {
             restoredTradesCount: workInProgress.tradesFormData?.length,
           });
         }
-        
+
         // Load strategy checklists if needed
         if (workInProgress.entryFormData.strategy_id) {
           loadStrategyChecklists(workInProgress.entryFormData.strategy_id);
@@ -1624,10 +1717,50 @@ export default function Journal() {
     }
   };
 
-  // Clear work-in-progress from localStorage
   const clearWorkInProgress = () => {
-    localStorage.removeItem('journal_work_in_progress');
+    clearJournalWip(dataMode);
   };
+
+  // Sticky restore when returning to Journal in the same tab (in-app navigation / refresh within session).
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+    if (searchParams.get("overview") === "1") return;
+    const navState = location.state as { openEntryId?: number } | null;
+    if (navState?.openEntryId != null) return;
+
+    migrateLegacyJournalWipToSession(dataMode);
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem(journalStickyKeyForMode(dataMode));
+    } catch {
+      return;
+    }
+    if (!raw) {
+      try {
+        raw = localStorage.getItem("journal_work_in_progress");
+      } catch {
+        return;
+      }
+    }
+    if (!raw) return;
+
+    let parsed: { dataMode?: DataMode; isCreating?: boolean; isEditing?: boolean } | null = null;
+    try {
+      parsed = JSON.parse(raw) as { dataMode?: DataMode; isCreating?: boolean; isEditing?: boolean };
+    } catch {
+      return;
+    }
+    if (parsed?.dataMode != null && parsed.dataMode !== dataMode) return;
+    if (!parsed?.isCreating && !parsed?.isEditing) return;
+
+    suppressWorkInProgressSaveRef.current = true;
+    skipInitialSavedEntryRestoreRef.current = true;
+    restoreWorkInProgress();
+    setTimeout(() => {
+      suppressWorkInProgressSaveRef.current = false;
+    }, 0);
+    // Intentionally omit location.state from deps: when openEntryId navigation clears state, we must not re-run and overwrite that load with a sticky restore.
+  }, [dataMode, searchParams]);
 
   // Get storage key for current entry (entry-specific scroll positions)
   const getScrollStorageKey = () => {
@@ -1924,7 +2057,29 @@ export default function Journal() {
       clearInterval(interval);
       saveWorkInProgress(); // Save one last time
     };
-  }, [entryFormData, tradesFormData, checklistResponses, entryLevelChecklistResponses, checklistTradeAssociations, activeTradeIndex, activeTab, isCreating, isEditing, selectedEntry]);
+  }, [
+    entryFormData,
+    tradesFormData,
+    checklistResponses,
+    entryLevelChecklistResponses,
+    checklistTradeAssociations,
+    surveyScores,
+    activeTradeIndex,
+    activeTab,
+    isCreating,
+    isEditing,
+    selectedEntry,
+    dataMode,
+    pendingLinkedPairs,
+    linkedPairs,
+    journalTradeActualTradeIds,
+    emotionalStateFormByTrade,
+    pendingEmotionalStates,
+    journalEmotionalStates,
+    showAddEmotionalStateForm,
+    newEmotionalStateLinkScope,
+    newEmotionalStateTradeIndices,
+  ]);
 
   useEffect(() => {
     loadEntries();
@@ -1936,6 +2091,10 @@ export default function Journal() {
   // When navigating to Journal without ?overview=1, restore the last-open entry from localStorage (per mode) so the tab doesn't reset to overview.
   useEffect(() => {
     if (searchParams.get("overview") === "1") return;
+    if (skipInitialSavedEntryRestoreRef.current) {
+      skipInitialSavedEntryRestoreRef.current = false;
+      return;
+    }
     let savedId = localStorage.getItem(`journal_selected_entry_id_${dataMode}`);
     if (!savedId) {
       const legacyId = localStorage.getItem("journal_selected_entry_id");
@@ -1956,14 +2115,15 @@ export default function Journal() {
     if (selectedEntry != null) setPendingRestoreEntryId(null);
   }, [selectedEntry]);
 
-  // Open specific entry/trade when navigated from Emotions (e.g. "Open in Journal")
+  // Open specific entry/trade when navigated from Emotions (e.g. "Open in Journal") — replaces sticky draft for this tab.
   useEffect(() => {
     const state = location.state as { openEntryId?: number; openTradeId?: number } | null;
     if (state?.openEntryId != null) {
+      clearJournalWip(dataMode);
       loadEntry(state.openEntryId, { openTradeId: state.openTradeId });
       navigate(location.pathname, { replace: true }); // clear state so back button doesn't re-open
     }
-  }, [location.state]);
+  }, [location.state, dataMode]);
 
   useEffect(() => {
     if (entryFormData.strategy_id) {
@@ -9894,7 +10054,7 @@ export default function Journal() {
               <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px" }}>
                 Review your past journal entries at a glance. Select any entry on the right to dive into full details.
               </p>
-              {typeof window !== "undefined" && localStorage.getItem("journal_work_in_progress") && (
+              {typeof window !== "undefined" && hasJournalNavDraft(dataMode) && (
                 <div
                   style={{
                     marginBottom: "16px",
