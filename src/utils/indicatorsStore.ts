@@ -385,14 +385,15 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
   const dotR = 5.8 + (hashString(abbreviation) % 30) / 10;
   const dotOpacity = 0.14 + (hashString(abbreviation + "_o") % 20) / 100;
 
-  const isPattern = BUILTIN_PATTERN_THUMBNAIL_IDS.has(id);
-  const w = isPattern ? 512 : 360;
-  const h = isPattern ? 288 : 200;
-  const pad = isPattern ? 14 : 18;
-  const captionH = isPattern ? 26 : 0;
-  const innerX = pad + (isPattern ? 6 : 8);
+  const isPatternThumb = BUILTIN_PATTERN_THUMBNAIL_IDS.has(id);
+  const useLibraryChart = isPatternThumb || getIndicatorLibraryThumbnailIds().has(id);
+  const w = useLibraryChart ? 512 : 360;
+  const h = useLibraryChart ? 288 : 200;
+  const pad = useLibraryChart ? 14 : 18;
+  const captionH = useLibraryChart ? 26 : 0;
+  const innerX = pad + (useLibraryChart ? 6 : 8);
   const innerY = pad + 6;
-  const innerW = w - pad * 2 - (isPattern ? 12 : 8);
+  const innerW = w - pad * 2 - (useLibraryChart ? 12 : 8);
   const innerH = h - pad * 2 - 10 - captionH;
 
   const x0 = innerX;
@@ -403,8 +404,7 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
   const accent = accentColor;
   const captionText = escapeXml((displayName ?? abbreviation).trim() || abbreviation);
 
-  const header = isPattern
-    ? `
+  const neutralFrame = `
     <rect x="0" y="0" width="${w}" height="${h}" rx="14" fill="#1a1d24"/>
     <rect x="${pad}" y="${pad}" width="${w - pad * 2}" height="${h - pad * 2}" rx="11" fill="rgba(255,255,255,0.035)" stroke="rgba(255,255,255,0.11)"/>
     <g opacity="1">
@@ -412,6 +412,18 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
       <path d="M ${x0} ${y0 + innerH * 0.5} L ${x1} ${y0 + innerH * 0.5}" stroke="${gridPattern}" stroke-width="1"/>
       <path d="M ${x0} ${y1} L ${x1} ${y1}" stroke="${gridPattern}" stroke-width="1"/>
     </g>
+  `;
+  const header = useLibraryChart
+    ? isPatternThumb
+      ? neutralFrame
+      : `
+    <defs>
+      <linearGradient id="fillA" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="${accent}" stop-opacity="0.35"/>
+        <stop offset="1" stop-color="${accent}" stop-opacity="0.05"/>
+      </linearGradient>
+    </defs>
+    ${neutralFrame}
   `
     : `
     <defs>
@@ -800,7 +812,51 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
       break;
     }
     case "order_block_timeframe": {
-      // (Concept) fallthrough: keep default glyph.
+      const zLeft = x0 + innerW * 0.18;
+      const zW = innerW * 0.30;
+      const zTop = mapY(0.70);
+      const zBot = mapY(0.36);
+      const cxOb = x0 + innerW * 0.62;
+      glyph = `
+        <rect x="${zLeft.toFixed(2)}" y="${Math.min(zTop, zBot).toFixed(2)}" width="${zW.toFixed(2)}" height="${Math.abs(zBot - zTop).toFixed(
+          2
+        )}" rx="5" fill="${accent}" opacity="0.18" stroke="rgba(255,255,255,0.28)"/>
+        <text x="${(zLeft + zW / 2).toFixed(2)}" y="${mapY(0.56).toFixed(2)}" text-anchor="middle" fill="rgba(255,255,255,0.45)" font-size="11" font-family="ui-sans-serif, system-ui, sans-serif">OB</text>
+        <path d="M ${cxOb.toFixed(2)} ${mapY(0.62).toFixed(2)} L ${cxOb.toFixed(2)} ${mapY(0.22).toFixed(2)}" stroke="rgba(255,255,255,0.32)" stroke-width="2" stroke-linecap="round"/>
+        <rect x="${(cxOb - innerW * 0.035).toFixed(2)}" y="${Math.min(mapY(0.48), mapY(0.38)).toFixed(2)}" width="${(innerW * 0.07).toFixed(
+          2
+        )}" height="${Math.abs(mapY(0.38) - mapY(0.48)).toFixed(2)}" rx="2" fill="rgba(16,185,129,0.55)" stroke="rgba(255,255,255,0.15)"/>
+      `;
+      break;
+    }
+    case "elliott_wave": {
+      const imp = [
+        [0.06, 0.58],
+        [0.20, 0.38],
+        [0.34, 0.50],
+        [0.48, 0.30],
+        [0.62, 0.44],
+        [0.76, 0.24],
+        [0.90, 0.36],
+      ].map(([tx, ty]) => [mapX(tx), mapY(ty)] as [number, number]);
+      glyph = `
+        <path d="${pointsToPath(imp)}" ${accentLine}/>
+        <text x="${mapX(0.12).toFixed(2)}" y="${mapY(0.72).toFixed(2)}" fill="rgba(255,255,255,0.5)" font-size="10" font-family="ui-sans-serif, system-ui, sans-serif">1</text>
+        <text x="${mapX(0.26).toFixed(2)}" y="${mapY(0.32).toFixed(2)}" fill="rgba(255,255,255,0.5)" font-size="10" font-family="ui-sans-serif, system-ui, sans-serif">2</text>
+        <text x="${mapX(0.40).toFixed(2)}" y="${mapY(0.58).toFixed(2)}" fill="rgba(255,255,255,0.5)" font-size="10" font-family="ui-sans-serif, system-ui, sans-serif">3</text>
+        <text x="${mapX(0.54).toFixed(2)}" y="${mapY(0.22).toFixed(2)}" fill="rgba(255,255,255,0.5)" font-size="10" font-family="ui-sans-serif, system-ui, sans-serif">4</text>
+        <text x="${mapX(0.82).toFixed(2)}" y="${mapY(0.28).toFixed(2)}" fill="rgba(255,255,255,0.5)" font-size="10" font-family="ui-sans-serif, system-ui, sans-serif">5</text>
+      `;
+      break;
+    }
+    case "choch_bos_timeframe": {
+      glyph = `
+        <path d="M ${mapX(0.08).toFixed(2)} ${mapY(0.56).toFixed(2)} L ${mapX(0.26).toFixed(2)} ${mapY(0.44).toFixed(2)} L ${mapX(0.44).toFixed(2)} ${mapY(0.52).toFixed(2)} L ${mapX(0.62).toFixed(2)} ${mapY(0.34).toFixed(2)} L ${mapX(0.80).toFixed(2)} ${mapY(0.60).toFixed(2)}"
+          stroke="rgba(255,255,255,0.42)" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M ${x0} ${mapY(0.48).toFixed(2)} L ${x1} ${mapY(0.48).toFixed(2)}"
+          stroke="${accent}" stroke-width="2" stroke-dasharray="7 5" stroke-linecap="round" opacity="0.9"/>
+        <circle cx="${mapX(0.62).toFixed(2)}" cy="${mapY(0.34).toFixed(2)}" r="4.5" fill="${accent}" opacity="0.88"/>
+      `;
       break;
     }
 
@@ -1741,16 +1797,19 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
         <path d="${fallbackPath}" ${accentLine}/>
         <path d="M ${x0} ${mapY(0.5)} L ${x1} ${mapY(0.5)}" stroke="rgba(255,255,255,0.25)" stroke-width="1"/>
         ${id.includes("fib") ? ` <path d="M ${x0} ${mapY(0.8)} L ${x1} ${mapY(0.3)}" stroke="${accent}" stroke-width="2" fill="none" stroke-linecap="round"/>` : ""}
-        <circle cx="${(w / 2).toFixed(2)}" cy="${(h - 22).toFixed(2)}" r="${dotR.toFixed(2)}" fill="${accent}" opacity="${dotOpacity.toFixed(2)}"/>
+        ${
+          useLibraryChart
+            ? ""
+            : `<circle cx="${(w / 2).toFixed(2)}" cy="${(h - 22).toFixed(2)}" r="${dotR.toFixed(2)}" fill="${accent}" opacity="${dotOpacity.toFixed(2)}"/>`
+        }
       `;
       break;
     }
   }
 
-  const caption =
-    isPattern
-      ? `<text x="${(w / 2).toFixed(2)}" y="${(h - 8).toFixed(2)}" text-anchor="middle" fill="rgba(255,255,255,0.9)" font-size="12" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">${captionText}</text>`
-      : "";
+  const caption = useLibraryChart
+    ? `<text x="${(w / 2).toFixed(2)}" y="${(h - 8).toFixed(2)}" text-anchor="middle" fill="rgba(255,255,255,0.9)" font-size="12" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">${captionText}</text>`
+    : "";
 
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
@@ -2234,6 +2293,19 @@ const BUILTIN_INDICATORS: Array<Omit<Indicator, "createdAt">> = [
     code: "// Volume template\n",
   },
 ];
+
+let indicatorLibraryThumbnailIdsCache: Set<string> | null = null;
+/** Signals → Indicators section (built-ins that are not Technical/Candlestick pattern cards). */
+function getIndicatorLibraryThumbnailIds(): Set<string> {
+  if (!indicatorLibraryThumbnailIdsCache) {
+    indicatorLibraryThumbnailIdsCache = new Set(
+      BUILTIN_INDICATORS.filter(
+        (i) => i.signalGroup !== "TechnicalPattern" && i.signalGroup !== "Candlestick"
+      ).map((i) => i.id)
+    );
+  }
+  return indicatorLibraryThumbnailIdsCache;
+}
 
 // If a strategy has no stored indicator associations yet for the active mode,
 // use a sensible starter set so the Journal indicators UI has something to show.
