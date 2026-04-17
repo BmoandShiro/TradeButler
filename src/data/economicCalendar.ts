@@ -128,6 +128,98 @@ export function getEconomicEventLabel(eventType: string): string {
   return event?.label || eventType;
 }
 
+const URL_FOMC = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm";
+const URL_BLS_CPI = "https://www.bls.gov/schedule/news_release/cpi.htm";
+const URL_BLS_PPI = "https://www.bls.gov/schedule/news_release/ppi.htm";
+const URL_BLS_EMPLOYMENT = "https://www.bls.gov/schedule/news_release/empsit.htm";
+const URL_CENSUS_RETAIL = "https://www.census.gov/retail/marts/www/marts.html";
+const URL_BEA_GDP = "https://www.bea.gov/data/gdp/gross-domestic-product";
+const URL_BEA_SCHEDULE = "https://www.bea.gov/news/schedule";
+const URL_CONFERENCE_BOARD = "https://www.conference-board.org/topics/us-leading-indicators";
+const URL_ISM = "https://www.ismworld.org/supply-management-news-and-reports/reports/ism-report-on-business/";
+const URL_DOL_CLAIMS = "https://www.dol.gov/agencies/eta/news/weekly-claims";
+const URL_TRADING_ECONOMICS_US = "https://tradingeconomics.com/united-states/calendar";
+
+/**
+ * Best-effort link to an official schedule or a reputable macro calendar.
+ * Works with static `eventType` keys and Finnhub-style titles (e.g. "CPI m/m", "Non Farm Payrolls").
+ */
+export function resolveEconomicEventResourceUrl(eventType: string, title: string): string {
+  const typeSlug = (eventType || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "");
+  const text = `${eventType} ${title}`.toLowerCase();
+
+  if (typeSlug === "fomc" || /fomc|fed rate|interest rate decision|federal reserve statement|powell press/.test(text)) {
+    return URL_FOMC;
+  }
+  if (
+    typeSlug === "cpi" ||
+    /\bcpi\b|consumer price index|core cpi|inflation rate|harmonised cpi|hicp/.test(text)
+  ) {
+    return URL_BLS_CPI;
+  }
+  if (typeSlug === "ppi" || /\bppi\b|producer price/.test(text)) {
+    return URL_BLS_PPI;
+  }
+  if (
+    typeSlug === "jobs" ||
+    /non[\s-]?farm|nfp|employment situation|change in nonfarm|payrolls|average hourly earnings/.test(text)
+  ) {
+    return URL_BLS_EMPLOYMENT;
+  }
+  if (
+    typeSlug === "retail_sales" ||
+    /retail sales|retail ex auto|control group retail/.test(text)
+  ) {
+    return URL_CENSUS_RETAIL;
+  }
+  if (typeSlug === "gdp" || /\bgdp\b|gross domestic product/.test(text)) {
+    return URL_BEA_GDP;
+  }
+  if (/bea|personal income|personal spending|pce|core pce/.test(text)) {
+    return URL_BEA_SCHEDULE;
+  }
+  if (
+    typeSlug === "consumer_confidence" ||
+    /consumer confidence|consumer sentiment|michigan|umich|u\.?mich/.test(text)
+  ) {
+    return URL_CONFERENCE_BOARD;
+  }
+  if (
+    typeSlug === "ism_manufacturing" ||
+    /ism manufacturing|ism services|ism non-manufacturing|pmi manufacturing|pmi services|s&p global manufacturing pmi|s&p global services pmi/.test(
+      text
+    )
+  ) {
+    return URL_ISM;
+  }
+  if (
+    typeSlug === "unemployment_claims" ||
+    /jobless|initial claims|continuing claims|unemployment claims/.test(text)
+  ) {
+    return URL_DOL_CLAIMS;
+  }
+  if (/housing starts|building permits|new home sales/.test(text)) {
+    return "https://www.census.gov/construction/nrc/index.html";
+  }
+  if (/durable goods orders/.test(text)) {
+    return "https://www.census.gov/manufacturing/m3/adv/index.html";
+  }
+  if (/trade balance|goods trade balance/.test(text)) {
+    return "https://www.bea.gov/data/international-transactions/international-transactions";
+  }
+  if (/jolts|job openings/.test(text)) {
+    return "https://www.bls.gov/jlt/";
+  }
+  if (/adp employment|adp nonfarm/.test(text)) {
+    return "https://www.adpemploymentreport.com/";
+  }
+
+  return URL_TRADING_ECONOMICS_US;
+}
+
 // Get all FOMC dates for a given year
 export function getFOMCDatesForYear(year: number): EconomicEvent[] {
   if (year === 2025) return FOMC_DATES_2025;

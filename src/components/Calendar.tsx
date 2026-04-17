@@ -2,13 +2,22 @@ import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useNavigate } from "react-router-dom";
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isToday, addDays, addWeeks, addMonths, addYears } from "date-fns";
-import { ChevronLeft, ChevronRight, Heart, BookOpen, DollarSign, TrendingUp, Calendar as CalendarIcon, RefreshCw, Settings, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Heart, BookOpen, DollarSign, TrendingUp, Calendar as CalendarIcon, RefreshCw, Settings, Plus, ExternalLink } from "lucide-react";
 import { getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import type { DataMode } from "../utils/dataMode";
 import { loadSandboxState, getSandboxEmotionalStates } from "../utils/sandboxStore";
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 import { getFinnhubApiKey } from "../utils/finnhubManager";
 import { LoadingSphere } from "./LoadingSphere";
+import { resolveEconomicEventResourceUrl } from "../data/economicCalendar";
+import { openExternalUrl } from "../utils/openExternalUrl";
+
+function normalizeReminderReferenceUrl(raw: string): string | undefined {
+  const t = raw.trim();
+  if (!t) return undefined;
+  if (/^https?:\/\//i.test(t)) return t;
+  return `https://${t}`;
+}
 
 interface DailyPnL {
   date: string;
@@ -95,6 +104,8 @@ interface CustomReminder {
     | "journal";
   title: string;
   description?: string;
+  /** Optional link (e.g. economic release page) opened in the system browser */
+  referenceUrl?: string;
   startDate: string; // yyyy-MM-dd
   time?: string; // HH:mm
   color?: string;
@@ -270,6 +281,7 @@ export default function Calendar() {
   const [newReminderColor, setNewReminderColor] = useState("#0EA5E9");
   const [newReminderRepeatUnit, setNewReminderRepeatUnit] = useState<CustomReminder["recurrence"]["unit"]>("month");
   const [newReminderRepeatInterval, setNewReminderRepeatInterval] = useState(1);
+  const [newReminderReferenceUrl, setNewReminderReferenceUrl] = useState("");
   const [editingReminderId, setEditingReminderId] = useState<number | null>(null);
   const [editReminderTitle, setEditReminderTitle] = useState("");
   const [editReminderType, setEditReminderType] = useState<NonNullable<CustomReminder["type"]>>("general");
@@ -279,6 +291,7 @@ export default function Calendar() {
   const [editReminderColor, setEditReminderColor] = useState("#0EA5E9");
   const [editReminderRepeatUnit, setEditReminderRepeatUnit] = useState<CustomReminder["recurrence"]["unit"]>("month");
   const [editReminderRepeatInterval, setEditReminderRepeatInterval] = useState(1);
+  const [editReminderReferenceUrl, setEditReminderReferenceUrl] = useState("");
   const [reminderPendingDelete, setReminderPendingDelete] = useState<CustomReminder | null>(null);
 
   // Save toggle settings
@@ -735,6 +748,7 @@ export default function Calendar() {
     setEditReminderColor(reminder.color || "#0EA5E9");
     setEditReminderRepeatUnit(reminder.recurrence?.unit || "month");
     setEditReminderRepeatInterval(reminder.recurrence?.interval || 1);
+    setEditReminderReferenceUrl(reminder.referenceUrl || "");
   };
 
   const cancelEditingReminder = () => {
@@ -760,6 +774,7 @@ export default function Calendar() {
                 unit: editReminderRepeatUnit,
                 interval: editReminderRepeatUnit === "once" ? 1 : Math.max(1, Math.floor(editReminderRepeatInterval || 1)),
               },
+              referenceUrl: normalizeReminderReferenceUrl(editReminderReferenceUrl),
             }
           : r
       )
@@ -1030,6 +1045,7 @@ export default function Calendar() {
               setNewReminderColor("#0EA5E9");
               setNewReminderRepeatUnit("month");
               setNewReminderRepeatInterval(1);
+              setNewReminderReferenceUrl("");
               setShowAddReminder(true);
             }}
             title="Add custom reminder (e.g. monthly review)"
@@ -1666,6 +1682,34 @@ export default function Calendar() {
                                 {event.details && (
                                   <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "var(--text-secondary)" }}>{event.details}</p>
                                 )}
+                                {event.symbol && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void openExternalUrl(
+                                        `https://finance.yahoo.com/quote/${encodeURIComponent(event.symbol!.trim())}`
+                                      );
+                                    }}
+                                    style={{
+                                      marginTop: "8px",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "6px",
+                                      padding: "6px 10px",
+                                      fontSize: "12px",
+                                      fontWeight: 600,
+                                      borderRadius: "6px",
+                                      border: "1px solid var(--accent)",
+                                      background: "transparent",
+                                      color: "var(--accent)",
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    <ExternalLink size={14} aria-hidden />
+                                    Yahoo Finance · {event.symbol}
+                                  </button>
+                                )}
                               </div>
                             ))}
                             {dividendEvents.map((event, idx) => (
@@ -1735,6 +1779,32 @@ export default function Calendar() {
                                 {event.description && (
                                   <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "var(--text-secondary)" }}>{event.description}</p>
                                 )}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void openExternalUrl(
+                                      resolveEconomicEventResourceUrl(event.event_type, event.title)
+                                    );
+                                  }}
+                                  style={{
+                                    marginTop: "8px",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "6px",
+                                    padding: "6px 10px",
+                                    fontSize: "12px",
+                                    fontWeight: 600,
+                                    borderRadius: "6px",
+                                    border: "1px solid var(--accent)",
+                                    background: "transparent",
+                                    color: "var(--accent)",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  <ExternalLink size={14} aria-hidden />
+                                  Release schedule & details
+                                </button>
                               </div>
                             ))}
                             {dayIpoEvents.map((ipo, idx) => (
@@ -1858,6 +1928,32 @@ export default function Calendar() {
                                       {reminder.description}
                                     </p>
                                   )}
+                                  {reminder.referenceUrl && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        void openExternalUrl(reminder.referenceUrl!);
+                                      }}
+                                      style={{
+                                        marginTop: "8px",
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: "6px",
+                                        padding: "6px 10px",
+                                        fontSize: "12px",
+                                        fontWeight: 600,
+                                        borderRadius: "6px",
+                                        border: "1px solid var(--accent)",
+                                        background: "transparent",
+                                        color: "var(--accent)",
+                                        cursor: "pointer",
+                                      }}
+                                    >
+                                      <ExternalLink size={14} aria-hidden />
+                                      Open link
+                                    </button>
+                                  )}
                                   <div style={{ display: "flex", gap: "8px", marginTop: "8px", flexWrap: "wrap" }}>
                                     <button
                                       type="button"
@@ -1979,6 +2075,21 @@ export default function Calendar() {
                                           color: "var(--text-primary)",
                                           fontSize: "12px",
                                           resize: "vertical",
+                                        }}
+                                      />
+                                      <input
+                                        type="url"
+                                        inputMode="url"
+                                        value={editReminderReferenceUrl}
+                                        onChange={(e) => setEditReminderReferenceUrl(e.target.value)}
+                                        placeholder="Optional link (https://…)"
+                                        style={{
+                                          padding: "8px 10px",
+                                          borderRadius: "8px",
+                                          border: "1px solid var(--border-color)",
+                                          background: "var(--bg-secondary)",
+                                          color: "var(--text-primary)",
+                                          fontSize: "12px",
                                         }}
                                       />
                                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 82px", gap: "8px" }}>
@@ -2334,6 +2445,7 @@ export default function Calendar() {
                   type: newReminderType,
                   title: newReminderTitle.trim(),
                   description: newReminderDescription.trim() || undefined,
+                  referenceUrl: normalizeReminderReferenceUrl(newReminderReferenceUrl),
                   startDate: newReminderDate,
                     time: newReminderTime || undefined,
                   color: newReminderColor || undefined,
@@ -2343,6 +2455,7 @@ export default function Calendar() {
                     },
                 };
                 setCustomReminders((prev) => [...prev, reminder]);
+                setNewReminderReferenceUrl("");
                 setShowAddReminder(false);
               }}
               style={{ display: "flex", flexDirection: "column", gap: "12px" }}
@@ -2419,6 +2532,28 @@ export default function Calendar() {
                     color: "var(--text-primary)",
                     fontSize: "14px",
                     resize: "vertical",
+                    outline: "none",
+                  }}
+                />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "13px", color: "var(--text-secondary)", fontWeight: 600 }}>
+                  Link <span style={{ fontWeight: 400 }}>(optional)</span>
+                </label>
+                <input
+                  className="themed-control"
+                  type="url"
+                  inputMode="url"
+                  value={newReminderReferenceUrl}
+                  onChange={(e) => setNewReminderReferenceUrl(e.target.value)}
+                  placeholder="https://… (release calendar, article, etc.)"
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-secondary)",
+                    color: "var(--text-primary)",
+                    fontSize: "14px",
                     outline: "none",
                   }}
                 />
