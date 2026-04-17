@@ -3,7 +3,7 @@ import { ChecklistItemCaption } from "../components/ChecklistItemCaption";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { readTextFile } from "@tauri-apps/api/fs";
-import { Plus, Edit2, Trash2, Target, Activity, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard, BarChart2 } from "lucide-react";
+import { Plus, Edit2, Trash2, Target, Activity, Maximize2, Minimize2, FileText, TrendingUp, ListChecks, GripVertical, X, FolderPlus, ChevronDown, ChevronUp, Folder, ChevronRight, Upload, RotateCcw, ClipboardList, Copy, CopyMinus, AlertTriangle, CheckCircle, LayoutDashboard, BarChart2, Scale, Star } from "lucide-react";
 import { format } from "date-fns";
 import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
 import { LoadingSphere } from "../components/LoadingSphere";
@@ -42,6 +42,21 @@ function hexToRgba(hex: string, alpha: number): string {
   const b = parseInt(m[3], 16);
   return `rgba(${r},${g},${b},${alpha})`;
 }
+
+const FAVORITE_INDICATORS_STORAGE_KEY = "tradebutler_favorite_indicators_v1";
+
+function readFavoriteIndicatorIdsFromStorage(): Set<string> {
+  try {
+    const raw = localStorage.getItem(FAVORITE_INDICATORS_STORAGE_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.map((x) => String(x)).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
 /** Custom X-axis tick that wraps strategy names onto multiple lines. Uses fullName when present to avoid truncated labels. */
 function OverviewChartAxisTick(props: { x?: number; y?: number; payload?: { value?: string; name?: string; fullName?: string }; fontSize?: number }) {
   const { x = 0, y = 0, payload } = props;
@@ -82,6 +97,11 @@ import {
 } from "../utils/scrollManager";
 import { DataMode, getCurrentDataMode, subscribeToDataMode } from "../utils/dataMode";
 import {
+  isPlanestationDemoSyncEnabled,
+  MY_STRATEGY_NAME_FOR_PLANESTATION_SYNC,
+} from "../utils/planestationConstants";
+import { syncPlanestationDemoFromMyStrategy } from "../utils/planestationDemoMirror";
+import {
   getSandboxStrategies,
   addSandboxStrategy,
   updateSandboxStrategy,
@@ -112,6 +132,57 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+
+/** Undo stack for Entry / Take Profit / custom rule sets while editing or creating a strategy. */
+type RulesUndoSnapshot = {
+  entryRuleTexts: string[];
+  takeProfitRuleTexts: string[];
+  customRuleSets: StrategyCustomRuleSet[];
+};
+
+function cloneRulesSnapshot(entry: string[], tp: string[], custom: StrategyCustomRuleSet[]): RulesUndoSnapshot {
+  return {
+    entryRuleTexts: [...entry],
+    takeProfitRuleTexts: [...tp],
+    customRuleSets: custom.map((s) => ({ ...s, rules: [...s.rules] })),
+  };
+}
+
+function rulesSnapshotsEqual(a: RulesUndoSnapshot, b: RulesUndoSnapshot): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Keep Journal section order in sync when a custom rule set is removed (keys match Journal.tsx). */
+function pruneJournalStorageForDeletedCustomRuleSet(ruleSetId: string) {
+  const sectionId = `custom_rules:${ruleSetId}`;
+  const orderKeys = ["tradebutler_journal_section_order", "tradebutler_journal_default_section_order"] as const;
+  for (const key of orderKeys) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) continue;
+      const next = parsed.filter((id) => id !== sectionId);
+      if (next.length !== parsed.length) {
+        localStorage.setItem(key, JSON.stringify(next));
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  try {
+    const hidRaw = localStorage.getItem("tradebutler_journal_hidden_section_ids");
+    if (!hidRaw) return;
+    const hid = JSON.parse(hidRaw) as unknown;
+    if (!Array.isArray(hid) || !hid.every((x) => typeof x === "string")) return;
+    const next = hid.filter((id) => id !== sectionId);
+    if (next.length !== hid.length) {
+      localStorage.setItem("tradebutler_journal_hidden_section_ids", JSON.stringify(next));
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 interface Strategy {
   id: number;
@@ -150,11 +221,51 @@ interface ChecklistItem {
   item_order: number;
   checklist_type: string;
   parent_id: number | null;
-  /** For survey items: true = high (5) is good, false = low (1) is good. Mirrors emotional survey. */
+  /** For survey items: true = high (10) is good, false = low (1) is good. Same flag encodes “Yes is favorable” vs “No is favorable” for yes/no items. */
   high_is_good?: boolean | null;
+  /** For survey items: "scale" (1–10) or "yes_no". Null/undefined = scale (legacy). */
+  survey_format?: string | null;
+  /** When true, journal shows N/A to explicitly skip the question. */
+  survey_allow_na?: boolean | null;
   /** Optional description for this checklist item (kept for backward compatibility; section-level descriptions are preferred). */
   description?: string | null;
 }
+
+/** Post-Trade Survey or custom `survey_*` checklist types. */
+function isSurveyChecklistType(checklistType: string): boolean {
+  return checklistType === "survey" || checklistType.startsWith("survey_");
+}
+
+export type SurveyFormatKind = "scale" | "yes_no";
+
+export type SurveyItemConfig = {
+  survey_format: SurveyFormatKind;
+  high_is_good: boolean;
+  survey_allow_na: boolean;
+};
+
+/** Legacy `scale_5` is treated as 1–10 scale everywhere in the UI. */
+function normalizedSurveyFormat(f: string | null | undefined): SurveyFormatKind {
+  if (f === "yes_no") return "yes_no";
+  return "scale";
+}
+
+/** Persist N/A toggle: false clears the flag in the DB. */
+function surveyNaForInvoke(checklistType: string, item: { survey_allow_na?: boolean | null }): boolean | undefined {
+  if (!isSurveyChecklistType(checklistType)) return undefined;
+  return Boolean(item.survey_allow_na);
+}
+
+/** Suggested post-trade survey questions (insert into the add field). */
+const SURVEY_QUESTION_PRESETS: string[] = [
+  "How well did I follow my plan?",
+  "Calm / clear mindset during the trade",
+  "Confidence in this specific setup",
+  "Stress or pressure felt",
+  "Urge to move stops or override rules",
+  "Discipline right after exit",
+  "Would I take this setup again tomorrow?",
+];
 
 /** Checklist item metrics by outcome (winning/losing, checked/not checked) for overview insights. */
 interface ChecklistItemMetricByOutcomeRow {
@@ -566,6 +677,7 @@ function SortableChecklistItem({
   onEditingTextChange,
   onSaveEdit,
   onCancelEdit,
+  onSurveyConfigChange,
   isGroup = false
 }: { 
   item: ChecklistItem; 
@@ -579,6 +691,12 @@ function SortableChecklistItem({
   onEditingTextChange: (text: string) => void;
   onSaveEdit: () => void;
   onCancelEdit: () => void;
+  /** Survey / custom survey_* items: inline type & polarity editor */
+  onSurveyConfigChange?: (config: {
+    survey_format: SurveyFormatKind;
+    high_is_good: boolean;
+    survey_allow_na: boolean;
+  }) => void;
   isGroup?: boolean;
 }) {
   const {
@@ -596,12 +714,53 @@ function SortableChecklistItem({
     opacity: isDragging ? 0.5 : 1,
   };
 
+  const showSurveyConfig =
+    Boolean(onSurveyConfigChange) &&
+    isEditing &&
+    !isEditingText &&
+    !isGroup &&
+    isSurveyChecklistType(item.checklist_type);
+  const surveyFmt = normalizedSurveyFormat(item.survey_format);
+  const polarGood = item.high_is_good !== false;
+  const allowNa = item.survey_allow_na === true;
+
+  const pillBase = (active: boolean) => ({
+    padding: "5px 11px",
+    fontSize: "11px",
+    fontWeight: 600,
+    borderRadius: "999px",
+    border: `1px solid ${active ? "var(--accent)" : "var(--border-color)"}`,
+    background: active ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+    color: active ? "var(--accent)" : "var(--text-secondary)",
+    cursor: "pointer",
+    transition: "border-color 0.15s, background 0.15s, color 0.15s",
+  } as const);
+
+  const labelColor = isSelected ? "rgba(255,255,255,0.85)" : "var(--text-secondary)";
+  const configDivider = isSelected ? "rgba(255,255,255,0.25)" : "var(--border-color)";
+  const configGroupStyle = {
+    display: "inline-flex" as const,
+    alignItems: "center" as const,
+    gap: "6px",
+    flexShrink: 0,
+    whiteSpace: "nowrap" as const,
+  };
+  const configLabelStyle = {
+    fontSize: "10px",
+    fontWeight: 700,
+    color: labelColor,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.06em",
+  };
+
   return (
     <div
       ref={setNodeRef}
       style={{
         ...style,
         display: "flex",
+        flexDirection: "row",
+        flexWrap: "wrap",
         alignItems: "center",
         gap: isGroup ? "10px" : "8px",
         padding: isGroup ? "14px 16px" : "12px 14px",
@@ -662,7 +821,8 @@ function SortableChecklistItem({
           onBlur={onSaveEdit}
           autoFocus
           style={{
-            flex: 1,
+            flex: "1 1 200px",
+            minWidth: "120px",
             padding: "6px 8px",
             backgroundColor: "var(--bg-primary)",
             border: "1px solid var(--accent)",
@@ -699,6 +859,137 @@ function SortableChecklistItem({
           />
         </div>
       )}
+      {(showSurveyConfig && onSurveyConfigChange) || (isEditing && !isEditingText) ? (
+        <div
+          style={{
+            marginLeft: "auto",
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            flexShrink: 0,
+          }}
+        >
+      {showSurveyConfig && onSurveyConfigChange && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "nowrap",
+            alignItems: "center",
+            gap: "12px",
+            flexShrink: 0,
+            paddingLeft: "10px",
+            borderLeft: `1px solid ${configDivider}`,
+            overflowX: "auto",
+          }}
+        >
+          <div style={configGroupStyle}>
+            <span style={configLabelStyle}>Type</span>
+            <button
+              type="button"
+              onClick={() => onSurveyConfigChange({ survey_format: "scale", high_is_good: polarGood, survey_allow_na: allowNa })}
+              style={pillBase(surveyFmt === "scale")}
+            >
+              1–10 scale
+            </button>
+            <button
+              type="button"
+              onClick={() => onSurveyConfigChange({ survey_format: "yes_no", high_is_good: polarGood, survey_allow_na: allowNa })}
+              style={pillBase(surveyFmt === "yes_no")}
+            >
+              Yes / No
+            </button>
+          </div>
+          <div
+            style={{
+              width: "1px",
+              height: "22px",
+              backgroundColor: configDivider,
+              flexShrink: 0,
+            }}
+            aria-hidden
+          />
+          <div style={configGroupStyle}>
+            <span style={configLabelStyle}>{surveyFmt === "yes_no" ? "Polarity" : "Scale"}</span>
+            {surveyFmt === "yes_no" ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onSurveyConfigChange({ survey_format: "yes_no", high_is_good: true, survey_allow_na: allowNa })}
+                  style={pillBase(polarGood)}
+                >
+                  Yes = favorable
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSurveyConfigChange({ survey_format: "yes_no", high_is_good: false, survey_allow_na: allowNa })}
+                  style={pillBase(!polarGood)}
+                >
+                  No = favorable
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onSurveyConfigChange({ survey_format: "scale", high_is_good: true, survey_allow_na: allowNa })
+                  }
+                  style={pillBase(polarGood)}
+                >
+                  10 = better
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onSurveyConfigChange({ survey_format: "scale", high_is_good: false, survey_allow_na: allowNa })
+                  }
+                  style={pillBase(!polarGood)}
+                >
+                  1 = better
+                </button>
+              </>
+            )}
+          </div>
+          <div
+            style={{
+              width: "1px",
+              height: "22px",
+              backgroundColor: configDivider,
+              flexShrink: 0,
+            }}
+            aria-hidden
+          />
+          <div style={configGroupStyle}>
+            <span style={configLabelStyle}>N/A</span>
+            <button
+              type="button"
+              onClick={() =>
+                onSurveyConfigChange({
+                  survey_format: surveyFmt,
+                  high_is_good: polarGood,
+                  survey_allow_na: true,
+                })
+              }
+              style={pillBase(allowNa)}
+            >
+              On
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                onSurveyConfigChange({
+                  survey_format: surveyFmt,
+                  high_is_good: polarGood,
+                  survey_allow_na: false,
+                })
+              }
+              style={pillBase(!allowNa)}
+            >
+              Off
+            </button>
+          </div>
+        </div>
+      )}
       {isEditing && !isEditingText && (
         <button
           onClick={onDelete}
@@ -710,12 +1001,15 @@ function SortableChecklistItem({
             padding: "4px",
             display: "flex",
             alignItems: "center",
+            flexShrink: 0,
           }}
           title="Delete"
         >
           <X size={16} />
         </button>
       )}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -732,6 +1026,8 @@ function SortableRuleRow({
   onCancelEdit,
   onRemove,
   canEdit,
+  moveToOptions,
+  onMoveTo,
 }: {
   id: string;
   text: string;
@@ -743,6 +1039,9 @@ function SortableRuleRow({
   onCancelEdit: () => void;
   onRemove: () => void;
   canEdit: boolean;
+  /** When non-empty, shows a "Move to…" control (e.g. another ruleset). */
+  moveToOptions?: { value: string; label: string }[];
+  onMoveTo?: (destinationValue: string) => void;
 }) {
   const {
     attributes,
@@ -874,7 +1173,17 @@ function SortableRuleRow({
       )}
 
       {canEdit && !isEditingThis && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            flexShrink: 0,
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+          }}
+        >
           <button
             type="button"
             onClick={(e) => {
@@ -891,10 +1200,12 @@ function SortableRuleRow({
               fontSize: 12,
               fontWeight: 650,
               height: 30,
+              width: 30,
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
               gap: 6,
+              flexShrink: 0,
             }}
             title="Edit rule"
           >
@@ -916,11 +1227,54 @@ function SortableRuleRow({
               fontSize: 12,
               fontWeight: 650,
               height: 30,
+              width: 30,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
             }}
             title="Remove"
           >
             ✕
           </button>
+          {moveToOptions && moveToOptions.length > 0 && onMoveTo && (
+            <select
+              aria-label="Move rule to another ruleset"
+              defaultValue=""
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v) {
+                  onMoveTo(v);
+                  e.target.selectedIndex = 0;
+                }
+              }}
+              style={{
+                height: 30,
+                minWidth: 88,
+                maxWidth: 148,
+                padding: "0 8px",
+                borderRadius: 8,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-primary)",
+                color: "var(--text-primary)",
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: "pointer",
+                boxSizing: "border-box",
+                flexShrink: 1,
+              }}
+            >
+              <option value="" disabled>
+                Move to…
+              </option>
+              {moveToOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       )}
     </div>
@@ -1250,6 +1604,7 @@ function ChecklistSection({
   sectionDescription = "",
   onSectionDescriptionChange,
   onSectionDescriptionBlur,
+  onSurveyItemConfigChange,
 }: { 
   type: string; 
   title: string; 
@@ -1269,7 +1624,14 @@ function ChecklistSection({
   startEditingItem: (item: ChecklistItem) => void;
   saveEditedItem: (itemId: number, newText: string) => Promise<void>;
   cancelEditingItem: () => void;
-  addChecklistItem: (strategyId: number, type: string, text: string, parentId?: number | null, highIsGood?: boolean) => Promise<void>;
+  addChecklistItem: (
+    strategyId: number,
+    type: string,
+    text: string,
+    parentId?: number | null,
+    surveyOpts?: { highIsGood?: boolean; surveyFormat?: SurveyFormatKind; allowNa?: boolean }
+  ) => Promise<void>;
+  onSurveyItemConfigChange?: (itemId: number, config: SurveyItemConfig) => void | Promise<void>;
   setPendingGroupAction: Dispatch<SetStateAction<{ strategyId: number; type: string; itemIds: number[] } | null>>;
   setGroupName: Dispatch<SetStateAction<string>>;
   setShowGroupModal: Dispatch<SetStateAction<boolean>>;
@@ -1291,6 +1653,8 @@ function ChecklistSection({
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState("");
   const [surveyHighIsGood, setSurveyHighIsGood] = useState(true);
+  const [surveyFormatNew, setSurveyFormatNew] = useState<SurveyFormatKind>("scale");
+  const [surveyAllowNaNew, setSurveyAllowNaNew] = useState(false);
   // Deduplicate by id (first occurrence wins), then hide internal placeholders (used in DB for empty custom checklist types)
   const dedupedById = (() => {
     const byId = new Map<number, ChecklistItem>();
@@ -1487,6 +1851,7 @@ function ChecklistSection({
                       onEditingTextChange={setEditingItemText}
                       onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
                       onCancelEdit={cancelEditingItem}
+                      onSurveyConfigChange={onSurveyItemConfigChange ? (cfg) => { void onSurveyItemConfigChange(item.id, cfg); } : undefined}
                       isGroup={true}
                     />
                     {children.length > 0 && (
@@ -1508,6 +1873,7 @@ function ChecklistSection({
                               onEditingTextChange={setEditingItemText}
                               onSaveEdit={() => saveEditedItem(child.id, editingItemText)}
                               onCancelEdit={cancelEditingItem}
+                              onSurveyConfigChange={onSurveyItemConfigChange ? (cfg) => { void onSurveyItemConfigChange(child.id, cfg); } : undefined}
                               isGroup={false}
                             />
                           </div>
@@ -1531,6 +1897,7 @@ function ChecklistSection({
                   onEditingTextChange={setEditingItemText}
                   onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
                   onCancelEdit={cancelEditingItem}
+                  onSurveyConfigChange={onSurveyItemConfigChange ? (cfg) => { void onSurveyItemConfigChange(item.id, cfg); } : undefined}
                   isGroup={false}
                 />
               );
@@ -1564,6 +1931,7 @@ function ChecklistSection({
                       onEditingTextChange={setEditingItemText}
                       onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
                       onCancelEdit={cancelEditingItem}
+                      onSurveyConfigChange={onSurveyItemConfigChange ? (cfg) => { void onSurveyItemConfigChange(item.id, cfg); } : undefined}
                       isGroup={true}
                     />
                     {/* Group Children - with visual connection */}
@@ -1600,6 +1968,7 @@ function ChecklistSection({
                               onEditingTextChange={setEditingItemText}
                               onSaveEdit={() => saveEditedItem(child.id, editingItemText)}
                               onCancelEdit={cancelEditingItem}
+                              onSurveyConfigChange={onSurveyItemConfigChange ? (cfg) => { void onSurveyItemConfigChange(child.id, cfg); } : undefined}
                             />
                           </div>
                         ))}
@@ -1623,6 +1992,7 @@ function ChecklistSection({
                     onEditingTextChange={setEditingItemText}
                     onSaveEdit={() => saveEditedItem(item.id, editingItemText)}
                     onCancelEdit={cancelEditingItem}
+                    onSurveyConfigChange={onSurveyItemConfigChange ? (cfg) => { void onSurveyItemConfigChange(item.id, cfg); } : undefined}
                   />
                 );
               }
@@ -1820,7 +2190,39 @@ function ChecklistSection({
             borderRadius: "8px",
             border: "1px dashed var(--border-color)",
           }}>
-            <div style={{ display: "flex", gap: "10px", alignItems: "flex-start" }}>
+            {isSurveyChecklistType(type) && (
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", marginBottom: "12px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)" }}>Quick add:</span>
+                {SURVEY_QUESTION_PRESETS.map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    onClick={() => {
+                      setNewChecklistItem((prev) => {
+                        const m = new Map(prev);
+                        m.set(type, q);
+                        return m;
+                      });
+                    }}
+                    style={{
+                      padding: "4px 10px",
+                      fontSize: "11px",
+                      fontWeight: 500,
+                      borderRadius: "999px",
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-primary)",
+                      color: "var(--text-secondary)",
+                      cursor: "pointer",
+                      maxWidth: "100%",
+                      textAlign: "left",
+                    }}
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
             <input
               type="text"
               value={currentValue}
@@ -1834,12 +2236,21 @@ function ChecklistSection({
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  addChecklistItem(selectedStrategy, type, currentValue, null, type === "survey" ? surveyHighIsGood : undefined);
+                  addChecklistItem(
+                    selectedStrategy,
+                    type,
+                    currentValue,
+                    null,
+                    isSurveyChecklistType(type)
+                      ? { highIsGood: surveyHighIsGood, surveyFormat: surveyFormatNew, allowNa: surveyAllowNaNew }
+                      : undefined
+                  );
                 }
               }}
               placeholder={`Add ${title.toLowerCase()} item...`}
               style={{
-                flex: 1,
+                flex: "1 1 200px",
+                minWidth: "160px",
                 padding: "12px 14px",
                 backgroundColor: "var(--bg-primary)",
                 border: "1px solid var(--border-color)",
@@ -1852,21 +2263,17 @@ function ChecklistSection({
               onFocus={(e) => e.target.style.borderColor = "var(--accent)"}
               onBlur={(e) => e.target.style.borderColor = "var(--border-color)"}
             />
-            {type === "survey" && (
-              <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-                <span style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: "500" }}>Scale:</span>
-                <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px", color: "var(--text-primary)" }}>
-                  <input type="radio" name={`survey-high-${type}`} checked={surveyHighIsGood === true} onChange={() => setSurveyHighIsGood(true)} />
-                  High is good (e.g. 5 = desirable)
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px", color: "var(--text-primary)" }}>
-                  <input type="radio" name={`survey-high-${type}`} checked={surveyHighIsGood === false} onChange={() => setSurveyHighIsGood(false)} />
-                  Low is good (e.g. 1 = desirable)
-                </label>
-              </div>
-            )}
             <button
-              onClick={() => addChecklistItem(selectedStrategy, type, currentValue, null, type === "survey" ? surveyHighIsGood : undefined)}
+              type="button"
+              onClick={() => addChecklistItem(
+                selectedStrategy,
+                type,
+                currentValue,
+                null,
+                isSurveyChecklistType(type)
+                  ? { highIsGood: surveyHighIsGood, surveyFormat: surveyFormatNew, allowNa: surveyAllowNaNew }
+                  : undefined
+              )}
               style={{
                 background: "var(--accent)",
                 border: "none",
@@ -1879,6 +2286,7 @@ function ChecklistSection({
                 gap: "6px",
                 fontSize: "14px",
                 fontWeight: "600",
+                flexShrink: 0,
                 transition: "opacity 0.2s, transform 0.2s",
               }}
               onMouseEnter={(e) => {
@@ -1893,6 +2301,173 @@ function ChecklistSection({
               <Plus size={16} />
               Add
             </button>
+            {isSurveyChecklistType(type) && (
+              <>
+                <div style={{ width: "1px", height: "28px", backgroundColor: "var(--border-color)", flexShrink: 0, alignSelf: "center" }} aria-hidden />
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "nowrap",
+                    alignItems: "center",
+                    gap: "12px",
+                    flex: "1 1 auto",
+                    minWidth: 0,
+                    overflowX: "auto",
+                  }}
+                >
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", flexShrink: 0, whiteSpace: "nowrap" }}>
+                    <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Type</span>
+                    <button
+                      type="button"
+                      onClick={() => setSurveyFormatNew("scale")}
+                      style={{
+                        padding: "5px 11px",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        borderRadius: "999px",
+                        border: `1px solid ${surveyFormatNew === "scale" ? "var(--accent)" : "var(--border-color)"}`,
+                        background: surveyFormatNew === "scale" ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                        color: surveyFormatNew === "scale" ? "var(--accent)" : "var(--text-secondary)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      1–10 scale
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSurveyFormatNew("yes_no")}
+                      style={{
+                        padding: "5px 11px",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        borderRadius: "999px",
+                        border: `1px solid ${surveyFormatNew === "yes_no" ? "var(--accent)" : "var(--border-color)"}`,
+                        background: surveyFormatNew === "yes_no" ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                        color: surveyFormatNew === "yes_no" ? "var(--accent)" : "var(--text-secondary)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Yes / No
+                    </button>
+                  </div>
+                  <div style={{ width: "1px", height: "22px", backgroundColor: "var(--border-color)", flexShrink: 0 }} aria-hidden />
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", flexShrink: 0, whiteSpace: "nowrap" }}>
+                    <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                      {surveyFormatNew === "yes_no" ? "Polarity" : "Scale"}
+                    </span>
+                    {surveyFormatNew === "yes_no" ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setSurveyHighIsGood(true)}
+                          style={{
+                            padding: "5px 11px",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            borderRadius: "999px",
+                            border: `1px solid ${surveyHighIsGood ? "var(--accent)" : "var(--border-color)"}`,
+                            background: surveyHighIsGood ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                            color: surveyHighIsGood ? "var(--accent)" : "var(--text-secondary)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Yes = favorable
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSurveyHighIsGood(false)}
+                          style={{
+                            padding: "5px 11px",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            borderRadius: "999px",
+                            border: `1px solid ${!surveyHighIsGood ? "var(--accent)" : "var(--border-color)"}`,
+                            background: !surveyHighIsGood ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                            color: !surveyHighIsGood ? "var(--accent)" : "var(--text-secondary)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          No = favorable
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setSurveyHighIsGood(true)}
+                          style={{
+                            padding: "5px 11px",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            borderRadius: "999px",
+                            border: `1px solid ${surveyHighIsGood ? "var(--accent)" : "var(--border-color)"}`,
+                            background: surveyHighIsGood ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                            color: surveyHighIsGood ? "var(--accent)" : "var(--text-secondary)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          10 = better
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSurveyHighIsGood(false)}
+                          style={{
+                            padding: "5px 11px",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            borderRadius: "999px",
+                            border: `1px solid ${!surveyHighIsGood ? "var(--accent)" : "var(--border-color)"}`,
+                            background: !surveyHighIsGood ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                            color: !surveyHighIsGood ? "var(--accent)" : "var(--text-secondary)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          1 = better
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <div style={{ width: "1px", height: "22px", backgroundColor: "var(--border-color)", flexShrink: 0 }} aria-hidden />
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", flexShrink: 0, whiteSpace: "nowrap" }}>
+                    <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                      N/A
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSurveyAllowNaNew(true)}
+                      style={{
+                        padding: "5px 11px",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        borderRadius: "999px",
+                        border: `1px solid ${surveyAllowNaNew ? "var(--accent)" : "var(--border-color)"}`,
+                        background: surveyAllowNaNew ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                        color: surveyAllowNaNew ? "var(--accent)" : "var(--text-secondary)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      On
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSurveyAllowNaNew(false)}
+                      style={{
+                        padding: "5px 11px",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        borderRadius: "999px",
+                        border: `1px solid ${!surveyAllowNaNew ? "var(--accent)" : "var(--border-color)"}`,
+                        background: !surveyAllowNaNew ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "var(--bg-primary)",
+                        color: !surveyAllowNaNew ? "var(--accent)" : "var(--text-secondary)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Off
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
             </div>
           </div>
         </>
@@ -1995,6 +2570,47 @@ export default function Strategies() {
   const [editingItemText, setEditingItemText] = useState<string>("");
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [strategyToDelete, setStrategyToDelete] = useState<number | null>(null);
+  /** In-app confirmation for deleting a custom rule set (matches app theme; native dialogs do not). */
+  const [pendingCustomRuleSetDelete, setPendingCustomRuleSetDelete] = useState<{ id: string; title: string } | null>(null);
+  /** Themed confirm before removing a single checklist item (group, child, or regular row). */
+  const [pendingChecklistItemDelete, setPendingChecklistItemDelete] = useState<{
+    strategyId: number;
+    itemId: number;
+    checklistType: string;
+    itemLabel: string;
+  } | null>(null);
+  /** Themed modal instead of window.prompt for custom rule set name / rename. */
+  const [customRuleSetNameModal, setCustomRuleSetNameModal] = useState<
+    null | { kind: "add" } | { kind: "rename"; id: string; initialTitle: string }
+  >(null);
+  const [customRuleSetNameDraft, setCustomRuleSetNameDraft] = useState("");
+  /** Undo stack for rules (entry / take profit / custom sets); see cloneRulesSnapshot. */
+  const [rulesEditHistory, setRulesEditHistory] = useState<RulesUndoSnapshot[]>([]);
+
+  const appendRulesHistoryTransition = useCallback((before: RulesUndoSnapshot, after: RulesUndoSnapshot) => {
+    if (!isEditing && !isCreating) return;
+    if (rulesSnapshotsEqual(before, after)) return;
+    setRulesEditHistory((prev) => {
+      const base = prev.length === 0 ? [before] : prev;
+      const last = base[base.length - 1];
+      if (rulesSnapshotsEqual(last, after)) return prev;
+      return [...base, after].slice(-15);
+    });
+  }, [isEditing, isCreating]);
+
+  const handleRulesUndo = useCallback(() => {
+    setRulesEditHistory((prev) => {
+      if (prev.length <= 1) return prev;
+      const newH = prev.slice(0, -1);
+      const restore = newH[newH.length - 1];
+      setEntryRuleTexts([...restore.entryRuleTexts]);
+      setTakeProfitRuleTexts([...restore.takeProfitRuleTexts]);
+      setCustomRuleSets(restore.customRuleSets.map((s) => ({ ...s, rules: [...s.rules] })));
+      setEditingRuleIndex(null);
+      setEditingRuleText("");
+      return newH;
+    });
+  }, []);
   const [associatedRecords, setAssociatedRecords] = useState<{
     trade_count: number;
     journal_entry_count: number;
@@ -2050,7 +2666,14 @@ export default function Strategies() {
   const [indicatorSearch, setIndicatorSearch] = useState("");
   const [indicatorDropdownOpen, setIndicatorDropdownOpen] = useState(false);
   /** Narrow the strategy signal picker list (matches Signals page groupings). */
-  const [signalSelectorKindFilter, setSignalSelectorKindFilter] = useState<"all" | "indicator" | "technical" | "candlestick">("all");
+  const [signalSelectorKindFilter, setSignalSelectorKindFilter] = useState<
+    "all" | "indicator" | "technical" | "candlestick" | "custom"
+  >("all");
+  /** When true, signal picker list only shows starred favorites (Signals page). */
+  const [signalSelectorFavoritesOnly, setSignalSelectorFavoritesOnly] = useState(false);
+  /** Confirm before removing a signal from the strategy list (draft until Save). */
+  const [pendingStrategySignalRemove, setPendingStrategySignalRemove] = useState<null | { indicatorId: string; label: string }>(null);
+  const canEditStrategySignals = isEditing || isCreating;
   const [presetModal, setPresetModal] = useState<null | "add" | number>(null);
   const [presetForm, setPresetForm] = useState<{ name: string; formula_expression: string }>({ name: "", formula_expression: "" });
   /** When true, preset modal was opened from Add/Edit metric; after saving new preset we select it in the metric form. */
@@ -2607,7 +3230,8 @@ export default function Strategies() {
     if (selectedStrategy) {
       void loadStrategyData(selectedStrategy);
     }
-  }, [selectedStrategy, dataMode, modeSwitchReloadKey]);
+    // Re-run when `strategies` fills in (e.g. switching to Demo) so notes/signals match persisted sandbox data.
+  }, [selectedStrategy, dataMode, modeSwitchReloadKey, strategies]);
 
   // Load paired trades when opening the Trades tab (not on every tab switch via loadStrategyData)
   useEffect(() => {
@@ -2637,7 +3261,11 @@ export default function Strategies() {
     if (selectedStrategy == null) return;
     if (isEditing || isCreating) return;
     setStrategyIndicatorIds(loadStrategyIndicatorIds(dataMode, selectedStrategy));
-  }, [selectedStrategy, dataMode, isEditing, isCreating]);
+  }, [selectedStrategy, dataMode, isEditing, isCreating, strategies]);
+
+  useEffect(() => {
+    if (!isEditing && !isCreating) setIndicatorDropdownOpen(false);
+  }, [isEditing, isCreating]);
 
   // When viewing a strategy (not editing/creating), load text rules so the Rules tab can display them.
   useEffect(() => {
@@ -2649,7 +3277,7 @@ export default function Strategies() {
     setCustomRuleSets(sets);
     setActiveRulesPanel("entry");
     setActiveCustomRuleSetId(null);
-  }, [selectedStrategy, dataMode, isEditing, isCreating]);
+  }, [selectedStrategy, dataMode, isEditing, isCreating, strategies]);
 
   useEffect(() => {
     if ((activeTab === "survey" || activeTab === "surveys") && selectedStrategy != null && !isCreating) {
@@ -2951,8 +3579,16 @@ export default function Strategies() {
           created_at: s.created_at,
           color: s.color,
           display_order: null as number | null,
+          author: s.author ?? null,
         }));
         setStrategies(data);
+        if (!preserveEditingState) {
+          const notesMap = new Map<number, string>();
+          data.forEach((s) => {
+            if (s.id != null) notesMap.set(s.id, s.notes || "");
+          });
+          setNotesContent(notesMap);
+        }
         const state = loadSandboxState();
         const pairingMethod = (localStorage.getItem("tradebutler_pairing_method") || "FIFO") as "FIFO" | "LIFO";
         const { pairs } = buildPositionGroupsAndPairs(
@@ -3244,8 +3880,23 @@ export default function Strategies() {
     }
   };
 
-  const addChecklistItem = async (strategyId: number, type: string, text: string, parentId: number | null = null, highIsGood?: boolean) => {
+  const addChecklistItem = async (
+    strategyId: number,
+    type: string,
+    text: string,
+    parentId: number | null = null,
+    surveyOpts?: { highIsGood?: boolean; surveyFormat?: SurveyFormatKind; allowNa?: boolean }
+  ) => {
     if (!text.trim()) return;
+    const surveyHigh = surveyOpts?.highIsGood ?? true;
+    const surveyFmt: SurveyFormatKind = surveyOpts?.surveyFormat === "yes_no" ? "yes_no" : "scale";
+    const surveyExtras = isSurveyChecklistType(type)
+      ? {
+          high_is_good: surveyHigh,
+          survey_format: surveyFmt,
+          survey_allow_na: Boolean(surveyOpts?.allowNa),
+        }
+      : {};
     
     // If creating (virtual strategy ID), use tempChecklists
     if (strategyId === -1) {
@@ -3272,7 +3923,7 @@ export default function Strategies() {
         item_order: itemOrder,
         checklist_type: type,
         parent_id: parentId,
-        ...(type === "survey" && { high_is_good: highIsGood ?? true }),
+        ...surveyExtras,
       };
 
       const updatedChecklist = new Map(currentChecklist);
@@ -3334,7 +3985,7 @@ export default function Strategies() {
         item_order: itemOrder,
         checklist_type: type,
         parent_id: parentId,
-        ...(type === "survey" && { high_is_good: highIsGood ?? true }),
+        ...surveyExtras,
       };
 
       const updatedChecklist = new Map(currentChecklist);
@@ -3380,7 +4031,10 @@ export default function Strategies() {
         itemOrder: itemOrder,
         checklistType: type,
         parentId: parentId,
-        high_is_good: type === "survey" ? (highIsGood ?? true) : undefined,
+        high_is_good: isSurveyChecklistType(type) ? surveyHigh : undefined,
+        description: null,
+        survey_format: isSurveyChecklistType(type) ? surveyFmt : undefined,
+        survey_allow_na: isSurveyChecklistType(type) ? Boolean(surveyOpts?.allowNa) : undefined,
       });
 
       const newItem: ChecklistItem = {
@@ -3391,7 +4045,7 @@ export default function Strategies() {
         item_order: itemOrder,
         checklist_type: type,
         parent_id: parentId,
-        ...(type === "survey" && { high_is_good: highIsGood ?? true }),
+        ...surveyExtras,
       };
 
       const updatedChecklist = new Map(currentChecklist);
@@ -3409,40 +4063,71 @@ export default function Strategies() {
     }
   };
 
-  const deleteChecklistItem = async (strategyId: number, itemId: number, type: string) => {
-    if (!confirm("Delete this item? This cannot be undone.")) return;
-    // If creating (virtual strategy ID), use tempChecklists
+  const deleteChecklistItem = (strategyId: number, itemId: number, type: string) => {
+    let itemLabel = "this item";
+    if (strategyId === -1) {
+      const it = (tempChecklists.get(type) || []).find((i) => i.id === itemId);
+      if (it?.item_text?.trim()) itemLabel = it.item_text.trim();
+    } else if (isEditing && editingChecklists.has(strategyId)) {
+      const it = (editingChecklists.get(strategyId)!.get(type) || []).find((i) => i.id === itemId);
+      if (it?.item_text?.trim()) itemLabel = it.item_text.trim();
+    } else {
+      const it = (checklists.get(strategyId)?.get(type) || []).find((i) => i.id === itemId);
+      if (it?.item_text?.trim()) itemLabel = it.item_text.trim();
+    }
+    setPendingChecklistItemDelete({ strategyId, itemId, checklistType: type, itemLabel });
+  };
+
+  const handleChecklistItemDeleteCancel = () => setPendingChecklistItemDelete(null);
+
+  const handleStrategySignalRemoveCancel = () => setPendingStrategySignalRemove(null);
+
+  const confirmRemoveStrategySignal = () => {
+    const pending = pendingStrategySignalRemove;
+    if (!pending) return;
+    setPendingStrategySignalRemove(null);
+    setStrategyIndicatorIds((prev) => prev.filter((id) => id !== pending.indicatorId));
+  };
+
+  const requestRemoveStrategySignal = (indicatorId: string, label: string) => {
+    setPendingStrategySignalRemove({ indicatorId, label: label.trim() || indicatorId });
+  };
+
+  const confirmDeleteChecklistItem = async () => {
+    const pending = pendingChecklistItemDelete;
+    if (!pending) return;
+    const { strategyId, itemId, checklistType: type } = pending;
+    setPendingChecklistItemDelete(null);
+
     if (strategyId === -1) {
       const currentChecklist = tempChecklists;
       const items = currentChecklist.get(type) || [];
-      const updatedItems = items.filter(item => item.id !== itemId);
+      const updatedItems = items.filter((item) => item.id !== itemId);
       const updatedChecklist = new Map(currentChecklist);
       updatedChecklist.set(type, updatedItems);
       setTempChecklists(updatedChecklist);
       return;
     }
-    
-    // If editing, use editingChecklists instead of deleting directly
+
     if (isEditing && editingChecklists.has(strategyId)) {
       const currentChecklist = editingChecklists.get(strategyId)!;
       const items = currentChecklist.get(type) || [];
-      const updatedItems = items.filter(item => item.id !== itemId);
+      const updatedItems = items.filter((item) => item.id !== itemId);
       const updatedChecklist = new Map(currentChecklist);
       updatedChecklist.set(type, updatedItems);
       setEditingChecklists(new Map(editingChecklists.set(strategyId, updatedChecklist)));
-      
-      // Update history
+
       const history = checklistEditHistory.get(strategyId) || [];
       const newHistory = [...history, new Map(updatedChecklist)].slice(-10);
       setChecklistEditHistory(new Map(checklistEditHistory.set(strategyId, newHistory)));
       return;
     }
-    
+
     try {
       await invoke("delete_strategy_checklist_item", { id: itemId });
       const currentChecklist = checklists.get(strategyId) || new Map<string, ChecklistItem[]>();
       const items = currentChecklist.get(type) || [];
-      const updatedItems = items.filter(item => item.id !== itemId);
+      const updatedItems = items.filter((item) => item.id !== itemId);
       const updatedChecklist = new Map(currentChecklist);
       updatedChecklist.set(type, updatedItems);
       setChecklists(new Map(checklists.set(strategyId, updatedChecklist)));
@@ -3790,7 +4475,10 @@ export default function Strategies() {
             itemOrder: newOrder,
             checklistType: checklistType,
             parentId: groupId,
-            high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
+            high_is_good: isSurveyChecklistType(item.checklist_type) ? (item.high_is_good ?? true) : undefined,
+            description: item.description ?? null,
+            survey_format: isSurveyChecklistType(item.checklist_type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+            survey_allow_na: surveyNaForInvoke(item.checklist_type, item),
           });
           orderOffset++;
         }
@@ -3929,7 +4617,10 @@ export default function Strategies() {
           itemOrder: item.item_order,
           checklistType: item.checklist_type,
           parentId: item.parent_id,
-          high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
+          high_is_good: isSurveyChecklistType(item.checklist_type) ? (item.high_is_good ?? true) : undefined,
+          description: item.description ?? null,
+          survey_format: isSurveyChecklistType(item.checklist_type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+          survey_allow_na: surveyNaForInvoke(item.checklist_type, item),
         });
         await loadChecklists(selectedStrategy);
       }
@@ -3945,6 +4636,78 @@ export default function Strategies() {
   const cancelEditingItem = () => {
     setEditingItemId(null);
     setEditingItemText("");
+  };
+
+  const handleSurveyItemConfigChange = async (itemId: number, config: SurveyItemConfig) => {
+    const findAndMap = (
+      checklistMap: Map<string, ChecklistItem[]>,
+      fn: (item: ChecklistItem) => ChecklistItem
+    ): Map<string, ChecklistItem[]> | null => {
+      let found = false;
+      const next = new Map<string, ChecklistItem[]>();
+      for (const [t, items] of checklistMap.entries()) {
+        next.set(
+          t,
+          items.map((it) => {
+            if (it.id !== itemId) return it;
+            found = true;
+            return fn(it);
+          })
+        );
+      }
+      return found ? next : null;
+    };
+
+    const patchItem = (it: ChecklistItem): ChecklistItem => ({
+      ...it,
+      survey_format: config.survey_format,
+      high_is_good: config.high_is_good,
+      survey_allow_na: config.survey_allow_na,
+    });
+
+    if (isCreating) {
+      const updated = findAndMap(tempChecklists, patchItem);
+      if (updated) setTempChecklists(updated);
+      return;
+    }
+    if (isEditing && selectedStrategy != null && editingChecklists.has(selectedStrategy)) {
+      const cur = editingChecklists.get(selectedStrategy)!;
+      const updated = findAndMap(cur, patchItem);
+      if (updated) {
+        setEditingChecklists(new Map(editingChecklists.set(selectedStrategy, updated)));
+        const history = checklistEditHistory.get(selectedStrategy) || [];
+        const newHistory = [...history, new Map(updated)].slice(-10);
+        setChecklistEditHistory(new Map(checklistEditHistory.set(selectedStrategy, newHistory)));
+      }
+      return;
+    }
+    if (selectedStrategy == null) return;
+    const checklistMap = checklists.get(selectedStrategy) || new Map<string, ChecklistItem[]>();
+    let item: ChecklistItem | undefined;
+    for (const arr of checklistMap.values()) {
+      item = arr.find((i) => i.id === itemId);
+      if (item) break;
+    }
+    if (!item) return;
+    try {
+      await invoke("save_strategy_checklist_item", {
+        id: itemId,
+        strategyId: selectedStrategy,
+        itemText: item.item_text,
+        isChecked: item.is_checked,
+        itemOrder: item.item_order,
+        checklistType: item.checklist_type,
+        parentId: item.parent_id,
+        high_is_good: isSurveyChecklistType(item.checklist_type) ? config.high_is_good : undefined,
+        description: item.description ?? null,
+        survey_format: isSurveyChecklistType(item.checklist_type) ? config.survey_format : undefined,
+        survey_allow_na: isSurveyChecklistType(item.checklist_type) ? config.survey_allow_na : undefined,
+      });
+      await loadChecklists(selectedStrategy);
+    } catch (error) {
+      console.error("Error saving survey item settings:", error);
+      alert("Failed to save survey settings: " + error);
+    }
   };
 
   const reorderChecklistItems = async (strategyId: number, type: string, activeId: number, overId: number) => {
@@ -4000,7 +4763,10 @@ export default function Strategies() {
           itemOrder: item.item_order,
           checklistType: type,
           parentId: item.parent_id,
-          high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
+          high_is_good: isSurveyChecklistType(item.checklist_type) ? (item.high_is_good ?? true) : undefined,
+          description: item.description ?? null,
+          survey_format: isSurveyChecklistType(item.checklist_type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+          survey_allow_na: surveyNaForInvoke(item.checklist_type, item),
         });
       }
     } catch (error) {
@@ -4022,6 +4788,20 @@ export default function Strategies() {
     setEditingFormData({ name: "", description: "", color: "#3b82f6", author: "" });
     setNewStrategyNotes("");
     setTempChecklists(new Map()); // Explicitly clear temp checklists when creating new strategy
+    setStrategyIndicatorIds([]);
+    setEntryRulesEnabled(true);
+    setTakeProfitRulesEnabled(true);
+    setEntryRuleTexts([]);
+    setTakeProfitRuleTexts([]);
+    setCustomRuleSets([]);
+    setActiveRulesPanel("entry");
+    setActiveCustomRuleSetId(null);
+    setRuleDraftText("");
+    setEditingRuleIndex(null);
+    setEditingRuleText("");
+    setIndicatorSearch("");
+    setSignalSelectorKindFilter("all");
+    setRulesEditHistory([cloneRulesSnapshot([], [], [])]);
     setActiveTab("notes");
     tabScrollPositions.current.clear();
   };
@@ -4406,6 +5186,9 @@ export default function Strategies() {
         saveStrategyRuleTexts(dataMode, newStrategyId, "entry", entryRuleTexts);
         saveStrategyRuleTexts(dataMode, newStrategyId, "takeProfit", takeProfitRuleTexts);
         saveStrategyCustomRuleSets(dataMode, newStrategyId, customRuleSets);
+        if (strategyIndicatorIds.length > 0) {
+          saveStrategyIndicatorIds(dataMode, newStrategyId, strategyIndicatorIds);
+        }
         return;
       }
       // Create the strategy - returns just the ID
@@ -4455,7 +5238,10 @@ export default function Strategies() {
               itemOrder: item.item_order,
               checklistType: type,
               parentId: null,
-              high_is_good: type === "survey" ? (item.high_is_good ?? true) : undefined,
+              high_is_good: isSurveyChecklistType(type) ? (item.high_is_good ?? true) : undefined,
+              description: item.description ?? null,
+              survey_format: isSurveyChecklistType(type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+              survey_allow_na: surveyNaForInvoke(type, item),
             });
             idMap.set(item.id, newId);
           }
@@ -4475,7 +5261,10 @@ export default function Strategies() {
                 itemOrder: item.item_order,
                 checklistType: type,
                 parentId: newParentId,
-                high_is_good: type === "survey" ? (item.high_is_good ?? true) : undefined,
+                high_is_good: isSurveyChecklistType(type) ? (item.high_is_good ?? true) : undefined,
+                description: item.description ?? null,
+                survey_format: isSurveyChecklistType(type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+                survey_allow_na: surveyNaForInvoke(type, item),
               });
               idMap.set(item.id, newId);
             }
@@ -4495,6 +5284,10 @@ export default function Strategies() {
             itemOrder: 0,
             checklistType: type,
             parentId: null,
+            high_is_good: undefined,
+            description: null,
+            survey_format: undefined,
+            survey_allow_na: undefined,
           });
         }
       }
@@ -4645,6 +5438,9 @@ export default function Strategies() {
     setEditingRuleText("");
     setIndicatorSearch("");
     setSignalSelectorKindFilter("all");
+    setSignalSelectorFavoritesOnly(false);
+    setPendingStrategySignalRemove(null);
+    setRulesEditHistory([]);
   };
 
   const handleEditClick = () => {
@@ -4694,15 +5490,20 @@ export default function Strategies() {
       const enabled = loadStrategyRulesEnabled(dataMode, selectedStrategyData.id);
       setEntryRulesEnabled(enabled.entryRulesEnabled);
       setTakeProfitRulesEnabled(enabled.takeProfitRulesEnabled);
-      setEntryRuleTexts(loadStrategyRuleTexts(dataMode, selectedStrategyData.id, "entry"));
-      setTakeProfitRuleTexts(loadStrategyRuleTexts(dataMode, selectedStrategyData.id, "takeProfit"));
+      const entryRules = loadStrategyRuleTexts(dataMode, selectedStrategyData.id, "entry");
+      const tpRules = loadStrategyRuleTexts(dataMode, selectedStrategyData.id, "takeProfit");
       const sets = loadStrategyCustomRuleSets(dataMode, selectedStrategyData.id);
+      setEntryRuleTexts(entryRules);
+      setTakeProfitRuleTexts(tpRules);
       setCustomRuleSets(sets);
+      setRulesEditHistory([cloneRulesSnapshot(entryRules, tpRules, sets)]);
       setActiveRulesPanel("entry");
       setActiveCustomRuleSetId(null);
       setIndicatorDropdownOpen(false);
       setIndicatorSearch("");
       setSignalSelectorKindFilter("all");
+      setSignalSelectorFavoritesOnly(false);
+      setPendingStrategySignalRemove(null);
     }
   };
 
@@ -4750,7 +5551,12 @@ export default function Strategies() {
           originalItem.item_text !== item.item_text ||
           originalItem.item_order !== item.item_order ||
           originalItem.parent_id !== item.parent_id ||
-          originalItem.checklist_type !== item.checklist_type
+          originalItem.checklist_type !== item.checklist_type ||
+          (isSurveyChecklistType(type) && (
+            (originalItem.high_is_good ?? true) !== (item.high_is_good ?? true) ||
+            normalizedSurveyFormat(originalItem.survey_format) !== normalizedSurveyFormat(item.survey_format) ||
+            (originalItem.survey_allow_na ?? false) !== (item.survey_allow_na ?? false)
+          ))
         ));
         
         if (isNew || hasChanged) {
@@ -4762,7 +5568,10 @@ export default function Strategies() {
             itemOrder: item.item_order,
             checklistType: type,
             parentId: null,
-            high_is_good: type === "survey" ? (item.high_is_good ?? true) : undefined,
+            high_is_good: isSurveyChecklistType(type) ? (item.high_is_good ?? true) : undefined,
+            description: item.description ?? null,
+            survey_format: isSurveyChecklistType(type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+            survey_allow_na: surveyNaForInvoke(type, item),
           });
           
           // If it's a new item, map the old temporary ID to the new database ID
@@ -4791,7 +5600,12 @@ export default function Strategies() {
           originalItem.item_text !== item.item_text ||
           originalItem.item_order !== item.item_order ||
           originalItem.parent_id !== correctParentId ||
-          originalItem.checklist_type !== item.checklist_type
+          originalItem.checklist_type !== item.checklist_type ||
+          (isSurveyChecklistType(type) && (
+            (originalItem.high_is_good ?? true) !== (item.high_is_good ?? true) ||
+            normalizedSurveyFormat(originalItem.survey_format) !== normalizedSurveyFormat(item.survey_format) ||
+            (originalItem.survey_allow_na ?? false) !== (item.survey_allow_na ?? false)
+          ))
         ));
         
         if (isNew || hasChanged) {
@@ -4803,7 +5617,10 @@ export default function Strategies() {
             itemOrder: item.item_order,
             checklistType: type,
             parentId: correctParentId,
-            high_is_good: type === "survey" ? (item.high_is_good ?? true) : undefined,
+            high_is_good: isSurveyChecklistType(type) ? (item.high_is_good ?? true) : undefined,
+            description: item.description ?? null,
+            survey_format: isSurveyChecklistType(type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+            survey_allow_na: surveyNaForInvoke(type, item),
           });
           
           // If it's a new item, map the old temporary ID to the new database ID
@@ -4832,6 +5649,10 @@ export default function Strategies() {
           itemOrder: 0,
           checklistType: type,
           parentId: null,
+          high_is_good: undefined,
+          description: null,
+          survey_format: undefined,
+          survey_allow_na: undefined,
         });
       }
     }
@@ -4854,8 +5675,10 @@ export default function Strategies() {
           color: editingFormData.color ?? null,
           author: editingFormData.author?.trim() || null,
         });
+        saveStrategyIndicatorIds(dataMode, selectedStrategyData.id, strategyIndicatorIds);
         setIsEditing(false);
         setEditHistory([]);
+        setRulesEditHistory([]);
         if (selectedStrategyData.id) {
           const updatedEditing = new Map(editingChecklists);
           updatedEditing.delete(selectedStrategyData.id);
@@ -4868,6 +5691,18 @@ export default function Strategies() {
           setChecklistEditHistory(updatedHistory);
         }
         const savedStrategyId = selectedStrategyData.id;
+        if (
+          isPlanestationDemoSyncEnabled() &&
+          editingFormData.name.trim() === MY_STRATEGY_NAME_FOR_PLANESTATION_SYNC &&
+          savedStrategyId
+        ) {
+          await syncPlanestationDemoFromMyStrategy("sandbox", savedStrategyId, {
+            description: editingFormData.description ?? null,
+            notes: currentNotes || null,
+            color: editingFormData.color ?? null,
+            author: editingFormData.author?.trim() || null,
+          });
+        }
         await loadStrategies(true);
         clearWorkInProgress();
         if (savedStrategyId) {
@@ -4890,7 +5725,9 @@ export default function Strategies() {
         color: editingFormData.color || null,
         author: editingFormData.author?.trim() || null,
       });
-      
+
+      saveStrategyIndicatorIds(dataMode, selectedStrategyData.id, strategyIndicatorIds);
+
       // Save checklist changes if any
       if (selectedStrategyData.id && editingChecklists.has(selectedStrategyData.id)) {
         await handleSaveChecklists(selectedStrategyData.id);
@@ -4916,6 +5753,7 @@ export default function Strategies() {
       
       setIsEditing(false);
       setEditHistory([]); // Clear edit history after saving
+      setRulesEditHistory([]);
       // Clear checklist editing state
       if (selectedStrategyData.id) {
         const updatedEditing = new Map(editingChecklists);
@@ -4951,6 +5789,20 @@ export default function Strategies() {
         
         await loadStrategyData(savedStrategyId);
         await loadChecklists(savedStrategyId);
+
+        if (
+          isPlanestationDemoSyncEnabled() &&
+          editingFormData.name.trim() === MY_STRATEGY_NAME_FOR_PLANESTATION_SYNC &&
+          savedStrategyId &&
+          (dataMode === "real" || dataMode === "paper")
+        ) {
+          await syncPlanestationDemoFromMyStrategy(dataMode, savedStrategyId, {
+            description: editingFormData.description || null,
+            notes: currentNotes || null,
+            color: editingFormData.color || null,
+            author: editingFormData.author?.trim() || null,
+          });
+        }
         
         // Switch to Details tab after saving
         setActiveTab("notes");
@@ -4976,6 +5828,7 @@ export default function Strategies() {
   const handleCancelEdit = () => {
     isSavingOrCancelingRef.current = true; // Prevent state restoration during cancel
     clearWorkInProgress(); // Clear work in progress when canceling
+    setPendingStrategySignalRemove(null);
     setIsEditing(false);
     if (selectedStrategyData) {
       // Revert to original values from database
@@ -4989,6 +5842,7 @@ export default function Strategies() {
       setNotesContent(new Map(notesContent.set(selectedStrategyData.id, selectedStrategyData.notes || "")));
       // Clear edit history
       setEditHistory([]);
+      setRulesEditHistory([]);
       
       // Revert checklists to original state
       if (selectedStrategyData.id && originalChecklists.has(selectedStrategyData.id)) {
@@ -5214,7 +6068,10 @@ export default function Strategies() {
             itemOrder: item.item_order,
             checklistType: item.checklist_type,
             parentId: null,
-            high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
+            high_is_good: isSurveyChecklistType(item.checklist_type) ? (item.high_is_good ?? true) : undefined,
+            description: item.description ?? null,
+            survey_format: isSurveyChecklistType(item.checklist_type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+            survey_allow_na: surveyNaForInvoke(item.checklist_type, item),
           });
           idMap.set(item.id, newId);
         }
@@ -5232,7 +6089,10 @@ export default function Strategies() {
               itemOrder: item.item_order,
               checklistType: item.checklist_type,
               parentId: newParentId,
-              high_is_good: item.checklist_type === "survey" ? (item.high_is_good ?? true) : undefined,
+              high_is_good: isSurveyChecklistType(item.checklist_type) ? (item.high_is_good ?? true) : undefined,
+              description: item.description ?? null,
+              survey_format: isSurveyChecklistType(item.checklist_type) ? normalizedSurveyFormat(item.survey_format) : undefined,
+              survey_allow_na: surveyNaForInvoke(item.checklist_type, item),
             });
           }
         }
@@ -5300,6 +6160,40 @@ export default function Strategies() {
   }
 
   const selectedStrategyData = strategies.find((s) => s.id === selectedStrategy);
+
+  const commitCustomRuleSetNameModal = () => {
+    const title = customRuleSetNameDraft.trim();
+    if (!title) return;
+    const m = customRuleSetNameModal;
+    if (!m) return;
+    const sid = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+    if (m.kind === "add") {
+      const before = cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, customRuleSets);
+      const id = `crs_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      const newSet: StrategyCustomRuleSet = { id, title, rules: [] };
+      const nextSets = [...customRuleSets, newSet];
+      setCustomRuleSets(nextSets);
+      setActiveRulesPanel("customSet");
+      setActiveCustomRuleSetId(id);
+      if (!isCreating && sid > 0) saveStrategyCustomRuleSets(dataMode, sid, nextSets);
+      appendRulesHistoryTransition(
+        before,
+        cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, nextSets)
+      );
+    } else {
+      const before = cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, customRuleSets);
+      const nextSets = customRuleSets.map((s) => (s.id === m.id ? { ...s, title } : s));
+      setCustomRuleSets(nextSets);
+      if (!isCreating && sid > 0) saveStrategyCustomRuleSets(dataMode, sid, nextSets);
+      appendRulesHistoryTransition(
+        before,
+        cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, nextSets)
+      );
+    }
+    setCustomRuleSetNameModal(null);
+    setCustomRuleSetNameDraft("");
+  };
+
   const pairs = isCreating 
     ? (strategyPairs.get(-1) || []) 
     : (selectedStrategy ? strategyPairs.get(selectedStrategy) || [] : []);
@@ -5512,6 +6406,27 @@ export default function Strategies() {
                 </button>
                 {isCreating ? (
                   <div style={{ display: "flex", gap: "8px" }}>
+                    {rulesEditHistory.length > 1 && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRulesUndo();
+                        }}
+                        style={{
+                          background: "var(--bg-tertiary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "6px",
+                          padding: "8px",
+                          color: "var(--text-primary)",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                        }}
+                        title="Undo"
+                      >
+                        <RotateCcw size={16} />
+                      </button>
+                    )}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -5632,7 +6547,8 @@ export default function Strategies() {
                     {isEditing && (() => {
                       const canUndoNotes = editHistory.length > 1;
                       const canUndoChecklists = selectedStrategy && checklistEditHistory.has(selectedStrategy) && checklistEditHistory.get(selectedStrategy)!.length > 1;
-                      const canUndo = canUndoNotes || canUndoChecklists;
+                      const canUndoRules = rulesEditHistory.length > 1;
+                      const canUndo = canUndoNotes || canUndoChecklists || canUndoRules;
                       
                       return canUndo ? (
                         <button
@@ -5644,6 +6560,9 @@ export default function Strategies() {
                             // Undo checklists if there's history
                             if (canUndoChecklists) {
                               handleChecklistUndo();
+                            }
+                            if (canUndoRules) {
+                              handleRulesUndo();
                             }
                           }}
                           style={{
@@ -5974,14 +6893,30 @@ export default function Strategies() {
                     </div>
                   </div>
 
-                  <div style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "12px", padding: "14px" }}>
+                  <div
+                    style={{
+                      background: "color-mix(in srgb, var(--warning) 10%, var(--bg-secondary))",
+                      border: "1px solid color-mix(in srgb, var(--warning) 38%, var(--border-color))",
+                      borderRadius: "12px",
+                      padding: "14px",
+                      boxShadow: "0 0 0 1px color-mix(in srgb, var(--warning) 14%, transparent)",
+                    }}
+                  >
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", marginBottom: "10px" }}>
-                      <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                        Select signals for this strategy
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                        <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                        <div style={{ fontSize: "12px", fontWeight: 800, color: "var(--warning)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                          Select signals for this strategy
+                        </div>
                       </div>
                       {isCreating && (
                         <div style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
-                          Saved after strategy is created
+                          Saved when you create the strategy
+                        </div>
+                      )}
+                      {!canEditStrategySignals && !isCreating && (
+                        <div style={{ color: "var(--text-secondary)", fontSize: "12px", maxWidth: 420, lineHeight: 1.4 }}>
+                          Edit the strategy to add or remove signals. Nothing is saved until you click Save.
                         </div>
                       )}
                     </div>
@@ -5989,7 +6924,8 @@ export default function Strategies() {
                     <div style={{ position: "relative" }}>
                       <button
                         type="button"
-                        onClick={() => setIndicatorDropdownOpen((o) => !o)}
+                        disabled={!canEditStrategySignals}
+                        onClick={() => canEditStrategySignals && setIndicatorDropdownOpen((o) => !o)}
                         style={{
                           width: "100%",
                           display: "flex",
@@ -6001,7 +6937,8 @@ export default function Strategies() {
                           border: "1px solid var(--border-color)",
                           borderRadius: "10px",
                           color: "var(--text-primary)",
-                          cursor: "pointer",
+                          cursor: canEditStrategySignals ? "pointer" : "not-allowed",
+                          opacity: canEditStrategySignals ? 1 : 0.72,
                           fontSize: "13px",
                           fontWeight: 650,
                         }}
@@ -6034,6 +6971,7 @@ export default function Strategies() {
                               [
                                 { id: "all" as const, label: "All" },
                                 { id: "indicator" as const, label: "Indicators" },
+                                { id: "custom" as const, label: "Custom" },
                                 { id: "technical" as const, label: "TA patterns" },
                                 { id: "candlestick" as const, label: "Candlestick" },
                               ] as const
@@ -6059,6 +6997,27 @@ export default function Strategies() {
                                 </button>
                               );
                             })}
+                            <button
+                              type="button"
+                              onClick={() => setSignalSelectorFavoritesOnly((v) => !v)}
+                              title="Show only signals you starred on the Signals page"
+                              style={{
+                                padding: "5px 10px",
+                                borderRadius: "999px",
+                                border: `1px solid ${signalSelectorFavoritesOnly ? "rgba(251, 191, 36, 0.75)" : "var(--border-color)"}`,
+                                background: signalSelectorFavoritesOnly ? "rgba(251, 191, 36, 0.14)" : "var(--bg-tertiary)",
+                                color: signalSelectorFavoritesOnly ? "#FBBF24" : "var(--text-secondary)",
+                                fontSize: "11px",
+                                fontWeight: 650,
+                                cursor: "pointer",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 6,
+                              }}
+                            >
+                              <Star size={12} fill={signalSelectorFavoritesOnly ? "#FBBF24" : "transparent"} aria-hidden />
+                              Favorites
+                            </button>
                           </div>
                           <input
                             value={indicatorSearch}
@@ -6082,43 +7041,50 @@ export default function Strategies() {
                               let base = all;
                               if (signalSelectorKindFilter === "indicator") {
                                 base = base.filter((i) => i.category !== "Pattern");
+                              } else if (signalSelectorKindFilter === "custom") {
+                                base = base.filter((i) => i.kind === "custom");
                               } else if (signalSelectorKindFilter === "technical") {
                                 base = base.filter((i) => i.category === "Pattern" && i.signalGroup === "TechnicalPattern");
                               } else if (signalSelectorKindFilter === "candlestick") {
                                 base = base.filter((i) => i.category === "Pattern" && i.signalGroup === "Candlestick");
                               }
                               const q = indicatorSearch.trim().toLowerCase();
-                              const shown = q ? base.filter((i) => `${i.name} ${i.abbreviation} ${i.description}`.toLowerCase().includes(q)) : base;
+                              let shown = q ? base.filter((i) => `${i.name} ${i.abbreviation} ${i.description}`.toLowerCase().includes(q)) : base;
+                              if (signalSelectorFavoritesOnly) {
+                                const fav = readFavoriteIndicatorIdsFromStorage();
+                                shown = shown.filter((i) => fav.has(i.id));
+                              }
                               if (shown.length === 0) {
                                 return (
                                   <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
-                                    {q
-                                      ? "No signals match your search."
-                                      : signalSelectorKindFilter === "all"
-                                        ? "No signals available."
-                                        : "No signals in this category."}
+                                    {signalSelectorFavoritesOnly
+                                      ? "No favorite signals in this view. Star signals on the Signals page, or turn off Favorites."
+                                      : q
+                                        ? "No signals match your search."
+                                        : signalSelectorKindFilter === "all"
+                                          ? "No signals available."
+                                          : "No signals in this category."}
                                   </div>
                                 );
                               }
-                              const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
                               return shown.map((i) => {
                                 const checked = strategyIndicatorIds.includes(i.id);
                                 const kindLabel =
-                                  i.category === "Pattern"
-                                    ? (i.signalGroup === "Candlestick" ? "Candlestick" : "Technical")
-                                    : "Indicator";
+                                  i.kind === "custom"
+                                    ? "Custom"
+                                    : i.category === "Pattern"
+                                      ? (i.signalGroup === "Candlestick" ? "Candlestick" : "Technical")
+                                      : "Indicator";
                                 return (
                                   <label key={i.id} style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
                                     <input
                                       type="checkbox"
                                       checked={checked}
                                       onChange={(e) => {
-                                        const next = e.target.checked
-                                          ? [...strategyIndicatorIds, i.id]
-                                          : strategyIndicatorIds.filter((id) => id !== i.id);
-                                        setStrategyIndicatorIds(next);
-                                        if (!isCreating && strategyId > 0) {
-                                          saveStrategyIndicatorIds(dataMode, strategyId, next);
+                                        if (e.target.checked) {
+                                          setStrategyIndicatorIds((prev) => (prev.includes(i.id) ? prev : [...prev, i.id]));
+                                        } else {
+                                          requestRemoveStrategySignal(i.id, i.name);
                                         }
                                       }}
                                       style={{ width: "16px", height: "16px", cursor: "pointer" }}
@@ -6153,6 +7119,7 @@ export default function Strategies() {
                               onClick={() => {
                                 setIndicatorSearch("");
                                 setSignalSelectorKindFilter("all");
+                                setSignalSelectorFavoritesOnly(false);
                                 setIndicatorDropdownOpen(false);
                               }}
                               style={{
@@ -6173,54 +7140,68 @@ export default function Strategies() {
                       )}
                     </div>
 
-                    {(() => {
+                                       {(() => {
                       const all = loadIndicators();
                       const selected = all.filter((i) => strategyIndicatorIds.includes(i.id));
                       if (selected.length === 0) return null;
-                      const strategyId = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+                      const chipStyle = {
+                        display: "inline-flex" as const,
+                        alignItems: "center" as const,
+                        gap: "8px",
+                        padding: "6px 10px",
+                        borderRadius: "999px",
+                        border: "1px solid var(--border-color)",
+                        background: "var(--bg-tertiary)",
+                        color: "var(--text-primary)",
+                        fontSize: "12px",
+                        fontWeight: 650,
+                      };
                       return (
                         <div style={{ marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                          {selected.map((i) => (
-                            <button
-                              type="button"
-                              key={i.id}
-                              onClick={() => {
-                                const next = strategyIndicatorIds.filter((id) => id !== i.id);
-                                setStrategyIndicatorIds(next);
-                                if (!isCreating && strategyId > 0) saveStrategyIndicatorIds(dataMode, strategyId, next);
-                              }}
-                              title="Remove"
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "8px",
-                                padding: "6px 10px",
-                                borderRadius: "999px",
-                                border: "1px solid var(--border-color)",
-                                background: "var(--bg-tertiary)",
-                                color: "var(--text-primary)",
-                                cursor: "pointer",
-                                fontSize: "12px",
-                                fontWeight: 650,
-                              }}
-                            >
-                              <span
-                                style={{
-                                  fontSize: "11px",
-                                  fontWeight: 800,
-                                  padding: "2px 7px",
-                                  borderRadius: "999px",
-                                  background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
-                                  border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
-                                  color: i.accentColor ?? "#F59E0B",
-                                }}
+                          {selected.map((i) =>
+                            canEditStrategySignals ? (
+                              <button
+                                type="button"
+                                key={i.id}
+                                onClick={() => requestRemoveStrategySignal(i.id, i.name)}
+                                title="Remove from strategy"
+                                style={{ ...chipStyle, cursor: "pointer" }}
                               >
-                                {i.abbreviation}
-                              </span>
-                              <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
-                              <span style={{ color: "var(--text-secondary)", fontWeight: 900 }}>×</span>
-                            </button>
-                          ))}
+                                <span
+                                  style={{
+                                    fontSize: "11px",
+                                    fontWeight: 800,
+                                    padding: "2px 7px",
+                                    borderRadius: "999px",
+                                    background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
+                                    border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
+                                    color: i.accentColor ?? "#F59E0B",
+                                  }}
+                                >
+                                  {i.abbreviation}
+                                </span>
+                                <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
+                                <span style={{ color: "var(--text-secondary)", fontWeight: 900 }}>×</span>
+                              </button>
+                            ) : (
+                              <div key={i.id} style={{ ...chipStyle, cursor: "default" }}>
+                                <span
+                                  style={{
+                                    fontSize: "11px",
+                                    fontWeight: 800,
+                                    padding: "2px 7px",
+                                    borderRadius: "999px",
+                                    background: hexToRgba(i.accentColor ?? "#F59E0B", 0.18),
+                                    border: `1px solid ${hexToRgba(i.accentColor ?? "#F59E0B", 0.55)}`,
+                                    color: i.accentColor ?? "#F59E0B",
+                                  }}
+                                >
+                                  {i.abbreviation}
+                                </span>
+                                <span style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
+                              </div>
+                            )
+                          )}
                         </div>
                       );
                     })()}
@@ -7036,6 +8017,7 @@ export default function Strategies() {
                                   startEditingItem={startEditingItem}
                                   saveEditedItem={saveEditedItem}
                                   cancelEditingItem={cancelEditingItem}
+                                  onSurveyItemConfigChange={handleSurveyItemConfigChange}
                                   addChecklistItem={addChecklistItem}
                                   setPendingGroupAction={setPendingGroupAction}
                                   setGroupName={setGroupName}
@@ -7083,14 +8065,17 @@ export default function Strategies() {
                       : selectedCustomRuleSet?.rules ?? [];
 
                 const saveSelectedRules = (next: string[]) => {
+                  const before = cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, customRuleSets);
                   if (activeRulesPanel === "entry") {
                     setEntryRuleTexts(next);
                     if (!isCreating && strategyId > 0) saveStrategyRuleTexts(dataMode, strategyId, "entry", next);
+                    appendRulesHistoryTransition(before, cloneRulesSnapshot(next, takeProfitRuleTexts, customRuleSets));
                     return;
                   }
                   if (activeRulesPanel === "takeProfit") {
                     setTakeProfitRuleTexts(next);
                     if (!isCreating && strategyId > 0) saveStrategyRuleTexts(dataMode, strategyId, "takeProfit", next);
+                    appendRulesHistoryTransition(before, cloneRulesSnapshot(entryRuleTexts, next, customRuleSets));
                     return;
                   }
 
@@ -7103,6 +8088,7 @@ export default function Strategies() {
                   );
                   setCustomRuleSets(nextSets);
                   if (!isCreating && strategyId > 0) saveStrategyCustomRuleSets(dataMode, strategyId, nextSets);
+                  appendRulesHistoryTransition(before, cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, nextSets));
                 };
 
                 const cancelEditingRule = () => {
@@ -7156,6 +8142,126 @@ export default function Strategies() {
                 };
 
                 const sortableRuleItemIds = selectedRules.map((_, idx) => String(idx));
+
+                type RulePanelRef =
+                  | { kind: "entry" }
+                  | { kind: "takeProfit" }
+                  | { kind: "custom"; id: string };
+
+                const currentRulePanelRef = (): RulePanelRef => {
+                  if (activeRulesPanel === "entry") return { kind: "entry" };
+                  if (activeRulesPanel === "takeProfit") return { kind: "takeProfit" };
+                  if (activeRulesPanel === "customSet" && activeCustomRuleSetId)
+                    return { kind: "custom", id: activeCustomRuleSetId };
+                  return { kind: "entry" };
+                };
+
+                const snapshotRulesForPanel = (panel: RulePanelRef): string[] => {
+                  if (panel.kind === "entry") return entryRuleTexts;
+                  if (panel.kind === "takeProfit") return takeProfitRuleTexts;
+                  return customRuleSets.find((s) => s.id === panel.id)?.rules ?? [];
+                };
+
+                const applyRulesForPanel = (panel: RulePanelRef, rules: string[]) => {
+                  if (panel.kind === "entry") {
+                    setEntryRuleTexts(rules);
+                    if (!isCreating && strategyId > 0) saveStrategyRuleTexts(dataMode, strategyId, "entry", rules);
+                    return;
+                  }
+                  if (panel.kind === "takeProfit") {
+                    setTakeProfitRuleTexts(rules);
+                    if (!isCreating && strategyId > 0) saveStrategyRuleTexts(dataMode, strategyId, "takeProfit", rules);
+                    return;
+                  }
+                  const nextSets = customRuleSets.map((s) => (s.id === panel.id ? { ...s, rules } : s));
+                  setCustomRuleSets(nextSets);
+                  if (!isCreating && strategyId > 0) saveStrategyCustomRuleSets(dataMode, strategyId, nextSets);
+                };
+
+                const parseMoveDestination = (value: string): RulePanelRef | null => {
+                  if (value === "entry") return { kind: "entry" };
+                  if (value === "takeProfit") return { kind: "takeProfit" };
+                  if (value.startsWith("custom:")) {
+                    const id = value.slice("custom:".length);
+                    if (customRuleSets.some((s) => s.id === id)) return { kind: "custom", id };
+                  }
+                  return null;
+                };
+
+                const panelsMatch = (a: RulePanelRef, b: RulePanelRef) => {
+                  if (a.kind !== b.kind) return false;
+                  if (a.kind === "custom" && b.kind === "custom") return a.id === b.id;
+                  return true;
+                };
+
+                const ruleMoveDestinations: { value: string; label: string }[] = [];
+                if (activeRulesPanel !== "entry") {
+                  ruleMoveDestinations.push({ value: "entry", label: "Entry Rules" });
+                }
+                if (activeRulesPanel !== "takeProfit") {
+                  ruleMoveDestinations.push({ value: "takeProfit", label: "Take Profit Rules" });
+                }
+                for (const s of customRuleSets) {
+                  if (activeRulesPanel === "customSet" && activeCustomRuleSetId === s.id) continue;
+                  ruleMoveDestinations.push({ value: `custom:${s.id}`, label: s.title });
+                }
+
+                const moveRuleToDestination = (ruleIndex: number, destinationValue: string) => {
+                  const dest = parseMoveDestination(destinationValue);
+                  if (!dest) return;
+                  const src = currentRulePanelRef();
+                  if (panelsMatch(src, dest)) return;
+
+                  const srcRules = [...snapshotRulesForPanel(src)];
+                  const moved = srcRules[ruleIndex];
+                  if (moved === undefined || !String(moved).trim()) return;
+
+                  cancelEditingRule();
+
+                  const nextSrc = srcRules.filter((_, i) => i !== ruleIndex);
+                  const nextDest = [...snapshotRulesForPanel(dest), moved];
+
+                  const before = cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, customRuleSets);
+                  const afterSnapshot = (() => {
+                    let e = [...entryRuleTexts];
+                    let tp = [...takeProfitRuleTexts];
+                    let cs = customRuleSets.map((s) => ({ ...s, rules: [...s.rules] }));
+                    const applyPanel = (p: RulePanelRef, rules: string[]) => {
+                      if (p.kind === "entry") e = rules;
+                      else if (p.kind === "takeProfit") tp = rules;
+                      else cs = cs.map((s) => (s.id === p.id ? { ...s, rules } : s));
+                    };
+                    applyPanel(src, nextSrc);
+                    applyPanel(dest, nextDest);
+                    return cloneRulesSnapshot(e, tp, cs);
+                  })();
+
+                  if (src.kind === "custom" && dest.kind === "custom" && src.id !== dest.id) {
+                    const nextSets = customRuleSets.map((s) => {
+                      if (s.id === src.id) return { ...s, rules: nextSrc };
+                      if (s.id === dest.id) return { ...s, rules: nextDest };
+                      return s;
+                    });
+                    setCustomRuleSets(nextSets);
+                    if (!isCreating && strategyId > 0) saveStrategyCustomRuleSets(dataMode, strategyId, nextSets);
+                  } else {
+                    applyRulesForPanel(src, nextSrc);
+                    applyRulesForPanel(dest, nextDest);
+                  }
+
+                  appendRulesHistoryTransition(before, afterSnapshot);
+
+                  if (dest.kind === "entry") {
+                    setActiveRulesPanel("entry");
+                    setActiveCustomRuleSetId(null);
+                  } else if (dest.kind === "takeProfit") {
+                    setActiveRulesPanel("takeProfit");
+                    setActiveCustomRuleSetId(null);
+                  } else {
+                    setActiveRulesPanel("customSet");
+                    setActiveCustomRuleSetId(dest.id);
+                  }
+                };
 
                 return (
                   <div
@@ -7245,35 +8351,88 @@ export default function Strategies() {
                       ))}
 
                       {canEditRules && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            cancelEditingRule();
-                            const name = window.prompt("Custom rule set name:");
-                            const title = (name ?? "").trim();
-                            if (!title) return;
-                            const id = `crs_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-                            const newSet: StrategyCustomRuleSet = { id, title, rules: [] };
-                            const nextSets = [...customRuleSets, newSet];
-                            setCustomRuleSets(nextSets);
-                            setActiveRulesPanel("customSet");
-                            setActiveCustomRuleSetId(id);
-                            if (!isCreating && strategyId > 0) saveStrategyCustomRuleSets(dataMode, strategyId, nextSets);
-                          }}
-                          style={{
-                            padding: "8px 12px",
-                            borderRadius: "999px",
-                            border: `1px solid var(--accent)`,
-                            background: "var(--bg-tertiary)",
-                            color: "var(--accent)",
-                            cursor: "pointer",
-                            fontSize: "13px",
-                            fontWeight: 650,
-                          }}
-                          title="Add custom rule set"
-                        >
-                          + Add custom set
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              cancelEditingRule();
+                              setCustomRuleSetNameModal({ kind: "add" });
+                              setCustomRuleSetNameDraft("");
+                            }}
+                            style={{
+                              padding: "8px 12px",
+                              borderRadius: "999px",
+                              border: `1px solid var(--accent)`,
+                              background: "var(--bg-tertiary)",
+                              color: "var(--accent)",
+                              cursor: "pointer",
+                              fontSize: "13px",
+                              fontWeight: 650,
+                            }}
+                            title="Add custom rule set"
+                          >
+                            + Add custom set
+                          </button>
+                          {activeRulesPanel === "customSet" && activeCustomRuleSetId && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  cancelEditingRule();
+                                  const cur = customRuleSets.find((x) => x.id === activeCustomRuleSetId);
+                                  if (!cur) return;
+                                  setCustomRuleSetNameModal({ kind: "rename", id: cur.id, initialTitle: cur.title });
+                                  setCustomRuleSetNameDraft(cur.title);
+                                }}
+                                style={{
+                                  padding: "8px 12px",
+                                  borderRadius: "999px",
+                                  border: "1px solid var(--border-color)",
+                                  background: "var(--bg-tertiary)",
+                                  color: "var(--text-primary)",
+                                  cursor: "pointer",
+                                  fontSize: "13px",
+                                  fontWeight: 650,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                }}
+                                title="Rename this rule set"
+                              >
+                                <Edit2 size={14} />
+                                Rename set
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  cancelEditingRule();
+                                  const id = activeCustomRuleSetId;
+                                  if (!id) return;
+                                  const cur = customRuleSets.find((x) => x.id === id);
+                                  if (!cur) return;
+                                  setPendingCustomRuleSetDelete({ id, title: cur.title });
+                                }}
+                                style={{
+                                  padding: "8px 12px",
+                                  borderRadius: "999px",
+                                  border: "1px solid var(--border-color)",
+                                  background: "var(--bg-tertiary)",
+                                  color: "var(--danger)",
+                                  cursor: "pointer",
+                                  fontSize: "13px",
+                                  fontWeight: 650,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                }}
+                                title="Delete this rule set"
+                              >
+                                <Trash2 size={14} />
+                                Delete set
+                              </button>
+                            </>
+                          )}
+                        </>
                       )}
                     </div>
 
@@ -7311,6 +8470,8 @@ export default function Strategies() {
                                         onCancelEdit={cancelEditingRule}
                                         onRemove={() => removeAt(idx)}
                                         canEdit={canEditRules}
+                                        moveToOptions={canEditRules ? ruleMoveDestinations : undefined}
+                                        onMoveTo={canEditRules ? (v) => moveRuleToDestination(idx, v) : undefined}
                                       />
                                     ))}
                                   </div>
@@ -8390,6 +9551,7 @@ export default function Strategies() {
                               startEditingItem={startEditingItem}
                               saveEditedItem={saveEditedItem}
                               cancelEditingItem={cancelEditingItem}
+                              onSurveyItemConfigChange={handleSurveyItemConfigChange}
                               addChecklistItem={addChecklistItem}
                               setPendingGroupAction={setPendingGroupAction}
                               setGroupName={setGroupName}
@@ -10458,6 +11620,478 @@ export default function Strategies() {
           </div>
         );
       })()}
+
+      {pendingChecklistItemDelete && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={handleChecklistItemDeleteCancel}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "450px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="checklist-item-delete-title"
+          >
+            <h3
+              id="checklist-item-delete-title"
+              style={{
+                fontSize: "18px",
+                fontWeight: "600",
+                marginBottom: "12px",
+                color: "var(--danger)",
+              }}
+            >
+              Delete checklist item
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-primary)",
+                marginBottom: "8px",
+                lineHeight: "1.5",
+              }}
+            >
+              Are you sure you want to delete{" "}
+              <strong>&quot;{pendingChecklistItemDelete.itemLabel}&quot;</strong>?
+            </p>
+            <p
+              style={{
+                fontSize: "13px",
+                color: "var(--text-secondary)",
+                marginBottom: "20px",
+                lineHeight: "1.5",
+              }}
+            >
+              This action cannot be undone.
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                onClick={handleChecklistItemDeleteCancel}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmDeleteChecklistItem()}
+                style={{
+                  background: "var(--danger)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingStrategySignalRemove && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={handleStrategySignalRemoveCancel}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "24px",
+              width: "90%",
+              maxWidth: "450px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="strategy-signal-remove-title"
+          >
+            <h3
+              id="strategy-signal-remove-title"
+              style={{
+                fontSize: "18px",
+                fontWeight: "600",
+                marginBottom: "12px",
+                color: "var(--warning)",
+              }}
+            >
+              Remove signal from strategy?
+            </h3>
+            <p
+              style={{
+                fontSize: "14px",
+                color: "var(--text-primary)",
+                marginBottom: "8px",
+                lineHeight: "1.5",
+              }}
+            >
+              Remove <strong>&quot;{pendingStrategySignalRemove.label}&quot;</strong> from this strategy&apos;s signal list?
+            </p>
+            <p
+              style={{
+                fontSize: "13px",
+                color: "var(--text-secondary)",
+                marginBottom: "20px",
+                lineHeight: "1.5",
+              }}
+            >
+              The signal stays in your Signals library. Changes to this list are only saved when you save the strategy.
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                onClick={handleStrategySignalRemoveCancel}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmRemoveStrategySignal}
+                style={{
+                  background: "var(--danger)",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "10px 20px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete custom rule set — themed modal (not OS dialog) */}
+      {pendingCustomRuleSetDelete && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.72)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => setPendingCustomRuleSetDelete(null)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setPendingCustomRuleSetDelete(null);
+          }}
+          role="presentation"
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "22px 24px",
+              width: "90%",
+              maxWidth: "440px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.45)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="custom-ruleset-delete-title"
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 14 }}>
+              <div
+                style={{
+                  flexShrink: 0,
+                  width: 40,
+                  height: 40,
+                  borderRadius: 10,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "color-mix(in srgb, var(--accent) 18%, transparent)",
+                  border: "1px solid color-mix(in srgb, var(--accent) 45%, transparent)",
+                }}
+              >
+                <AlertTriangle size={22} style={{ color: "var(--accent)" }} aria-hidden />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <h3
+                  id="custom-ruleset-delete-title"
+                  style={{
+                    fontSize: "17px",
+                    fontWeight: 700,
+                    margin: "0 0 6px",
+                    color: "var(--text-primary)",
+                  }}
+                >
+                  Delete rule set?
+                </h3>
+                <p style={{ fontSize: "14px", color: "var(--text-secondary)", margin: 0, lineHeight: 1.5 }}>
+                  Are you sure you want to delete{" "}
+                  <strong style={{ color: "var(--text-primary)" }}>&ldquo;{pendingCustomRuleSetDelete.title}&rdquo;</strong>?
+                  All rules in this set will be removed. This cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
+              <button
+                type="button"
+                onClick={() => setPendingCustomRuleSetDelete(null)}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "10px 18px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const pending = pendingCustomRuleSetDelete;
+                  if (!pending) return;
+                  const delId = pending.id;
+                  setPendingCustomRuleSetDelete(null);
+                  setEditingRuleIndex(null);
+                  setEditingRuleText("");
+                  const sid = isCreating ? -1 : (selectedStrategyData?.id ?? -1);
+                  const before = cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, customRuleSets);
+                  const nextSets = customRuleSets.filter((s) => s.id !== delId);
+                  setCustomRuleSets(nextSets);
+                  appendRulesHistoryTransition(
+                    before,
+                    cloneRulesSnapshot(entryRuleTexts, takeProfitRuleTexts, nextSets)
+                  );
+                  pruneJournalStorageForDeletedCustomRuleSet(delId);
+                  if (!isCreating && sid > 0) {
+                    saveStrategyCustomRuleSets(dataMode, sid, nextSets);
+                  }
+                  if (nextSets.length > 0) {
+                    setActiveCustomRuleSetId(nextSets[0].id);
+                    setActiveRulesPanel("customSet");
+                  } else {
+                    setActiveCustomRuleSetId(null);
+                    setActiveRulesPanel("entry");
+                  }
+                }}
+                style={{
+                  background: "var(--danger)",
+                  border: "none",
+                  borderRadius: "8px",
+                  padding: "10px 18px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom rule set name / rename — themed modal */}
+      {customRuleSetNameModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.72)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => {
+            setCustomRuleSetNameModal(null);
+            setCustomRuleSetNameDraft("");
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setCustomRuleSetNameModal(null);
+              setCustomRuleSetNameDraft("");
+            }
+          }}
+          role="presentation"
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "12px",
+              padding: "22px 24px",
+              width: "90%",
+              maxWidth: "440px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.45)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="custom-ruleset-name-title"
+          >
+            <h3
+              id="custom-ruleset-name-title"
+              style={{
+                fontSize: "17px",
+                fontWeight: 700,
+                margin: "0 0 14px",
+                color: "var(--text-primary)",
+              }}
+            >
+              {customRuleSetNameModal.kind === "add" ? "New custom rule set" : "Rename rule set"}
+            </h3>
+            <label
+              htmlFor="custom-ruleset-name-input"
+              style={{ fontSize: "13px", color: "var(--text-secondary)", display: "block", marginBottom: 8 }}
+            >
+              Name
+            </label>
+            <input
+              id="custom-ruleset-name-input"
+              type="text"
+              value={customRuleSetNameDraft}
+              onChange={(e) => setCustomRuleSetNameDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitCustomRuleSetNameModal();
+                }
+              }}
+              autoFocus
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "10px 12px",
+                borderRadius: "8px",
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-tertiary)",
+                color: "var(--text-primary)",
+                fontSize: "14px",
+                marginBottom: 18,
+              }}
+            />
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomRuleSetNameModal(null);
+                  setCustomRuleSetNameDraft("");
+                }}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "10px 18px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={commitCustomRuleSetNameModal}
+                style={{
+                  background: "var(--accent)",
+                  border: "none",
+                  borderRadius: "8px",
+                  padding: "10px 18px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Name Required Modal */}
       {showNameRequiredModal && (

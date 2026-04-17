@@ -1,4 +1,5 @@
 import type { DataMode } from "./dataMode";
+import { PLANESTATION_DEMO_STRATEGY_ID } from "./planestationConstants";
 
 export interface Indicator {
   id: string; // uuid-ish
@@ -334,20 +335,65 @@ function pointsToPath(points: Array<[number, number]>): string {
     .join(" ");
 }
 
-function makeIndicatorExampleImageForId(id: string, abbreviation: string, accentColor: string): string {
+function escapeXml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** Built-in pattern signals: 512×288 neutral chart + caption (matches Signals page titles). */
+const BUILTIN_PATTERN_THUMBNAIL_IDS = new Set<string>([
+  "sfp",
+  "fvg",
+  "divergence",
+  "harmonics",
+  "ascending_triangle",
+  "bearish_symmetric_triangle",
+  "bullish_symmetric_triangle",
+  "cup_and_handle",
+  "descending_triangle",
+  "falling_wedge",
+  "rising_wedge",
+  "flag",
+  "pennant",
+  "head_and_shoulders_top",
+  "inverted_head_and_shoulders",
+  "double_top",
+  "double_bottom",
+  "broadening_triangle_wedge",
+  "descending_broadening_wedge",
+  "right_angled_broadening_wedge",
+  "three_drive_pattern",
+  "quad_theory",
+  "triple_bottom",
+  "rounding_bottom",
+  "doji",
+  "hammer",
+  "hanging_man",
+  "shooting_star",
+  "bullish_engulfing",
+  "bearish_engulfing",
+  "morning_star",
+  "evening_star",
+  "bullish_marubozu",
+  "bearish_marubozu",
+]);
+
+function makeIndicatorExampleImageForId(id: string, abbreviation: string, accentColor: string, displayName?: string): string {
   const bg = "rgba(255,255,255,0.06)";
   const border = "rgba(255,255,255,0.22)";
   const grid = "rgba(255,255,255,0.10)";
-  // Keep the thumbnail purely visual (no text), but still vary it per indicator.
-  const dotR = 5.8 + (hashString(abbreviation) % 30) / 10; // 5.8..8.7
-  const dotOpacity = 0.14 + (hashString(abbreviation + "_o") % 20) / 100; // 0.14..0.33
-  const w = 360;
-  const h = 200;
-  const pad = 18;
-  const innerX = pad + 8;
+  const gridPattern = "rgba(255,255,255,0.08)";
+  const dotR = 5.8 + (hashString(abbreviation) % 30) / 10;
+  const dotOpacity = 0.14 + (hashString(abbreviation + "_o") % 20) / 100;
+
+  const isPattern = BUILTIN_PATTERN_THUMBNAIL_IDS.has(id);
+  const w = isPattern ? 512 : 360;
+  const h = isPattern ? 288 : 200;
+  const pad = isPattern ? 14 : 18;
+  const captionH = isPattern ? 26 : 0;
+  const innerX = pad + (isPattern ? 6 : 8);
   const innerY = pad + 6;
-  const innerW = w - pad * 2 - 8;
-  const innerH = h - pad * 2 - 10;
+  const innerW = w - pad * 2 - (isPattern ? 12 : 8);
+  const innerH = h - pad * 2 - 10 - captionH;
 
   const x0 = innerX;
   const x1 = innerX + innerW;
@@ -355,9 +401,19 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
   const y1 = innerY + innerH;
 
   const accent = accentColor;
+  const captionText = escapeXml((displayName ?? abbreviation).trim() || abbreviation);
 
-  // Shared scaffolding: gradient + framed chart area.
-  const header = `
+  const header = isPattern
+    ? `
+    <rect x="0" y="0" width="${w}" height="${h}" rx="14" fill="#1a1d24"/>
+    <rect x="${pad}" y="${pad}" width="${w - pad * 2}" height="${h - pad * 2}" rx="11" fill="rgba(255,255,255,0.035)" stroke="rgba(255,255,255,0.11)"/>
+    <g opacity="1">
+      <path d="M ${x0} ${y0} L ${x1} ${y0}" stroke="${gridPattern}" stroke-width="1"/>
+      <path d="M ${x0} ${y0 + innerH * 0.5} L ${x1} ${y0 + innerH * 0.5}" stroke="${gridPattern}" stroke-width="1"/>
+      <path d="M ${x0} ${y1} L ${x1} ${y1}" stroke="${gridPattern}" stroke-width="1"/>
+    </g>
+  `
+    : `
     <defs>
       <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
         <stop offset="0" stop-color="${accent}" stop-opacity="0.95"/>
@@ -828,6 +884,30 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
       )}" stroke="rgba(255,255,255,0.16)" stroke-width="1" />
         <circle cx="${right.toFixed(2)}" cy="${y1b.toFixed(2)}" r="4.2" fill="${accent}" opacity="0.90"/>
         <circle cx="${right.toFixed(2)}" cy="${y2b.toFixed(2)}" r="4.2" fill="rgba(255,255,255,0.75)" opacity="0.65"/>
+      `;
+      break;
+    }
+    case "harmonics": {
+      // Generic XABCD harmonic swing + PRZ (Gartley/Bat family stand-in).
+      const x = x0 + innerW * 0.10;
+      const xa = x0 + innerW * 0.26;
+      const xb = x0 + innerW * 0.42;
+      const xc = x0 + innerW * 0.58;
+      const xd = x0 + innerW * 0.82;
+      const yx = mapY(0.56);
+      const ya = mapY(0.38);
+      const yb = mapY(0.64);
+      const yc = mapY(0.36);
+      const yd = mapY(0.58);
+      const przLeft = xd - innerW * 0.1;
+      const przTop = Math.min(yc, yd) - innerH * 0.05;
+      const przH = Math.abs(yd - yc) + innerH * 0.14;
+      glyph = `
+        <path d="M ${x.toFixed(2)} ${yx.toFixed(2)} L ${xa.toFixed(2)} ${ya.toFixed(2)} L ${xb.toFixed(2)} ${yb.toFixed(2)} L ${xc.toFixed(2)} ${yc.toFixed(2)} L ${xd.toFixed(2)} ${yd.toFixed(2)}"
+          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <rect x="${przLeft.toFixed(2)}" y="${przTop.toFixed(2)}" width="${(innerW * 0.12).toFixed(2)}" height="${przH.toFixed(
+          2
+        )}" rx="6" fill="${accent}" opacity="0.12" stroke="rgba(255,255,255,0.22)"/>
       `;
       break;
     }
@@ -1667,10 +1747,16 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
     }
   }
 
+  const caption =
+    isPattern
+      ? `<text x="${(w / 2).toFixed(2)}" y="${(h - 8).toFixed(2)}" text-anchor="middle" fill="rgba(255,255,255,0.9)" font-size="12" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">${captionText}</text>`
+      : "";
+
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
       ${header}
       <g>${glyph}</g>
+      ${caption}
     </svg>
   `;
 
@@ -1693,7 +1779,7 @@ function withLibraryMeta(
   const kind = ind.kind ?? "builtin";
   const accentColor = ind.accentColor ?? (kind === "custom" ? CUSTOM_ACCENT_COLOR : getBuiltinAccentColor(ind.id));
   const exampleImage =
-    ind.exampleImage ?? makeIndicatorExampleImageForId(ind.id, ind.abbreviation, accentColor);
+    ind.exampleImage ?? makeIndicatorExampleImageForId(ind.id, ind.abbreviation, accentColor, ind.name);
   const category =
     ind.category ??
     (kind === "custom"
@@ -2187,7 +2273,7 @@ type JournalIndicatorDivergenceMap = Record<
 type JournalIndicatorOtherSignalsMap = Record<
   string,
   Record<string, boolean | string>
->; // signalLabel -> checked or text (value mode)
+>; // key `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}` or `...:${indicatorId}:${timeframe}` -> signalLabel -> checked or text
 
 function safeParse<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
@@ -2251,7 +2337,7 @@ export function addIndicator(input: Omit<Indicator, "id" | "createdAt">): Indica
     code: input.code,
     capturesTimeframes: input.capturesTimeframes === true,
     accentColor,
-    exampleImage: providedImage ?? makeIndicatorExampleImageForId(indicatorId, abbreviation, accentColor),
+    exampleImage: providedImage ?? makeIndicatorExampleImageForId(indicatorId, abbreviation, accentColor, input.name.trim()),
     category: input.category ?? ("Custom" as const),
     otherSignals: Array.isArray(input.otherSignals) ? input.otherSignals : [],
   };
@@ -2289,12 +2375,89 @@ export function getPrebuiltIndicatorThumbnails(abbreviation: string, accentColor
     id: i.id,
     name: i.name,
     abbreviation: i.abbreviation,
-    image: makeIndicatorExampleImageForId(i.id, abbr, accentColor),
+    image: makeIndicatorExampleImageForId(i.id, abbr, accentColor, i.name),
   }));
 }
 
-export function deleteIndicator(id: string) {
-  saveIndicators(loadIndicators().filter((i) => i.id !== id));
+const FAVORITE_INDICATORS_STORAGE_KEY = "tradebutler_favorite_indicators_v1";
+
+function pruneJournalStorageKeysForIndicatorId(indicatorId: string) {
+  if (typeof window === "undefined") return;
+
+  const dropMatchingSegment = (storageKey: string) => {
+    const data = safeParse<Record<string, unknown>>(localStorage.getItem(storageKey), {});
+    let changed = false;
+    for (const key of Object.keys(data)) {
+      const parts = key.split(":");
+      if (parts.length >= 5 && parts[4] === indicatorId) {
+        delete data[key];
+        changed = true;
+      }
+    }
+    if (changed) localStorage.setItem(storageKey, JSON.stringify(data));
+  };
+
+  dropMatchingSegment(JOURNAL_INDICATOR_VALUES_KEY);
+  dropMatchingSegment(JOURNAL_INDICATOR_DIVERGENCE_KEY);
+  dropMatchingSegment(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY);
+  dropMatchingSegment(JOURNAL_INDICATOR_MA_FLAGS_KEY);
+
+  const tradePatterns = safeParse<Record<string, string[]>>(localStorage.getItem(JOURNAL_TRADE_PATTERN_INDICATOR_IDS_KEY), {});
+  let tpChanged = false;
+  for (const [key, arr] of Object.entries(tradePatterns)) {
+    if (!Array.isArray(arr)) continue;
+    const filtered = arr.filter((x) => String(x) !== indicatorId);
+    if (filtered.length !== arr.length) {
+      tpChanged = true;
+      if (filtered.length === 0) delete tradePatterns[key];
+      else tradePatterns[key] = filtered;
+    }
+  }
+  if (tpChanged) localStorage.setItem(JOURNAL_TRADE_PATTERN_INDICATOR_IDS_KEY, JSON.stringify(tradePatterns));
+}
+
+/**
+ * Permanently removes a user-created indicator and related local preferences/journal drafts.
+ * Built-in library indicators cannot be deleted.
+ */
+export function deleteIndicator(id: string): boolean {
+  if (typeof window === "undefined") return false;
+  const all = loadIndicators();
+  const target = all.find((i) => i.id === id);
+  if (!target || target.kind !== "custom") return false;
+
+  saveIndicators(all.filter((i) => i.id !== id));
+
+  try {
+    let rawPrefs: Record<string, unknown> = {};
+    const s = window.localStorage.getItem(INDICATOR_SIGNAL_PREFS_KEY);
+    if (s) rawPrefs = JSON.parse(s) as Record<string, unknown>;
+    if (rawPrefs[id]) {
+      delete rawPrefs[id];
+      window.localStorage.setItem(INDICATOR_SIGNAL_PREFS_KEY, JSON.stringify(rawPrefs));
+    }
+  } catch {
+    /* optional */
+  }
+
+  try {
+    const favRaw = window.localStorage.getItem(FAVORITE_INDICATORS_STORAGE_KEY);
+    if (favRaw) {
+      const arr = JSON.parse(favRaw) as unknown;
+      if (Array.isArray(arr)) {
+        const next = arr.map((x) => String(x)).filter((x) => x && x !== id);
+        window.localStorage.setItem(FAVORITE_INDICATORS_STORAGE_KEY, JSON.stringify(next));
+      }
+    }
+  } catch {
+    /* optional */
+  }
+
+  pruneJournalStorageKeysForIndicatorId(id);
+
+  window.dispatchEvent(new CustomEvent("tradebutler:indicator-signal-prefs-changed"));
+  window.dispatchEvent(new CustomEvent("tradebutler:custom-indicators-changed"));
+  return true;
 }
 
 export function loadStrategyIndicatorIds(mode: DataMode, strategyId: number): string[] {
@@ -2302,6 +2465,15 @@ export function loadStrategyIndicatorIds(mode: DataMode, strategyId: number): st
   const byMode = data[mode] ?? {};
   const stored = byMode[String(strategyId)];
   const indicatorIds = new Set(loadIndicators().map((i) => i.id));
+
+  // Demo "Planestation's Strategy" (sandbox id 7): do not use the global default starter set.
+  // Missing storage previously produced 19 generic signals instead of mirroring "My Strategy" after sync.
+  if (mode === "sandbox" && strategyId === PLANESTATION_DEMO_STRATEGY_ID) {
+    if (!Array.isArray(stored)) {
+      return [];
+    }
+    return stored.filter((id) => indicatorIds.has(id));
+  }
 
   if (Array.isArray(stored)) {
     const cleaned = stored.filter((id) => indicatorIds.has(id));
@@ -2382,20 +2554,11 @@ export function loadStrategyRuleTexts(mode: DataMode, strategyId: number, ruleTy
   const ruleTexts = stored?.[ruleType];
 
   if (Array.isArray(ruleTexts)) {
-    const cleaned = sanitizeRuleTextRules(ruleTexts);
+    const cleaned = sanitizeRuleTextRules(ruleTexts).filter((r) => !/^Legacy indicator rule:/i.test(r.trim()));
     if (cleaned.length > 0) return cleaned;
   }
 
-  // Back-compat: if text rules aren't stored yet, fall back to the legacy indicator-id
-  // rule associations by converting selected indicator abbreviations into placeholder text.
-  const legacyIndicatorIds = loadStrategyRuleIndicatorIds(mode, strategyId, ruleType);
-  if (legacyIndicatorIds.length === 0) return [];
-
-  const allIndicators = loadIndicators();
-  const selected = allIndicators.filter((i) => legacyIndicatorIds.includes(i.id));
-  const fallback = selected.map((ind) => `Legacy indicator rule: ${ind.abbreviation}`);
-
-  return sanitizeRuleTextRules(fallback);
+  return [];
 }
 
 export function saveStrategyRuleTexts(mode: DataMode, strategyId: number, ruleType: StrategyRuleType, rules: string[]) {
@@ -2443,9 +2606,19 @@ function sanitizeCustomRuleSets(sets: StrategyCustomRuleSet[]): StrategyCustomRu
   return out;
 }
 
-function makeRuleSetId(): string {
-  // Avoid external deps; good enough for local ids.
-  return `crs_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+/** Reads only persisted rule lines for a type (no legacy indicator placeholder synthesis). */
+function loadStoredStrategyRuleTextsArrayOnly(
+  mode: DataMode,
+  strategyId: number,
+  ruleType: StrategyRuleType
+): string[] | undefined {
+  if (strategyId < 0) return undefined;
+  const data = safeParse<StrategyRuleTextMap>(localStorage.getItem(STRATEGY_RULE_TEXT_KEY), {} as any);
+  const byMode = data[mode] ?? {};
+  const stored = byMode[String(strategyId)] ?? {};
+  const ruleTexts = stored?.[ruleType];
+  if (!Array.isArray(ruleTexts)) return undefined;
+  return sanitizeRuleTextRules(ruleTexts);
 }
 
 export function loadStrategyCustomRuleSets(mode: DataMode, strategyId: number): StrategyCustomRuleSet[] {
@@ -2453,23 +2626,27 @@ export function loadStrategyCustomRuleSets(mode: DataMode, strategyId: number): 
 
   const data = safeParse<StrategyCustomRuleSetsMap>(localStorage.getItem(STRATEGY_CUSTOM_RULE_SETS_KEY), {} as any);
   const byMode = data[mode] ?? {};
-  const stored = byMode[String(strategyId)] ?? [];
-  const cleaned = sanitizeCustomRuleSets(stored);
-  if (cleaned.length > 0) return cleaned;
+  const raw = byMode[String(strategyId)];
 
-  // Back-compat: if the old single "custom" rule text array exists,
-  // convert it into one default set.
-  const legacy = loadStrategyRuleTexts(mode, strategyId, "custom");
-  const legacyClean = sanitizeRuleTextRules(legacy);
-  if (legacyClean.length === 0) return [];
+  // Any explicit value (including []) means "use saved custom sets only" — do not resurrect legacy rows.
+  if (raw !== undefined) {
+    return sanitizeCustomRuleSets(Array.isArray(raw) ? raw : []);
+  }
 
-  return [
-    {
-      id: makeRuleSetId(),
-      title: "Custom Rules",
-      rules: legacyClean,
-    },
-  ];
+  // First load for this strategy: migrate only *explicitly stored* legacy "custom" lines (user/strategy data),
+  // not indicator-derived placeholder text from loadStrategyRuleTexts.
+  const explicitLegacy = loadStoredStrategyRuleTextsArrayOnly(mode, strategyId, "custom");
+  if (explicitLegacy !== undefined && explicitLegacy.length > 0) {
+    return [
+      {
+        id: `crs_mig_${mode}_${strategyId}`,
+        title: "Custom Rules",
+        rules: explicitLegacy,
+      },
+    ];
+  }
+
+  return [];
 }
 
 export function saveStrategyCustomRuleSets(mode: DataMode, strategyId: number, sets: StrategyCustomRuleSet[]) {
@@ -2758,11 +2935,13 @@ export function loadJournalIndicatorOtherSignals(
   entryId: number,
   tradeIndex: number,
   phase: IndicatorPhase,
-  indicatorId: string
+  indicatorId: string,
+  timeframe: string
 ): Record<string, boolean | string> {
   const data = safeParse<JournalIndicatorOtherSignalsMap>(localStorage.getItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY), {});
-  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}`;
-  return data[key] ?? {};
+  const keyTf = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}`;
+  const keyLegacy = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}`;
+  return data[keyTf] ?? data[keyLegacy] ?? {};
 }
 
 export function setJournalIndicatorOtherSignalField(
@@ -2771,13 +2950,14 @@ export function setJournalIndicatorOtherSignalField(
   tradeIndex: number,
   phase: IndicatorPhase,
   indicatorId: string,
+  timeframe: string,
   signalLabel: string,
   value: boolean | string
 ) {
   const clean = signalLabel.trim();
   if (!clean) return;
   const data = safeParse<JournalIndicatorOtherSignalsMap>(localStorage.getItem(JOURNAL_INDICATOR_OTHER_SIGNALS_KEY), {});
-  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}`;
+  const key = `${mode}:${entryId}:${tradeIndex}:${phase}:${indicatorId}:${timeframe}`;
   const cur: Record<string, boolean | string> = { ...(data[key] ?? {}) };
   if (typeof value === "boolean") {
     cur[clean] = value;
@@ -2796,10 +2976,11 @@ export function setJournalIndicatorOtherSignal(
   tradeIndex: number,
   phase: IndicatorPhase,
   indicatorId: string,
+  timeframe: string,
   signalLabel: string,
   checked: boolean
 ) {
-  setJournalIndicatorOtherSignalField(mode, entryId, tradeIndex, phase, indicatorId, signalLabel, checked);
+  setJournalIndicatorOtherSignalField(mode, entryId, tradeIndex, phase, indicatorId, timeframe, signalLabel, checked);
 }
 
 export function migrateJournalIndicatorDraftOtherSignals(

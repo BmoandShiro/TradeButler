@@ -1,7 +1,13 @@
-import { useEffect, useLayoutEffect, useState, useRef, useMemo, useCallback } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, useMemo, useCallback, type ReactNode, type CSSProperties } from "react";
+import {
+  clearJournalWip,
+  hasJournalNavDraft,
+  journalStickyKeyForMode,
+  migrateLegacyJournalWipToSession,
+} from "../utils/journalStickySession";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronUp, Search, LayoutDashboard, GripVertical, Eye, EyeOff, Settings } from "lucide-react";
+import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronUp, Search, LayoutDashboard, GripVertical, Eye, EyeOff, Settings, ListChecks, Scale, Sparkles, Activity } from "lucide-react";
 import {
   DndContext,
   closestCenter,
@@ -21,6 +27,8 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { format, parse } from "date-fns";
 import { TimeframeSelector, Timeframe, getTimeframeDates } from "../components/TimeframeSelector";
 import { JournalSignalsSettingsModal } from "../components/JournalSignalsSettingsModal";
+import { JournalChecklistStrategyConfigureModal } from "../components/JournalChecklistStrategyConfigureModal";
+import { JournalRulesStrategyConfigureModal } from "../components/JournalRulesStrategyConfigureModal";
 import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
 import { getSurveyScoreColor, getSurveyScoreBgRgba } from "../utils/intensityColor";
 import RichTextEditor from "../components/RichTextEditor";
@@ -62,6 +70,11 @@ import {
   upsertSandboxEmotionSurveyFromResponses,
 } from "../utils/sandboxStore";
 
+type ChecklistTone = "accent" | "warning";
+function checklistToneVar(tone: ChecklistTone): string {
+  return tone === "warning" ? "var(--warning)" : "var(--accent)";
+}
+
 function hexToRgba(hex: string, alpha: number): string {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
   if (!m) return `rgba(245,158,11,${alpha})`;
@@ -70,11 +83,99 @@ function hexToRgba(hex: string, alpha: number): string {
   const b = parseInt(m[3], 16);
   return `rgba(${r},${g},${b},${alpha})`;
 }
+
+/** Pill container: title + configure cog share one border (cog stays visually top-right of the title row). */
+function JournalStrategySectionTitlePill({ children }: { children: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 10,
+        width: "100%",
+        boxSizing: "border-box",
+        flex: "1 1 auto",
+        minWidth: 0,
+        padding: "6px 12px",
+        borderRadius: 9999,
+        border: "1px solid var(--border-color)",
+        background: "var(--bg-tertiary)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function JournalStrategySectionCard({ children }: { children: ReactNode }) {
+  return (
+    <div
+      style={{
+        flex: "1 1 0",
+        minWidth: 280,
+        border: "1px solid var(--border-color)",
+        borderRadius: 12,
+        padding: "10px",
+        background: "color-mix(in srgb, var(--bg-secondary) 86%, var(--bg-primary))",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function JournalStrategyConfigureCogButton({ title, onClick, disabled }: { title: string; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        flexShrink: 0,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "4px",
+        border: "none",
+        borderRadius: 8,
+        background: "transparent",
+        color: "var(--text-secondary)",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.45 : 1,
+      }}
+    >
+      <Settings size={16} aria-hidden />
+    </button>
+  );
+}
+
+/** Unified typography for journal section titles (scroll headers, pills, cards, sub-panels). */
+function journalSectionTitleStyle(
+  tone: "accent" | "warning" | "muted",
+  opts?: { size?: "xs" | "sm" | "md" | "lg" }
+): CSSProperties {
+  const size = opts?.size ?? "md";
+  const fontSize =
+    size === "xs" ? "10px" : size === "sm" ? "11px" : size === "lg" ? "13px" : "12px";
+  const color =
+    tone === "accent" ? "var(--accent)" : tone === "warning" ? "var(--warning)" : "var(--text-secondary)";
+  return {
+    fontSize,
+    fontWeight: 700,
+    color,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+  };
+}
+
 import { buildPositionGroupsAndPairs } from "../utils/sandboxPairing";
 import { sanitizeHtml, normalizeRichTextHtml } from "../utils/sanitizeHtml";
 import {
   loadIndicators,
   loadStrategyIndicatorIds,
+  saveStrategyIndicatorIds,
   loadStrategyRuleTexts,
   loadStrategyCustomRuleSets,
   loadEmaMaJournalRowVisibility,
@@ -164,6 +265,24 @@ interface ChecklistItem {
   checklist_type: string;
   parent_id: number | null;
   description?: string | null;
+  high_is_good?: boolean | null;
+  /** "scale" (1–10) or "yes_no"; omitted = scale */
+  survey_format?: string | null;
+  survey_allow_na?: boolean | null;
+}
+
+function isSurveyChecklistTypeJournal(t: string): boolean {
+  return t === "survey" || t.startsWith("survey_");
+}
+
+function isYesNoSurveyItem(item: ChecklistItem): boolean {
+  return isSurveyChecklistTypeJournal(item.checklist_type) && item.survey_format === "yes_no";
+}
+
+/** Map Yes/No to stored 1–10 value using high_is_good polarity. */
+function yesNoResponseValue(highIsGood: boolean, yes: boolean): number {
+  if (highIsGood) return yes ? 10 : 1;
+  return yes ? 1 : 10;
 }
 
 interface JournalChecklistResponse {
@@ -508,9 +627,9 @@ export type JournalSectionId =
 /** Core section order (no custom blocks); custom checklist/survey sections are added per-strategy. */
 const CORE_SECTION_ORDER: JournalSectionId[] = [
   "analysis_checklist",
+  "entry_checklist",
   "emotional_state_before",
   "implementation",
-  "entry_checklist",
   "emotional_state_during",
   "take_profit_checklist",
   "emotional_state_after",
@@ -554,6 +673,18 @@ const JOURNAL_SECTION_ORDER_KEY = "tradebutler_journal_section_order";
 const JOURNAL_DEFAULT_STRATEGY_ID_KEY = "tradebutler_journal_default_strategy_id";
 const JOURNAL_DEFAULT_SECTION_ORDER_KEY = "tradebutler_journal_default_section_order";
 const JOURNAL_HIDDEN_SECTION_IDS_KEY = "tradebutler_journal_hidden_section_ids";
+/**
+ * Bump when `CORE_SECTION_ORDER` changes so existing users get a one-time migration:
+ * core sections follow the new default order; `custom:*` / `custom_rules:*` entries stay grouped after core in their prior relative order.
+ */
+const JOURNAL_SECTION_ORDER_SCHEMA_VERSION = 2;
+const JOURNAL_SECTION_ORDER_VERSION_KEY = "tradebutler_journal_section_order_schema_v1";
+/** Legacy minimum collapse threshold when metadata height is not yet measured. */
+const JOURNAL_META_COLLAPSE_SCROLL_PX = 120;
+/** Hysteresis: expand when scrollTop is at or below this (collapsed → expanded). */
+const JOURNAL_META_EXPAND_SCROLL_PX = 12;
+/** Extra scroll allowance past measured metadata height so layout scroll compensation after expand does not immediately re-collapse. */
+const JOURNAL_META_EXPAND_LAYOUT_SLACK_PX = JOURNAL_META_EXPAND_SCROLL_PX + 8;
 
 /** Sortable row for the Reorder sections modal (uses @dnd-kit). */
 function SortableSectionRow({
@@ -635,6 +766,383 @@ function SortableSectionRow({
   );
 }
 
+/** Slim progress for strategy checklists in the journal. */
+function JournalChecklistProgressBar({ done, total, compact, tone = "accent" }: { done: number; total: number; compact?: boolean; tone?: ChecklistTone }) {
+  if (total <= 0) return null;
+  const pct = Math.min(100, Math.round((done / total) * 100));
+  const a = checklistToneVar(tone);
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: compact ? "8px" : "12px",
+        marginBottom: compact ? "8px" : "14px",
+        padding: compact ? "6px 10px" : "10px 12px",
+        borderRadius: "10px",
+        background: `color-mix(in srgb, ${a} 8%, var(--bg-secondary))`,
+        border: `1px solid color-mix(in srgb, ${a} 22%, var(--border-color))`,
+      }}
+    >
+      <div
+        style={{
+          flex: 1,
+          height: 8,
+          borderRadius: 999,
+          background: "var(--bg-primary)",
+          overflow: "hidden",
+          border: "1px solid var(--border-color)",
+          boxShadow: "inset 0 1px 2px rgba(0,0,0,0.12)",
+        }}
+      >
+        <div
+          style={{
+            width: `${pct}%`,
+            height: "100%",
+            borderRadius: 999,
+            background: `linear-gradient(90deg, ${a}, color-mix(in srgb, ${a} 65%, #fff))`,
+            transition: "width 0.35s ease",
+            boxShadow: pct > 0 ? `0 0 12px color-mix(in srgb, ${a} 45%, transparent)` : "none",
+          }}
+        />
+      </div>
+      <span
+        style={{
+          fontSize: "11px",
+          fontWeight: 700,
+          color: a,
+          fontVariantNumeric: "tabular-nums",
+          letterSpacing: "0.02em",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {done}/{total}
+      </span>
+    </div>
+  );
+}
+
+function JournalChecklistGroupHeader({ children, compact, tone = "accent" }: { children: ReactNode; compact?: boolean; tone?: ChecklistTone }) {
+  const a = checklistToneVar(tone);
+  return (
+    <div
+      style={{
+        padding: compact ? "8px 10px" : "12px 14px",
+        marginBottom: compact ? "6px" : "10px",
+        borderRadius: "10px",
+        background: `linear-gradient(135deg, color-mix(in srgb, ${a} 14%, var(--bg-secondary)) 0%, var(--bg-tertiary) 100%)`,
+        border: `1px solid color-mix(in srgb, ${a} 28%, var(--border-color))`,
+        borderLeft: `4px solid ${a}`,
+        boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Single bordered stack for compact checklist columns (entry / take profit). */
+function JournalChecklistListShell({ children, tone = "accent" }: { children: ReactNode; tone?: ChecklistTone }) {
+  const a = checklistToneVar(tone);
+  return (
+    <div
+      style={{
+        borderRadius: "10px",
+        border: `1px solid color-mix(in srgb, ${a} 24%, var(--border-color))`,
+        background: "var(--bg-secondary)",
+        overflow: "hidden",
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Right column: prominent progress + optional blurb/hint (Analysis / Mantra list layout). */
+function JournalChecklistSideRail({
+  done,
+  total,
+  title,
+  blurb,
+  hint,
+}: {
+  done: number;
+  total: number;
+  title: string;
+  blurb?: string | null;
+  hint?: string | null;
+}) {
+  const pct = total <= 0 ? 0 : Math.min(100, Math.round((done / total) * 100));
+  return (
+    <aside
+      style={{
+        flex: "0 1 280px",
+        minWidth: 200,
+        maxWidth: 340,
+        alignSelf: "stretch",
+        padding: "16px 18px",
+        borderRadius: 12,
+        border: "1px solid color-mix(in srgb, var(--accent) 28%, var(--border-color))",
+        background: "linear-gradient(165deg, color-mix(in srgb, var(--accent) 14%, var(--bg-secondary)) 0%, var(--bg-tertiary) 100%)",
+        boxShadow: "0 4px 20px rgba(0,0,0,0.12)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 10,
+            background: "color-mix(in srgb, var(--accent) 20%, var(--bg-primary))",
+            border: "1px solid color-mix(in srgb, var(--accent) 35%, var(--border-color))",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "var(--accent)",
+            flexShrink: 0,
+          }}
+        >
+          <ListChecks size={22} strokeWidth={2.2} aria-hidden />
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ ...journalSectionTitleStyle("accent", { size: "sm" }), lineHeight: 1.2 }}>At a glance</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)", marginTop: 2 }}>{title}</div>
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 40, fontWeight: 800, color: "var(--text-primary)", fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{pct}%</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-secondary)" }}>{done}/{total} done</span>
+      </div>
+      <div
+        style={{
+          height: 14,
+          borderRadius: 999,
+          background: "var(--bg-primary)",
+          overflow: "hidden",
+          border: "1px solid var(--border-color)",
+          boxShadow: "inset 0 1px 3px rgba(0,0,0,0.15)",
+        }}
+      >
+        <div
+          style={{
+            width: `${pct}%`,
+            height: "100%",
+            borderRadius: 999,
+            background: "linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 72%, #fff))",
+            transition: "width 0.4s ease",
+            boxShadow: pct > 0 ? "0 0 16px color-mix(in srgb, var(--accent) 40%, transparent)" : "none",
+          }}
+        />
+      </div>
+      {blurb ? (
+        <p style={{ margin: 0, fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5 }}>{blurb}</p>
+      ) : null}
+      {hint ? (
+        <p style={{ margin: 0, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5, fontStyle: "italic", opacity: blurb ? 0.92 : 1 }}>{hint}</p>
+      ) : null}
+    </aside>
+  );
+}
+
+function JournalChecklistRowEditable({
+  itemId,
+  checked,
+  onToggle,
+  indent,
+  extraRight,
+  caption,
+  variant = "card",
+  isLast,
+  tone = "accent",
+}: {
+  itemId: number;
+  checked: boolean;
+  onToggle: () => void;
+  indent?: boolean;
+  extraRight?: ReactNode;
+  caption: ReactNode;
+  variant?: "card" | "list";
+  isLast?: boolean;
+  tone?: ChecklistTone;
+}) {
+  const [hover, setHover] = useState(false);
+  const chkId = `journal-cl-${itemId}`;
+  const isList = variant === "list";
+  const a = checklistToneVar(tone);
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: isList ? "10px" : "12px",
+        padding: isList ? "7px 12px" : "11px 14px",
+        marginBottom: isList ? 0 : "8px",
+        marginLeft: indent && !isList ? "10px" : 0,
+        borderRadius: isList ? 0 : "10px",
+        border: isList ? "none" : `1px solid ${checked ? `color-mix(in srgb, ${a} 38%, var(--border-color))` : "var(--border-color)"}`,
+        borderBottom: isList && !isLast ? "1px solid color-mix(in srgb, var(--border-color) 85%, transparent)" : isList ? "none" : undefined,
+        borderLeft: isList ? `3px solid ${checked ? a : "transparent"}` : `3px solid ${checked ? a : `color-mix(in srgb, ${a} 30%, transparent)`}`,
+        background: isList
+          ? checked
+            ? `color-mix(in srgb, ${a} 12%, var(--bg-secondary))`
+            : hover
+              ? `color-mix(in srgb, ${a} 6%, var(--bg-secondary))`
+              : "transparent"
+          : checked
+            ? `linear-gradient(118deg, color-mix(in srgb, ${a} 15%, var(--bg-secondary)), color-mix(in srgb, ${a} 6%, var(--bg-tertiary)))`
+            : hover
+              ? `color-mix(in srgb, ${a} 10%, var(--bg-tertiary))`
+              : "var(--bg-tertiary)",
+        boxShadow: isList ? "none" : hover ? "0 4px 16px rgba(0,0,0,0.14)" : "0 1px 4px rgba(0,0,0,0.07)",
+        transition: "background 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease",
+      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <input
+        id={chkId}
+        type="checkbox"
+        checked={checked}
+        onChange={() => onToggle()}
+        style={{
+          marginTop: isList ? 1 : 2,
+          cursor: "pointer",
+          width: isList ? 16 : 18,
+          height: isList ? 16 : 18,
+          accentColor: a,
+          flexShrink: 0,
+        }}
+      />
+      <label
+        htmlFor={chkId}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          cursor: "pointer",
+          display: "block",
+          color: checked ? "color-mix(in srgb, var(--text-primary) 82%, var(--text-secondary))" : "var(--text-primary)",
+          textDecoration: checked ? "line-through" : "none",
+          textDecorationThickness: "1px",
+          textDecorationColor: "color-mix(in srgb, var(--text-secondary) 55%, transparent)",
+        }}
+      >
+        {caption}
+      </label>
+      {extraRight}
+    </div>
+  );
+}
+
+function JournalChecklistRowReadonly({
+  checked,
+  indent,
+  extraRight,
+  caption,
+  variant = "card",
+  isLast,
+  tone = "accent",
+}: {
+  checked: boolean;
+  indent?: boolean;
+  extraRight?: ReactNode;
+  caption: ReactNode;
+  variant?: "card" | "list";
+  isLast?: boolean;
+  tone?: ChecklistTone;
+}) {
+  const isList = variant === "list";
+  const a = checklistToneVar(tone);
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: isList ? "10px" : "12px",
+        padding: isList ? "7px 12px" : "10px 14px",
+        marginBottom: isList ? 0 : "8px",
+        marginLeft: indent && !isList ? "10px" : 0,
+        borderRadius: isList ? 0 : "10px",
+        border: isList ? "none" : `1px solid ${checked ? `color-mix(in srgb, ${a} 32%, var(--border-color))` : "var(--border-color)"}`,
+        borderBottom: isList && !isLast ? "1px solid color-mix(in srgb, var(--border-color) 85%, transparent)" : isList ? "none" : undefined,
+        borderLeft: isList ? `3px solid ${checked ? a : "transparent"}` : `3px solid ${checked ? a : `color-mix(in srgb, ${a} 22%, transparent)`}`,
+        background: isList
+          ? checked
+            ? `color-mix(in srgb, ${a} 10%, var(--bg-secondary))`
+            : "transparent"
+          : checked
+            ? `linear-gradient(118deg, color-mix(in srgb, ${a} 11%, var(--bg-secondary)), var(--bg-tertiary))`
+            : "var(--bg-tertiary)",
+        boxShadow: isList ? "none" : "0 1px 3px rgba(0,0,0,0.06)",
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled
+        readOnly
+        style={{
+          marginTop: isList ? 1 : 2,
+          cursor: "default",
+          width: isList ? 16 : 18,
+          height: isList ? 16 : 18,
+          accentColor: a,
+          flexShrink: 0,
+          opacity: 0.9,
+        }}
+      />
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          color: checked ? "color-mix(in srgb, var(--text-primary) 78%, var(--text-secondary))" : "var(--text-primary)",
+          textDecoration: checked ? "line-through" : "none",
+          textDecorationThickness: "1px",
+          textDecorationColor: "color-mix(in srgb, var(--text-secondary) 50%, transparent)",
+        }}
+      >
+        {caption}
+      </div>
+      {extraRight}
+    </div>
+  );
+}
+
+const journalRuleCardStyle: CSSProperties = {
+  padding: "10px 14px 10px 16px",
+  background: "linear-gradient(160deg, color-mix(in srgb, var(--warning) 10%, var(--bg-secondary)) 0%, color-mix(in srgb, var(--warning) 4%, var(--bg-tertiary)) 100%)",
+  border: "1px solid color-mix(in srgb, var(--warning) 28%, var(--border-color))",
+  borderLeft: "4px solid var(--warning)",
+  borderRadius: 8,
+  color: "var(--text-primary)",
+  fontSize: 13,
+  lineHeight: 1.45,
+  whiteSpace: "pre-wrap",
+  boxShadow: "0 1px 8px rgba(0,0,0,0.1)",
+  fontStyle: "italic",
+};
+
+function JournalRuleCard({ children }: { children: ReactNode }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div
+      style={{
+        ...journalRuleCardStyle,
+        boxShadow: hover ? "0 4px 16px rgba(0,0,0,0.16)" : journalRuleCardStyle.boxShadow,
+        borderColor: hover ? "color-mix(in srgb, var(--warning) 45%, var(--border-color))" : "color-mix(in srgb, var(--warning) 28%, var(--border-color))",
+        transition: "box-shadow 0.18s ease, border-color 0.18s ease",
+      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      {children}
+    </div>
+  );
+}
+
 export default function Journal() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [journalEntriesPage, setJournalEntriesPage] = useState(1);
@@ -671,8 +1179,12 @@ export default function Journal() {
       try {
         const parsed = JSON.parse(raw) as string[];
         if (Array.isArray(parsed) && parsed.length > 0) {
-                        const normalized = parsed.map((id) => (id === "mantra_checklist" ? "custom:daily_mantra" : id));
-                        const valid = normalized.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:") || id.startsWith("custom_rules:")));
+          const normalized = parsed.map((id) => (id === "mantra_checklist" ? "custom:daily_mantra" : id));
+          const valid = normalized.filter(
+            (id) =>
+              id !== "custom_checklists_surveys" &&
+              (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:") || id.startsWith("custom_rules:"))
+          );
           const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
           return [...valid, ...missing];
         }
@@ -681,10 +1193,36 @@ export default function Journal() {
       }
       return null;
     };
+
+    let storedSchemaVersion = 0;
+    try {
+      const v = localStorage.getItem(JOURNAL_SECTION_ORDER_VERSION_KEY);
+      if (v != null) storedSchemaVersion = parseInt(v, 10) || 0;
+    } catch {
+      /* ignore */
+    }
+
     const saved = parseOrder(localStorage.getItem(JOURNAL_SECTION_ORDER_KEY));
-    if (saved) return saved;
     const defaultOrder = parseOrder(localStorage.getItem(JOURNAL_DEFAULT_SECTION_ORDER_KEY));
-    return defaultOrder ?? [...CORE_SECTION_ORDER];
+
+    if (storedSchemaVersion < JOURNAL_SECTION_ORDER_SCHEMA_VERSION) {
+      const base = saved ?? defaultOrder ?? [...CORE_SECTION_ORDER];
+      const coresInOrder = CORE_SECTION_ORDER.filter((id) => base.includes(id));
+      const customs = base.filter((id) => id.startsWith("custom:") || id.startsWith("custom_rules:"));
+      const missing = CORE_SECTION_ORDER.filter((id) => !base.includes(id));
+      const migrated = [...coresInOrder, ...customs, ...missing];
+      try {
+        localStorage.setItem(JOURNAL_SECTION_ORDER_VERSION_KEY, String(JOURNAL_SECTION_ORDER_SCHEMA_VERSION));
+        localStorage.setItem(JOURNAL_SECTION_ORDER_KEY, JSON.stringify(migrated));
+      } catch {
+        /* ignore */
+      }
+      return migrated;
+    }
+
+    if (saved) return saved;
+    if (defaultOrder) return defaultOrder;
+    return [...CORE_SECTION_ORDER];
   });
   const [hiddenSectionIds, setHiddenSectionIds] = useState<string[]>(() => {
     try {
@@ -716,6 +1254,10 @@ export default function Journal() {
   const [loading, setLoading] = useState(true);
   const [isMaximized, setIsMaximized] = useState(false);
   const [isTabContentMaximized, setIsTabContentMaximized] = useState(false);
+  /** When the journal body is scrolled down, collapse entry metadata into the sticky bar + dropdown. */
+  const [journalEntryMetaCollapsed, setJournalEntryMetaCollapsed] = useState(false);
+  const [journalEntryMetaDropdownOpen, setJournalEntryMetaDropdownOpen] = useState(false);
+  const journalEntryMetaBarRef = useRef<HTMLDivElement | null>(null);
   const [linkedPairs, setLinkedPairs] = useState<PairedTrade[]>([]);
   /** Pending trade pairs when creating a new entry (not yet saved); persisted when journal is saved. */
   const [pendingLinkedPairs, setPendingLinkedPairs] = useState<PairedTrade[]>([]);
@@ -907,8 +1449,25 @@ export default function Journal() {
   useEffect(() => {
     setSelectedEntry(null);
     setPendingRestoreEntryId(null);
-    setIsCreating(false);
-    setIsEditing(false);
+    migrateLegacyJournalWipToSession(dataMode);
+    let hasStickyForMode = false;
+    try {
+      if (typeof sessionStorage !== "undefined") {
+        const raw = sessionStorage.getItem(journalStickyKeyForMode(dataMode));
+        if (raw) {
+          const p = JSON.parse(raw) as { dataMode?: DataMode; isCreating?: boolean; isEditing?: boolean };
+          if ((p.isCreating || p.isEditing) && (p.dataMode == null || p.dataMode === dataMode)) {
+            hasStickyForMode = true;
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    if (!hasStickyForMode) {
+      setIsCreating(false);
+      setIsEditing(false);
+    }
   }, [dataMode]);
 
   // When entering view mode for a selected entry, default focus to the first trade.
@@ -974,6 +1533,13 @@ export default function Journal() {
   const tabScrollPositions = useRef<Map<TabType, number>>(new Map());
   const tabContentRefs = useRef<Map<TabType, HTMLDivElement | null>>(new Map());
   const journalScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  /** Measures expanded metadata height so we can adjust scrollTop when it is removed/added (avoids threshold oscillation). */
+  const journalMetaFormOuterRef = useRef<HTMLDivElement | null>(null);
+  const journalMetaCollapseHeightRef = useRef(0);
+  const journalMetaScrollTopBeforeCollapseRef = useRef(0);
+  const journalMetaExpandPendingRef = useRef(false);
+  const journalMetaScrollTopBeforeExpandRef = useRef(0);
+  const ignoreJournalMetaScrollUntilRef = useRef(0);
   const sectionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const leftPanelScrollRef = useRef<HTMLDivElement>(null);
   /** Last known entries-list scroll; DOM scrollTop can read 0 during teardown while this still holds the real offset. */
@@ -995,12 +1561,15 @@ export default function Journal() {
   const suppressWorkInProgressSaveRef = useRef(false);
   /** Incremented when starting a new load or "+ Add Entry" so in-flight `loadEntry` cannot overwrite a fresh create form. */
   const journalLoadTokenRef = useRef(0);
+  /** After restoring sticky session on mount, skip loading `journal_selected_entry_id_*` once (same tab session). */
+  const skipInitialSavedEntryRestoreRef = useRef(false);
 
-  // Save work-in-progress to localStorage
+  // Save work-in-progress to sessionStorage (per data mode); includes `dataMode` in JSON for validation.
   const saveWorkInProgress = () => {
     if (suppressWorkInProgressSaveRef.current) return;
     if (isCreating || isEditing) {
       const workInProgress = {
+        dataMode,
         entryFormData,
         tradesFormData,
         checklistResponses: Array.from(checklistResponses.entries()).map(([tradeIndex, responses]) => [
@@ -1019,25 +1588,76 @@ export default function Journal() {
         isEditing,
         selectedEntryId: selectedEntry?.id || null,
         scrollPositions: Array.from(tabScrollPositions.current.entries()),
+        pendingLinkedPairs,
+        linkedPairs,
+        journalTradeActualTradeIds: Array.from(journalTradeActualTradeIds.entries()),
+        emotionalStateFormByTrade: Array.from(emotionalStateFormByTrade.entries()),
+        pendingEmotionalStates,
+        journalEmotionalStates,
+        showAddEmotionalStateForm,
+        newEmotionalStateLinkScope,
+        newEmotionalStateTradeIndices,
       };
-      localStorage.setItem('journal_work_in_progress', JSON.stringify(workInProgress));
+      try {
+        if (typeof sessionStorage !== "undefined") {
+          sessionStorage.setItem(journalStickyKeyForMode(dataMode), JSON.stringify(workInProgress));
+        }
+        localStorage.removeItem("journal_work_in_progress");
+      } catch {
+        /* ignore */
+      }
     }
   };
 
-  // Restore work-in-progress from localStorage (used by "Restore draft" on Overview)
+  // Restore work-in-progress from session (or legacy local) — used by sticky remount and "Restore draft" on Overview
   const restoreWorkInProgress = () => {
     try {
-      const saved = localStorage.getItem('journal_work_in_progress');
+      migrateLegacyJournalWipToSession(dataMode);
+      let saved: string | null = null;
+      if (typeof sessionStorage !== "undefined") {
+        saved = sessionStorage.getItem(journalStickyKeyForMode(dataMode));
+      }
+      if (!saved) {
+        saved = localStorage.getItem("journal_work_in_progress");
+      }
       if (saved) {
-        const workInProgress = JSON.parse(saved);
+        const workInProgress = JSON.parse(saved) as {
+          dataMode?: DataMode;
+          entryFormData: typeof entryFormData;
+          tradesFormData: typeof tradesFormData;
+          checklistResponses: [number, [number, boolean][]][];
+          surveyScores?: [number, [number, number][]][];
+          entryLevelChecklistResponses?: [number, boolean][];
+          checklistTradeAssociations?: [number, number[] | null][];
+          activeTradeIndex: number;
+          activeTab: TabType;
+          isCreating: boolean;
+          isEditing: boolean;
+          selectedEntryId: number | null;
+          scrollPositions: [TabType, number][];
+          pendingLinkedPairs?: PairedTrade[];
+          linkedPairs?: PairedTrade[];
+          journalTradeActualTradeIds?: [number, number[]][];
+          emotionalStateFormByTrade?: [number, { selectedEmotions: Record<string, number>; notes: string; surveyResponses: Record<string, number> }][];
+          pendingEmotionalStates?: typeof pendingEmotionalStates;
+          journalEmotionalStates?: JournalEmotionalState[];
+          showAddEmotionalStateForm?: boolean;
+          newEmotionalStateLinkScope?: "entry" | "trades";
+          newEmotionalStateTradeIndices?: number[];
+        };
+        if (workInProgress.dataMode != null && workInProgress.dataMode !== dataMode) {
+          return;
+        }
         setEntryFormData(workInProgress.entryFormData);
         setTradesFormData(workInProgress.tradesFormData);
-        
+
         // Restore checklist responses
         const restoredResponses = new Map<number, Map<number, boolean>>();
-        workInProgress.checklistResponses.forEach(([tradeIndex, responses]: [number, [number, boolean][]]) => {
-          restoredResponses.set(tradeIndex, new Map(responses));
-        });
+        if (Array.isArray(workInProgress.checklistResponses)) {
+          workInProgress.checklistResponses.forEach(([tradeIndex, responses]: [number, [number, boolean][]]) => {
+            restoredResponses.set(tradeIndex, new Map(responses));
+          });
+        }
         setChecklistResponses(restoredResponses);
         if (workInProgress.entryLevelChecklistResponses) {
           setEntryLevelChecklistResponses(new Map(workInProgress.entryLevelChecklistResponses));
@@ -1052,17 +1672,33 @@ export default function Journal() {
           });
           setSurveyScores(restoredScores);
         }
-        
+
         setActiveTradeIndex(workInProgress.activeTradeIndex);
         setActiveTab(workInProgress.activeTab);
         setIsCreating(workInProgress.isCreating);
         setIsEditing(workInProgress.isEditing);
-        
+
+        if (workInProgress.pendingLinkedPairs) setPendingLinkedPairs(workInProgress.pendingLinkedPairs);
+        if (workInProgress.linkedPairs) setLinkedPairs(workInProgress.linkedPairs);
+        if (workInProgress.journalTradeActualTradeIds) {
+          setJournalTradeActualTradeIds(new Map(workInProgress.journalTradeActualTradeIds));
+        }
+        if (workInProgress.emotionalStateFormByTrade) {
+          setEmotionalStateFormByTrade(new Map(workInProgress.emotionalStateFormByTrade));
+        }
+        if (workInProgress.pendingEmotionalStates) setPendingEmotionalStates(workInProgress.pendingEmotionalStates);
+        if (workInProgress.journalEmotionalStates) setJournalEmotionalStates(workInProgress.journalEmotionalStates);
+        if (workInProgress.showAddEmotionalStateForm != null) setShowAddEmotionalStateForm(workInProgress.showAddEmotionalStateForm);
+        if (workInProgress.newEmotionalStateLinkScope) setNewEmotionalStateLinkScope(workInProgress.newEmotionalStateLinkScope);
+        if (workInProgress.newEmotionalStateTradeIndices) setNewEmotionalStateTradeIndices(workInProgress.newEmotionalStateTradeIndices);
+
         // Restore scroll positions
-        workInProgress.scrollPositions.forEach(([tab, pos]: [TabType, number]) => {
-          tabScrollPositions.current.set(tab, pos);
-        });
-        
+        if (Array.isArray(workInProgress.scrollPositions)) {
+          workInProgress.scrollPositions.forEach(([tab, pos]: [TabType, number]) => {
+            tabScrollPositions.current.set(tab, pos);
+          });
+        }
+
         // If editing an existing entry, load it. Pass restored count so we sync from DB if saved state was bloated.
         if (workInProgress.selectedEntryId && !workInProgress.isCreating) {
           loadEntry(workInProgress.selectedEntryId, {
@@ -1070,7 +1706,7 @@ export default function Journal() {
             restoredTradesCount: workInProgress.tradesFormData?.length,
           });
         }
-        
+
         // Load strategy checklists if needed
         if (workInProgress.entryFormData.strategy_id) {
           loadStrategyChecklists(workInProgress.entryFormData.strategy_id);
@@ -1081,10 +1717,50 @@ export default function Journal() {
     }
   };
 
-  // Clear work-in-progress from localStorage
   const clearWorkInProgress = () => {
-    localStorage.removeItem('journal_work_in_progress');
+    clearJournalWip(dataMode);
   };
+
+  // Sticky restore when returning to Journal in the same tab (in-app navigation / refresh within session).
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+    if (searchParams.get("overview") === "1") return;
+    const navState = location.state as { openEntryId?: number } | null;
+    if (navState?.openEntryId != null) return;
+
+    migrateLegacyJournalWipToSession(dataMode);
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem(journalStickyKeyForMode(dataMode));
+    } catch {
+      return;
+    }
+    if (!raw) {
+      try {
+        raw = localStorage.getItem("journal_work_in_progress");
+      } catch {
+        return;
+      }
+    }
+    if (!raw) return;
+
+    let parsed: { dataMode?: DataMode; isCreating?: boolean; isEditing?: boolean } | null = null;
+    try {
+      parsed = JSON.parse(raw) as { dataMode?: DataMode; isCreating?: boolean; isEditing?: boolean };
+    } catch {
+      return;
+    }
+    if (parsed?.dataMode != null && parsed.dataMode !== dataMode) return;
+    if (!parsed?.isCreating && !parsed?.isEditing) return;
+
+    suppressWorkInProgressSaveRef.current = true;
+    skipInitialSavedEntryRestoreRef.current = true;
+    restoreWorkInProgress();
+    setTimeout(() => {
+      suppressWorkInProgressSaveRef.current = false;
+    }, 0);
+    // Intentionally omit location.state from deps: when openEntryId navigation clears state, we must not re-run and overwrite that load with a sticky restore.
+  }, [dataMode, searchParams]);
 
   // Get storage key for current entry (entry-specific scroll positions)
   const getScrollStorageKey = () => {
@@ -1198,6 +1874,82 @@ export default function Journal() {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [strategyDropdownOpen]);
 
+  useEffect(() => {
+    if (!journalEntryMetaDropdownOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (journalEntryMetaBarRef.current && !journalEntryMetaBarRef.current.contains(e.target as Node)) {
+        setJournalEntryMetaDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [journalEntryMetaDropdownOpen]);
+
+  useEffect(() => {
+    if (isTabContentMaximized) {
+      journalMetaExpandPendingRef.current = false;
+      journalMetaCollapseHeightRef.current = 0;
+      setJournalEntryMetaCollapsed(false);
+      setJournalEntryMetaDropdownOpen(false);
+    }
+  }, [isTabContentMaximized]);
+
+  useLayoutEffect(() => {
+    const el = journalScrollContainerRef.current;
+    if (!el || isTabContentMaximized) return;
+
+    const hCollapse = journalMetaCollapseHeightRef.current;
+    if (journalEntryMetaCollapsed && hCollapse > 0) {
+      el.scrollTop = Math.max(0, journalMetaScrollTopBeforeCollapseRef.current - hCollapse);
+      journalMetaCollapseHeightRef.current = 0;
+      ignoreJournalMetaScrollUntilRef.current = performance.now() + 80;
+      return;
+    }
+
+    if (!journalEntryMetaCollapsed && journalMetaExpandPendingRef.current) {
+      journalMetaExpandPendingRef.current = false;
+      const h = journalMetaFormOuterRef.current?.offsetHeight ?? 0;
+      if (h > 0) {
+        el.scrollTop = journalMetaScrollTopBeforeExpandRef.current + h;
+        ignoreJournalMetaScrollUntilRef.current = performance.now() + 80;
+      }
+    }
+  }, [journalEntryMetaCollapsed, isTabContentMaximized]);
+
+  const handleJournalBodyScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      if (performance.now() < ignoreJournalMetaScrollUntilRef.current) return;
+      const el = e.currentTarget;
+      const t = el.scrollTop;
+
+      const outerH = journalMetaFormOuterRef.current?.offsetHeight ?? 0;
+      const metaBlockH =
+        outerH > 0
+          ? outerH
+          : journalMetaCollapseHeightRef.current > 0
+            ? journalMetaCollapseHeightRef.current
+            : JOURNAL_META_COLLAPSE_SCROLL_PX;
+      const stayExpandedMaxScroll = metaBlockH + JOURNAL_META_EXPAND_LAYOUT_SLACK_PX;
+      const shouldShowFullMeta = t <= stayExpandedMaxScroll;
+
+      setJournalEntryMetaCollapsed((prev) => {
+        const next = !shouldShowFullMeta;
+        if (!prev && next && journalMetaFormOuterRef.current) {
+          journalMetaCollapseHeightRef.current = journalMetaFormOuterRef.current.offsetHeight;
+          journalMetaScrollTopBeforeCollapseRef.current = t;
+        }
+        if (prev && !next) {
+          journalMetaScrollTopBeforeExpandRef.current = t;
+          journalMetaExpandPendingRef.current = true;
+        }
+        return next;
+      });
+
+      if (shouldShowFullMeta) setJournalEntryMetaDropdownOpen(false);
+    },
+    []
+  );
+
   // Drag-and-drop for Reorder sections modal (handler is defined after effectiveSectionOrder)
   const sectionOrderSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
@@ -1305,7 +2057,29 @@ export default function Journal() {
       clearInterval(interval);
       saveWorkInProgress(); // Save one last time
     };
-  }, [entryFormData, tradesFormData, checklistResponses, entryLevelChecklistResponses, checklistTradeAssociations, activeTradeIndex, activeTab, isCreating, isEditing, selectedEntry]);
+  }, [
+    entryFormData,
+    tradesFormData,
+    checklistResponses,
+    entryLevelChecklistResponses,
+    checklistTradeAssociations,
+    surveyScores,
+    activeTradeIndex,
+    activeTab,
+    isCreating,
+    isEditing,
+    selectedEntry,
+    dataMode,
+    pendingLinkedPairs,
+    linkedPairs,
+    journalTradeActualTradeIds,
+    emotionalStateFormByTrade,
+    pendingEmotionalStates,
+    journalEmotionalStates,
+    showAddEmotionalStateForm,
+    newEmotionalStateLinkScope,
+    newEmotionalStateTradeIndices,
+  ]);
 
   useEffect(() => {
     loadEntries();
@@ -1317,6 +2091,10 @@ export default function Journal() {
   // When navigating to Journal without ?overview=1, restore the last-open entry from localStorage (per mode) so the tab doesn't reset to overview.
   useEffect(() => {
     if (searchParams.get("overview") === "1") return;
+    if (skipInitialSavedEntryRestoreRef.current) {
+      skipInitialSavedEntryRestoreRef.current = false;
+      return;
+    }
     let savedId = localStorage.getItem(`journal_selected_entry_id_${dataMode}`);
     if (!savedId) {
       const legacyId = localStorage.getItem("journal_selected_entry_id");
@@ -1337,14 +2115,15 @@ export default function Journal() {
     if (selectedEntry != null) setPendingRestoreEntryId(null);
   }, [selectedEntry]);
 
-  // Open specific entry/trade when navigated from Emotions (e.g. "Open in Journal")
+  // Open specific entry/trade when navigated from Emotions (e.g. "Open in Journal") — replaces sticky draft for this tab.
   useEffect(() => {
     const state = location.state as { openEntryId?: number; openTradeId?: number } | null;
     if (state?.openEntryId != null) {
+      clearJournalWip(dataMode);
       loadEntry(state.openEntryId, { openTradeId: state.openTradeId });
       navigate(location.pathname, { replace: true }); // clear state so back button doesn't re-open
     }
-  }, [location.state]);
+  }, [location.state, dataMode]);
 
   useEffect(() => {
     if (entryFormData.strategy_id) {
@@ -3642,6 +4421,13 @@ export default function Journal() {
     return titleMap[type] || type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') + " Checklist";
   };
 
+  const getChecklistSideRailHint = (checklistType: string): string | undefined => {
+    if (checklistType === "daily_mantra") {
+      return "Read each line deliberately before checking. Consistency beats rushing.";
+    }
+    return undefined;
+  };
+
   const getSectionLabel = (sectionId: string): string => {
     if (JOURNAL_SECTION_LABELS[sectionId as JournalSectionId]) return JOURNAL_SECTION_LABELS[sectionId as JournalSectionId];
     if (sectionId.startsWith("custom:")) return getChecklistTitle(sectionId.slice(7));
@@ -3843,15 +4629,24 @@ export default function Journal() {
   })();
 
   const fullSectionOrder = useMemo(() => {
-    const base = journalSectionOrder.filter((id) => id !== "custom_checklists_surveys");
     const surveyItems = (currentChecklists?.get("survey") || []).filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
     const customRuleSectionIds = entryFormData.strategy_id
       ? loadStrategyCustomRuleSets(dataMode, entryFormData.strategy_id).map((s) => `custom_rules:${s.id}`)
       : [];
+    const validCustomChecklistSectionIds = new Set(customTypes.map((t) => `custom:${t}`));
+    const validCustomRuleSectionIds = new Set(customRuleSectionIds);
+    const shouldShowSurveySection = surveyItems.length > 0;
+    const base = journalSectionOrder.filter((id) => {
+      if (id === "custom_checklists_surveys") return false;
+      if (!id.startsWith("custom:") && !id.startsWith("custom_rules:")) return true;
+      if (id === "custom:survey") return shouldShowSurveySection;
+      if (id.startsWith("custom_rules:")) return validCustomRuleSectionIds.has(id);
+      return validCustomChecklistSectionIds.has(id);
+    });
     const customSectionIds = [
       ...customTypes.map((t) => `custom:${t}`),
       ...customRuleSectionIds,
-      ...(surveyItems.length > 0 ? ["custom:survey"] : []),
+      ...(shouldShowSurveySection ? ["custom:survey"] : []),
     ];
     const newCustom = customSectionIds.filter((id) => !base.includes(id));
     return [...base, ...newCustom];
@@ -3872,8 +4667,11 @@ export default function Journal() {
   }, [fullSectionOrder]);
 
   /** Render checklist UI for a single type (used in scrolling sections). */
-  const renderChecklistForType = (type: string) => {
+  const renderChecklistForType = (type: string, options?: { checklistLayout?: "cards" | "list"; splitSidePanel?: boolean; accentVariant?: "accent" | "warning" }) => {
     if (!entryFormData.strategy_id || !currentChecklists) return <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load checklists.</p>;
+    const isList = options?.checklistLayout === "list";
+    const splitSide = Boolean(options?.splitSidePanel && isList);
+    const tone: ChecklistTone = options?.accentVariant === "warning" ? "warning" : "accent";
     const rawItems = currentChecklists.get(type) || [];
     const items = rawItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
     const sectionBlurb = currentChecklistSectionDescriptions?.get(type)?.trim();
@@ -3896,56 +4694,156 @@ export default function Journal() {
     const groupedItems = items.filter(item => item.parent_id !== null && items.some(p => p.id === item.parent_id));
     const itemsByParent = new Map<number, ChecklistItem[]>();
     groupedItems.forEach(item => { if (item.parent_id) { const parentId = item.parent_id; if (!itemsByParent.has(parentId)) itemsByParent.set(parentId, []); itemsByParent.get(parentId)!.push(item); } });
-    return (
-      <div style={{ marginBottom: "4px" }}>
-        {sectionBlurb ? (
-          <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "12px", lineHeight: 1.4 }}>{sectionBlurb}</div>
-        ) : null}
+    let checklistTotal = 0;
+    let checklistDone = 0;
+    for (const g of groups) {
+      const ch = itemsByParent.get(g.id) || [];
+      for (const c of ch) {
+        checklistTotal++;
+        if (getChecked(c.id)) checklistDone++;
+      }
+    }
+    for (const ri of regularItems) {
+      checklistTotal++;
+      if (getChecked(ri.id)) checklistDone++;
+    }
+    const checklistBlocks = (
+      <>
         {groups.map((group) => {
           const children = itemsByParent.get(group.id) || [];
           return (
-            <div key={group.id} style={{ marginBottom: "12px" }}>
-              <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px" }}>
-                <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }} />
-              </div>
-              {children.map((child) => (
-                <div key={child.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 12px", marginLeft: "16px", marginBottom: "2px" }}>
-                  <input type="checkbox" checked={getChecked(child.id)} onChange={() => onToggle(child.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
-                  <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", cursor: "pointer", display: "flex", minWidth: 0 }} onClick={() => onToggle(child.id)}>
-                    <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }} />
-                  </label>
-                  {isEntryLevel && entryTradesForAssociation.length > 1 && (
-                    <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                      <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{!(checklistTradeAssociations.get(child.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(child.id)!.length} trade(s)`}</span>
-                      <button type="button" onClick={() => setTradeAssociationModalItemId(child.id)} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", padding: "2px", display: "flex" }} title="Associate with specific trades"><Link2 size={12} /></button>
-                    </span>
-                  )}
-                </div>
-              ))}
+            <div key={group.id} style={{ marginBottom: isList ? "10px" : "14px" }}>
+              <JournalChecklistGroupHeader compact={isList} tone={tone}>
+                <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "700", color: "var(--text-primary)", fontSize: "13px", letterSpacing: "0.02em" }} />
+              </JournalChecklistGroupHeader>
+              {isList ? (
+                <JournalChecklistListShell tone={tone}>
+                  {children.map((child, cidx) => (
+                    <JournalChecklistRowEditable
+                      key={child.id}
+                      variant="list"
+                      tone={tone}
+                      isLast={cidx === children.length - 1}
+                      itemId={child.id}
+                      checked={getChecked(child.id)}
+                      onToggle={() => onToggle(child.id)}
+                      indent
+                      extraRight={
+                        isEntryLevel && entryTradesForAssociation.length > 1 ? (
+                          <span style={{ display: "flex", alignItems: "center", gap: "4px", flexShrink: 0 }}>
+                            <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{!(checklistTradeAssociations.get(child.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(child.id)!.length} trade(s)`}</span>
+                            <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTradeAssociationModalItemId(child.id); }} style={{ background: "none", border: "none", color: checklistToneVar(tone), cursor: "pointer", padding: "2px", display: "flex" }} title="Associate with specific trades"><Link2 size={12} /></button>
+                          </span>
+                        ) : undefined
+                      }
+                      caption={<ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "13px", color: "inherit" }} />}
+                    />
+                  ))}
+                </JournalChecklistListShell>
+              ) : (
+                children.map((child) => (
+                  <JournalChecklistRowEditable
+                    key={child.id}
+                    tone={tone}
+                    itemId={child.id}
+                    checked={getChecked(child.id)}
+                    onToggle={() => onToggle(child.id)}
+                    indent
+                    extraRight={
+                      isEntryLevel && entryTradesForAssociation.length > 1 ? (
+                        <span style={{ display: "flex", alignItems: "center", gap: "4px", flexShrink: 0 }}>
+                          <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{!(checklistTradeAssociations.get(child.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(child.id)!.length} trade(s)`}</span>
+                          <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTradeAssociationModalItemId(child.id); }} style={{ background: "none", border: "none", color: checklistToneVar(tone), cursor: "pointer", padding: "2px", display: "flex" }} title="Associate with specific trades"><Link2 size={12} /></button>
+                        </span>
+                      ) : undefined
+                    }
+                    caption={<ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "13px", color: "inherit" }} />}
+                  />
+                ))
+              )}
             </div>
           );
         })}
-        {regularItems.map((item) => (
-          <div key={item.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 12px", marginBottom: "2px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
-            <input type="checkbox" checked={getChecked(item.id)} onChange={() => onToggle(item.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
-            <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", cursor: "pointer", display: "flex", minWidth: 0 }} onClick={() => onToggle(item.id)}>
-              <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }} />
-            </label>
-            {isEntryLevel && entryTradesForAssociation.length > 1 && (
-              <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{!(checklistTradeAssociations.get(item.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(item.id)!.length} trade(s)`}</span>
-                <button type="button" onClick={() => setTradeAssociationModalItemId(item.id)} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", padding: "2px", display: "flex" }} title="Associate with specific trades"><Link2 size={12} /></button>
-              </span>
-            )}
+        {isList && regularItems.length > 0 ? (
+          <JournalChecklistListShell tone={tone}>
+            {regularItems.map((item, idx) => (
+              <JournalChecklistRowEditable
+                key={item.id}
+                variant="list"
+                tone={tone}
+                isLast={idx === regularItems.length - 1}
+                itemId={item.id}
+                checked={getChecked(item.id)}
+                onToggle={() => onToggle(item.id)}
+                extraRight={
+                  isEntryLevel && entryTradesForAssociation.length > 1 ? (
+                    <span style={{ display: "flex", alignItems: "center", gap: "4px", flexShrink: 0 }}>
+                      <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{!(checklistTradeAssociations.get(item.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(item.id)!.length} trade(s)`}</span>
+                      <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTradeAssociationModalItemId(item.id); }} style={{ background: "none", border: "none", color: checklistToneVar(tone), cursor: "pointer", padding: "2px", display: "flex" }} title="Associate with specific trades"><Link2 size={12} /></button>
+                    </span>
+                  ) : undefined
+                }
+                caption={<ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "13px", color: "inherit" }} />}
+              />
+            ))}
+          </JournalChecklistListShell>
+        ) : (
+          regularItems.map((item) => (
+            <JournalChecklistRowEditable
+              key={item.id}
+              tone={tone}
+              itemId={item.id}
+              checked={getChecked(item.id)}
+              onToggle={() => onToggle(item.id)}
+              extraRight={
+                isEntryLevel && entryTradesForAssociation.length > 1 ? (
+                  <span style={{ display: "flex", alignItems: "center", gap: "4px", flexShrink: 0 }}>
+                    <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{!(checklistTradeAssociations.get(item.id)?.length) ? "Whole entry" : `${checklistTradeAssociations.get(item.id)!.length} trade(s)`}</span>
+                    <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTradeAssociationModalItemId(item.id); }} style={{ background: "none", border: "none", color: checklistToneVar(tone), cursor: "pointer", padding: "2px", display: "flex" }} title="Associate with specific trades"><Link2 size={12} /></button>
+                  </span>
+                ) : undefined
+              }
+              caption={<ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "13px", color: "inherit" }} />}
+            />
+          ))
+        )}
+      </>
+    );
+
+    return (
+      <div style={{ marginBottom: "4px" }}>
+        {splitSide ? (
+          <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", alignItems: "flex-start" }}>
+            <div style={{ flex: "1 1 300px", minWidth: 0 }}>{checklistBlocks}</div>
+            {checklistTotal > 0 ? (
+              <JournalChecklistSideRail
+                done={checklistDone}
+                total={checklistTotal}
+                title={getChecklistTitle(type)}
+                blurb={sectionBlurb || undefined}
+                hint={getChecklistSideRailHint(type)}
+              />
+            ) : null}
           </div>
-        ))}
+        ) : (
+          <>
+            {sectionBlurb ? (
+              <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "12px", lineHeight: 1.45 }}>{sectionBlurb}</div>
+            ) : null}
+            {checklistTotal > 0 ? <JournalChecklistProgressBar done={checklistDone} total={checklistTotal} compact={isList} tone={tone} /> : null}
+            {checklistBlocks}
+          </>
+        )}
       </div>
     );
   };
 
   /** Read-only checklist rendering (for view-mode trade cards). */
-  const renderChecklistReadOnlyForType = (type: string, tradeIndexForResponses: number) => {
+  const renderChecklistReadOnlyForType = (type: string, tradeIndexForResponses: number, options?: { checklistLayout?: "cards" | "list"; splitSidePanel?: boolean; accentVariant?: "accent" | "warning" }) => {
     if (!currentChecklists) return null;
+    const isList = options?.checklistLayout === "list";
+    const splitSide = Boolean(options?.splitSidePanel && isList);
+    const tone: ChecklistTone = options?.accentVariant === "warning" ? "warning" : "accent";
     const rawItems = currentChecklists.get(type) || [];
     const items = rawItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
     const sectionBlurb = currentChecklistSectionDescriptions?.get(type)?.trim();
@@ -3976,72 +4874,175 @@ export default function Journal() {
       itemsByParent.get(parentId)!.push(item);
     });
 
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-        {sectionBlurb ? (
-          <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "4px", lineHeight: 1.4 }}>{sectionBlurb}</div>
-        ) : null}
+    const surveyScoreLabel = (row: ChecklistItem, sc: number | undefined) => {
+      if (sc == null) return "—";
+      if (isYesNoSurveyItem(row)) {
+        const hi = row.high_is_good !== false;
+        return sc === yesNoResponseValue(hi, true) ? "Yes" : "No";
+      }
+      return String(sc);
+    };
+
+    let roTotal = 0;
+    let roDone = 0;
+    for (const g of groups) {
+      const ch = itemsByParent.get(g.id) || [];
+      for (const c of ch) {
+        roTotal++;
+        if (getChecked(c.id)) roDone++;
+      }
+    }
+    for (const ri of regularItems) {
+      roTotal++;
+      if (getChecked(ri.id)) roDone++;
+    }
+
+    const checklistBlocksRo = (
+      <>
         {groups.map((group) => {
           const children = itemsByParent.get(group.id) || [];
-          return (
-            <div key={group.id} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-              <div style={{ padding: "8px 10px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 6 }}>
-                <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: 600, color: "var(--text-primary)", fontSize: 13 }} />
-              </div>
-              {children.map((child) => (
-                <div key={child.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", marginLeft: 16 }}>
-                  <input type="checkbox" checked={getChecked(child.id)} disabled style={{ cursor: "default", width: 16, height: 16 }} />
-                  <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
-                    <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: 13, color: "var(--text-primary)" }} />
-                  </label>
-                  {isSurveyType && (
-                    <span
-                      style={{
-                        flexShrink: 0,
-                        minWidth: "28px",
-                        padding: "3px 8px",
-                        borderRadius: "6px",
-                        backgroundColor: getScore(child.id) != null ? getSurveyScoreBgRgba(getScore(child.id) as number) : "var(--bg-tertiary)",
-                        color: getScore(child.id) != null ? getSurveyScoreColor(getScore(child.id) as number) : "var(--text-secondary)",
-                        fontSize: "12px",
-                        fontWeight: "500",
-                        textAlign: "center",
-                      }}
-                    >
-                      {getScore(child.id) != null ? getScore(child.id) : "—"}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          );
-        })}
-
-        {regularItems.map((item) => (
-          <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px" }}>
-            <input type="checkbox" checked={getChecked(item.id)} disabled style={{ cursor: "default", width: 16, height: 16 }} />
-            <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
-              <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: 13, color: "var(--text-primary)" }} />
-            </label>
-            {isSurveyType && (
+          const rowExtra = (row: ChecklistItem) =>
+            isSurveyType ? (
               <span
                 style={{
                   flexShrink: 0,
                   minWidth: "28px",
                   padding: "3px 8px",
                   borderRadius: "6px",
-                  backgroundColor: getScore(item.id) != null ? getSurveyScoreBgRgba(getScore(item.id) as number) : "var(--bg-tertiary)",
-                  color: getScore(item.id) != null ? getSurveyScoreColor(getScore(item.id) as number) : "var(--text-secondary)",
+                  backgroundColor: getScore(row.id) != null ? getSurveyScoreBgRgba(getScore(row.id) as number) : "var(--bg-tertiary)",
+                  color: getScore(row.id) != null ? getSurveyScoreColor(getScore(row.id) as number) : "var(--text-secondary)",
                   fontSize: "12px",
                   fontWeight: "500",
                   textAlign: "center",
                 }}
               >
-                {getScore(item.id) != null ? getScore(item.id) : "—"}
+                {surveyScoreLabel(row, getScore(row.id))}
               </span>
-            )}
+            ) : undefined;
+          return (
+            <div key={group.id} style={{ display: "flex", flexDirection: "column", gap: isList ? "6px" : "6px", marginBottom: isList ? "10px" : "8px" }}>
+              <JournalChecklistGroupHeader compact={isList} tone={tone}>
+                <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: 700, color: "var(--text-primary)", fontSize: 13 }} />
+              </JournalChecklistGroupHeader>
+              {isList ? (
+                <JournalChecklistListShell tone={tone}>
+                  {children.map((child, cidx) => (
+                    <JournalChecklistRowReadonly
+                      key={child.id}
+                      variant="list"
+                      tone={tone}
+                      isLast={cidx === children.length - 1}
+                      checked={getChecked(child.id)}
+                      indent
+                      extraRight={rowExtra(child)}
+                      caption={<ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: 13, color: "inherit" }} />}
+                    />
+                  ))}
+                </JournalChecklistListShell>
+              ) : (
+                children.map((child) => (
+                  <JournalChecklistRowReadonly
+                    key={child.id}
+                    tone={tone}
+                    checked={getChecked(child.id)}
+                    indent
+                    extraRight={rowExtra(child)}
+                    caption={<ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: 13, color: "inherit" }} />}
+                  />
+                ))
+              )}
+            </div>
+          );
+        })}
+
+        {isList && regularItems.length > 0 ? (
+          <JournalChecklistListShell tone={tone}>
+            {regularItems.map((item, idx) => (
+              <JournalChecklistRowReadonly
+                key={item.id}
+                variant="list"
+                tone={tone}
+                isLast={idx === regularItems.length - 1}
+                checked={getChecked(item.id)}
+                extraRight={
+                  isSurveyType ? (
+                    <span
+                      style={{
+                        flexShrink: 0,
+                        minWidth: "28px",
+                        padding: "3px 8px",
+                        borderRadius: "6px",
+                        backgroundColor: getScore(item.id) != null ? getSurveyScoreBgRgba(getScore(item.id) as number) : "var(--bg-tertiary)",
+                        color: getScore(item.id) != null ? getSurveyScoreColor(getScore(item.id) as number) : "var(--text-secondary)",
+                        fontSize: "12px",
+                        fontWeight: "500",
+                        textAlign: "center",
+                      }}
+                    >
+                      {surveyScoreLabel(item, getScore(item.id))}
+                    </span>
+                  ) : undefined
+                }
+                caption={<ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: 13, color: "inherit" }} />}
+              />
+            ))}
+          </JournalChecklistListShell>
+        ) : (
+          regularItems.map((item) => (
+            <JournalChecklistRowReadonly
+              key={item.id}
+              tone={tone}
+              checked={getChecked(item.id)}
+              extraRight={
+                isSurveyType ? (
+                  <span
+                    style={{
+                      flexShrink: 0,
+                      minWidth: "28px",
+                      padding: "3px 8px",
+                      borderRadius: "6px",
+                      backgroundColor: getScore(item.id) != null ? getSurveyScoreBgRgba(getScore(item.id) as number) : "var(--bg-tertiary)",
+                      color: getScore(item.id) != null ? getSurveyScoreColor(getScore(item.id) as number) : "var(--text-secondary)",
+                      fontSize: "12px",
+                      fontWeight: "500",
+                      textAlign: "center",
+                    }}
+                  >
+                    {surveyScoreLabel(item, getScore(item.id))}
+                  </span>
+                ) : undefined
+              }
+              caption={<ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: 13, color: "inherit" }} />}
+            />
+          ))
+        )}
+      </>
+    );
+
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+        {splitSide ? (
+          <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", alignItems: "flex-start" }}>
+            <div style={{ flex: "1 1 300px", minWidth: 0 }}>{checklistBlocksRo}</div>
+            {roTotal > 0 ? (
+              <JournalChecklistSideRail
+                done={roDone}
+                total={roTotal}
+                title={getChecklistTitle(type)}
+                blurb={sectionBlurb || undefined}
+                hint={getChecklistSideRailHint(type)}
+              />
+            ) : null}
           </div>
-        ))}
+        ) : (
+          <>
+            {sectionBlurb ? (
+              <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "4px", lineHeight: 1.4 }}>{sectionBlurb}</div>
+            ) : null}
+            {roTotal > 0 ? <JournalChecklistProgressBar done={roDone} total={roTotal} compact={isList} tone={tone} /> : null}
+            {checklistBlocksRo}
+          </>
+        )}
       </div>
     );
   };
@@ -4144,9 +5145,7 @@ export default function Journal() {
           }}
         >
           <div style={{ flex: "1 1 240px", minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              Patterns
-            </div>
+            <div style={journalSectionTitleStyle("muted")}>Patterns</div>
             <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>Select which patterns are present in this trade.</div>
           </div>
 
@@ -4267,9 +5266,7 @@ export default function Journal() {
               {[{ label: "Technical Patterns", items: filteredTechnical }, { label: "Candlesticks", items: filteredCandlesticks }].map(
                 ({ label, items }) => (
                   <div key={label} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                      {label}
-                    </div>
+                    <div style={journalSectionTitleStyle("muted")}>{label}</div>
                     {items.length === 0 ? (
                       <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>None available.</div>
                     ) : (
@@ -4461,34 +5458,28 @@ export default function Journal() {
           pointerEvents: isReadOnlySignals ? "none" : "auto",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
-          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Signals ({phaseLabel})
-          </div>
-              {canEditIndicators ? (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
-                  <button
-                    type="button"
-                    onClick={() => setJournalSignalsSettingsModalPhase(phase)}
-                    style={{
-                      padding: "6px 10px",
-                      borderRadius: 999,
-                      border: "1px solid var(--border-color)",
-                      background: "var(--bg-tertiary)",
-                      color: "var(--text-primary)",
-                      cursor: "pointer",
-                      fontSize: 12,
-                      fontWeight: 800,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 8,
-                    }}
-                    title="Signal settings"
-                  >
-                    <Settings size={16} />
-                  </button>
-                </div>
-              ) : null}
+        <div style={{ marginBottom: "10px" }}>
+          {canEditIndicators ? (
+            <JournalStrategySectionTitlePill>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                <Activity size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                <span style={journalSectionTitleStyle("accent")}>
+                  Signals ({phaseLabel})
+                </span>
+              </div>
+              <JournalStrategyConfigureCogButton
+                title="Configure signals (order & display affect this strategy for all journal entries)"
+                onClick={() => setJournalSignalsSettingsModalPhase(phase)}
+              />
+            </JournalStrategySectionTitlePill>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <Activity size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+              <span style={journalSectionTitleStyle("accent")}>
+                Signals ({phaseLabel})
+              </span>
+            </div>
+          )}
         </div>
 
         <TradePatternsPicker
@@ -4501,9 +5492,7 @@ export default function Journal() {
 
         <div style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "nowrap" }}>
           <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              Indicators
-            </div>
+            <div style={journalSectionTitleStyle("muted")}>Indicators</div>
             <div style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
               Select one or more timeframes to enter indicator values (optional).
             </div>
@@ -4551,7 +5540,6 @@ export default function Journal() {
               const indSelectedTfs = getIndicatorSelectedTfs(ind.id, isTfIndicator);
               const isMomentum = (ind.category ?? "").toLowerCase() === "momentum";
               const colTfs = isTfIndicator ? globalSelectedTfs : indSelectedTfs;
-              const otherSignals = ind.kind === "custom" ? loadJournalIndicatorOtherSignals(dataMode, entryId, tradeIndex, phase, ind.id) : {};
               void indicatorSignalPrefsTick;
               const signalPrefs = ind.kind === "custom" ? loadIndicatorSignalPrefs(ind.id, ind.otherSignals ?? []) : null;
               const otherSignalLabels = ind.kind === "custom" ? (signalPrefs?.order ?? []) : [];
@@ -4670,10 +5658,8 @@ export default function Journal() {
                         key={`${entryId}:${tradeIndex}:${phase}:${ind.id}:${tf}`}
                         style={{ display: "flex", flexDirection: "column", gap: "6px", minWidth: 0, width: "100%" }}
                       >
-                        <div style={{ fontSize: "10px", color: "var(--text-secondary)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", paddingLeft: "2px" }}>
-                          {tf}
-                        </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <div style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), paddingLeft: "2px" }}>{tf}</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px", width: "100%", minWidth: 0 }}>
                           {(ind.id === "ema" || ind.id === "ma") ? (
                             (() => {
                               void maConfigTick; // re-render when EMA/MA config changes
@@ -4933,134 +5919,156 @@ export default function Journal() {
                               );
                             })()
                           ) : (
-                            <input
-                              type="text"
-                              placeholder="Value"
-                              defaultValue={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
-                              onChange={(e) => {
-                                if (!canEditIndicators) return;
-                                setJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.value);
-                              }}
-                              readOnly={!canEditIndicators}
-                              disabled={!canEditIndicators}
-                              spellCheck={false}
-                              style={{
-                                padding: "10px 12px",
-                                background: "var(--bg-tertiary)",
-                                border: "1px solid var(--border-color)",
-                                borderRadius: "10px",
-                                color: "var(--text-primary)",
-                                outline: "none",
-                                flex: "1 1 120px",
-                                minWidth: 0,
-                              }}
-                            />
-                          )}
-
-                          {isMomentum && (
-                            <label
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "6px",
-                                cursor: canEditIndicators ? "pointer" : "default",
-                                color: "var(--text-secondary)",
-                                fontSize: "11px",
-                                fontWeight: 650,
-                                userSelect: "none",
-                              }}
-                            >
+                            <>
                               <input
-                                type="checkbox"
-                                checked={loadJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
-                                disabled={!canEditIndicators}
+                                type="text"
+                                placeholder="Value"
+                                defaultValue={loadJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
                                 onChange={(e) => {
-                                  setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.checked);
-                                  setJournalSignalInputsTick((t) => t + 1);
+                                  if (!canEditIndicators) return;
+                                  setJournalIndicatorValue(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.value);
                                 }}
-                                style={{ width: "16px", height: "16px" }}
+                                readOnly={!canEditIndicators}
+                                disabled={!canEditIndicators}
+                                spellCheck={false}
+                                style={{
+                                  padding: "10px 12px",
+                                  background: "var(--bg-tertiary)",
+                                  border: "1px solid var(--border-color)",
+                                  borderRadius: "10px",
+                                  color: "var(--text-primary)",
+                                  outline: "none",
+                                  width: "100%",
+                                  minWidth: 0,
+                                  boxSizing: "border-box",
+                                }}
                               />
-                              Divergence
-                            </label>
+                              {ind.kind === "custom" &&
+                                otherSignalLabels
+                                  .filter((lbl) => (signalPrefs?.journalKindByLabel[lbl] ?? "checkbox") === "value")
+                                  .map((label) => {
+                                    const customColor = signalPrefs?.chipColorByLabel?.[label];
+                                    const otherSignalsTf = loadJournalIndicatorOtherSignals(dataMode, entryId, tradeIndex, phase, ind.id, tf);
+                                    const raw = otherSignalsTf[label];
+                                    const textVal = typeof raw === "string" ? raw : "";
+                                    return (
+                                      <div key={`${label}-val-${tf}`} style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
+                                        <span style={{ fontSize: "11px", fontWeight: 650, color: "var(--text-secondary)", userSelect: "none" }}>{label}</span>
+                                        <input
+                                          type="text"
+                                          placeholder="Value"
+                                          defaultValue={textVal}
+                                          disabled={!canEditIndicators}
+                                          readOnly={!canEditIndicators}
+                                          spellCheck={false}
+                                          onChange={(e) => {
+                                            if (!canEditIndicators) return;
+                                            setJournalIndicatorOtherSignalField(
+                                              dataMode,
+                                              entryId,
+                                              tradeIndex,
+                                              phase,
+                                              ind.id,
+                                              tf,
+                                              label,
+                                              e.target.value
+                                            );
+                                            setJournalSignalInputsTick((t) => t + 1);
+                                          }}
+                                          style={{
+                                            padding: "10px 12px",
+                                            width: "100%",
+                                            minWidth: 0,
+                                            boxSizing: "border-box",
+                                            background: customColor ? hexToRgba(customColor, 0.08) : "var(--bg-tertiary)",
+                                            border: customColor ? `1px solid ${hexToRgba(customColor, 0.45)}` : "1px solid var(--border-color)",
+                                            borderRadius: "10px",
+                                            color: "var(--text-primary)",
+                                            fontSize: 12,
+                                            outline: "none",
+                                          }}
+                                        />
+                                      </div>
+                                    );
+                                  })}
+                            </>
                           )}
 
-                          {ind.kind === "custom" && otherSignalLabels.length > 0 && tf === (colTfs[0] ?? tf) && (
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                              {otherSignalLabels.map((label) => {
-                                const osMode = signalPrefs?.journalKindByLabel[label] ?? "checkbox";
-                                const customColor = signalPrefs?.chipColorByLabel?.[label];
-                                const raw = otherSignals[label];
-                                const checked = typeof raw === "boolean" ? raw : raw === "true" || raw === "1";
-                                const textVal = typeof raw === "string" ? raw : "";
-                                if (osMode === "value") {
-                                  return (
-                                    <label
-                                      key={label}
-                                      style={{
-                                        display: "inline-flex",
-                                        flexDirection: "column",
-                                        alignItems: "flex-start",
-                                        gap: 4,
-                                        color: "var(--text-primary)",
-                                        fontSize: 12,
-                                        fontWeight: 650,
-                                        userSelect: "none",
-                                        minWidth: 0,
-                                      }}
-                                    >
-                                      <span style={{ color: customColor ?? "var(--text-secondary)", fontSize: 11, fontWeight: 800 }}>{label}</span>
-                                      <input
-                                        type="text"
-                                        defaultValue={textVal}
-                                        disabled={!canEditIndicators}
-                                        readOnly={!canEditIndicators}
-                                        spellCheck={false}
-                                        onChange={(e) => {
-                                          if (!canEditIndicators) return;
-                                          setJournalIndicatorOtherSignalField(dataMode, entryId, tradeIndex, phase, ind.id, label, e.target.value);
-                                          setJournalSignalInputsTick((t) => t + 1);
-                                        }}
-                                        style={{
-                                          padding: "6px 8px",
-                                          minWidth: 100,
-                                          background: customColor ? hexToRgba(customColor, 0.08) : "var(--bg-tertiary)",
-                                          border: customColor ? `1px solid ${hexToRgba(customColor, 0.45)}` : "1px solid var(--border-color)",
-                                          borderRadius: "8px",
-                                          color: "var(--text-primary)",
-                                          fontSize: 12,
-                                        }}
-                                      />
-                                    </label>
-                                  );
-                                }
-                                return (
-                                  <label
-                                    key={label}
-                                    style={{
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      gap: 8,
-                                      color: "var(--text-primary)",
-                                      fontSize: 12,
-                                      fontWeight: 650,
-                                      userSelect: "none",
-                                      cursor: canEditIndicators ? "pointer" : "default",
+                          {(isMomentum ||
+                            (ind.kind === "custom" &&
+                              otherSignalLabels.some((lbl) => (signalPrefs?.journalKindByLabel[lbl] ?? "checkbox") === "checkbox"))) && (
+                            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px" }}>
+                              {isMomentum && (
+                                <label
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "6px",
+                                    cursor: canEditIndicators ? "pointer" : "default",
+                                    color: "var(--text-secondary)",
+                                    fontSize: "11px",
+                                    fontWeight: 650,
+                                    userSelect: "none",
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={loadJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                                    disabled={!canEditIndicators}
+                                    onChange={(e) => {
+                                      setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.checked);
+                                      setJournalSignalInputsTick((t) => t + 1);
                                     }}
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      checked={checked}
-                                      disabled={!canEditIndicators}
-                                      onChange={(e) => {
-                                        setJournalIndicatorOtherSignal(dataMode, entryId, tradeIndex, phase, ind.id, label, e.target.checked);
-                                        setJournalSignalInputsTick((t) => t + 1);
-                                      }}
-                                      style={{ width: 16, height: 16, ...(customColor ? { accentColor: customColor } : {}) }}
-                                    />
-                                    <span style={{ color: customColor ?? "var(--text-primary)", fontWeight: customColor ? 800 : 650 }}>{label}</span>
-                                  </label>
-                                );
-                              })}
+                                    style={{ width: "16px", height: "16px" }}
+                                  />
+                                  Divergence
+                                </label>
+                              )}
+                              {ind.kind === "custom" &&
+                                otherSignalLabels
+                                  .filter((lbl) => (signalPrefs?.journalKindByLabel[lbl] ?? "checkbox") === "checkbox")
+                                  .map((label) => {
+                                    const customColor = signalPrefs?.chipColorByLabel?.[label];
+                                    const otherSignalsTf = loadJournalIndicatorOtherSignals(dataMode, entryId, tradeIndex, phase, ind.id, tf);
+                                    const raw = otherSignalsTf[label];
+                                    const checked = typeof raw === "boolean" ? raw : raw === "true" || raw === "1";
+                                    return (
+                                      <label
+                                        key={`${label}-chk-${tf}`}
+                                        style={{
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          gap: "6px",
+                                          cursor: canEditIndicators ? "pointer" : "default",
+                                          color: "var(--text-secondary)",
+                                          fontSize: "11px",
+                                          fontWeight: 650,
+                                          userSelect: "none",
+                                        }}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={checked}
+                                          disabled={!canEditIndicators}
+                                          onChange={(e) => {
+                                            setJournalIndicatorOtherSignal(
+                                              dataMode,
+                                              entryId,
+                                              tradeIndex,
+                                              phase,
+                                              ind.id,
+                                              tf,
+                                              label,
+                                              e.target.checked
+                                            );
+                                            setJournalSignalInputsTick((t) => t + 1);
+                                          }}
+                                          style={{ width: 16, height: 16, ...(customColor ? { accentColor: customColor } : {}) }}
+                                        />
+                                        {label}
+                                      </label>
+                                    );
+                                  })}
                             </div>
                           )}
                         </div>
@@ -5292,6 +6300,10 @@ export default function Journal() {
   // Each set gets its own Journal section that can be reordered.
   const [strategyCustomRuleSets, setStrategyCustomRuleSets] = useState<StrategyCustomRuleSet[]>([]);
   const [journalSignalsSettingsModalPhase, setJournalSignalsSettingsModalPhase] = useState<IndicatorPhase | null>(null);
+  const [journalChecklistConfigureType, setJournalChecklistConfigureType] = useState<string | null>(null);
+  const [journalRulesConfigure, setJournalRulesConfigure] = useState<
+    null | { kind: "entry" | "takeProfit" } | { kind: "custom"; ruleSetId: string }
+  >(null);
   /** Bumped when divergence / other-signal prefs change in localStorage so controlled checkboxes re-render. */
   const [, setJournalSignalInputsTick] = useState(0);
   const [indicatorSignalGroupFilterByPhase, setIndicatorSignalGroupFilterByPhase] = useState<
@@ -5418,6 +6430,311 @@ export default function Journal() {
     return out;
   }, [filteredEntries, showAllRecent, journalTradesByEntry]);
 
+  const renderJournalEntryMetadataForm = (): ReactNode => (
+    <>
+      {/* Consolidated top bar: Date, Title, Strategy, Trade selector */}
+      <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)", display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "flex-end" }}>
+        <div style={{ flex: "0 0 110px", minWidth: "90px" }}>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), display: "block", marginBottom: "2px" }}>Date</label>
+          <input
+            type="date"
+            value={entryFormData.date}
+            onChange={(e) => setEntryFormData({ ...entryFormData, date: e.target.value })}
+            style={{ width: "100%", padding: "5px 6px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "13px" }}
+          />
+        </div>
+        <div style={{ flex: "1 1 160px", minWidth: "120px" }}>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), display: "block", marginBottom: "2px" }}>Title</label>
+          <input
+            ref={titleInputRef}
+            type="text"
+            value={entryFormData.title}
+            onChange={(e) => {
+              const newData = { ...entryFormData, title: e.target.value };
+              setEntryFormData(newData);
+              if (isEditing) {
+                const currentState = { entry: newData, trades: tradesFormData.map(t => ({ ...t })), checklistResponses: new Map(checklistResponses) };
+                setEditHistory(prev => [...prev, currentState].slice(-10));
+              }
+            }}
+            placeholder="Entry title..."
+            style={{ width: "100%", padding: "5px 6px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "13px" }}
+          />
+        </div>
+        <div style={{ flex: "0 0 140px", minWidth: "100px" }} ref={strategyDropdownRef}>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), display: "block", marginBottom: "2px" }}>Strategy</label>
+          <div style={{ position: "relative" }}>
+            <button
+              type="button"
+              onClick={() => setStrategyDropdownOpen((o) => !o)}
+              style={{
+                width: "100%",
+                padding: "5px 8px",
+                textAlign: "left",
+                backgroundColor: "var(--bg-primary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                color: "var(--text-primary)",
+                fontSize: "13px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "6px",
+              }}
+            >
+              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {entryFormData.strategy_id != null ? (strategies.find((s) => s.id === entryFormData.strategy_id)?.name ?? "None") : "None"}
+              </span>
+              <ChevronDown size={14} style={{ flexShrink: 0, opacity: 0.7 }} />
+            </button>
+            {strategyDropdownOpen && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  right: 0,
+                  marginTop: "2px",
+                  backgroundColor: "var(--bg-secondary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                  zIndex: 100,
+                  maxHeight: "220px",
+                  overflowY: "auto",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => { setEntryFormData({ ...entryFormData, strategy_id: null }); setStrategyDropdownOpen(false); }}
+                  style={{
+                    width: "100%",
+                    padding: "8px 10px",
+                    textAlign: "left",
+                    background: "none",
+                    border: "none",
+                    borderBottom: "1px solid var(--border-color)",
+                    color: "var(--accent)",
+                    fontSize: "13px",
+                    cursor: "pointer",
+                    fontWeight: 500,
+                  }}
+                >
+                  None
+                </button>
+                {strategies.map((s) => {
+                  const isDefault = defaultStrategyIdForJournal === s.id;
+                  return (
+                    <div
+                      key={s.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "12px",
+                        padding: "4px 8px 4px 12px",
+                        background: entryFormData.strategy_id === s.id ? "var(--bg-hover)" : "transparent",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => { setEntryFormData({ ...entryFormData, strategy_id: s.id }); setStrategyDropdownOpen(false); }}
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          padding: "6px 0",
+                          textAlign: "left",
+                          background: "none",
+                          border: "none",
+                          color: "var(--text-primary)",
+                          fontSize: "13px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {s.name}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          try {
+                            if (isDefault) {
+                              localStorage.removeItem(JOURNAL_DEFAULT_STRATEGY_ID_KEY);
+                              setDefaultStrategyIdForJournal(null);
+                            } else {
+                              localStorage.setItem(JOURNAL_DEFAULT_STRATEGY_ID_KEY, String(s.id));
+                              setDefaultStrategyIdForJournal(s.id);
+                            }
+                          } catch {
+                            /* ignore */
+                          }
+                        }}
+                        title={isDefault ? "Clear default for new journal entries" : "Use this strategy as default for new journal entries"}
+                        style={{
+                          flexShrink: 0,
+                          padding: "4px 8px",
+                          fontSize: "11px",
+                          fontWeight: isDefault ? 600 : 400,
+                          color: isDefault ? "white" : "var(--text-secondary)",
+                          background: isDefault ? "var(--accent)" : "transparent",
+                          border: isDefault ? "1px solid var(--accent)" : "1px dashed var(--border-color)",
+                          borderRadius: "4px",
+                          cursor: "pointer",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {isDefault ? "Default" : "Set default"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "2px", flexWrap: "wrap" }}>
+          {tradesFormData.map((trade, index) => {
+            const isActive = activeTradeIndex === index;
+            const tabLabel = trade.symbol || `T${index + 1}`;
+            return (
+              <div key={index} style={{ display: "flex", alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={() => setActiveTradeIndex(index)}
+                  style={{
+                    padding: "6px 12px",
+                    background: isActive ? "var(--bg-primary)" : "transparent",
+                    border: "1px solid var(--border-color)",
+                    borderBottom: isActive ? "2px solid var(--accent)" : "2px solid transparent",
+                    color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    fontWeight: isActive ? "600" : "400",
+                    borderRadius: "4px 4px 0 0",
+                    marginBottom: "-1px",
+                  }}
+                >
+                  {tabLabel}
+                </button>
+                {tradesFormData.length > 1 && (
+                  <button
+                    type="button"
+                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                    onClick={(e) => { e.stopPropagation(); handleRemoveTrade(index); }}
+                    style={{ padding: "4px", marginLeft: "2px", background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer" }}
+                    title="Remove trade"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => handleAddTrade()}
+            style={{ padding: "6px 10px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--accent)", cursor: "pointer", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px" }}
+            title="Add trade"
+          >
+            <Plus size={14} />
+            Add
+          </button>
+        </div>
+      </div>
+  
+      {/* Trade-specific fields - compact row */}
+      {currentTrade && (
+        <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)", display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "flex-end" }}>
+        <div style={{ minWidth: "80px", flex: "1 1 80px" }}>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>Symbol</label>
+          <input type="text" list={`symbol-list-${activeTradeIndex}`} value={currentTrade.symbol} onChange={(e) => updateTradeFormData(activeTradeIndex, "symbol", e.target.value)} placeholder="Symbol" style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }} />
+          <datalist id={`symbol-list-${activeTradeIndex}`}>{availableSymbols.map((sym) => <option key={sym} value={sym} />)}</datalist>
+        </div>
+        <div style={{ minWidth: "70px", flex: "0 0 70px" }}>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>Position</label>
+          <select value={currentTrade.position} onChange={(e) => updateTradeFormData(activeTradeIndex, "position", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
+            <option value="">Pos.</option>
+            <option value="Long">Long</option>
+            <option value="Short">Short</option>
+            <option value="Call">Call</option>
+            <option value="Put">Put</option>
+          </select>
+        </div>
+        <div style={{ minWidth: "75px", flex: "0 0 75px" }}>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>TF</label>
+          <select value={currentTrade.timeframe} onChange={(e) => updateTradeFormData(activeTradeIndex, "timeframe", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
+            <option value="">TF</option>
+            <option value="1m">1m</option>
+            <option value="5m">5m</option>
+            <option value="15m">15m</option>
+            <option value="1h">1h</option>
+            <option value="1d">1d</option>
+          </select>
+        </div>
+        <div style={{ minWidth: "60px", flex: "0 0 60px" }}>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>Entry</label>
+          <select value={currentTrade.entry_type} onChange={(e) => updateTradeFormData(activeTradeIndex, "entry_type", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
+            <option value="">—</option>
+            <option value="Market">Market</option>
+            <option value="Limit">Limit</option>
+          </select>
+        </div>
+        <div style={{ minWidth: "60px", flex: "0 0 60px" }}>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>Exit</label>
+          <select value={currentTrade.exit_type} onChange={(e) => updateTradeFormData(activeTradeIndex, "exit_type", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
+            <option value="">—</option>
+            <option value="Market">Market</option>
+            <option value="Limit">Limit</option>
+          </select>
+        </div>
+        <div style={{ minWidth: "70px", flex: "0 0 70px" }}>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>Outcome</label>
+          <select value={currentTrade.outcome} onChange={(e) => updateTradeFormData(activeTradeIndex, "outcome", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
+            <option value="None">None</option>
+            <option value="Positive">+</option>
+            <option value="Negative">−</option>
+            <option value="Breakeven">BE</option>
+          </select>
+        </div>
+        <div style={{ minWidth: "55px", flex: "0 0 55px" }}>
+          <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), display: "block", marginBottom: "2px" }}>R</label>
+          <input type="text" inputMode="decimal" value={(currentTrade as { r_multiple?: string }).r_multiple ?? ""} onChange={(e) => updateTradeFormData(activeTradeIndex, "r_multiple", e.target.value)} placeholder="R" style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }} />
+        </div>
+        {((isEditing && currentTrade.id != null) || selectedEntry?.id) && (
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            {isEditing && currentTrade.id != null && (
+              <button type="button" onClick={() => { setLinkActualTradesSelection(journalTradeActualTradeIds.get(currentTrade.id!) ?? []); setLinkActualTradesModalJournalTradeId(currentTrade.id!); }} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 8px", background: "var(--accent)", border: "none", borderRadius: "4px", color: "white", cursor: "pointer", fontSize: "11px" }}>
+                <Link2 size={12} /> {journalTradeActualTradeIds.get(currentTrade.id!)?.length ? "Edit" : "Link"}
+              </button>
+            )}
+            {selectedEntry?.id && (
+              <button type="button" onClick={async () => { setShowLinkPairsModal(true); setLinkPairsSearchQuery(""); setLinkPairsSortBy("date"); setLinkPairsSortDirection("desc"); const method = localStorage.getItem("tradebutler_pairing_method") || "FIFO"; const all = await invoke<PairedTrade[]>("get_paired_trades", { pairingMethod: method || null }); setAllPairsForPicker(all); setLinkPickerSelected(new Set(linkedPairs.map(p => `${p.entry_trade_id}_${p.exit_trade_id}`))); }} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 8px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "11px", cursor: "pointer" }}>
+                <Link2 size={12} /> Positions {linkedPairs.length > 0 && `(${linkedPairs.length})`}
+              </button>
+            )}
+          </div>
+        )}
+        </div>
+      )}
+  
+      {/* Linked pairs list - compact when entry has pairs */}
+      {selectedEntry?.id && linkedPairs.length > 0 && (
+        <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)", display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
+        <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginRight: "8px" }}>{linkedPairs.length} position{linkedPairs.length !== 1 ? "s" : ""}</span>
+        {linkedPairs.map((pair) => (
+          <div key={`${pair.entry_trade_id}-${pair.exit_trade_id}`} style={{ display: "flex", alignItems: "center", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", overflow: "hidden" }}>
+            <button type="button" onClick={() => { setSelectedPairForChart(pair); setSelectedPositionTrades(undefined); fetchPositionTradesForPair(pair).then(setSelectedPositionTrades); }} style={{ padding: "4px 8px", background: "none", border: "none", color: "var(--text-primary)", fontSize: "12px", cursor: "pointer" }}>
+              {pair.symbol} {format(new Date(pair.entry_timestamp), "MMM d")}→{format(new Date(pair.exit_timestamp), "MMM d")} <span style={{ color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)", fontWeight: "600" }}>{pair.net_profit_loss >= 0 ? "+" : ""}{pair.net_profit_loss.toFixed(2)}</span>
+            </button>
+            <button type="button" onClick={async () => { if (!selectedEntry?.id) return; const remaining = linkedPairs.filter((p) => !(p.entry_trade_id === pair.entry_trade_id && p.exit_trade_id === pair.exit_trade_id)); try { if (dataMode === "sandbox") { setSandboxJournalEntryPairs(selectedEntry.id, remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id }))); setLinkedPairs(remaining); } else { await invoke("set_journal_entry_pairs", { journalEntryId: selectedEntry.id, pairs: remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })) }); setLinkedPairs(remaining); } } catch (err) { console.error(err); alert("Failed to unlink."); } }} style={{ padding: "4px 6px", borderLeft: "1px solid var(--border-color)", background: "none", color: "var(--text-secondary)", cursor: "pointer" }} title="Unlink"><X size={12} /></button>
+          </div>
+        ))}
+        </div>
+      )}
+
+    </>
+  );
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", flex: 1 }}>
       {dataMode === "sandbox" && (
@@ -5539,133 +6856,146 @@ export default function Journal() {
               style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px" }}
             >
               <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12, minWidth: 260, flex: "1 1 520px" }}>
-                    <div style={{ flex: "1 1 220px", minWidth: 200, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
-                      <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
-                        Date
-                      </label>
-                      <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
-                        {selectedEntry.date}
-                      </div>
-                    </div>
-
-                    <div style={{ flex: "2 1 260px", minWidth: 240, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
-                      <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
-                        Title
-                      </label>
-                      <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={selectedEntry.title}>
-                        {selectedEntry.title}
-                      </div>
-                    </div>
-
-                    {selectedEntry.strategy_id && (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "stretch", gap: 16, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 260, flex: "1 1 520px", alignSelf: "stretch" }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
                       <div style={{ flex: "1 1 220px", minWidth: 200, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
-                        <label style={{ fontSize: "11px", fontWeight: "800", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
-                          Strategy
+                        <label style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), display: "block", marginBottom: 6 }}>
+                          Date
                         </label>
-                        <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={strategies.find(s => s.id === selectedEntry.strategy_id)?.name || "Unknown"}>
-                          {strategies.find(s => s.id === selectedEntry.strategy_id)?.name || "Unknown"}
+                        <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
+                          {selectedEntry.date}
+                        </div>
+                      </div>
+
+                      <div style={{ flex: "2 1 260px", minWidth: 240, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
+                        <label style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), display: "block", marginBottom: 6 }}>
+                          Title
+                        </label>
+                        <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={selectedEntry.title}>
+                          {selectedEntry.title}
+                        </div>
+                      </div>
+
+                      {selectedEntry.strategy_id && (
+                        <div style={{ flex: "1 1 220px", minWidth: 200, padding: "12px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10 }}>
+                          <label style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), display: "block", marginBottom: 6 }}>
+                            Strategy
+                          </label>
+                          <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={strategies.find(s => s.id === selectedEntry.strategy_id)?.name || "Unknown"}>
+                            {strategies.find(s => s.id === selectedEntry.strategy_id)?.name || "Unknown"}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {selectedTrades.length > 0 && (
+                      <div
+                        style={{
+                          padding: "10px 12px",
+                          background: "var(--bg-tertiary)",
+                          border: "1px solid var(--border-color)",
+                          borderLeft: "3px solid var(--accent)",
+                          borderRadius: 10,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <h3
+                          style={{
+                            fontSize: "13px",
+                            fontWeight: 900,
+                            margin: 0,
+                            color: "var(--text-primary)",
+                            letterSpacing: "0.06em",
+                            textTransform: "uppercase",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Trades ({selectedTrades.length})
+                        </h3>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            flexWrap: "wrap",
+                            minWidth: 0,
+                          }}
+                        >
+                          {selectedTrades.map((trade, index) => {
+                            const tabLabel = trade.symbol
+                              ? (trade.position ? `${trade.symbol} ${trade.position}` : trade.symbol)
+                              : `Trade ${index + 1}`;
+                            const isActiveTab = index === (viewFocusedTradeIndex ?? 0);
+                            return (
+                              <button
+                                key={trade.id || `trade-tab-${index}`}
+                                type="button"
+                                onClick={() => setViewFocusedTradeIndex(index)}
+                                style={{
+                                  border: `1px solid ${isActiveTab ? "var(--accent)" : "var(--border-color)"}`,
+                                  background: isActiveTab ? "var(--bg-secondary)" : "var(--bg-primary)",
+                                  color: isActiveTab ? "var(--text-primary)" : "var(--text-secondary)",
+                                  borderRadius: 8,
+                                  padding: "6px 10px",
+                                  fontSize: 12,
+                                  fontWeight: isActiveTab ? 700 : 600,
+                                  cursor: "pointer",
+                                  maxWidth: 180,
+                                  whiteSpace: "nowrap",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                }}
+                                title={tabLabel}
+                              >
+                                {tabLabel}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
                   </div>
 
-                  <div style={{ flex: "1 1 280px", minWidth: 280 }}>
-                    <div style={{ padding: "14px 14px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 10, display: "flex", flexDirection: "column", gap: 10 }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                        <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Overview</span>
+                  <div style={{ flex: "1 1 280px", minWidth: 280, display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
+                    <div
+                      style={{
+                        flex: 1,
+                        minHeight: 0,
+                        padding: "12px 12px",
+                        backgroundColor: "var(--bg-tertiary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 10,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexShrink: 0 }}>
+                        <span style={journalSectionTitleStyle("muted")}>Overview</span>
                         <span style={{ fontSize: 12, fontWeight: 700, color: "var(--accent)" }}>{selectedEntry.strategy_id ? "Strategy-backed" : "Unassigned"}</span>
                       </div>
-                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                        <div style={{ flex: "1 1 120px", minWidth: 120, padding: "10px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Trades</div>
+                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", flex: 1, alignContent: "stretch", minHeight: 0 }}>
+                        <div style={{ flex: "1 1 120px", minWidth: 120, padding: "10px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: 8, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+                          <div style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), marginBottom: 4 }}>Trades</div>
                           <div style={{ fontSize: 16, fontWeight: 900, color: "var(--text-primary)" }}>{selectedTrades.length}</div>
                         </div>
-                        <div style={{ flex: "1 1 120px", minWidth: 120, padding: "10px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Emotions</div>
+                        <div style={{ flex: "1 1 120px", minWidth: 120, padding: "10px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: 8, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+                          <div style={{ ...journalSectionTitleStyle("muted", { size: "sm" }), marginBottom: 4 }}>Emotions</div>
                           <div style={{ fontSize: 16, fontWeight: 900, color: "var(--text-primary)" }}>{viewEntryEmotionalStates.length > 0 ? groupEmotionalStatesByTimestamp(viewEntryEmotionalStates).length : 0}</div>
                         </div>
-                      </div>
-                      <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.4 }}>
-                        Click a trade card to expand checklists and details. Use the Emotions cards to jump to the related trade.
                       </div>
                     </div>
                   </div>
                 </div>
 
                 {/* Display all trades */}
-                {selectedTrades.length > 0 && (
-                  <div style={{ marginTop: "24px" }}>
-                    <div
-                      style={{
-                        marginBottom: "16px",
-                        padding: "10px 12px",
-                        background: "var(--bg-tertiary)",
-                        border: "1px solid var(--border-color)",
-                        borderLeft: "3px solid var(--accent)",
-                        borderRadius: 10,
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        flexWrap: "wrap",
-                      }}
-                    >
-                      <h3
-                        style={{
-                          fontSize: "13px",
-                          fontWeight: "900",
-                          margin: 0,
-                          color: "var(--text-primary)",
-                          letterSpacing: "0.04em",
-                          textTransform: "uppercase",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        Trades ({selectedTrades.length})
-                      </h3>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          flexWrap: "wrap",
-                          minWidth: 0,
-                        }}
-                      >
-                        {selectedTrades.map((trade, index) => {
-                          const tabLabel = trade.symbol
-                            ? (trade.position ? `${trade.symbol} ${trade.position}` : trade.symbol)
-                            : `Trade ${index + 1}`;
-                          const isActiveTab = index === (viewFocusedTradeIndex ?? 0);
-                          return (
-                            <button
-                              key={trade.id || `trade-tab-${index}`}
-                              type="button"
-                              onClick={() => setViewFocusedTradeIndex(index)}
-                              style={{
-                                border: `1px solid ${isActiveTab ? "var(--accent)" : "var(--border-color)"}`,
-                                background: isActiveTab ? "var(--bg-secondary)" : "var(--bg-primary)",
-                                color: isActiveTab ? "var(--text-primary)" : "var(--text-secondary)",
-                                borderRadius: 8,
-                                padding: "6px 10px",
-                                fontSize: 12,
-                                fontWeight: isActiveTab ? 700 : 600,
-                                cursor: "pointer",
-                                maxWidth: 180,
-                                whiteSpace: "nowrap",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                              }}
-                              title={tabLabel}
-                            >
-                              {tabLabel}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    {selectedTrades.map((trade, index) => {
+                {selectedTrades.length > 0 &&
+                  selectedTrades.map((trade, index) => {
                       const tradeName = trade.symbol
                         ? (trade.position ? `${trade.symbol} (${trade.position})` : trade.symbol)
                         : `Trade ${index + 1}`;
@@ -5690,7 +7020,7 @@ export default function Journal() {
                         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "10px", marginBottom: "14px" }}>
                           {trade.symbol && (
                             <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                              <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "4px", display: "block" }}>
                                 Symbol
                               </label>
                               <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
@@ -5700,7 +7030,7 @@ export default function Journal() {
                           )}
                           {trade.position && (
                             <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                              <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "4px", display: "block" }}>
                                 Position
                               </label>
                               <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
@@ -5710,7 +7040,7 @@ export default function Journal() {
                           )}
                           {trade.timeframe && (
                             <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                              <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "4px", display: "block" }}>
                                 Trade Timeframe
                               </label>
                               <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
@@ -5720,7 +7050,7 @@ export default function Journal() {
                           )}
                           {isFocused && trade.entry_type && (
                             <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                              <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "4px", display: "block" }}>
                                 Entry Type
                               </label>
                               <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
@@ -5730,7 +7060,7 @@ export default function Journal() {
                           )}
                           {isFocused && trade.exit_type && (
                             <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                              <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "4px", display: "block" }}>
                                 Exit Type
                               </label>
                               <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
@@ -5740,7 +7070,7 @@ export default function Journal() {
                           )}
                           {trade.outcome != null && (
                             <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                              <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px", display: "block" }}>
+                              <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "4px", display: "block" }}>
                                 Outcome
                               </label>
                               <div style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 700 }}>
@@ -5751,7 +7081,7 @@ export default function Journal() {
                         </div>
                         {trade.trade != null && (
                           <div style={{ marginBottom: isFocused ? "24px" : "14px", padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: 8 }}>
-                            <label style={{ fontSize: "10px", fontWeight: "700", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px", display: "block" }}>
+                            <label style={{ ...journalSectionTitleStyle("muted", { size: "xs" }), marginBottom: "8px", display: "block" }}>
                               Implementation
                             </label>
                             {isFocused ? (
@@ -5785,7 +7115,7 @@ export default function Journal() {
                               if (sectionId === "implementation") return null; // already rendered above
                               return (
                                 <div key={`readonly-${sectionId}`}>
-                                  <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "8px", display: "block" }}>
+                                  <label style={{ ...journalSectionTitleStyle("accent"), marginBottom: "8px", display: "block" }}>
                                     {getSectionLabelScroll(sectionId)}
                                   </label>
 
@@ -5804,28 +7134,28 @@ export default function Journal() {
                                       <RichTextEditor value={trade.notes || ""} onChange={() => {}} readOnly={true} />
                                     </div>
                                   )}
-                                  {sectionId === "analysis_checklist" && renderChecklistReadOnlyForType("daily_analysis", index)}
+                                  {sectionId === "analysis_checklist" && renderChecklistReadOnlyForType("daily_analysis", index, { checklistLayout: "list", splitSidePanel: true })}
                                   {sectionId === "entry_checklist" && (
                                     <>
                                       <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
                                         <div style={{ flex: "1 1 0", minWidth: 280 }}>
-                                          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
-                                            Entry Checklist
+                                          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
+                                            <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                                            <span style={journalSectionTitleStyle("accent")}>Entry Checklist</span>
                                           </div>
-                                          {renderChecklistReadOnlyForType("entry", index)}
+                                          {renderChecklistReadOnlyForType("entry", index, { checklistLayout: "list" })}
                                         </div>
                                         <div style={{ flex: "1 1 0", minWidth: 280 }}>
-                                          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
-                                            Entry Rules
+                                          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
+                                            <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                                            <span style={journalSectionTitleStyle("warning")}>Entry Rules</span>
                                           </div>
                                           {strategyEntryRuleTexts.length === 0 ? (
                                             <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>No entry rules configured.</p>
                                           ) : (
                                             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                                               {strategyEntryRuleTexts.map((rule, idx) => (
-                                                <div key={`entry-rule-${idx}`} style={{ padding: "10px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderLeft: "3px solid var(--accent)", borderRadius: 8, color: "var(--text-primary)", fontSize: 13, lineHeight: 1.35, whiteSpace: "pre-wrap" }}>
-                                                  {rule}
-                                                </div>
+                                                <JournalRuleCard key={`entry-rule-ro-${idx}`}>{rule}</JournalRuleCard>
                                               ))}
                                             </div>
                                           )}
@@ -5838,23 +7168,23 @@ export default function Journal() {
                                     <>
                                       <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
                                         <div style={{ flex: "1 1 0", minWidth: 280 }}>
-                                          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
-                                            Take Profit Checklist
+                                          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
+                                            <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                                            <span style={journalSectionTitleStyle("accent")}>Take Profit Checklist</span>
                                           </div>
-                                          {renderChecklistReadOnlyForType("take_profit", index)}
+                                          {renderChecklistReadOnlyForType("take_profit", index, { checklistLayout: "list" })}
                                         </div>
                                         <div style={{ flex: "1 1 0", minWidth: 280 }}>
-                                          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
-                                            Take Profit Rules
+                                          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
+                                            <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                                            <span style={journalSectionTitleStyle("warning")}>Take Profit Rules</span>
                                           </div>
                                           {strategyTakeProfitRuleTexts.length === 0 ? (
                                             <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>No take profit rules configured.</p>
                                           ) : (
                                             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                                               {strategyTakeProfitRuleTexts.map((rule, idx) => (
-                                                <div key={`tp-rule-${idx}`} style={{ padding: "10px 12px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderLeft: "3px solid var(--accent)", borderRadius: 8, color: "var(--text-primary)", fontSize: 13, lineHeight: 1.35, whiteSpace: "pre-wrap" }}>
-                                                  {rule}
-                                                </div>
+                                                <JournalRuleCard key={`tp-rule-ro-${idx}`}>{rule}</JournalRuleCard>
                                               ))}
                                             </div>
                                           )}
@@ -5881,7 +7211,7 @@ export default function Journal() {
                                   })()}
                                   {sectionId.startsWith("custom:") && (() => {
                                     const type = sectionId.slice(7);
-                                    return currentChecklists ? renderChecklistReadOnlyForType(type, index) : <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No checklist data available.</p>;
+                                    return currentChecklists ? renderChecklistReadOnlyForType(type, index, { checklistLayout: "list", accentVariant: "warning" }) : <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No checklist data available.</p>;
                                   })()}
                                   {(sectionId === "emotional_state_before" || sectionId === "emotional_state_during" || sectionId === "emotional_state_after") && (
                                     <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -6010,9 +7340,7 @@ export default function Journal() {
                         )}
                       </div>
                     );
-                    })}
-                  </div>
-                )}
+                  })}
 
                 {/* Links */}
                 {linkedPairs.length > 0 && (
@@ -6150,392 +7478,210 @@ export default function Journal() {
               </div>
             </div>
             <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-              {!isTabContentMaximized && (
-                <>
-                {/* Consolidated top bar: Date, Title, Strategy, Trade selector */}
-                <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)", display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "flex-end" }}>
-                  <div style={{ flex: "0 0 110px", minWidth: "90px" }}>
-                    <label style={{ display: "block", marginBottom: "2px", fontSize: "11px", fontWeight: "500", color: "var(--text-secondary)" }}>Date</label>
-                    <input
-                      type="date"
-                      value={entryFormData.date}
-                      onChange={(e) => setEntryFormData({ ...entryFormData, date: e.target.value })}
-                      style={{ width: "100%", padding: "5px 6px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "13px" }}
-                    />
-                  </div>
-                  <div style={{ flex: "1 1 160px", minWidth: "120px" }}>
-                    <label style={{ display: "block", marginBottom: "2px", fontSize: "11px", fontWeight: "500", color: "var(--text-secondary)" }}>Title</label>
-                    <input
-                      ref={titleInputRef}
-                      type="text"
-                      value={entryFormData.title}
-                      onChange={(e) => {
-                        const newData = { ...entryFormData, title: e.target.value };
-                        setEntryFormData(newData);
-                        if (isEditing) {
-                          const currentState = { entry: newData, trades: tradesFormData.map(t => ({ ...t })), checklistResponses: new Map(checklistResponses) };
-                          setEditHistory(prev => [...prev, currentState].slice(-10));
-                        }
-                      }}
-                      placeholder="Entry title..."
-                      style={{ width: "100%", padding: "5px 6px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "13px" }}
-                    />
-                  </div>
-                  <div style={{ flex: "0 0 140px", minWidth: "100px" }} ref={strategyDropdownRef}>
-                    <label style={{ display: "block", marginBottom: "2px", fontSize: "11px", fontWeight: "500", color: "var(--text-secondary)" }}>Strategy</label>
-                    <div style={{ position: "relative" }}>
-                      <button
-                        type="button"
-                        onClick={() => setStrategyDropdownOpen((o) => !o)}
-                        style={{
-                          width: "100%",
-                          padding: "5px 8px",
-                          textAlign: "left",
-                          backgroundColor: "var(--bg-primary)",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "4px",
-                          color: "var(--text-primary)",
-                          fontSize: "13px",
-                          cursor: "pointer",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          gap: "6px",
-                        }}
-                      >
-                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {entryFormData.strategy_id != null ? (strategies.find((s) => s.id === entryFormData.strategy_id)?.name ?? "None") : "None"}
-                        </span>
-                        <ChevronDown size={14} style={{ flexShrink: 0, opacity: 0.7 }} />
-                      </button>
-                      {strategyDropdownOpen && (
-                        <div
-                          style={{
-                            position: "absolute",
-                            top: "100%",
-                            left: 0,
-                            right: 0,
-                            marginTop: "2px",
-                            backgroundColor: "var(--bg-secondary)",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: "6px",
-                            boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-                            zIndex: 100,
-                            maxHeight: "220px",
-                            overflowY: "auto",
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => { setEntryFormData({ ...entryFormData, strategy_id: null }); setStrategyDropdownOpen(false); }}
-                            style={{
-                              width: "100%",
-                              padding: "8px 10px",
-                              textAlign: "left",
-                              background: "none",
-                              border: "none",
-                              borderBottom: "1px solid var(--border-color)",
-                              color: "var(--accent)",
-                              fontSize: "13px",
-                              cursor: "pointer",
-                              fontWeight: 500,
-                            }}
-                          >
-                            None
-                          </button>
-                          {strategies.map((s) => {
-                            const isDefault = defaultStrategyIdForJournal === s.id;
-                            return (
-                              <div
-                                key={s.id}
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: "12px",
-                                  padding: "4px 8px 4px 12px",
-                                  background: entryFormData.strategy_id === s.id ? "var(--bg-hover)" : "transparent",
-                                }}
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() => { setEntryFormData({ ...entryFormData, strategy_id: s.id }); setStrategyDropdownOpen(false); }}
-                                  style={{
-                                    flex: 1,
-                                    minWidth: 0,
-                                    padding: "6px 0",
-                                    textAlign: "left",
-                                    background: "none",
-                                    border: "none",
-                                    color: "var(--text-primary)",
-                                    fontSize: "13px",
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  {s.name}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    try {
-                                      if (isDefault) {
-                                        localStorage.removeItem(JOURNAL_DEFAULT_STRATEGY_ID_KEY);
-                                        setDefaultStrategyIdForJournal(null);
-                                      } else {
-                                        localStorage.setItem(JOURNAL_DEFAULT_STRATEGY_ID_KEY, String(s.id));
-                                        setDefaultStrategyIdForJournal(s.id);
-                                      }
-                                    } catch {
-                                      /* ignore */
-                                    }
-                                  }}
-                                  title={isDefault ? "Clear default for new journal entries" : "Use this strategy as default for new journal entries"}
-                                  style={{
-                                    flexShrink: 0,
-                                    padding: "4px 8px",
-                                    fontSize: "11px",
-                                    fontWeight: isDefault ? 600 : 400,
-                                    color: isDefault ? "white" : "var(--text-secondary)",
-                                    background: isDefault ? "var(--accent)" : "transparent",
-                                    border: isDefault ? "1px solid var(--accent)" : "1px dashed var(--border-color)",
-                                    borderRadius: "4px",
-                                    cursor: "pointer",
-                                    whiteSpace: "nowrap",
-                                  }}
-                                >
-                                  {isDefault ? "Default" : "Set default"}
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "2px", flexWrap: "wrap" }}>
-                    {tradesFormData.map((trade, index) => {
-                      const isActive = activeTradeIndex === index;
-                      const tabLabel = trade.symbol || `T${index + 1}`;
-                      return (
-                        <div key={index} style={{ display: "flex", alignItems: "center" }}>
-                          <button
-                            type="button"
-                            onClick={() => setActiveTradeIndex(index)}
-                            style={{
-                              padding: "6px 12px",
-                              background: isActive ? "var(--bg-primary)" : "transparent",
-                              border: "1px solid var(--border-color)",
-                              borderBottom: isActive ? "2px solid var(--accent)" : "2px solid transparent",
-                              color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
-                              cursor: "pointer",
-                              fontSize: "12px",
-                              fontWeight: isActive ? "600" : "400",
-                              borderRadius: "4px 4px 0 0",
-                              marginBottom: "-1px",
-                            }}
-                          >
-                            {tabLabel}
-                          </button>
-                          {tradesFormData.length > 1 && (
-                            <button
-                              type="button"
-                              onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                              onClick={(e) => { e.stopPropagation(); handleRemoveTrade(index); }}
-                              style={{ padding: "4px", marginLeft: "2px", background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer" }}
-                              title="Remove trade"
-                            >
-                              <X size={12} />
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                    <button
-                      type="button"
-                      onClick={() => handleAddTrade()}
-                      style={{ padding: "6px 10px", background: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--accent)", cursor: "pointer", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px" }}
-                      title="Add trade"
-                    >
-                      <Plus size={14} />
-                      Add
-                    </button>
-                  </div>
-                </div>
-
-              {/* Trade-specific fields - compact row */}
-              {currentTrade && (
-                <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)", display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "flex-end" }}>
-                  <div style={{ minWidth: "80px", flex: "1 1 80px" }}>
-                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Symbol</label>
-                    <input type="text" list={`symbol-list-${activeTradeIndex}`} value={currentTrade.symbol} onChange={(e) => updateTradeFormData(activeTradeIndex, "symbol", e.target.value)} placeholder="Symbol" style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }} />
-                    <datalist id={`symbol-list-${activeTradeIndex}`}>{availableSymbols.map((sym) => <option key={sym} value={sym} />)}</datalist>
-                  </div>
-                  <div style={{ minWidth: "70px", flex: "0 0 70px" }}>
-                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Position</label>
-                    <select value={currentTrade.position} onChange={(e) => updateTradeFormData(activeTradeIndex, "position", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
-                      <option value="">Pos.</option>
-                      <option value="Long">Long</option>
-                      <option value="Short">Short</option>
-                      <option value="Call">Call</option>
-                      <option value="Put">Put</option>
-                    </select>
-                  </div>
-                  <div style={{ minWidth: "75px", flex: "0 0 75px" }}>
-                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>TF</label>
-                    <select value={currentTrade.timeframe} onChange={(e) => updateTradeFormData(activeTradeIndex, "timeframe", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
-                      <option value="">TF</option>
-                      <option value="1m">1m</option>
-                      <option value="5m">5m</option>
-                      <option value="15m">15m</option>
-                      <option value="1h">1h</option>
-                      <option value="1d">1d</option>
-                    </select>
-                  </div>
-                  <div style={{ minWidth: "60px", flex: "0 0 60px" }}>
-                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Entry</label>
-                    <select value={currentTrade.entry_type} onChange={(e) => updateTradeFormData(activeTradeIndex, "entry_type", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
-                      <option value="">—</option>
-                      <option value="Market">Market</option>
-                      <option value="Limit">Limit</option>
-                    </select>
-                  </div>
-                  <div style={{ minWidth: "60px", flex: "0 0 60px" }}>
-                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Exit</label>
-                    <select value={currentTrade.exit_type} onChange={(e) => updateTradeFormData(activeTradeIndex, "exit_type", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
-                      <option value="">—</option>
-                      <option value="Market">Market</option>
-                      <option value="Limit">Limit</option>
-                    </select>
-                  </div>
-                  <div style={{ minWidth: "70px", flex: "0 0 70px" }}>
-                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>Outcome</label>
-                    <select value={currentTrade.outcome} onChange={(e) => updateTradeFormData(activeTradeIndex, "outcome", e.target.value)} style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }}>
-                      <option value="None">None</option>
-                      <option value="Positive">+</option>
-                      <option value="Negative">−</option>
-                      <option value="Breakeven">BE</option>
-                    </select>
-                  </div>
-                  <div style={{ minWidth: "55px", flex: "0 0 55px" }}>
-                    <label style={{ display: "block", marginBottom: "2px", fontSize: "10px", color: "var(--text-secondary)" }}>R</label>
-                    <input type="text" inputMode="decimal" value={(currentTrade as { r_multiple?: string }).r_multiple ?? ""} onChange={(e) => updateTradeFormData(activeTradeIndex, "r_multiple", e.target.value)} placeholder="R" style={{ width: "100%", padding: "4px 6px", fontSize: "12px", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)" }} />
-                  </div>
-                  {((isEditing && currentTrade.id != null) || selectedEntry?.id) && (
-                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                      {isEditing && currentTrade.id != null && (
-                        <button type="button" onClick={() => { setLinkActualTradesSelection(journalTradeActualTradeIds.get(currentTrade.id!) ?? []); setLinkActualTradesModalJournalTradeId(currentTrade.id!); }} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 8px", background: "var(--accent)", border: "none", borderRadius: "4px", color: "white", cursor: "pointer", fontSize: "11px" }}>
-                          <Link2 size={12} /> {journalTradeActualTradeIds.get(currentTrade.id!)?.length ? "Edit" : "Link"}
-                        </button>
-                      )}
-                      {selectedEntry?.id && (
-                        <button type="button" onClick={async () => { setShowLinkPairsModal(true); setLinkPairsSearchQuery(""); setLinkPairsSortBy("date"); setLinkPairsSortDirection("desc"); const method = localStorage.getItem("tradebutler_pairing_method") || "FIFO"; const all = await invoke<PairedTrade[]>("get_paired_trades", { pairingMethod: method || null }); setAllPairsForPicker(all); setLinkPickerSelected(new Set(linkedPairs.map(p => `${p.entry_trade_id}_${p.exit_trade_id}`))); }} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 8px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "4px", color: "var(--text-primary)", fontSize: "11px", cursor: "pointer" }}>
-                          <Link2 size={12} /> Positions {linkedPairs.length > 0 && `(${linkedPairs.length})`}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Linked pairs list - compact when entry has pairs */}
-              {selectedEntry?.id && !isTabContentMaximized && linkedPairs.length > 0 && (
-                <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-secondary)", display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
-                  <span style={{ fontSize: "11px", color: "var(--text-secondary)", marginRight: "8px" }}>{linkedPairs.length} position{linkedPairs.length !== 1 ? "s" : ""}</span>
-                  {linkedPairs.map((pair) => (
-                    <div key={`${pair.entry_trade_id}-${pair.exit_trade_id}`} style={{ display: "flex", alignItems: "center", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", overflow: "hidden" }}>
-                      <button type="button" onClick={() => { setSelectedPairForChart(pair); setSelectedPositionTrades(undefined); fetchPositionTradesForPair(pair).then(setSelectedPositionTrades); }} style={{ padding: "4px 8px", background: "none", border: "none", color: "var(--text-primary)", fontSize: "12px", cursor: "pointer" }}>
-                        {pair.symbol} {format(new Date(pair.entry_timestamp), "MMM d")}→{format(new Date(pair.exit_timestamp), "MMM d")} <span style={{ color: pair.net_profit_loss >= 0 ? "var(--profit)" : "var(--loss)", fontWeight: "600" }}>{pair.net_profit_loss >= 0 ? "+" : ""}{pair.net_profit_loss.toFixed(2)}</span>
-                      </button>
-                      <button type="button" onClick={async () => { if (!selectedEntry?.id) return; const remaining = linkedPairs.filter((p) => !(p.entry_trade_id === pair.entry_trade_id && p.exit_trade_id === pair.exit_trade_id)); try { if (dataMode === "sandbox") { setSandboxJournalEntryPairs(selectedEntry.id, remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id }))); setLinkedPairs(remaining); } else { await invoke("set_journal_entry_pairs", { journalEntryId: selectedEntry.id, pairs: remaining.map((p) => ({ entry_trade_id: p.entry_trade_id, exit_trade_id: p.exit_trade_id })) }); setLinkedPairs(remaining); } } catch (err) { console.error(err); alert("Failed to unlink."); } }} style={{ padding: "4px 6px", borderLeft: "1px solid var(--border-color)", background: "none", color: "var(--text-secondary)", cursor: "pointer" }} title="Unlink"><X size={12} /></button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Section nav: scroll-to links + reorder */}
-              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "5px", padding: "6px 12px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
-                {effectiveSectionOrder
-                  .filter((sectionId) => !EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId as JournalSectionId) || showAddEmotionalStateForm)
-                  .map((sectionId) => (
-                  <button
-                    key={sectionId}
-                    type="button"
-                    onClick={() => scrollToSection(sectionId)}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = "var(--accent)";
-                      e.currentTarget.style.color = "white";
-                      e.currentTarget.style.borderColor = "var(--accent)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "var(--bg-primary)";
-                      e.currentTarget.style.color = "var(--accent)";
-                      e.currentTarget.style.borderColor = "var(--accent)";
-                    }}
-                    style={{
-                      padding: "4px 10px",
-                      fontSize: "11px",
-                      fontWeight: "500",
-                      letterSpacing: "0.02em",
-                      color: "var(--accent)",
-                      background: "var(--bg-primary)",
-                      border: "1px solid var(--accent)",
-                      borderRadius: "999px",
-                      cursor: "pointer",
-                      transition: "background 0.12s ease, color 0.12s ease, border-color 0.12s ease",
-                    }}
-                  >
-                    {getSectionLabel(sectionId)}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => setShowSectionOrderModal(true)}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "var(--bg-hover)";
-                    e.currentTarget.style.borderColor = "var(--text-secondary)";
-                    e.currentTarget.style.color = "var(--text-primary)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                    e.currentTarget.style.borderColor = "var(--border-color)";
-                    e.currentTarget.style.color = "var(--text-secondary)";
-                  }}
-                  style={{
-                    padding: "4px 8px",
-                    fontSize: "11px",
-                    fontWeight: "500",
-                    letterSpacing: "0.02em",
-                    color: "var(--text-secondary)",
-                    background: "transparent",
-                    border: "1px dashed var(--border-color)",
-                    borderRadius: "999px",
-                    cursor: "pointer",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "4px",
-                    transition: "background 0.12s ease, border-color 0.12s ease, color 0.12s ease",
-                  }}
-                  title="Reorder sections"
-                >
-                  <GripVertical size={11} /> Order
-                </button>
-              </div>
-                </>
-              )}
-
               {/* Main scrolling content: sections in trader order */}
               {currentTrade && (
                 <>
-                  <div style={{ flex: 1, minHeight: 0, overflow: "visible", display: "flex", flexDirection: "column", padding: "16px 20px" }}>
+                  <div
+                    ref={journalScrollContainerRef}
+                    onScroll={handleJournalBodyScroll}
+                    style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}
+                  >
+                    {!isTabContentMaximized && (
+                      <>
+                        <div ref={journalMetaFormOuterRef} style={{ flexShrink: 0 }}>
+                          {!journalEntryMetaCollapsed && renderJournalEntryMetadataForm()}
+                        </div>
+                        <div
+                          style={{
+                            position: "sticky",
+                            top: 0,
+                            zIndex: 35,
+                            backgroundColor: "var(--bg-secondary)",
+                            borderBottom: "1px solid var(--border-color)",
+                          }}
+                        >
+                          {journalEntryMetaCollapsed && (
+                            <div ref={journalEntryMetaBarRef} style={{ position: "relative", borderBottom: "1px solid var(--border-color)" }}>
+                              <button
+                                type="button"
+                                onClick={() => setJournalEntryMetaDropdownOpen((v) => !v)}
+                                style={{
+                                  width: "100%",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  flexWrap: "wrap",
+                                  padding: "8px 14px",
+                                  background: "var(--bg-tertiary)",
+                                  border: "none",
+                                  cursor: "pointer",
+                                  textAlign: "left",
+                                  fontSize: "13px",
+                                  color: "var(--text-primary)",
+                                }}
+                              >
+                                <span style={{ fontWeight: 600, flex: "1 1 140px", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {(entryFormData.title || "").trim() || "Untitled entry"}
+                                </span>
+                                <span style={{ color: "var(--text-secondary)", flexShrink: 0 }}>
+                                  {format(parse(entryFormData.date, "yyyy-MM-dd", new Date()), "MM/dd/yyyy")}
+                                </span>
+                                <span style={{ color: "var(--text-secondary)", flexShrink: 0 }}>
+                                  · {entryFormData.strategy_id != null ? (strategies.find((s) => s.id === entryFormData.strategy_id)?.name ?? "—") : "—"}
+                                </span>
+                                <ChevronDown size={16} style={{ marginLeft: "auto", opacity: 0.75, flexShrink: 0 }} />
+                              </button>
+                              {journalEntryMetaDropdownOpen && (
+                                <div
+                                  style={{
+                                    position: "absolute",
+                                    left: 8,
+                                    right: 8,
+                                    top: "100%",
+                                    marginTop: 6,
+                                    zIndex: 100,
+                                    backgroundColor: "var(--bg-secondary)",
+                                    border: "1px solid var(--border-color)",
+                                    borderRadius: 10,
+                                    boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
+                                    maxHeight: "min(80vh, 640px)",
+                                    overflowY: "auto",
+                                    padding: 12,
+                                  }}
+                                >
+                                  {renderJournalEntryMetadataForm()}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "5px", padding: "6px 12px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
+                            {effectiveSectionOrder
+                              .filter((sectionId) => !EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId as JournalSectionId) || showAddEmotionalStateForm)
+                              .map((sectionId) => (
+                              <button
+                                key={sectionId}
+                                type="button"
+                                onClick={() => scrollToSection(sectionId)}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.background = "var(--accent)";
+                                  e.currentTarget.style.color = "white";
+                                  e.currentTarget.style.borderColor = "var(--accent)";
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.background = "var(--bg-primary)";
+                                  e.currentTarget.style.color = "var(--accent)";
+                                  e.currentTarget.style.borderColor = "var(--accent)";
+                                }}
+                                style={{
+                                  padding: "4px 10px",
+                                  fontSize: "11px",
+                                  fontWeight: "500",
+                                  letterSpacing: "0.02em",
+                                  color: "var(--accent)",
+                                  background: "var(--bg-primary)",
+                                  border: "1px solid var(--accent)",
+                                  borderRadius: "999px",
+                                  cursor: "pointer",
+                                  transition: "background 0.12s ease, color 0.12s ease, border-color 0.12s ease",
+                                }}
+                              >
+                                {getSectionLabel(sectionId)}
+                              </button>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => setShowSectionOrderModal(true)}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.background = "var(--bg-hover)";
+                                e.currentTarget.style.borderColor = "var(--text-secondary)";
+                                e.currentTarget.style.color = "var(--text-primary)";
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.background = "transparent";
+                                e.currentTarget.style.borderColor = "var(--border-color)";
+                                e.currentTarget.style.color = "var(--text-secondary)";
+                              }}
+                              style={{
+                                padding: "4px 8px",
+                                fontSize: "11px",
+                                fontWeight: "500",
+                                letterSpacing: "0.02em",
+                                color: "var(--text-secondary)",
+                                background: "transparent",
+                                border: "1px dashed var(--border-color)",
+                                borderRadius: "999px",
+                                cursor: "pointer",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px",
+                                transition: "background 0.12s ease, border-color 0.12s ease, color 0.12s ease",
+                              }}
+                              title="Reorder sections"
+                            >
+                              <GripVertical size={11} /> Order
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                    <div style={{ padding: "16px 20px", flex: 1, minHeight: 0 }}>
                     {effectiveSectionOrder.map((sectionId) => {
                       const hideUntilEmoStarted = EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId as JournalSectionId) && !showAddEmotionalStateForm;
                       if (hideUntilEmoStarted) return null;
                       return (
-                      <div key={sectionId} id={`section-${sectionId}`} ref={(el) => { sectionRefs.current.set(sectionId, el); }} style={{ marginBottom: "28px", scrollMarginTop: "12px" }}>
+                      <div key={sectionId} id={`section-${sectionId}`} ref={(el) => { sectionRefs.current.set(sectionId, el); }} style={{ marginBottom: "28px", scrollMarginTop: !isTabContentMaximized ? (journalEntryMetaCollapsed ? "100px" : "56px") : "12px" }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
-                          <h3 style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                            {getSectionLabelScroll(sectionId)}
-                          </h3>
+                          {(() => {
+                            const canCfg = Boolean(entryFormData.strategy_id && (isCreating || isEditing));
+                            let configureCog: ReactNode = null;
+                            if (canCfg && sectionId === "analysis_checklist") {
+                              configureCog = (
+                                <JournalStrategyConfigureCogButton
+                                  title="Configure analysis checklist on strategy (affects all journal entries using this strategy)"
+                                  onClick={() => setJournalChecklistConfigureType("daily_analysis")}
+                                />
+                              );
+                            } else if (canCfg && sectionId === "mantra_checklist") {
+                              configureCog = (
+                                <JournalStrategyConfigureCogButton
+                                  title="Configure mantra checklist on strategy (affects all journal entries using this strategy)"
+                                  onClick={() => setJournalChecklistConfigureType("daily_mantra")}
+                                />
+                              );
+                            } else if (canCfg && sectionId.startsWith("custom:")) {
+                              const t = sectionId.slice(7);
+                              configureCog = (
+                                <JournalStrategyConfigureCogButton
+                                  title={
+                                    t === "survey" || t.startsWith("survey_")
+                                      ? "Configure survey on strategy (affects all journal entries using this strategy)"
+                                      : "Configure checklist on strategy (affects all journal entries using this strategy)"
+                                  }
+                                  onClick={() => setJournalChecklistConfigureType(t)}
+                                />
+                              );
+                            } else if (canCfg && sectionId.startsWith("custom_rules:")) {
+                              configureCog = (
+                                <JournalStrategyConfigureCogButton
+                                  title="Configure this rule set on strategy (affects all journal entries using this strategy)"
+                                  onClick={() => setJournalRulesConfigure({ kind: "custom", ruleSetId: sectionId.slice("custom_rules:".length) })}
+                                />
+                              );
+                            }
+                            const heading = (
+                              <h3 style={{ ...journalSectionTitleStyle("accent"), margin: 0, flex: "1 1 auto", minWidth: 0 }}>
+                                {getSectionLabelScroll(sectionId)}
+                              </h3>
+                            );
+                            return configureCog ? (
+                              <JournalStrategySectionTitlePill>
+                                {heading}
+                                {configureCog}
+                              </JournalStrategySectionTitlePill>
+                            ) : (
+                              heading
+                            );
+                          })()}
                           {sectionId === "emotional_state_before" && (isCreating || isEditing) && showAddEmotionalStateForm && (
                             <button
                               type="button"
@@ -6577,20 +7723,60 @@ export default function Journal() {
                         {sectionId === "notes" && (
                           <RichTextEditor value={currentTrade.notes} onChange={(content: string) => updateTradeFormData(activeTradeIndex, "notes", content)} placeholder="Notes..." readOnly={false} />
                         )}
-                        {sectionId === "analysis_checklist" && renderChecklistForType("daily_analysis")}
-                        {sectionId === "mantra_checklist" && renderChecklistForType("daily_mantra")}
+                        {sectionId === "analysis_checklist" && (
+                          <JournalStrategySectionCard>
+                            {renderChecklistForType("daily_analysis", { checklistLayout: "list", splitSidePanel: true })}
+                          </JournalStrategySectionCard>
+                        )}
+                        {sectionId === "mantra_checklist" && (
+                          <JournalStrategySectionCard>
+                            {renderChecklistForType("daily_mantra", { checklistLayout: "list", splitSidePanel: true })}
+                          </JournalStrategySectionCard>
+                        )}
                         {sectionId === "entry_checklist" && (
                           <>
                           <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
-                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
-                              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
-                                Entry Checklist
+                            <JournalStrategySectionCard>
+                              <div style={{ marginBottom: "10px" }}>
+                                {entryFormData.strategy_id && (isCreating || isEditing) ? (
+                                  <JournalStrategySectionTitlePill>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                                      <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                                      <span style={journalSectionTitleStyle("accent")}>Entry Checklist</span>
+                                    </div>
+                                    <JournalStrategyConfigureCogButton
+                                      title="Configure entry checklist on strategy (affects all journal entries using this strategy)"
+                                      onClick={() => setJournalChecklistConfigureType("entry")}
+                                    />
+                                  </JournalStrategySectionTitlePill>
+                                ) : (
+                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                    <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                                    <span style={journalSectionTitleStyle("accent")}>Entry Checklist</span>
+                                  </div>
+                                )}
                               </div>
-                              {renderChecklistForType("entry")}
-                            </div>
-                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
-                              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
-                                Entry Rules
+                              {renderChecklistForType("entry", { checklistLayout: "list" })}
+                            </JournalStrategySectionCard>
+                            <JournalStrategySectionCard>
+                              <div style={{ marginBottom: "10px" }}>
+                                {entryFormData.strategy_id && (isCreating || isEditing) ? (
+                                  <JournalStrategySectionTitlePill>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                                      <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                                      <span style={journalSectionTitleStyle("warning")}>Entry Rules</span>
+                                    </div>
+                                    <JournalStrategyConfigureCogButton
+                                      title="Configure entry rules on strategy (affects all journal entries using this strategy)"
+                                      onClick={() => setJournalRulesConfigure({ kind: "entry" })}
+                                    />
+                                  </JournalStrategySectionTitlePill>
+                                ) : (
+                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                    <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                                    <span style={journalSectionTitleStyle("warning")}>Entry Rules</span>
+                                  </div>
+                                )}
                               </div>
                               {strategyEntryRuleTexts.length === 0 ? (
                                 <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
@@ -6599,26 +7785,11 @@ export default function Journal() {
                               ) : (
                                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                                   {strategyEntryRuleTexts.map((rule, idx) => (
-                                    <div
-                                      key={`${idx}`}
-                                      style={{
-                                        padding: "10px 12px",
-                                        background: "var(--bg-tertiary)",
-                                        border: "1px solid var(--border-color)",
-                                        borderLeft: "3px solid var(--accent)",
-                                        borderRadius: 8,
-                                        color: "var(--text-primary)",
-                                        fontSize: 13,
-                                        lineHeight: 1.35,
-                                        whiteSpace: "pre-wrap",
-                                      }}
-                                    >
-                                      {rule}
-                                    </div>
+                                    <JournalRuleCard key={`entry-rule-${idx}`}>{rule}</JournalRuleCard>
                                   ))}
                                 </div>
                               )}
-                            </div>
+                            </JournalStrategySectionCard>
                           </div>
                           <div style={{ marginTop: "12px" }}>{renderIndicatorInputs("entry")}</div>
                           </>
@@ -6626,15 +7797,47 @@ export default function Journal() {
                         {sectionId === "take_profit_checklist" && (
                           <>
                           <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
-                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
-                              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
-                                Take Profit Checklist
+                            <JournalStrategySectionCard>
+                              <div style={{ marginBottom: "10px" }}>
+                                {entryFormData.strategy_id && (isCreating || isEditing) ? (
+                                  <JournalStrategySectionTitlePill>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                                      <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                                      <span style={journalSectionTitleStyle("accent")}>Take Profit Checklist</span>
+                                    </div>
+                                    <JournalStrategyConfigureCogButton
+                                      title="Configure take profit checklist on strategy (affects all journal entries using this strategy)"
+                                      onClick={() => setJournalChecklistConfigureType("take_profit")}
+                                    />
+                                  </JournalStrategySectionTitlePill>
+                                ) : (
+                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                    <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                                    <span style={journalSectionTitleStyle("accent")}>Take Profit Checklist</span>
+                                  </div>
+                                )}
                               </div>
-                              {renderChecklistForType("take_profit")}
-                            </div>
-                            <div style={{ flex: "1 1 0", minWidth: 280 }}>
-                              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
-                                Take Profit Rules
+                              {renderChecklistForType("take_profit", { checklistLayout: "list" })}
+                            </JournalStrategySectionCard>
+                            <JournalStrategySectionCard>
+                              <div style={{ marginBottom: "10px" }}>
+                                {entryFormData.strategy_id && (isCreating || isEditing) ? (
+                                  <JournalStrategySectionTitlePill>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                                      <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                                      <span style={journalSectionTitleStyle("warning")}>Take Profit Rules</span>
+                                    </div>
+                                    <JournalStrategyConfigureCogButton
+                                      title="Configure take profit rules on strategy (affects all journal entries using this strategy)"
+                                      onClick={() => setJournalRulesConfigure({ kind: "takeProfit" })}
+                                    />
+                                  </JournalStrategySectionTitlePill>
+                                ) : (
+                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                    <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                                    <span style={journalSectionTitleStyle("warning")}>Take Profit Rules</span>
+                                  </div>
+                                )}
                               </div>
                               {strategyTakeProfitRuleTexts.length === 0 ? (
                                 <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
@@ -6643,39 +7846,27 @@ export default function Journal() {
                               ) : (
                                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                                   {strategyTakeProfitRuleTexts.map((rule, idx) => (
-                                    <div
-                                      key={`${idx}`}
-                                      style={{
-                                        padding: "10px 12px",
-                                        background: "var(--bg-tertiary)",
-                                        border: "1px solid var(--border-color)",
-                                        borderLeft: "3px solid var(--accent)",
-                                        borderRadius: 8,
-                                        color: "var(--text-primary)",
-                                        fontSize: 13,
-                                        lineHeight: 1.35,
-                                        whiteSpace: "pre-wrap",
-                                      }}
-                                    >
-                                      {rule}
-                                    </div>
+                                    <JournalRuleCard key={`tp-rule-${idx}`}>{rule}</JournalRuleCard>
                                   ))}
                                 </div>
                               )}
-                            </div>
+                            </JournalStrategySectionCard>
                           </div>
                           <div style={{ marginTop: "12px" }}>{renderIndicatorInputs("exit")}</div>
                           </>
                         )}
                         {sectionId.startsWith("custom_rules:") && (!entryFormData.strategy_id || !strategyCustomRuleSets) && (
-                          <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load custom rules.</p>
+                          <JournalStrategySectionCard>
+                            <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: 0 }}>Select a strategy to load custom rules.</p>
+                          </JournalStrategySectionCard>
                         )}
                         {sectionId.startsWith("custom_rules:") && entryFormData.strategy_id && (() => {
                           const ruleSetId = sectionId.slice("custom_rules:".length);
                           const ruleSet = strategyCustomRuleSets.find((s) => s.id === ruleSetId);
                           const rules = ruleSet?.rules ?? [];
                           return (
-                            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            <JournalStrategySectionCard>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                               {rules.length === 0 ? (
                                 <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
                                   No custom rules configured.
@@ -6700,69 +7891,244 @@ export default function Journal() {
                                   </div>
                                 ))
                               )}
-                            </div>
+                              </div>
+                            </JournalStrategySectionCard>
                           );
                         })()}
                         {sectionId.startsWith("custom:") && (!entryFormData.strategy_id || !currentChecklists) && (
-                          <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Select a strategy to load custom checklists and surveys.</p>
+                          <JournalStrategySectionCard>
+                            <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: 0 }}>Select a strategy to load custom checklists and surveys.</p>
+                          </JournalStrategySectionCard>
                         )}
                         {sectionId.startsWith("custom:") && entryFormData.strategy_id && currentChecklists && (() => {
                           const type = sectionId.slice(7);
                           if (type === "survey") {
                             const rawSurveyItems = currentChecklists.get("survey") || [];
                             const surveyItems = rawSurveyItems.filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
-                            if (surveyItems.length === 0) return <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>No survey items.</p>;
+                            if (surveyItems.length === 0) {
+                              return (
+                                <JournalStrategySectionCard>
+                                  <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: 0 }}>No survey items.</p>
+                                </JournalStrategySectionCard>
+                              );
+                            }
                             const groups = surveyItems.filter(item => !item.parent_id && surveyItems.some(child => child.parent_id === item.id));
                             const regularItems = surveyItems.filter(item => !item.parent_id && !surveyItems.some(child => child.parent_id === item.id));
                             const groupedItems = surveyItems.filter(item => item.parent_id !== null && surveyItems.some(p => p.id === item.parent_id));
                             const itemsByParent = new Map<number, ChecklistItem[]>();
                             groupedItems.forEach(item => { if (item.parent_id) { const pid = item.parent_id; if (!itemsByParent.has(pid)) itemsByParent.set(pid, []); itemsByParent.get(pid)!.push(item); } });
+                            const setSurveyScore = (checklistItemId: number, n: number) => {
+                              setSurveyScores((prev) => {
+                                const next = new Map(prev);
+                                const tradeMap = new Map(next.get(activeTradeIndex));
+                                tradeMap.set(checklistItemId, n);
+                                next.set(activeTradeIndex, tradeMap);
+                                return next;
+                              });
+                              setChecklistResponses((prev) => {
+                                const m = new Map(prev);
+                                const tr = new Map(m.get(activeTradeIndex) || new Map());
+                                tr.set(checklistItemId, true);
+                                m.set(activeTradeIndex, tr);
+                                return m;
+                              });
+                            };
+                            const clearSurveyScore = (checklistItemId: number) => {
+                              setSurveyScores((prev) => {
+                                const next = new Map(prev);
+                                const tradeMap = new Map(next.get(activeTradeIndex));
+                                tradeMap.delete(checklistItemId);
+                                next.set(activeTradeIndex, tradeMap);
+                                return next;
+                              });
+                              setChecklistResponses((prev) => {
+                                const m = new Map(prev);
+                                const tr = new Map(m.get(activeTradeIndex) || new Map());
+                                tr.set(checklistItemId, false);
+                                m.set(activeTradeIndex, tr);
+                                return m;
+                              });
+                            };
+                            const naBtnCompact = (onClick: () => void) => (
+                              <button
+                                type="button"
+                                onClick={onClick}
+                                style={{
+                                  minWidth: "36px",
+                                  padding: "4px 6px",
+                                  borderRadius: "6px",
+                                  border: "1px solid color-mix(in srgb, var(--warning) 28%, var(--border-color))",
+                                  backgroundColor: "var(--bg-primary)",
+                                  color: "var(--text-secondary)",
+                                  cursor: "pointer",
+                                  fontSize: "10px",
+                                  fontWeight: 600,
+                                }}
+                              >
+                                N/A
+                              </button>
+                            );
+                            const w = "var(--warning)";
+                            const renderSurveyControls = (row: ChecklistItem) => {
+                              const score = surveyScores.get(activeTradeIndex)?.get(row.id);
+                              const highGood = row.high_is_good !== false;
+                              const allowNa = row.survey_allow_na === true;
+                              if (isYesNoSurveyItem(row)) {
+                                const yesV = yesNoResponseValue(highGood, true);
+                                const noV = yesNoResponseValue(highGood, false);
+                                return (
+                                  <div style={{ display: "flex", gap: "6px", flexShrink: 0, alignItems: "center", flexWrap: "wrap" }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => setSurveyScore(row.id, yesV)}
+                                      style={{
+                                        minWidth: "46px",
+                                        padding: "5px 10px",
+                                        borderRadius: "8px",
+                                        border: `1px solid ${score === yesV ? w : "var(--border-color)"}`,
+                                        backgroundColor: score === yesV ? w : "var(--bg-secondary)",
+                                        color: score === yesV ? "white" : "var(--text-primary)",
+                                        cursor: "pointer",
+                                        fontSize: "12px",
+                                        fontWeight: 700,
+                                      }}
+                                    >
+                                      Yes
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setSurveyScore(row.id, noV)}
+                                      style={{
+                                        minWidth: "46px",
+                                        padding: "5px 10px",
+                                        borderRadius: "8px",
+                                        border: `1px solid ${score === noV ? w : "var(--border-color)"}`,
+                                        backgroundColor: score === noV ? w : "var(--bg-secondary)",
+                                        color: score === noV ? "white" : "var(--text-primary)",
+                                        cursor: "pointer",
+                                        fontSize: "12px",
+                                        fontWeight: 700,
+                                      }}
+                                    >
+                                      No
+                                    </button>
+                                    {allowNa ? naBtnCompact(() => clearSurveyScore(row.id)) : null}
+                                  </div>
+                                );
+                              }
+                              return (
+                                <div style={{ display: "flex", gap: "3px", flexWrap: "wrap", justifyContent: "flex-end", alignItems: "center" }}>
+                                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                                    <button
+                                      key={n}
+                                      type="button"
+                                      onClick={() => setSurveyScore(row.id, n)}
+                                      style={{
+                                        width: "26px",
+                                        height: "26px",
+                                        padding: 0,
+                                        borderRadius: "6px",
+                                        border: `1px solid ${score === n ? w : "var(--border-color)"}`,
+                                        backgroundColor: score === n ? w : "var(--bg-secondary)",
+                                        color: score === n ? "white" : "var(--text-primary)",
+                                        cursor: "pointer",
+                                        fontSize: "11px",
+                                        fontWeight: "600",
+                                      }}
+                                    >
+                                      {n}
+                                    </button>
+                                  ))}
+                                  {allowNa ? naBtnCompact(() => clearSurveyScore(row.id)) : null}
+                                </div>
+                              );
+                            };
                             return (
-                              <div>
+                              <JournalStrategySectionCard>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                  <div
+                                    style={{
+                                      width: 36,
+                                      height: 36,
+                                      borderRadius: 10,
+                                      background: "color-mix(in srgb, var(--warning) 18%, var(--bg-primary))",
+                                      border: "1px solid color-mix(in srgb, var(--warning) 38%, var(--border-color))",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      color: "var(--warning)",
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    <Sparkles size={18} strokeWidth={2.2} aria-hidden />
+                                  </div>
+                                  <div>
+                                    <div style={journalSectionTitleStyle("warning", { size: "sm" })}>Survey</div>
+                                    <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>Rate each item.</div>
+                                  </div>
+                                </div>
                                 {groups.map((group) => {
                                   const children = itemsByParent.get(group.id) || [];
                                   return (
-                                    <div key={group.id} style={{ marginBottom: "12px" }}>
-                                      <div style={{ padding: "10px 12px", backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", borderRadius: "6px", marginBottom: "6px" }}>
-                                        <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }} />
-                                      </div>
-                                      {children.map((child) => {
-                                        const score = surveyScores.get(activeTradeIndex)?.get(child.id);
-                                        return (
-                                          <div key={child.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginLeft: "16px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
-                                            <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
-                                              <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)" }} />
+                                    <div key={group.id} style={{ marginBottom: 6 }}>
+                                      <JournalChecklistGroupHeader compact tone="warning">
+                                        <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: 700, color: "var(--text-primary)", fontSize: 13 }} />
+                                      </JournalChecklistGroupHeader>
+                                      <JournalChecklistListShell tone="warning">
+                                        {children.map((child, cidx) => (
+                                          <div
+                                            key={child.id}
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "flex-start",
+                                              justifyContent: "space-between",
+                                              gap: 8,
+                                              padding: "6px 10px",
+                                              borderBottom: cidx < children.length - 1 ? "1px solid color-mix(in srgb, var(--warning) 14%, var(--border-color))" : undefined,
+                                            }}
+                                          >
+                                            <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", minWidth: 0 }}>
+                                              <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: 13, color: "var(--text-primary)" }} />
                                             </label>
-                                            <div style={{ display: "flex", gap: "4px" }}>
-                                              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-                                                <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(child.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(child.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
-                                              ))}
-                                            </div>
+                                            {renderSurveyControls(child)}
                                           </div>
-                                        );
-                                      })}
-                                    </div>
-                                  );
-                                })}
-                                {regularItems.map((item) => {
-                                  const score = surveyScores.get(activeTradeIndex)?.get(item.id);
-                                  return (
-                                    <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
-                                      <label style={{ flex: 1, fontSize: "13px", color: "var(--text-primary)", display: "flex", minWidth: 0 }}>
-                                        <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "13px", color: "var(--text-primary)" }} />
-                                      </label>
-                                      <div style={{ display: "flex", gap: "4px" }}>
-                                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-                                          <button key={n} type="button" onClick={() => { setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(item.id, n); next.set(activeTradeIndex, tradeMap); return next; }); setChecklistResponses(prev => { const m = new Map(prev); const tr = new Map(m.get(activeTradeIndex) || new Map()); tr.set(item.id, true); m.set(activeTradeIndex, tr); return m; }); }} style={{ width: "28px", height: "28px", padding: 0, borderRadius: "6px", border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)", color: score === n ? "white" : "var(--text-primary)", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}>{n}</button>
                                         ))}
-                                      </div>
+                                      </JournalChecklistListShell>
                                     </div>
                                   );
                                 })}
-                              </div>
+                                {regularItems.length > 0 ? (
+                                  <JournalChecklistListShell tone="warning">
+                                    {regularItems.map((item, idx) => (
+                                      <div
+                                        key={item.id}
+                                        style={{
+                                          display: "flex",
+                                          alignItems: "flex-start",
+                                          justifyContent: "space-between",
+                                          gap: 8,
+                                          padding: "6px 10px",
+                                          borderBottom: idx < regularItems.length - 1 ? "1px solid color-mix(in srgb, var(--warning) 14%, var(--border-color))" : undefined,
+                                        }}
+                                      >
+                                        <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", minWidth: 0 }}>
+                                          <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: 13, color: "var(--text-primary)" }} />
+                                        </label>
+                                        {renderSurveyControls(item)}
+                                      </div>
+                                    ))}
+                                  </JournalChecklistListShell>
+                                ) : null}
+                                </div>
+                              </JournalStrategySectionCard>
                             );
                           }
-                          return renderChecklistForType(type);
+                          return (
+                            <JournalStrategySectionCard>
+                              {renderChecklistForType(type, { checklistLayout: "list", accentVariant: "warning" })}
+                            </JournalStrategySectionCard>
+                          );
                         })()}
                         {sectionId === "links" && (isCreating || isEditing) && (
                           <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
@@ -7126,7 +8492,7 @@ export default function Journal() {
                                     ))}
                                   </div>
                                 )}
-                                <h4 style={{ margin: "12px 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>Before trade</h4>
+                                <h4 style={{ margin: "12px 0 8px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Before trade</h4>
                                 {JOURNAL_SURVEY_QUESTIONS.before.map((q) => (
                                   <div key={q.key} style={{ marginBottom: "12px" }}>
                                     <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>{q.question}</label>
@@ -7147,7 +8513,7 @@ export default function Journal() {
                         )}
                         {sectionId === "emotional_state_during" && (isCreating || isEditing) && showAddEmotionalStateForm && (
                           <div style={{ padding: "12px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
-                            <h4 style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>During trade</h4>
+                            <h4 style={{ margin: "0 0 8px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>During trade</h4>
                             {JOURNAL_SURVEY_QUESTIONS.during.map((q) => (
                               <div key={q.key} style={{ marginBottom: "12px" }}>
                                 <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>{q.question}</label>
@@ -7164,7 +8530,7 @@ export default function Journal() {
                         )}
                         {sectionId === "emotional_state_after" && (isCreating || isEditing) && showAddEmotionalStateForm && (
                           <div style={{ padding: "12px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
-                            <h4 style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase" }}>After trade</h4>
+                            <h4 style={{ margin: "0 0 8px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>After trade</h4>
                             {JOURNAL_SURVEY_QUESTIONS.after.map((q) => (
                               <div key={q.key} style={{ marginBottom: "12px" }}>
                                 <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>{q.question}</label>
@@ -7264,6 +8630,7 @@ export default function Journal() {
                         )}
                       </div>
                     ); })}
+                    </div>
                   </div>
                   {/* Duplicate trade fields and section tabs removed - content in consolidated bar and scrolling sections above */}
 
@@ -7412,10 +8779,10 @@ export default function Journal() {
                         ) : !selectedEntry?.id ? (
                           <>
                             <div style={{ marginBottom: "20px", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                              <h4 style={{ margin: "0 0 10px", fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Emotions</h4>
+                              <h4 style={{ margin: "0 0 10px", ...journalSectionTitleStyle("muted", { size: "lg" }) }}>Emotions</h4>
                               <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal to emotional state entries. Links are saved when you save the journal entry.</p>
                               <div style={{ marginBottom: "16px" }}>
-                                <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
+                                <h3 style={{ margin: "0 0 6px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Link to</h3>
                                 <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry. This applies to the <strong>next</strong> state you link—change the selection before each link to associate different states with different trades.</p>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                                   <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
@@ -7485,7 +8852,7 @@ export default function Journal() {
                               </div>
                             </div>
                             <div style={{ padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                              <h4 style={{ margin: "0 0 10px", fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Trades</h4>
+                              <h4 style={{ margin: "0 0 10px", ...journalSectionTitleStyle("muted", { size: "lg" }) }}>Trades</h4>
                               <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal to real trades. Links are saved when you save the journal entry.</p>
                               <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "600" }}>Link to real trades</label>
                               {(entryFormData.linked_trade_ids?.length ?? 0) > 0 && (
@@ -7557,10 +8924,10 @@ export default function Journal() {
                           <>
                             {/* Emotions — clear separation of link categories */}
                             <div style={{ marginBottom: "20px", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                              <h4 style={{ margin: "0 0 10px", fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Emotions</h4>
+                              <h4 style={{ margin: "0 0 10px", ...journalSectionTitleStyle("muted", { size: "lg" }) }}>Emotions</h4>
                               <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal entry to emotional state entries.</p>
                               <div style={{ marginBottom: "16px" }}>
-                                <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
+                                <h3 style={{ margin: "0 0 6px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Link to</h3>
                                 <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry. This applies to the <strong>next</strong> state you link—change the selection before each link to associate different states with different trades.</p>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                                   <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
@@ -7677,7 +9044,7 @@ export default function Journal() {
                             </div>
                             {/* Trades — clear separation of link categories */}
                             <div style={{ padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                              <h4 style={{ margin: "0 0 10px", fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Trades</h4>
+                              <h4 style={{ margin: "0 0 10px", ...journalSectionTitleStyle("muted", { size: "lg" }) }}>Trades</h4>
                               <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-secondary)" }}>Link this journal entry to real trades.</p>
                               <label style={{ display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: "600" }}>Link to real trades</label>
                               {(entryFormData.linked_trade_ids?.length ?? 0) > 0 && (
@@ -7762,7 +9129,7 @@ export default function Journal() {
                           <>
                             {/* Single "Link to" scope for both linking existing states and adding new ones */}
                             <div style={{ marginBottom: "20px", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: "10px", border: "1px solid var(--border-color)" }}>
-                              <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Link to</h3>
+                              <h3 style={{ margin: "0 0 6px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Link to</h3>
                               <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>One emotional state per journal trade or one for the entire entry. The choice below applies to the <strong>next</strong> state you link or add—change it before each action to link different states to different trades (e.g. one state for Trade 1, another for Trade 2).</p>
                               <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                                 <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
@@ -8088,7 +9455,7 @@ export default function Journal() {
                                     <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.5 }}>{INTENSITY_SCALE_LABEL}</p>
                                   </div>
                                   <div>
-                                    <h3 style={{ margin: "0 0 4px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Emotions</h3>
+                                    <h3 style={{ margin: "0 0 4px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Emotions</h3>
                                     <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>Tap to add or remove; then set strength below.</p>
                                     <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
                                       {JOURNAL_EMOTIONS.map((emotion) => {
@@ -8131,7 +9498,7 @@ export default function Journal() {
                                   </div>
                                   {Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 && (
                                     <div style={{ padding: "16px", backgroundColor: "var(--bg-tertiary)", borderRadius: "12px", border: "1px solid var(--border-color)" }}>
-                                      <h3 style={{ margin: "0 0 4px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Set intensity</h3>
+                                      <h3 style={{ margin: "0 0 4px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Set intensity</h3>
                                       <div style={{ marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-secondary)" }}>
                                         <span>0</span>
                                         <div style={{ flex: 1, height: "2px", background: "var(--border-color)", borderRadius: 1 }} />
@@ -8176,7 +9543,7 @@ export default function Journal() {
                                   {/* Same question groups as Emotions page — unified format */}
                                   {(["before", "during", "after"] as const).map((phase) => (
                                     <div key={phase} style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--border-color)" }}>
-                                      <h3 style={{ margin: "0 0 12px", fontSize: "12px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                                      <h3 style={{ margin: "0 0 12px", ...journalSectionTitleStyle("muted") }}>
                                         {phase === "before" ? "Before Trade" : phase === "during" ? "During Trade" : "After Trade"}
                                       </h3>
                                       {JOURNAL_SURVEY_QUESTIONS[phase].map((q, idx) => (
@@ -8202,7 +9569,7 @@ export default function Journal() {
                                   ))}
                                   {/* Notes at the very bottom (under all questions) */}
                                   <div style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--border-color)" }}>
-                                    <h3 style={{ margin: "0 0 6px", fontSize: "11px", fontWeight: "600", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Notes (for this whole entry)</h3>
+                                    <h3 style={{ margin: "0 0 6px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Notes (for this whole entry)</h3>
                                     <RichTextEditor
                                       value={newEmotionalStateForm.notes}
                                       onChange={(content: string) => setNewEmotionalStateForm((f) => ({ ...f, notes: content }))}
@@ -8431,6 +9798,132 @@ export default function Journal() {
                                 }
                               });
 
+                              const setSurveyScoreTab = (checklistItemId: number, n: number) => {
+                                setSurveyScores((prev) => {
+                                  const next = new Map(prev);
+                                  const tradeMap = new Map(next.get(activeTradeIndex));
+                                  tradeMap.set(checklistItemId, n);
+                                  next.set(activeTradeIndex, tradeMap);
+                                  return next;
+                                });
+                                setChecklistResponses((prev) => {
+                                  const newMap = new Map(prev);
+                                  const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
+                                  tradeResponses.set(checklistItemId, true);
+                                  newMap.set(activeTradeIndex, tradeResponses);
+                                  return newMap;
+                                });
+                              };
+                              const clearSurveyScoreTab = (checklistItemId: number) => {
+                                setSurveyScores((prev) => {
+                                  const next = new Map(prev);
+                                  const tradeMap = new Map(next.get(activeTradeIndex));
+                                  tradeMap.delete(checklistItemId);
+                                  next.set(activeTradeIndex, tradeMap);
+                                  return next;
+                                });
+                                setChecklistResponses((prev) => {
+                                  const newMap = new Map(prev);
+                                  const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
+                                  tradeResponses.set(checklistItemId, false);
+                                  newMap.set(activeTradeIndex, tradeResponses);
+                                  return newMap;
+                                });
+                              };
+                              const naBtnTab = (onClick: () => void) => (
+                                <button
+                                  type="button"
+                                  onClick={onClick}
+                                  style={{
+                                    minWidth: "48px",
+                                    padding: "8px 10px",
+                                    borderRadius: "8px",
+                                    border: "1px solid var(--border-color)",
+                                    backgroundColor: "var(--bg-primary)",
+                                    color: "var(--text-secondary)",
+                                    cursor: "pointer",
+                                    fontSize: "12px",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  N/A
+                                </button>
+                              );
+                              const renderSurveyControlsTab = (row: ChecklistItem) => {
+                                const score = surveyScores.get(activeTradeIndex)?.get(row.id);
+                                const highGood = row.high_is_good !== false;
+                                const allowNa = row.survey_allow_na === true;
+                                if (isYesNoSurveyItem(row)) {
+                                  const yesV = yesNoResponseValue(highGood, true);
+                                  const noV = yesNoResponseValue(highGood, false);
+                                  return (
+                                    <div style={{ display: "flex", gap: "10px", alignItems: "center", flexShrink: 0, flexWrap: "wrap" }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSurveyScoreTab(row.id, yesV)}
+                                        style={{
+                                          minWidth: "64px",
+                                          padding: "8px 14px",
+                                          borderRadius: "8px",
+                                          border: `1px solid ${score === yesV ? "var(--accent)" : "var(--border-color)"}`,
+                                          backgroundColor: score === yesV ? "var(--accent)" : "var(--bg-secondary)",
+                                          color: score === yesV ? "white" : "var(--text-primary)",
+                                          cursor: "pointer",
+                                          fontSize: "13px",
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        Yes
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSurveyScoreTab(row.id, noV)}
+                                        style={{
+                                          minWidth: "64px",
+                                          padding: "8px 14px",
+                                          borderRadius: "8px",
+                                          border: `1px solid ${score === noV ? "var(--accent)" : "var(--border-color)"}`,
+                                          backgroundColor: score === noV ? "var(--accent)" : "var(--bg-secondary)",
+                                          color: score === noV ? "white" : "var(--text-primary)",
+                                          cursor: "pointer",
+                                          fontSize: "13px",
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        No
+                                      </button>
+                                      {allowNa ? naBtnTab(() => clearSurveyScoreTab(row.id)) : null}
+                                    </div>
+                                  );
+                                }
+                                return (
+                                  <div style={{ display: "flex", gap: "4px", alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                                      <button
+                                        key={n}
+                                        type="button"
+                                        onClick={() => setSurveyScoreTab(row.id, n)}
+                                        style={{
+                                          width: "32px",
+                                          height: "32px",
+                                          padding: 0,
+                                          borderRadius: "6px",
+                                          border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`,
+                                          backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)",
+                                          color: score === n ? "white" : "var(--text-primary)",
+                                          cursor: "pointer",
+                                          fontSize: "13px",
+                                          fontWeight: "600",
+                                        }}
+                                      >
+                                        {n}
+                                      </button>
+                                    ))}
+                                    {allowNa ? naBtnTab(() => clearSurveyScoreTab(row.id)) : null}
+                                  </div>
+                                );
+                              };
+
                               return (
                                 <div style={{ marginBottom: "24px" }}>
                                   <h4 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>
@@ -8452,135 +9945,67 @@ export default function Journal() {
                                         >
                                           <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "15px" }} />
                                         </div>
-                                        {children.map((child) => {
-                                          const score = surveyScores.get(activeTradeIndex)?.get(child.id);
-                                          return (
-                                            <div
-                                              key={child.id}
+                                        {children.map((child) => (
+                                          <div
+                                            key={child.id}
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "center",
+                                              justifyContent: "space-between",
+                                              gap: "12px",
+                                              padding: "12px",
+                                              marginLeft: "20px",
+                                              marginBottom: "8px",
+                                              backgroundColor: "var(--bg-tertiary)",
+                                              borderRadius: "6px",
+                                            }}
+                                          >
+                                            <label
                                               style={{
+                                                flex: 1,
+                                                fontSize: "14px",
+                                                color: "var(--text-primary)",
                                                 display: "flex",
-                                                alignItems: "center",
-                                                justifyContent: "space-between",
-                                                gap: "12px",
-                                                padding: "12px",
-                                                marginLeft: "20px",
-                                                marginBottom: "8px",
-                                                backgroundColor: "var(--bg-tertiary)",
-                                                borderRadius: "6px",
+                                                minWidth: 0,
                                               }}
                                             >
-                                              <label
-                                                style={{
-                                                  flex: 1,
-                                                  fontSize: "14px",
-                                                  color: "var(--text-primary)",
-                                                  display: "flex",
-                                                  minWidth: 0,
-                                                }}
-                                              >
-                                                <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
-                                              </label>
-                                              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                                                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-                                                  <button
-                                                    key={n}
-                                                    type="button"
-                                                    onClick={() => {
-                                                      setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(child.id, n); next.set(activeTradeIndex, tradeMap); return next; });
-                                                      setChecklistResponses(prev => {
-                                                        const newMap = new Map(prev);
-                                                        const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
-                                                        tradeResponses.set(child.id, true);
-                                                        newMap.set(activeTradeIndex, tradeResponses);
-                                                        return newMap;
-                                                      });
-                                                    }}
-                                                    style={{
-                                                      width: "32px",
-                                                      height: "32px",
-                                                      padding: 0,
-                                                      borderRadius: "6px",
-                                                      border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`,
-                                                      backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)",
-                                                      color: score === n ? "white" : "var(--text-primary)",
-                                                      cursor: "pointer",
-                                                      fontSize: "13px",
-                                                      fontWeight: "600",
-                                                    }}
-                                                  >
-                                                    {n}
-                                                  </button>
-                                                ))}
-                                              </div>
-                                            </div>
-                                          );
-                                        })}
+                                              <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
+                                            </label>
+                                            {renderSurveyControlsTab(child)}
+                                          </div>
+                                        ))}
                                       </div>
                                     );
                                   })}
                                   {/* Render regular items */}
-                                  {regularItems.map((item) => {
-                                    const score = surveyScores.get(activeTradeIndex)?.get(item.id);
-                                    return (
-                                      <div
-                                        key={item.id}
+                                  {regularItems.map((item) => (
+                                    <div
+                                      key={item.id}
+                                      style={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "space-between",
+                                        gap: "12px",
+                                        padding: "12px",
+                                        marginBottom: "8px",
+                                        backgroundColor: "var(--bg-tertiary)",
+                                        borderRadius: "6px",
+                                      }}
+                                    >
+                                      <label
                                         style={{
+                                          flex: 1,
+                                          fontSize: "14px",
+                                          color: "var(--text-primary)",
                                           display: "flex",
-                                          alignItems: "center",
-                                          justifyContent: "space-between",
-                                          gap: "12px",
-                                          padding: "12px",
-                                          marginBottom: "8px",
-                                          backgroundColor: "var(--bg-tertiary)",
-                                          borderRadius: "6px",
+                                          minWidth: 0,
                                         }}
                                       >
-                                        <label
-                                          style={{
-                                            flex: 1,
-                                            fontSize: "14px",
-                                            color: "var(--text-primary)",
-                                            display: "flex",
-                                            minWidth: 0,
-                                          }}
-                                        >
-                                          <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
-                                        </label>
-                                        <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-                                            <button
-                                              key={n}
-                                              type="button"
-                                              onClick={() => {
-                                                setSurveyScores(prev => { const next = new Map(prev); const tradeMap = new Map(next.get(activeTradeIndex)); tradeMap.set(item.id, n); next.set(activeTradeIndex, tradeMap); return next; });
-                                                setChecklistResponses(prev => {
-                                                  const newMap = new Map(prev);
-                                                  const tradeResponses = new Map(newMap.get(activeTradeIndex) || new Map());
-                                                  tradeResponses.set(item.id, true);
-                                                  newMap.set(activeTradeIndex, tradeResponses);
-                                                  return newMap;
-                                                });
-                                              }}
-                                              style={{
-                                                width: "32px",
-                                                height: "32px",
-                                                padding: 0,
-                                                borderRadius: "6px",
-                                                border: `1px solid ${score === n ? "var(--accent)" : "var(--border-color)"}`,
-                                                backgroundColor: score === n ? "var(--accent)" : "var(--bg-secondary)",
-                                                color: score === n ? "white" : "var(--text-primary)",
-                                                cursor: "pointer",
-                                                fontSize: "13px",
-                                                fontWeight: "600",
-                                              }}
-                                            >
-                                              {n}
-                                            </button>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
+                                        <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
+                                      </label>
+                                      {renderSurveyControlsTab(item)}
+                                    </div>
+                                  ))}
                                 </div>
                               );
                             })()}
@@ -8629,7 +10054,7 @@ export default function Journal() {
               <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "16px" }}>
                 Review your past journal entries at a glance. Select any entry on the right to dive into full details.
               </p>
-              {typeof window !== "undefined" && localStorage.getItem("journal_work_in_progress") && (
+              {typeof window !== "undefined" && hasJournalNavDraft(dataMode) && (
                 <div
                   style={{
                     marginBottom: "16px",
@@ -9449,8 +10874,8 @@ export default function Journal() {
           {/* Progress Bars */}
           {(isCreating || isEditing) && entryFormData.strategy_id && currentTrade && (
             <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "12px" }}>
-              {/* Analysis & Mantra (first) */}
-              {(["daily_analysis", "daily_mantra"] as const).map((type) => {
+              {/* Analysis (built-in) */}
+              {(["daily_analysis"] as const).map((type) => {
                 const items = (currentChecklists?.get(type) || []).filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
                 if (items.length === 0) return null;
                 const progress = calculateChecklistProgress(activeTradeIndex, type);
@@ -9572,7 +10997,7 @@ export default function Journal() {
                 return null;
               })()}
               
-              {/* Custom Checklist Progress Bars */}
+              {/* Custom checklists (Mantra, user-defined types, etc.) — one bar each */}
               {customTypes.map((type) => {
                 const items = (currentChecklists?.get(type) || []).filter((item) => item.item_text !== EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER);
                 if (items.length === 0) return null;
@@ -9662,7 +11087,73 @@ export default function Journal() {
           }));
         }}
         canEdit={isCreating || isEditing}
+        strategyIndicatorsInOrder={entryFormData.strategy_id ? strategyIndicators : undefined}
+        onPersistIndicatorOrder={
+          entryFormData.strategy_id && (isCreating || isEditing)
+            ? (ids) => {
+                const sid = entryFormData.strategy_id!;
+                saveStrategyIndicatorIds(dataMode, sid, ids);
+                const all = loadIndicators();
+                setStrategyIndicators(ids.map((id) => all.find((i) => i.id === id)).filter((x): x is Indicator => Boolean(x)));
+              }
+            : undefined
+        }
+        showStrategyTemplateNotice={Boolean(entryFormData.strategy_id && (isCreating || isEditing))}
       />
+
+      {journalChecklistConfigureType && entryFormData.strategy_id ? (
+        <JournalChecklistStrategyConfigureModal
+          open
+          onClose={() => setJournalChecklistConfigureType(null)}
+          dataMode={dataMode}
+          strategyId={entryFormData.strategy_id}
+          checklistType={journalChecklistConfigureType}
+          sectionTitle={getChecklistTitle(journalChecklistConfigureType)}
+          sourceItems={strategyChecklists.get(entryFormData.strategy_id)?.get(journalChecklistConfigureType) ?? []}
+          onAfterSave={() => {
+            const sid = entryFormData.strategy_id!;
+            void loadStrategyChecklists(sid);
+            if (selectedEntry?.id) {
+              void loadChecklistResponses(selectedEntry.id, sid);
+            }
+          }}
+        />
+      ) : null}
+
+      {journalRulesConfigure && entryFormData.strategy_id ? (
+        <JournalRulesStrategyConfigureModal
+          open
+          onClose={() => setJournalRulesConfigure(null)}
+          dataMode={dataMode}
+          strategyId={entryFormData.strategy_id}
+          title={(() => {
+            const jr = journalRulesConfigure;
+            if (jr.kind === "entry") return "Entry rules";
+            if (jr.kind === "takeProfit") return "Take profit rules";
+            if (jr.kind === "custom") return strategyCustomRuleSets.find((s) => s.id === jr.ruleSetId)?.title ?? "Custom rules";
+            return "Custom rules";
+          })()}
+          mode={journalRulesConfigure.kind === "custom" ? "customSet" : journalRulesConfigure.kind}
+          entryOrTpRules={
+            journalRulesConfigure.kind === "entry"
+              ? strategyEntryRuleTexts
+              : journalRulesConfigure.kind === "takeProfit"
+                ? strategyTakeProfitRuleTexts
+                : undefined
+          }
+          customSets={strategyCustomRuleSets}
+          ruleSetId={(() => {
+            const jr = journalRulesConfigure;
+            return jr.kind === "custom" ? jr.ruleSetId : undefined;
+          })()}
+          onAfterSave={() => {
+            const sid = entryFormData.strategy_id!;
+            setStrategyEntryRuleTexts(loadStrategyRuleTexts(dataMode, sid, "entry"));
+            setStrategyTakeProfitRuleTexts(loadStrategyRuleTexts(dataMode, sid, "takeProfit"));
+            setStrategyCustomRuleSets(loadStrategyCustomRuleSets(dataMode, sid));
+          }}
+        />
+      ) : null}
 
       {/* Link to actual trades modal (journal trade -> real trades from Trades table) */}
       {linkActualTradesModalJournalTradeId !== null && (
@@ -9947,7 +11438,11 @@ export default function Journal() {
                         const parsed = JSON.parse(raw) as string[];
                         if (Array.isArray(parsed) && parsed.length > 0) {
                           const normalized = parsed.map((id) => (id === "mantra_checklist" ? "custom:daily_mantra" : id));
-                          const valid = normalized.filter((id) => id !== "custom_checklists_surveys" && (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:")));
+                        const valid = normalized.filter(
+                            (id) =>
+                              id !== "custom_checklists_surveys" &&
+                              (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:") || id.startsWith("custom_rules:"))
+                          );
                           const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
                           setJournalSectionOrder([...valid, ...missing]);
                         }

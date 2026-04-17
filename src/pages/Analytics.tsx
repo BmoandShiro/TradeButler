@@ -812,47 +812,21 @@ export default function Analytics() {
         setChecklistItemMetricsByOutcome(demoByStrategy.flatMap((s) => s.items));
         const demoEmotionalStates = getSandboxEmotionalStates() as EmotionalStateRow[];
         setEmotionalStates(demoEmotionalStates);
-        // In Demo, when any trade filter is set, build equity curve from filtered demo trades
-        const hasStrategy = filterStrategyIds.length > 0;
-        const hasSymbol = filterSymbols.length > 0;
-        const hasSide = filterSides.length > 0;
-        const hasType = filterTypes.length > 0;
-        const posMinUsd = filterPositionSizeMin !== "" ? parseFloat(filterPositionSizeMin) : null;
-        const posMaxUsd = filterPositionSizeMax !== "" ? parseFloat(filterPositionSizeMax) : null;
-        const hasPos = (posMinUsd != null && !Number.isNaN(posMinUsd)) || (posMaxUsd != null && !Number.isNaN(posMaxUsd));
-        const hasFilter = hasStrategy || hasSymbol || hasSide || hasType || hasPos;
-        if (hasFilter) {
-          const strategyIdNums = filterStrategyIds.map((id) => parseInt(id, 10)).filter((n) => !Number.isNaN(n));
-          const filtered = demoTrades.filter((t) => {
-            if (hasStrategy && (t.strategy_id == null || !strategyIdNums.includes(t.strategy_id))) return false;
-            if (hasSymbol) {
-              const tSym = t.symbol ?? "";
-              if (!filterSymbols.some((s) => tSym === s || getUnderlyingSymbol(tSym) === getUnderlyingSymbol(s))) return false;
-            }
-            if (hasSide && filterSides.indexOf(t.side ?? "") === -1) return false;
-            if (hasType && filterTypes.indexOf(t.order_type ?? "") === -1) return false;
-            const posUsd = t.quantity * t.price;
-            if (posMinUsd != null && !Number.isNaN(posMinUsd) && posUsd < posMinUsd) return false;
-            if (posMaxUsd != null && !Number.isNaN(posMaxUsd) && posUsd > posMaxUsd) return false;
-            return true;
+        // Demo: always derive equity / drawdown from current sandbox trades (filteredDemo respects trade filters).
+        const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
+        const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
+        const startDate = dateRange.start ? dateRange.start.toISOString() : null;
+        const endDate = dateRange.end ? dateRange.end.toISOString() : null;
+        try {
+          const curveData = await invoke<EquityCurveData>("get_equity_curve_from_trades", {
+            trades: filteredDemo,
+            pairingMethod,
+            startDate,
+            endDate,
           });
-          const pairingMethod = localStorage.getItem("tradebutler_pairing_method") || "FIFO";
-          const dateRange = getTimeframeDates(timeframe, customStartDate, customEndDate);
-          const startDate = dateRange.start ? dateRange.start.toISOString() : null;
-          const endDate = dateRange.end ? dateRange.end.toISOString() : null;
-          try {
-            const curveData = await invoke<EquityCurveData>("get_equity_curve_from_trades", {
-              trades: filtered,
-              pairingMethod,
-              startDate,
-              endDate,
-            });
-            setEquityCurve(curveData);
-          } catch (e) {
-            console.error("Demo equity curve from trades failed:", e);
-            setEquityCurve(EXAMPLE_EQUITY_CURVE as unknown as EquityCurveData);
-          }
-        } else {
+          setEquityCurve(curveData);
+        } catch (e) {
+          console.error("Demo equity curve from trades failed:", e);
           setEquityCurve(EXAMPLE_EQUITY_CURVE as unknown as EquityCurveData);
         }
         return;
@@ -932,6 +906,21 @@ export default function Analytics() {
       setLoading(false);
     }
   };
+
+  const loadDataRef = useRef(loadData);
+  loadDataRef.current = loadData;
+
+  useEffect(() => {
+    const onTradeDataChanged = () => {
+      void loadDataRef.current();
+    };
+    window.addEventListener("tradeButlerSandboxChanged", onTradeDataChanged);
+    window.addEventListener("tradebutlerTradesChanged", onTradeDataChanged);
+    return () => {
+      window.removeEventListener("tradeButlerSandboxChanged", onTradeDataChanged);
+      window.removeEventListener("tradebutlerTradesChanged", onTradeDataChanged);
+    };
+  }, []);
 
   // Fill in missing dates for even scaling
   const fillMissingDates = (points: EquityPoint[]): EquityPoint[] => {

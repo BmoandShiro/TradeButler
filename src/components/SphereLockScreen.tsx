@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Lock, Unlock, AlertCircle, Trash2 } from "lucide-react";
 import { unlockApp, getPasswordType, deletePassword } from "../utils/passwordManager";
 import { invoke } from "@tauri-apps/api/tauri";
+import { clearAllJournalStickySessions } from "../utils/journalStickySession";
 import { getSphereMainDotAccentHex, getSphereThemeSettings } from "../utils/sphereThemeManager";
 import { getLockScreenRendererPreference, canUseWebGL2 } from "../utils/lockScreenRenderer";
 import {
@@ -703,6 +704,7 @@ export default function SphereLockScreen({ onUnlock }: SphereLockScreenProps) {
       const themeColors = localStorage.getItem("tradebutler_theme_colors");
       const customPresets = localStorage.getItem("tradebutler_custom_theme_presets");
       localStorage.clear();
+      clearAllJournalStickySessions();
       if (themeColors) {
         localStorage.setItem("tradebutler_theme_colors", themeColors);
       }

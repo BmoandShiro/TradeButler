@@ -444,6 +444,31 @@ pub fn init_database(db_path: &Path) -> Result<()> {
         conn.execute("ALTER TABLE strategy_checklists ADD COLUMN description TEXT", [])?;
     }
 
+    // Survey items: "scale" (1–10) vs "yes_no" (binary). Null/legacy = scale.
+    let has_survey_format: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='survey_format'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0) > 0;
+    if !has_survey_format {
+        conn.execute("ALTER TABLE strategy_checklists ADD COLUMN survey_format TEXT", [])?;
+    }
+
+    // Survey: optional explicit N/A (skip) in journal; 1 = show N/A control, 0/null = not offered.
+    let has_survey_allow_na: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('strategy_checklists') WHERE name='survey_allow_na'",
+        [],
+        |row| row.get(0),
+    )
+    .unwrap_or(0)
+        > 0;
+    if !has_survey_allow_na {
+        conn.execute(
+            "ALTER TABLE strategy_checklists ADD COLUMN survey_allow_na INTEGER",
+            [],
+        )?;
+    }
+
     // One description per checklist section (e.g. Analysis, Mantra, Entry Checklist, Survey) per strategy.
     // This table is used by the Strategies and Journal pages to show a short description under each section title.
     conn.execute(

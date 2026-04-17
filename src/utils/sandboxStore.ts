@@ -16,10 +16,14 @@ import {
   SANDBOX_STRATEGY_SURVEY_METRICS,
 } from "../data/sandboxStrategySeed";
 import { getDemoEmotionSurveys, type DemoEmotionSurvey } from "../data/sandboxSurveySeed";
+import {
+  PLANESTATION_DEMO_STRATEGY_ID,
+  loadPlanestationChecklistMirror,
+} from "./planestationConstants";
 
 const STORAGE_KEY = "tradebutler_sandbox_store_v2";
 const STORAGE_VERSION_KEY = "tradebutler_sandbox_store_version";
-const SANDBOX_STORE_VERSION = 5; // Bump to re-seed with fuller Strategy findings demo (disparity, good/bad)
+const SANDBOX_STORE_VERSION = 6; // Planestation's Strategy (id 7) at top of demo strategies
 const LEGACY_KEY = "tradebutler_sandbox_store_v1";
 const EXAMPLE_STORE_KEY = "tradebutler_example_store_v1";
 
@@ -618,6 +622,12 @@ export function linkSandboxEmotionalStatesToJournal(emotionalStateIds: number[],
 
 // ---- Strategy checklists & survey metrics (sandbox seed; read-only for demos) ----
 export function getSandboxStrategyChecklist(strategyId: number) {
+  if (strategyId === PLANESTATION_DEMO_STRATEGY_ID) {
+    const mirrored = loadPlanestationChecklistMirror();
+    if (mirrored) {
+      return mirrored as typeof SANDBOX_STRATEGY_CHECKLIST_ITEMS;
+    }
+  }
   return SANDBOX_STRATEGY_CHECKLIST_ITEMS.filter((i) => i.strategy_id === strategyId);
 }
 

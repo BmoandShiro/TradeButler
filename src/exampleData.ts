@@ -132,6 +132,15 @@ export const EXAMPLE_JOURNAL_ENTRY_PAIRS: Record<number, { entry_trade_id: numbe
 
 export const EXAMPLE_STRATEGIES: ExampleStrategy[] = [
   {
+    id: 7,
+    name: "Planestation's Strategy",
+    description: "Mirrors My Strategy in demo mode when saved (developer sync).",
+    notes: null,
+    created_at: "2025-01-01T12:00:00Z",
+    color: "#a855f7",
+    author: "Planestation",
+  },
+  {
     id: 1,
     name: "Opening Range Breakout",
     description: "Intraday breakout of first 30m range on large caps.",

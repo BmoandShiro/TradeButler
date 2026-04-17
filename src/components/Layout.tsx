@@ -39,6 +39,7 @@ import { getLockScreenStyle } from "../utils/lockScreenManager";
 import { getGalaxyThemeSettings } from "../utils/galaxyThemeManager";
 import { applyGalaxyBackgroundStyles } from "../utils/galaxyBackgroundStyles";
 import { DataMode, getCurrentDataMode, setCurrentDataMode } from "../utils/dataMode";
+import { clearJournalWip, hasJournalNavDraft } from "../utils/journalStickySession";
 import { addSandboxTrade, resetSandboxState } from "../utils/sandboxStore";
 import { resetSandboxDocumentation } from "../data/sandboxDocumentation";
 
@@ -965,9 +966,11 @@ export default function Layout({ children }: LayoutProps) {
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
-            const journalTo = (typeof localStorage !== "undefined" && (localStorage.getItem(`journal_selected_entry_id_${getCurrentDataMode()}`) || localStorage.getItem("journal_work_in_progress")))
-              ? "/journal"
-              : "/journal?overview=1";
+            const journalTo =
+              typeof localStorage !== "undefined" &&
+              (localStorage.getItem(`journal_selected_entry_id_${getCurrentDataMode()}`) || hasJournalNavDraft(getCurrentDataMode()))
+                ? "/journal"
+                : "/journal?overview=1";
             const href = item.path === "/journal" ? journalTo : item.path;
             const isJournal = item.path === "/journal";
             const isJournalActive = location.pathname === "/journal";
@@ -979,7 +982,7 @@ export default function Layout({ children }: LayoutProps) {
                   if (isJournal && isJournalActive) {
                     e.preventDefault();
                     localStorage.removeItem(`journal_selected_entry_id_${getCurrentDataMode()}`);
-                    localStorage.removeItem("journal_work_in_progress");
+                    clearJournalWip(getCurrentDataMode());
                     navigate(`/journal?overview=1&t=${Date.now()}`, { replace: true });
                   }
                 }}
