@@ -696,12 +696,47 @@ export function saveTheme(theme: ThemeColors): void {
   localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(theme));
 }
 
+/** Parse #RGB / #RRGGBB for luminance (theme colors are always hex in presets). */
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const h = hex.trim().replace(/^#/, "");
+  if (h.length === 3) {
+    const r = parseInt(h[0] + h[0], 16);
+    const g = parseInt(h[1] + h[1], 16);
+    const b = parseInt(h[2] + h[2], 16);
+    return Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b) ? null : { r, g, b };
+  }
+  if (h.length === 6) {
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b) ? null : { r, g, b };
+  }
+  return null;
+}
+
+/** WCAG relative luminance (0–1). */
+function relativeLuminanceFromHex(hex: string): number {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return 0;
+  const lin = (c: number) => {
+    c = c / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const r = lin(rgb.r);
+  const g = lin(rgb.g);
+  const b = lin(rgb.b);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
 /**
  * Apply theme to CSS variables
  */
 export function applyTheme(theme: ThemeColors): void {
   const root = document.documentElement;
-  
+
+  const lum = relativeLuminanceFromHex(theme.bgPrimary);
+  root.style.colorScheme = lum > 0.45 ? "light" : "dark";
+
   root.style.setProperty("--bg-primary", theme.bgPrimary);
   root.style.setProperty("--bg-secondary", theme.bgSecondary);
   root.style.setProperty("--bg-tertiary", theme.bgTertiary);

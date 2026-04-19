@@ -33,6 +33,7 @@ import { JournalRulesStrategyConfigureModal } from "../components/JournalRulesSt
 import { BRUSH_MIN_POINTS } from "../utils/chartDataSampling";
 import { getSurveyScoreColor, getSurveyScoreBgRgba } from "../utils/intensityColor";
 import RichTextEditor from "../components/RichTextEditor";
+import { JournalCompletionOutline, JournalSliderShell, useJournalCompletionFlash } from "../components/JournalCompletionFeedback";
 import { ChecklistItemCaption } from "../components/ChecklistItemCaption";
 import { TradeChart } from "../components/TradeChart";
 import {
@@ -304,7 +305,14 @@ const ENTRY_LEVEL_CHECKLIST_TYPES: string[] = ["daily_analysis", "daily_mantra"]
 /** Hidden placeholder used in the DB for empty custom checklist types; never show to users. */
 const EMPTY_CUSTOM_CHECKLIST_PLACEHOLDER = "__empty_custom_checklist_placeholder__";
 /** Hidden placeholder emotion so surveys can be saved without selecting chips. */
+/** Sentinel stored in DB when saving survey sliders without a picked emotion — never show in UI. */
 const SURVEY_ONLY_EMOTION = "__survey_only__";
+
+function omitSurveyOnlyEmotion(em: Record<string, number>): Record<string, number> {
+  if (!(SURVEY_ONLY_EMOTION in em)) return em;
+  const { [SURVEY_ONLY_EMOTION]: _, ...rest } = em;
+  return rest;
+}
 
   /** Emotional state from Emotions (linked to journal entry/implementation) */
 interface JournalEmotionalState {
@@ -846,6 +854,8 @@ function SortableJournalNavPill({
         ...style,
         display: "inline-flex",
         alignItems: "center",
+        alignSelf: "center",
+        flexShrink: 0,
         gap: 2,
         borderRadius: "999px",
         border: "1px solid var(--accent)",
@@ -882,11 +892,13 @@ function SortableJournalNavPill({
           fontSize: "11px",
           fontWeight: "500",
           letterSpacing: "0.02em",
+          lineHeight: 1.2,
           color: "var(--accent)",
           background: "transparent",
           border: "none",
           borderRadius: "0 999px 999px 0",
           cursor: "pointer",
+          whiteSpace: "nowrap",
           transition: "background 0.12s ease, color 0.12s ease",
         }}
         onMouseEnter={(e) => {
@@ -1067,14 +1079,18 @@ function JournalChecklistSideRail({
   title,
   blurb,
   hint,
+  tone = "accent",
 }: {
   done: number;
   total: number;
   title: string;
   blurb?: string | null;
   hint?: string | null;
+  tone?: ChecklistTone;
 }) {
   const pct = total <= 0 ? 0 : Math.min(100, Math.round((done / total) * 100));
+  const a = checklistToneVar(tone);
+  const titleTone: "accent" | "warning" = tone === "warning" ? "warning" : "accent";
   return (
     <aside
       style={{
@@ -1084,8 +1100,8 @@ function JournalChecklistSideRail({
         alignSelf: "stretch",
         padding: "16px 18px",
         borderRadius: 12,
-        border: "1px solid color-mix(in srgb, var(--accent) 28%, var(--border-color))",
-        background: "linear-gradient(165deg, color-mix(in srgb, var(--accent) 14%, var(--bg-secondary)) 0%, var(--bg-tertiary) 100%)",
+        border: `1px solid color-mix(in srgb, ${a} 28%, var(--border-color))`,
+        background: `linear-gradient(165deg, color-mix(in srgb, ${a} 14%, var(--bg-secondary)) 0%, var(--bg-tertiary) 100%)`,
         boxShadow: "0 4px 20px rgba(0,0,0,0.12)",
         display: "flex",
         flexDirection: "column",
@@ -1098,19 +1114,19 @@ function JournalChecklistSideRail({
             width: 40,
             height: 40,
             borderRadius: 10,
-            background: "color-mix(in srgb, var(--accent) 20%, var(--bg-primary))",
-            border: "1px solid color-mix(in srgb, var(--accent) 35%, var(--border-color))",
+            background: `color-mix(in srgb, ${a} 20%, var(--bg-primary))`,
+            border: `1px solid color-mix(in srgb, ${a} 35%, var(--border-color))`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            color: "var(--accent)",
+            color: a,
             flexShrink: 0,
           }}
         >
           <ListChecks size={22} strokeWidth={2.2} aria-hidden />
         </div>
         <div style={{ minWidth: 0 }}>
-          <div style={{ ...journalSectionTitleStyle("accent", { size: "sm" }), lineHeight: 1.2 }}>At a glance</div>
+          <div style={{ ...journalSectionTitleStyle(titleTone, { size: "sm" }), lineHeight: 1.2 }}>At a glance</div>
           <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)", marginTop: 2 }}>{title}</div>
         </div>
       </div>
@@ -1133,9 +1149,9 @@ function JournalChecklistSideRail({
             width: `${pct}%`,
             height: "100%",
             borderRadius: 999,
-            background: "linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 72%, #fff))",
+            background: `linear-gradient(90deg, ${a}, color-mix(in srgb, ${a} 72%, #fff))`,
             transition: "width 0.4s ease",
-            boxShadow: pct > 0 ? "0 0 16px color-mix(in srgb, var(--accent) 40%, transparent)" : "none",
+            boxShadow: pct > 0 ? `0 0 16px color-mix(in srgb, ${a} 40%, transparent)` : "none",
           }}
         />
       </div>
@@ -1171,11 +1187,17 @@ function JournalChecklistRowEditable({
   tone?: ChecklistTone;
 }) {
   const [hover, setHover] = useState(false);
+  const { active: completionFlash, trigger: triggerCompletionFlash } = useJournalCompletionFlash();
   const chkId = `journal-cl-${itemId}`;
   const isList = variant === "list";
   const a = checklistToneVar(tone);
   return (
     <div
+      className={
+        completionFlash
+          ? `journal-completion-flash${tone === "warning" ? " journal-completion-flash--warning" : ""}`
+          : undefined
+      }
       style={{
         display: "flex",
         alignItems: "flex-start",
@@ -1208,7 +1230,11 @@ function JournalChecklistRowEditable({
         id={chkId}
         type="checkbox"
         checked={checked}
-        onChange={() => onToggle()}
+        className={tone === "warning" ? "journal-checklist-checkbox--warning" : undefined}
+        onChange={() => {
+          onToggle();
+          triggerCompletionFlash();
+        }}
         style={{
           marginTop: isList ? 1 : 2,
           cursor: "pointer",
@@ -1285,6 +1311,7 @@ function JournalChecklistRowReadonly({
         checked={checked}
         disabled
         readOnly
+        className={tone === "warning" ? "journal-checklist-checkbox--warning" : undefined}
         style={{
           marginTop: isList ? 1 : 2,
           cursor: "default",
@@ -1448,6 +1475,24 @@ export default function Journal() {
       return false;
     }
   });
+  /** Brief highlight on the section bar when switching from locked → unlocked (reorder mode). */
+  const prevJournalNavUnlockedRef = useRef<boolean | undefined>(undefined);
+  const [journalNavUnlockFlash, setJournalNavUnlockFlash] = useState(false);
+  useEffect(() => {
+    if (prevJournalNavUnlockedRef.current === false && journalNavReorderUnlocked) {
+      setJournalNavUnlockFlash(true);
+      const id = window.setTimeout(() => setJournalNavUnlockFlash(false), 750);
+      return () => window.clearTimeout(id);
+    }
+    prevJournalNavUnlockedRef.current = journalNavReorderUnlocked;
+  }, [journalNavReorderUnlocked]);
+  /** Shown under the section pills after Set / Reset so users see that defaults apply to future sessions (Set) or layout was reapplied (Reset). */
+  const [journalBarArrangementFeedback, setJournalBarArrangementFeedback] = useState<{ text: string; variant: "success" | "warning" } | null>(null);
+  useEffect(() => {
+    if (!journalBarArrangementFeedback) return;
+    const id = window.setTimeout(() => setJournalBarArrangementFeedback(null), 7000);
+    return () => window.clearTimeout(id);
+  }, [journalBarArrangementFeedback]);
   const [loading, setLoading] = useState(true);
   const [isMaximized, setIsMaximized] = useState(false);
   const [isTabContentMaximized, setIsTabContentMaximized] = useState(false);
@@ -2470,10 +2515,14 @@ export default function Journal() {
     return () => { cancelled = true; };
   }, [linkActualTradesModalJournalTradeId, dataMode]);
 
-  // Load emotional states linked to this journal entry/implementation when on Emotional State or Links tab
+  // Load emotional states linked to this journal entry when on Emotional State or Links tab.
+  // Do not clear journalEmotionalStates when switching away — Implementation tab needs it for Skip visibility and other cues.
   useEffect(() => {
-    if ((activeTab !== "emotional_state" && activeTab !== "links") || !selectedEntry?.id) {
+    if (!selectedEntry?.id) {
       setJournalEmotionalStates([]);
+      return;
+    }
+    if (activeTab !== "emotional_state" && activeTab !== "links") {
       return;
     }
     const jtId = tradesFormData[activeTradeIndex]?.id ?? null;
@@ -3131,6 +3180,7 @@ export default function Journal() {
             if (!picked) return;
             const selectedEmotions: Record<string, number> = {};
             picked.forEach((s) => {
+              if (s.emotion === SURVEY_ONLY_EMOTION) return;
               selectedEmotions[s.emotion] = s.intensity;
             });
             const survey = pickLatestSurveyForGroup(allSurveys, new Set(picked.map((s) => s.id)));
@@ -3166,6 +3216,7 @@ export default function Journal() {
             if (!picked) return;
             const selectedEmotions: Record<string, number> = {};
             picked.forEach((s) => {
+              if (s.emotion === SURVEY_ONLY_EMOTION) return;
               selectedEmotions[s.emotion] = s.intensity;
             });
             const survey = pickLatestSurveyForGroup(allSurveys, new Set(picked.map((s) => s.id)));
@@ -3980,15 +4031,22 @@ export default function Journal() {
 
                 for (const pending of toPersist) {
                   let firstStateId: number | null = null;
+                  const sr = pending.surveyResponses ?? {};
+                  const shouldSaveSurvey = Object.values(JOURNAL_SURVEY_QUESTIONS)
+                    .flat()
+                    .some((q) => (sr[q.key] ?? 6) !== 6);
+                  const emotionsToPersist = Object.keys(pending.selectedEmotions);
+                  const effectiveEmotions =
+                    emotionsToPersist.length > 0 ? emotionsToPersist : (shouldSaveSurvey ? [SURVEY_ONLY_EMOTION] : []);
                   if (pending.tradeIndex === -1) {
                     const entryLevel = allStatesForEntry.filter((s) => s.journal_trade_id == null);
                     const groups = groupEmotionalStatesByTimestamp(entryLevel);
                     for (const g of groups) deleteGroup(g);
-                    for (const emotion of Object.keys(pending.selectedEmotions)) {
+                    for (const emotion of effectiveEmotions) {
                       const stateId = addSandboxEmotionalState({
                         timestamp: now,
                         emotion,
-                        intensity: pending.selectedEmotions[emotion],
+                        intensity: emotion === SURVEY_ONLY_EMOTION ? 0 : pending.selectedEmotions[emotion],
                         notes: pending.notes || null,
                         trade_id: null,
                         journal_entry_id: entryId,
@@ -4003,11 +4061,11 @@ export default function Journal() {
                       const forTrade = allStatesForEntry.filter((s) => s.journal_trade_id === journalTradeId);
                       const groups = groupEmotionalStatesByTimestamp(forTrade);
                       for (const g of groups) deleteGroup(g);
-                      for (const emotion of Object.keys(pending.selectedEmotions)) {
+                      for (const emotion of effectiveEmotions) {
                         const stateId = addSandboxEmotionalState({
                           timestamp: now,
                           emotion,
-                          intensity: pending.selectedEmotions[emotion],
+                          intensity: emotion === SURVEY_ONLY_EMOTION ? 0 : pending.selectedEmotions[emotion],
                           notes: pending.notes || null,
                           trade_id: null,
                           journal_entry_id: entryId,
@@ -4019,12 +4077,6 @@ export default function Journal() {
                     }
                   }
 
-                  const sr = pending.surveyResponses ?? {};
-                  const shouldSaveSurvey =
-                    firstStateId != null &&
-                    Object.values(JOURNAL_SURVEY_QUESTIONS)
-                      .flat()
-                      .some((q) => (sr[q.key] ?? 6) !== 6);
                   if (shouldSaveSurvey && firstStateId != null) {
                     upsertSandboxEmotionSurveyFromResponses(firstStateId, sr, now);
                   }
@@ -4843,6 +4895,16 @@ export default function Journal() {
     () => (currentTrade?.id != null ? journalEmotionalStates.filter((s) => s.journal_trade_id === currentTrade.id) : []),
     [journalEmotionalStates, currentTrade?.id]
   );
+  /**
+   * Hide "Skip" on the emotional-state add flow when this entry already has emotional data:
+   * states from the journal/DB, linked emotion records from the Links tab, or pending (unsaved) adds.
+   */
+  const journalHasSavedEmotionalState = useMemo(() => {
+    if (journalEmotionalStates.length > 0) return true;
+    if ((entryFormData.linked_emotional_state_ids?.length ?? 0) > 0) return true;
+    if (pendingEmotionalStates.length > 0) return true;
+    return false;
+  }, [journalEmotionalStates, entryFormData.linked_emotional_state_ids, pendingEmotionalStates]);
   const currentChecklists = entryFormData.strategy_id ? strategyChecklists.get(entryFormData.strategy_id) : null;
   const currentChecklistSectionDescriptions = entryFormData.strategy_id
     ? strategyChecklistSectionDescriptions.get(entryFormData.strategy_id)
@@ -4939,13 +5001,21 @@ export default function Journal() {
   );
 
   const persistJournalDefaultArrangementFromBar = useCallback(() => {
+    if (!journalNavReorderUnlocked) return;
     try {
       localStorage.setItem(JOURNAL_DEFAULT_SECTION_ORDER_KEY, JSON.stringify(journalSectionOrder));
       localStorage.setItem(JOURNAL_DEFAULT_COLLAPSED_SECTION_IDS_KEY, JSON.stringify(collapsedSectionIds));
+      setJournalBarArrangementFeedback({
+        variant: "success",
+        text: "Saved — this section order and which sections are collapsed will be the starting point for new journal entries. The entry you are viewing does not change until you reorder or collapse sections yourself.",
+      });
     } catch {
-      /* ignore */
+      setJournalBarArrangementFeedback({
+        variant: "warning",
+        text: "Could not save — browser storage may be full or blocked. Check site settings and try again.",
+      });
     }
-  }, [journalSectionOrder, collapsedSectionIds]);
+  }, [journalSectionOrder, collapsedSectionIds, journalNavReorderUnlocked]);
 
   const resetJournalSectionOrderToSavedOrCore = useCallback(() => {
     try {
@@ -4961,12 +5031,37 @@ export default function Journal() {
           );
           const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
           setJournalSectionOrder([...valid, ...missing]);
+          try {
+            const collapsedRaw = localStorage.getItem(JOURNAL_DEFAULT_COLLAPSED_SECTION_IDS_KEY);
+            if (collapsedRaw) {
+              const c = JSON.parse(collapsedRaw) as unknown;
+              if (Array.isArray(c) && c.every((x) => typeof x === "string")) {
+                setCollapsedSectionIds(c);
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+          setJournalBarArrangementFeedback({
+            variant: "success",
+            text: "Restored your saved default — section order and collapsed sections match what you last saved with Set.",
+          });
+          return;
         }
-      } else {
-        setJournalSectionOrder([...CORE_SECTION_ORDER]);
       }
+      setJournalSectionOrder([...CORE_SECTION_ORDER]);
+      setCollapsedSectionIds([]);
+      setJournalBarArrangementFeedback({
+        variant: "success",
+        text: "No saved default yet — restored the built-in section order and expanded sections. Arrange the bar, then click Set to save a default for next time.",
+      });
     } catch {
       setJournalSectionOrder([...CORE_SECTION_ORDER]);
+      setCollapsedSectionIds([]);
+      setJournalBarArrangementFeedback({
+        variant: "warning",
+        text: "Something went wrong — restored the built-in section order.",
+      });
     }
   }, []);
 
@@ -5121,6 +5216,7 @@ export default function Journal() {
             <div style={{ flex: "1 1 300px", minWidth: 0 }}>{checklistBlocks}</div>
             {checklistTotal > 0 ? (
               <JournalChecklistSideRail
+                tone={tone}
                 done={checklistDone}
                 total={checklistTotal}
                 title={getChecklistTitle(type)}
@@ -5330,6 +5426,7 @@ export default function Journal() {
             <div style={{ flex: "1 1 300px", minWidth: 0 }}>{checklistBlocksRo}</div>
             {roTotal > 0 ? (
               <JournalChecklistSideRail
+                tone={tone}
                 done={roDone}
                 total={roTotal}
                 title={getChecklistTitle(type)}
@@ -5436,7 +5533,7 @@ export default function Journal() {
     const filteredTechnical = technical.filter(passBiasFilter);
     const filteredCandlesticks = candlesticks.filter(passBiasFilter);
 
-    return (
+    const pickerBody = (
       <div ref={pickerRef} style={{ marginTop: 6, position: "relative" }}>
         <div
           style={{
@@ -5493,30 +5590,32 @@ export default function Journal() {
                 })}
               </div>
             )}
-            <button
-              type="button"
-              disabled={!canEdit}
-              onClick={() => {
-                if (!canEdit) return;
-                setOpen((v) => !v);
-              }}
-              style={{
-                padding: "8px 12px",
-                borderRadius: 999,
-                border: `1px solid var(--border-color)`,
-                background: "var(--accent)",
-                color: "white",
-                cursor: canEdit ? "pointer" : "not-allowed",
-                fontSize: 12,
-                fontWeight: 700,
-                width: 220,
-                maxWidth: "100%",
-                flexShrink: 0,
-              }}
-              title="Select patterns"
-            >
-              {selectedIds.length > 0 ? `${selectedIds.length} selected` : "Choose patterns"}
-            </button>
+            <JournalCompletionOutline style={{ display: "inline-flex", borderRadius: 999 }}>
+              <button
+                type="button"
+                disabled={!canEdit}
+                onClick={() => {
+                  if (!canEdit) return;
+                  setOpen((v) => !v);
+                }}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 999,
+                  border: `1px solid var(--border-color)`,
+                  background: "var(--accent)",
+                  color: "white",
+                  cursor: canEdit ? "pointer" : "not-allowed",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  width: 220,
+                  maxWidth: "100%",
+                  flexShrink: 0,
+                }}
+                title="Select patterns"
+              >
+                {selectedIds.length > 0 ? `${selectedIds.length} selected` : "Choose patterns"}
+              </button>
+            </JournalCompletionOutline>
           </div>
         </div>
 
@@ -5539,32 +5638,36 @@ export default function Journal() {
           >
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 2 }}>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 12, fontWeight: 700, cursor: canEdit ? "pointer" : "default" }}>
-                  <input
-                    type="checkbox"
-                    checked={showBullish}
-                    onChange={(e) => {
-                      if (!canEdit) return;
-                      setShowBullish(e.target.checked);
-                    }}
-                    disabled={!canEdit}
-                    style={{ width: 16, height: 16 }}
-                  />
-                  Bullish
-                </label>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 12, fontWeight: 700, cursor: canEdit ? "pointer" : "default" }}>
-                  <input
-                    type="checkbox"
-                    checked={showBearish}
-                    onChange={(e) => {
-                      if (!canEdit) return;
-                      setShowBearish(e.target.checked);
-                    }}
-                    disabled={!canEdit}
-                    style={{ width: 16, height: 16 }}
-                  />
-                  Bearish
-                </label>
+                <JournalCompletionOutline style={{ display: "inline-flex", borderRadius: 8 }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 12, fontWeight: 700, cursor: canEdit ? "pointer" : "default" }}>
+                    <input
+                      type="checkbox"
+                      checked={showBullish}
+                      onChange={(e) => {
+                        if (!canEdit) return;
+                        setShowBullish(e.target.checked);
+                      }}
+                      disabled={!canEdit}
+                      style={{ width: 16, height: 16 }}
+                    />
+                    Bullish
+                  </label>
+                </JournalCompletionOutline>
+                <JournalCompletionOutline style={{ display: "inline-flex", borderRadius: 8 }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 12, fontWeight: 700, cursor: canEdit ? "pointer" : "default" }}>
+                    <input
+                      type="checkbox"
+                      checked={showBearish}
+                      onChange={(e) => {
+                        if (!canEdit) return;
+                        setShowBearish(e.target.checked);
+                      }}
+                      disabled={!canEdit}
+                      style={{ width: 16, height: 16 }}
+                    />
+                    Bearish
+                  </label>
+                </JournalCompletionOutline>
               </div>
 
               {[{ label: "Technical Patterns", items: filteredTechnical }, { label: "Candlesticks", items: filteredCandlesticks }].map(
@@ -5578,8 +5681,8 @@ export default function Journal() {
                         {items.map((ind) => {
                           const isOn = selectedIds.includes(ind.id);
                           return (
+                            <JournalCompletionOutline key={ind.id} style={{ borderRadius: 10, minWidth: 0 }}>
                             <button
-                              key={ind.id}
                               type="button"
                               onClick={() => toggle(ind.id)}
                               disabled={!canEdit}
@@ -5596,6 +5699,8 @@ export default function Journal() {
                                 alignItems: "flex-start",
                                 textAlign: "left",
                                 minHeight: 70,
+                                width: "100%",
+                                boxSizing: "border-box",
                               }}
                               title={ind.name}
                             >
@@ -5643,6 +5748,7 @@ export default function Journal() {
                                 )}
                               </span>
                             </button>
+                            </JournalCompletionOutline>
                           );
                         })}
                       </div>
@@ -5652,49 +5758,54 @@ export default function Journal() {
               )}
 
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!canEdit) return;
-                    setSelectedIds([]);
-                    setJournalTradePatternIndicatorIds(dataMode, entryId, tradeIndex, phase, []);
-                  }}
-                  disabled={!canEdit}
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: 10,
-                    border: "1px solid var(--border-color)",
-                    background: "var(--bg-tertiary)",
-                    color: "var(--text-secondary)",
-                    cursor: canEdit ? "pointer" : "not-allowed",
-                    fontSize: 12,
-                    fontWeight: 700,
-                  }}
-                >
-                  Clear
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setOpen(false)}
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: 10,
-                    border: "none",
-                    background: "var(--accent)",
-                    color: "white",
-                    cursor: canEdit ? "pointer" : "default",
-                    fontSize: 12,
-                    fontWeight: 800,
-                  }}
-                >
-                  Done
-                </button>
+                <JournalCompletionOutline style={{ display: "inline-flex", borderRadius: 10 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!canEdit) return;
+                      setSelectedIds([]);
+                      setJournalTradePatternIndicatorIds(dataMode, entryId, tradeIndex, phase, []);
+                    }}
+                    disabled={!canEdit}
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: 10,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-tertiary)",
+                      color: "var(--text-secondary)",
+                      cursor: canEdit ? "pointer" : "not-allowed",
+                      fontSize: 12,
+                      fontWeight: 700,
+                    }}
+                  >
+                    Clear
+                  </button>
+                </JournalCompletionOutline>
+                <JournalCompletionOutline style={{ display: "inline-flex", borderRadius: 10 }}>
+                  <button
+                    type="button"
+                    onClick={() => setOpen(false)}
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: 10,
+                      border: "none",
+                      background: "var(--accent)",
+                      color: "white",
+                      cursor: canEdit ? "pointer" : "default",
+                      fontSize: 12,
+                      fontWeight: 800,
+                    }}
+                  >
+                    Done
+                  </button>
+                </JournalCompletionOutline>
               </div>
             </div>
           </div>
         )}
       </div>
     );
+    return pickerBody;
   };
 
   const renderIndicatorInputs = (phase: IndicatorPhase) => {
@@ -5805,27 +5916,28 @@ export default function Journal() {
             {timeframeOptions.map((tf) => {
               const active = globalSelectedTfs.includes(tf);
               return (
-                <button
-                  key={tf}
-                  type="button"
-                  disabled={!canEditIndicators}
-                  onClick={() => {
-                    if (!canEditIndicators) return;
-                    toggleTf(tf);
-                  }}
-                  style={{
-                    padding: "6px 10px",
-                    borderRadius: "999px",
-                    border: "1px solid var(--border-color)",
-                    background: active ? "var(--accent)" : "var(--bg-tertiary)",
-                    color: active ? "white" : "var(--text-primary)",
-                    cursor: canEditIndicators ? "pointer" : "default",
-                    fontSize: "12px",
-                    fontWeight: 650,
-                  }}
-                >
-                  {tf}
-                </button>
+                <JournalCompletionOutline key={tf} style={{ display: "inline-flex", borderRadius: 999 }}>
+                  <button
+                    type="button"
+                    disabled={!canEditIndicators}
+                    onClick={() => {
+                      if (!canEditIndicators) return;
+                      toggleTf(tf);
+                    }}
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: "999px",
+                      border: "1px solid var(--border-color)",
+                      background: active ? "var(--accent)" : "var(--bg-tertiary)",
+                      color: active ? "white" : "var(--text-primary)",
+                      cursor: canEditIndicators ? "pointer" : "default",
+                      fontSize: "12px",
+                      fontWeight: 650,
+                    }}
+                  >
+                    {tf}
+                  </button>
+                </JournalCompletionOutline>
               );
             })}
           </div>
@@ -5896,65 +6008,69 @@ export default function Journal() {
                         key={`${entryId}:${tradeIndex}:${phase}:${ind.id}:${tf}`}
                         style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "stretch", width: "100%" }}
                       >
-                        <button
-                          type="button"
-                          disabled={!canEditIndicators}
-                          onClick={() => {
-                            if (!canEditIndicators) return;
-                            toggleIndicatorTf(ind.id, tf);
-                          }}
-                          style={{
-                            padding: "6px 10px",
-                            borderRadius: "999px",
-                            border: "1px solid var(--border-color)",
-                            background: indSelectedTfs.includes(tf) ? "var(--accent)" : "var(--bg-tertiary)",
-                            color: indSelectedTfs.includes(tf) ? "white" : "var(--text-primary)",
-                            cursor: canEditIndicators ? "pointer" : "default",
-                            fontSize: "12px",
-                            fontWeight: 650,
-                            width: "100%",
-                          }}
-                        >
-                          {tf}
-                        </button>
-                        {isMomentum && (
-                          <label
+                        <JournalCompletionOutline style={{ display: "flex", borderRadius: 999, width: "100%" }}>
+                          <button
+                            type="button"
+                            disabled={!canEditIndicators}
+                            onClick={() => {
+                              if (!canEditIndicators) return;
+                              toggleIndicatorTf(ind.id, tf);
+                            }}
                             style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              gap: "6px",
+                              padding: "6px 10px",
+                              borderRadius: "999px",
+                              border: "1px solid var(--border-color)",
+                              background: indSelectedTfs.includes(tf) ? "var(--accent)" : "var(--bg-tertiary)",
+                              color: indSelectedTfs.includes(tf) ? "white" : "var(--text-primary)",
                               cursor: canEditIndicators ? "pointer" : "default",
-                              color: "var(--text-secondary)",
-                              fontSize: "11px",
+                              fontSize: "12px",
                               fontWeight: 650,
-                              userSelect: "none",
                               width: "100%",
                             }}
                           >
-                            <input
-                              type="checkbox"
-                              checked={loadJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
-                              disabled={!canEditIndicators}
-                              onChange={(e) => {
-                                const next = e.target.checked;
-                                if (next && !indSelectedTfs.includes(tf)) {
-                                  setIndicatorTimeframesByPhaseAndIndicator((prev) => {
-                                    const phaseOverrides = prev[phase] ?? {};
-                                    // Start from empty: we only want to select the clicked timeframe,
-                                    // not auto-select all global timeframes.
-                                    const cur = phaseOverrides[ind.id] ?? [];
-                                    const nextTfs = cur.includes(tf) ? cur : [...cur, tf];
-                                    return { ...prev, [phase]: { ...phaseOverrides, [ind.id]: nextTfs } };
-                                  });
-                                }
-                                setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, next);
-                                setJournalSignalInputsTick((t) => t + 1);
+                            {tf}
+                          </button>
+                        </JournalCompletionOutline>
+                        {isMomentum && (
+                          <JournalCompletionOutline style={{ display: "flex", justifyContent: "center", borderRadius: 8, width: "100%" }}>
+                            <label
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                gap: "6px",
+                                cursor: canEditIndicators ? "pointer" : "default",
+                                color: "var(--text-secondary)",
+                                fontSize: "11px",
+                                fontWeight: 650,
+                                userSelect: "none",
+                                width: "100%",
                               }}
-                              style={{ width: "16px", height: "16px" }}
-                            />
-                            Divergence
-                          </label>
+                            >
+                              <input
+                                type="checkbox"
+                                checked={loadJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                                disabled={!canEditIndicators}
+                                onChange={(e) => {
+                                  const next = e.target.checked;
+                                  if (next && !indSelectedTfs.includes(tf)) {
+                                    setIndicatorTimeframesByPhaseAndIndicator((prev) => {
+                                      const phaseOverrides = prev[phase] ?? {};
+                                      // Start from empty: we only want to select the clicked timeframe,
+                                      // not auto-select all global timeframes.
+                                      const cur = phaseOverrides[ind.id] ?? [];
+                                      const nextTfs = cur.includes(tf) ? cur : [...cur, tf];
+                                      return { ...prev, [phase]: { ...phaseOverrides, [ind.id]: nextTfs } };
+                                    });
+                                  }
+                                  setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, next);
+                                  setJournalSignalInputsTick((t) => t + 1);
+                                }}
+                                style={{ width: "16px", height: "16px" }}
+                              />
+                              Divergence
+                            </label>
+                          </JournalCompletionOutline>
                         )}
                       </div>
                     ) : (
@@ -6073,32 +6189,34 @@ export default function Journal() {
                                             {label}
                                           </div>
                                           {jk === "checkbox" ? (
-                                            <label
-                                              style={{
-                                                display: "inline-flex",
-                                                alignItems: "center",
-                                                justifyContent: "center",
-                                                width: "100%",
-                                                minHeight: 30,
-                                                cursor: canEditIndicators ? "pointer" : "default",
-                                              }}
-                                            >
-                                              <input
-                                                type="checkbox"
-                                                defaultChecked={checkboxCheckedFor(actualIdx)}
-                                                disabled={!canEditIndicators}
-                                                onChange={(e) => {
-                                                  if (!canEditIndicators) return;
-                                                  setLenAtIndex(actualIdx, e.target.checked ? "1" : "");
-                                                  setJournalSignalInputsTick((t) => t + 1);
-                                                }}
+                                            <JournalCompletionOutline style={{ display: "flex", justifyContent: "center", borderRadius: 8, width: "100%" }}>
+                                              <label
                                                 style={{
-                                                  width: 16,
-                                                  height: 16,
-                                                  ...(customColor ? { accentColor: customColor } : {}),
+                                                  display: "inline-flex",
+                                                  alignItems: "center",
+                                                  justifyContent: "center",
+                                                  width: "100%",
+                                                  minHeight: 30,
+                                                  cursor: canEditIndicators ? "pointer" : "default",
                                                 }}
-                                              />
-                                            </label>
+                                              >
+                                                <input
+                                                  type="checkbox"
+                                                  defaultChecked={checkboxCheckedFor(actualIdx)}
+                                                  disabled={!canEditIndicators}
+                                                  onChange={(e) => {
+                                                    if (!canEditIndicators) return;
+                                                    setLenAtIndex(actualIdx, e.target.checked ? "1" : "");
+                                                    setJournalSignalInputsTick((t) => t + 1);
+                                                  }}
+                                                  style={{
+                                                    width: 16,
+                                                    height: 16,
+                                                    ...(customColor ? { accentColor: customColor } : {}),
+                                                  }}
+                                                />
+                                              </label>
+                                            </JournalCompletionOutline>
                                           ) : (
                                             <input
                                               type="text"
@@ -6158,63 +6276,67 @@ export default function Journal() {
                                         }}
                                       >
                                         {rowVis.showCrossingRow && (
-                                          <label
-                                            style={{
-                                              display: "inline-flex",
-                                              alignItems: "center",
-                                              justifyContent: "flex-start",
-                                              gap: 5,
-                                              cursor: canEditIndicators ? "pointer" : "default",
-                                              fontSize: 10,
-                                              fontWeight: 650,
-                                              color: "var(--text-secondary)",
-                                              userSelect: "none",
-                                              whiteSpace: "nowrap",
-                                              minWidth: 0,
-                                            }}
-                                          >
-                                            <input
-                                              type="checkbox"
-                                              checked={flags.crossing}
-                                              disabled={!canEditIndicators}
-                                              onChange={(e) => {
-                                                setJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf, { ...flags, crossing: e.target.checked });
-                                                setJournalSignalInputsTick((t) => t + 1);
+                                          <JournalCompletionOutline style={{ display: "inline-flex", borderRadius: 8, minWidth: 0 }}>
+                                            <label
+                                              style={{
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                justifyContent: "flex-start",
+                                                gap: 5,
+                                                cursor: canEditIndicators ? "pointer" : "default",
+                                                fontSize: 10,
+                                                fontWeight: 650,
+                                                color: "var(--text-secondary)",
+                                                userSelect: "none",
+                                                whiteSpace: "nowrap",
+                                                minWidth: 0,
                                               }}
-                                              style={{ width: 14, height: 14, flexShrink: 0 }}
-                                            />
-                                            Crossing
-                                          </label>
+                                            >
+                                              <input
+                                                type="checkbox"
+                                                checked={flags.crossing}
+                                                disabled={!canEditIndicators}
+                                                onChange={(e) => {
+                                                  setJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf, { ...flags, crossing: e.target.checked });
+                                                  setJournalSignalInputsTick((t) => t + 1);
+                                                }}
+                                                style={{ width: 14, height: 14, flexShrink: 0 }}
+                                              />
+                                              Crossing
+                                            </label>
+                                          </JournalCompletionOutline>
                                         )}
 
                                         {rowVis.showCoilingRow && (
-                                          <label
-                                            style={{
-                                              display: "inline-flex",
-                                              alignItems: "center",
-                                              justifyContent: "flex-start",
-                                              gap: 5,
-                                              cursor: canEditIndicators ? "pointer" : "default",
-                                              fontSize: 10,
-                                              fontWeight: 650,
-                                              color: "var(--text-secondary)",
-                                              userSelect: "none",
-                                              whiteSpace: "nowrap",
-                                              minWidth: 0,
-                                            }}
-                                          >
-                                            <input
-                                              type="checkbox"
-                                              checked={flags.coiling}
-                                              disabled={!canEditIndicators}
-                                              onChange={(e) => {
-                                                setJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf, { ...flags, coiling: e.target.checked });
-                                                setJournalSignalInputsTick((t) => t + 1);
+                                          <JournalCompletionOutline style={{ display: "inline-flex", borderRadius: 8, minWidth: 0 }}>
+                                            <label
+                                              style={{
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                justifyContent: "flex-start",
+                                                gap: 5,
+                                                cursor: canEditIndicators ? "pointer" : "default",
+                                                fontSize: 10,
+                                                fontWeight: 650,
+                                                color: "var(--text-secondary)",
+                                                userSelect: "none",
+                                                whiteSpace: "nowrap",
+                                                minWidth: 0,
                                               }}
-                                              style={{ width: 14, height: 14, flexShrink: 0 }}
-                                            />
-                                            Coiling
-                                          </label>
+                                            >
+                                              <input
+                                                type="checkbox"
+                                                checked={flags.coiling}
+                                                disabled={!canEditIndicators}
+                                                onChange={(e) => {
+                                                  setJournalIndicatorMaFlags(dataMode, entryId, tradeIndex, phase, ind.id, tf, { ...flags, coiling: e.target.checked });
+                                                  setJournalSignalInputsTick((t) => t + 1);
+                                                }}
+                                                style={{ width: 14, height: 14, flexShrink: 0 }}
+                                              />
+                                              Coiling
+                                            </label>
+                                          </JournalCompletionOutline>
                                         )}
                                       </div>
                                     );
@@ -6303,30 +6425,32 @@ export default function Journal() {
                               otherSignalLabels.some((lbl) => (signalPrefs?.journalKindByLabel[lbl] ?? "checkbox") === "checkbox"))) && (
                             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px" }}>
                               {isMomentum && (
-                                <label
-                                  style={{
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    gap: "6px",
-                                    cursor: canEditIndicators ? "pointer" : "default",
-                                    color: "var(--text-secondary)",
-                                    fontSize: "11px",
-                                    fontWeight: 650,
-                                    userSelect: "none",
-                                  }}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={loadJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
-                                    disabled={!canEditIndicators}
-                                    onChange={(e) => {
-                                      setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.checked);
-                                      setJournalSignalInputsTick((t) => t + 1);
+                                <JournalCompletionOutline style={{ display: "inline-flex", borderRadius: 8 }}>
+                                  <label
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "6px",
+                                      cursor: canEditIndicators ? "pointer" : "default",
+                                      color: "var(--text-secondary)",
+                                      fontSize: "11px",
+                                      fontWeight: 650,
+                                      userSelect: "none",
                                     }}
-                                    style={{ width: "16px", height: "16px" }}
-                                  />
-                                  Divergence
-                                </label>
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={loadJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf)}
+                                      disabled={!canEditIndicators}
+                                      onChange={(e) => {
+                                        setJournalIndicatorDivergence(dataMode, entryId, tradeIndex, phase, ind.id, tf, e.target.checked);
+                                        setJournalSignalInputsTick((t) => t + 1);
+                                      }}
+                                      style={{ width: "16px", height: "16px" }}
+                                    />
+                                    Divergence
+                                  </label>
+                                </JournalCompletionOutline>
                               )}
                               {ind.kind === "custom" &&
                                 otherSignalLabels
@@ -6337,40 +6461,41 @@ export default function Journal() {
                                     const raw = otherSignalsTf[label];
                                     const checked = typeof raw === "boolean" ? raw : raw === "true" || raw === "1";
                                     return (
-                                      <label
-                                        key={`${label}-chk-${tf}`}
-                                        style={{
-                                          display: "inline-flex",
-                                          alignItems: "center",
-                                          gap: "6px",
-                                          cursor: canEditIndicators ? "pointer" : "default",
-                                          color: "var(--text-secondary)",
-                                          fontSize: "11px",
-                                          fontWeight: 650,
-                                          userSelect: "none",
-                                        }}
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={checked}
-                                          disabled={!canEditIndicators}
-                                          onChange={(e) => {
-                                            setJournalIndicatorOtherSignal(
-                                              dataMode,
-                                              entryId,
-                                              tradeIndex,
-                                              phase,
-                                              ind.id,
-                                              tf,
-                                              label,
-                                              e.target.checked
-                                            );
-                                            setJournalSignalInputsTick((t) => t + 1);
+                                      <JournalCompletionOutline key={`${label}-chk-${tf}`} style={{ display: "inline-flex", borderRadius: 8 }}>
+                                        <label
+                                          style={{
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            gap: "6px",
+                                            cursor: canEditIndicators ? "pointer" : "default",
+                                            color: "var(--text-secondary)",
+                                            fontSize: "11px",
+                                            fontWeight: 650,
+                                            userSelect: "none",
                                           }}
-                                          style={{ width: 16, height: 16, ...(customColor ? { accentColor: customColor } : {}) }}
-                                        />
-                                        {label}
-                                      </label>
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            disabled={!canEditIndicators}
+                                            onChange={(e) => {
+                                              setJournalIndicatorOtherSignal(
+                                                dataMode,
+                                                entryId,
+                                                tradeIndex,
+                                                phase,
+                                                ind.id,
+                                                tf,
+                                                label,
+                                                e.target.checked
+                                              );
+                                              setJournalSignalInputsTick((t) => t + 1);
+                                            }}
+                                            style={{ width: 16, height: 16, ...(customColor ? { accentColor: customColor } : {}) }}
+                                          />
+                                          {label}
+                                        </label>
+                                      </JournalCompletionOutline>
                                     );
                                   })}
                             </div>
@@ -7614,14 +7739,14 @@ export default function Journal() {
                                                                 <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "0 0 6px" }}>{q.scale}</p>
                                                                 <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                                                                   <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "16px" }}>1</span>
-                                                                  <input
-                                                                    type="range"
+                                                                  <JournalSliderShell
                                                                     min={1}
                                                                     max={10}
                                                                     value={scoreNum}
+                                                                    onChange={() => {}}
                                                                     readOnly
-                                                                    disabled
-                                                                    style={{ flex: 1, minWidth: "80px", accentColor: "var(--accent)" }}
+                                                                    accentColor={phaseStyle.labelColor}
+                                                                    style={{ flex: 1, minWidth: "80px" }}
                                                                   />
                                                                   <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "16px" }}>10</span>
                                                                   <span style={{ minWidth: "28px", textAlign: "center", fontSize: "13px", fontWeight: "600", color: "var(--accent)" }}>
@@ -7868,50 +7993,30 @@ export default function Journal() {
                               display: "flex",
                               flexDirection: "row",
                               alignItems: "center",
-                              gap: 6,
+                              gap: 8,
                               flexWrap: "nowrap",
                               minWidth: 0,
-                              padding: "6px 12px",
+                              padding: "6px 10px",
                               borderBottom: "1px solid var(--border-color)",
-                              backgroundColor: "var(--bg-tertiary)",
+                              backgroundColor: journalNavUnlockFlash
+                                ? "color-mix(in srgb, var(--accent) 10%, var(--bg-tertiary))"
+                                : "var(--bg-tertiary)",
+                              boxShadow: journalNavUnlockFlash
+                                ? "0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent), 0 0 22px color-mix(in srgb, var(--accent) 22%, transparent)"
+                                : "none",
+                              transition: "background-color 0.35s ease, box-shadow 0.45s ease",
                             }}
                           >
-                              <button
-                                type="button"
-                                onClick={() => setJournalNavReorderUnlocked((v) => !v)}
-                                title={
-                                  journalNavReorderUnlocked
-                                    ? "Lock: pills only scroll to sections (no drag)"
-                                    : "Unlock: drag section pills by the grip to reorder"
-                                }
+                              <div
                                 style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  padding: "4px 8px",
-                                  fontSize: "11px",
-                                  fontWeight: 500,
-                                  color: journalNavReorderUnlocked ? "var(--accent)" : "var(--text-secondary)",
-                                  background: journalNavReorderUnlocked ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "transparent",
-                                  border: `1px solid ${journalNavReorderUnlocked ? "var(--accent)" : "var(--border-color)"}`,
-                                  borderRadius: "999px",
-                                  cursor: "pointer",
-                                  flexShrink: 0,
+                                  position: "relative",
+                                  flex: "1 1 auto",
+                                  minWidth: 0,
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  alignSelf: "stretch",
                                 }}
                               >
-                                {journalNavReorderUnlocked ? <Unlock size={14} aria-hidden /> : <Lock size={14} aria-hidden />}
-                              </button>
-                              <span
-                                aria-hidden
-                                style={{
-                                  width: 1,
-                                  height: 18,
-                                  flexShrink: 0,
-                                  background: "var(--border-color)",
-                                  opacity: 0.9,
-                                  alignSelf: "center",
-                                }}
-                              />
                               <div
                                 style={{
                                   display: "flex",
@@ -7924,6 +8029,7 @@ export default function Journal() {
                                   overflowX: "auto",
                                   overflowY: "hidden",
                                   scrollbarWidth: "thin",
+                                  paddingRight: 8,
                                 }}
                               >
                               {journalNavReorderUnlocked && !showSectionOrderModal ? (
@@ -7948,34 +8054,18 @@ export default function Journal() {
                                         />
                                       ))}
                                     </SortableContext>
-                                    <button
-                                      type="button"
-                                      onClick={() => openJournalSectionOrderModal("global")}
-                                      style={{
-                                        padding: "4px 8px",
-                                        fontSize: "11px",
-                                        fontWeight: 500,
-                                        letterSpacing: "0.02em",
-                                        color: "var(--text-secondary)",
-                                        background: "transparent",
-                                        border: "1px dashed var(--border-color)",
-                                        borderRadius: "999px",
-                                        cursor: "pointer",
-                                        display: "inline-flex",
-                                        alignItems: "center",
-                                        gap: "4px",
-                                        flexShrink: 0,
-                                        whiteSpace: "nowrap",
-                                      }}
-                                      title="Hide sections, start-collapsed defaults, and full list reorder"
-                                    >
-                                      <Settings size={11} aria-hidden />
-                                      Sections
-                                    </button>
                                   </div>
                                 </DndContext>
                               ) : (
-                                <>
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    flexDirection: "row",
+                                    alignItems: "center",
+                                    gap: 5,
+                                    flexWrap: "nowrap",
+                                  }}
+                                >
                                 {navBarSectionIds.map((sectionId) => (
                                   <button
                                     key={sectionId}
@@ -7996,6 +8086,7 @@ export default function Journal() {
                                       fontSize: "11px",
                                       fontWeight: "500",
                                       letterSpacing: "0.02em",
+                                      lineHeight: 1.2,
                                       color: "var(--accent)",
                                       background: "var(--bg-primary)",
                                       border: "1px solid var(--accent)",
@@ -8005,37 +8096,28 @@ export default function Journal() {
                                       transition: "background 0.12s ease, color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease",
                                       flexShrink: 0,
                                       whiteSpace: "nowrap",
+                                      alignSelf: "center",
                                     }}
                                   >
                                     {getSectionLabel(sectionId)}
                                   </button>
                                 ))}
-                                <button
-                                  type="button"
-                                  onClick={() => openJournalSectionOrderModal("global")}
-                                  style={{
-                                    padding: "4px 8px",
-                                    fontSize: "11px",
-                                    fontWeight: 500,
-                                    letterSpacing: "0.02em",
-                                    color: "var(--text-secondary)",
-                                    background: "transparent",
-                                    border: "1px dashed var(--border-color)",
-                                    borderRadius: "999px",
-                                    cursor: "pointer",
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    gap: "4px",
-                                    flexShrink: 0,
-                                    whiteSpace: "nowrap",
-                                  }}
-                                  title="Hide sections, start-collapsed defaults, and full list reorder"
-                                >
-                                  <Settings size={11} aria-hidden />
-                                  Sections
-                                </button>
-                                </>
+                                </div>
                               )}
+                              </div>
+                              <div
+                                aria-hidden
+                                style={{
+                                  position: "absolute",
+                                  right: 0,
+                                  top: 0,
+                                  bottom: 10,
+                                  width: 48,
+                                  pointerEvents: "none",
+                                  zIndex: 2,
+                                  background: `linear-gradient(to right, transparent 0%, color-mix(in srgb, var(--bg-tertiary) 35%, transparent) 45%, var(--bg-tertiary) 100%)`,
+                                }}
+                              />
                               </div>
                               <span
                                 aria-hidden
@@ -8044,51 +8126,130 @@ export default function Journal() {
                                   height: 18,
                                   flexShrink: 0,
                                   background: "var(--border-color)",
-                                  opacity: 0.9,
+                                  opacity: 0.85,
                                   alignSelf: "center",
                                 }}
                               />
-                              <button
-                                type="button"
-                                onClick={persistJournalDefaultArrangementFromBar}
+                              <div
                                 style={{
-                                  padding: "4px 8px",
-                                  fontSize: "11px",
-                                  fontWeight: 500,
-                                  letterSpacing: "0.02em",
-                                  color: "var(--text-secondary)",
-                                  background: "transparent",
-                                  border: "1px dashed var(--border-color)",
-                                  borderRadius: "999px",
-                                  cursor: "pointer",
+                                  display: "flex",
+                                  flexDirection: "row",
+                                  alignItems: "center",
+                                  gap: 4,
                                   flexShrink: 0,
-                                  whiteSpace: "nowrap",
                                 }}
-                                title="Save current section order and collapsed state as your default for new journal sessions"
                               >
-                                Set default
-                              </button>
-                              <button
-                                type="button"
-                                onClick={resetJournalSectionOrderToSavedOrCore}
-                                style={{
-                                  padding: "4px 8px",
-                                  fontSize: "11px",
-                                  fontWeight: 500,
-                                  letterSpacing: "0.02em",
-                                  color: "var(--text-secondary)",
-                                  background: "transparent",
-                                  border: "1px dashed var(--border-color)",
-                                  borderRadius: "999px",
-                                  cursor: "pointer",
-                                  flexShrink: 0,
-                                  whiteSpace: "nowrap",
-                                }}
-                                title="Restore section order from your saved default (or core order if none saved)"
-                              >
-                                Reset to Default
-                              </button>
+                                {journalNavReorderUnlocked ? (
+                                <button
+                                  type="button"
+                                  onClick={persistJournalDefaultArrangementFromBar}
+                                  style={{
+                                    padding: "3px 6px",
+                                    fontSize: "10px",
+                                    fontWeight: 600,
+                                    letterSpacing: "0.02em",
+                                    color: "var(--text-secondary)",
+                                    background: "transparent",
+                                    border: "1px dashed var(--border-color)",
+                                    borderRadius: "6px",
+                                    cursor: "pointer",
+                                    whiteSpace: "nowrap",
+                                    lineHeight: 1.2,
+                                  }}
+                                  title="Set — remembers this section order and collapsed sections as the default for new journal entries (does not change this entry until you edit layout)"
+                                >
+                                  Set
+                                </button>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  onClick={resetJournalSectionOrderToSavedOrCore}
+                                  style={{
+                                    padding: "3px 6px",
+                                    fontSize: "10px",
+                                    fontWeight: 600,
+                                    letterSpacing: "0.02em",
+                                    color: "var(--text-secondary)",
+                                    background: "transparent",
+                                    border: "1px dashed var(--border-color)",
+                                    borderRadius: "6px",
+                                    cursor: "pointer",
+                                    whiteSpace: "nowrap",
+                                    lineHeight: 1.2,
+                                  }}
+                                  title="Reset — reapplies your saved default to this session, or built-in order if you have not clicked Set yet"
+                                >
+                                  Reset
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openJournalSectionOrderModal("global")}
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    width: 28,
+                                    height: 28,
+                                    padding: 0,
+                                    color: "var(--text-secondary)",
+                                    background: "transparent",
+                                    border: "1px solid var(--border-color)",
+                                    borderRadius: "8px",
+                                    cursor: "pointer",
+                                    flexShrink: 0,
+                                  }}
+                                  title="Section layout — visibility, start-collapsed, full reorder"
+                                  aria-label="Section layout"
+                                >
+                                  <Settings size={15} aria-hidden />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setJournalNavReorderUnlocked((v) => !v)}
+                                  title={
+                                    journalNavReorderUnlocked
+                                      ? "Lock: pills only scroll to sections (no drag)"
+                                      : "Unlock: drag section pills by the grip to reorder"
+                                  }
+                                  aria-pressed={journalNavReorderUnlocked}
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    width: 28,
+                                    height: 28,
+                                    padding: 0,
+                                    color: journalNavReorderUnlocked ? "var(--accent)" : "var(--text-secondary)",
+                                    background: journalNavReorderUnlocked ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "transparent",
+                                    border: `1px solid ${journalNavReorderUnlocked ? "var(--accent)" : "var(--border-color)"}`,
+                                    borderRadius: "8px",
+                                    cursor: "pointer",
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  {journalNavReorderUnlocked ? <Unlock size={15} aria-hidden /> : <Lock size={15} aria-hidden />}
+                                </button>
+                              </div>
                           </div>
+                          {journalBarArrangementFeedback ? (
+                            <div
+                              role="status"
+                              aria-live="polite"
+                              style={{
+                                padding: "8px 12px",
+                                fontSize: "12px",
+                                lineHeight: 1.45,
+                                borderBottom: "1px solid var(--border-color)",
+                                background:
+                                  journalBarArrangementFeedback.variant === "warning"
+                                    ? "color-mix(in srgb, var(--danger) 12%, var(--bg-secondary))"
+                                    : "color-mix(in srgb, var(--success) 12%, var(--bg-secondary))",
+                                color: "var(--text-primary)",
+                              }}
+                            >
+                              {journalBarArrangementFeedback.text}
+                            </div>
+                          ) : null}
                         </div>
                       </>
                     )}
@@ -8208,7 +8369,10 @@ export default function Journal() {
                               </JournalStrategySectionTitlePill>
                             );
                           })()}
-                          {sectionId === "emotional_state_before" && (isCreating || isEditing) && showAddEmotionalStateForm && (
+                          {sectionId === "emotional_state_before" &&
+                            (isCreating || isEditing) &&
+                            showAddEmotionalStateForm &&
+                            !journalHasSavedEmotionalState && (
                             <button
                               type="button"
                               onClick={() => {
@@ -8259,7 +8423,7 @@ export default function Journal() {
                         )}
                         {sectionId === "mantra_checklist" && (
                           <JournalStrategySectionCard>
-                            {renderChecklistForType("daily_mantra", { checklistLayout: "list", splitSidePanel: true })}
+                            {renderChecklistForType("daily_mantra", { checklistLayout: "list", splitSidePanel: true, accentVariant: "warning" })}
                           </JournalStrategySectionCard>
                         )}
                         {sectionId === "entry_checklist" && (
@@ -8550,8 +8714,9 @@ export default function Journal() {
                                       </JournalChecklistGroupHeader>
                                       <JournalChecklistListShell tone="warning">
                                         {children.map((child, cidx) => (
-                                          <div
+                                          <JournalCompletionOutline
                                             key={child.id}
+                                            completionTone="warning"
                                             style={{
                                               display: "flex",
                                               alignItems: "flex-start",
@@ -8559,13 +8724,14 @@ export default function Journal() {
                                               gap: 8,
                                               padding: "6px 10px",
                                               borderBottom: cidx < children.length - 1 ? "1px solid color-mix(in srgb, var(--warning) 14%, var(--border-color))" : undefined,
+                                              borderRadius: 8,
                                             }}
                                           >
                                             <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", minWidth: 0 }}>
                                               <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: 13, color: "var(--text-primary)" }} />
                                             </label>
                                             {renderSurveyControls(child)}
-                                          </div>
+                                          </JournalCompletionOutline>
                                         ))}
                                       </JournalChecklistListShell>
                                     </div>
@@ -8574,8 +8740,9 @@ export default function Journal() {
                                 {regularItems.length > 0 ? (
                                   <JournalChecklistListShell tone="warning">
                                     {regularItems.map((item, idx) => (
-                                      <div
+                                      <JournalCompletionOutline
                                         key={item.id}
+                                        completionTone="warning"
                                         style={{
                                           display: "flex",
                                           alignItems: "flex-start",
@@ -8583,13 +8750,14 @@ export default function Journal() {
                                           gap: 8,
                                           padding: "6px 10px",
                                           borderBottom: idx < regularItems.length - 1 ? "1px solid color-mix(in srgb, var(--warning) 14%, var(--border-color))" : undefined,
+                                          borderRadius: 8,
                                         }}
                                       >
                                         <label style={{ flex: 1, fontSize: 13, color: "var(--text-primary)", minWidth: 0 }}>
                                           <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: 13, color: "var(--text-primary)" }} />
                                         </label>
                                         {renderSurveyControls(item)}
-                                      </div>
+                                      </JournalCompletionOutline>
                                     ))}
                                   </JournalChecklistListShell>
                                 ) : null}
@@ -8924,7 +9092,8 @@ export default function Journal() {
                                         const checked = newEmotionalStateTradeIndices.includes(i);
                                         const isOnlySelected = checked && newEmotionalStateTradeIndices.length === 1;
                                         return (
-                                          <label key={i} style={{ display: "inline-flex", alignItems: "center", gap: "4px", cursor: isOnlySelected ? "default" : "pointer", fontSize: "11px", color: "var(--text-secondary)", opacity: isOnlySelected ? 0.9 : 1 }}>
+                                          <JournalCompletionOutline key={i} style={{ display: "inline-flex", alignItems: "center", gap: "4px", cursor: isOnlySelected ? "default" : "pointer", fontSize: "11px", color: "var(--text-secondary)", opacity: isOnlySelected ? 0.9 : 1, borderRadius: 6 }}>
+                                            <label style={{ display: "inline-flex", alignItems: "center", gap: "4px", cursor: isOnlySelected ? "default" : "pointer" }}>
                                             <input
                                               type="checkbox"
                                               checked={checked}
@@ -8937,7 +9106,8 @@ export default function Journal() {
                                               }}
                                             />
                                             {t.symbol || `Trade ${i + 1}`}
-                                          </label>
+                                            </label>
+                                          </JournalCompletionOutline>
                                         );
                                       })}
                                     </div>
@@ -8945,7 +9115,7 @@ export default function Journal() {
                                 </div>
                                 <div style={{ padding: "12px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
                                 <p style={{ margin: "0 0 8px", fontSize: "11px", color: "var(--text-secondary)" }}>{INTENSITY_SCALE_LABEL}</p>
-                                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "12px" }}>
+                                <JournalCompletionOutline style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "12px", borderRadius: 8 }}>
                                   {JOURNAL_EMOTIONS.map((emotion) => {
                                     const intensity = newEmotionalStateForm.selectedEmotions[emotion];
                                     const isSelected = intensity !== undefined;
@@ -8953,30 +9123,47 @@ export default function Journal() {
                                       <button key={emotion} type="button" onClick={() => { if (isSelected) { const next = { ...newEmotionalStateForm.selectedEmotions }; delete next[emotion]; setNewEmotionalStateForm((f) => ({ ...f, selectedEmotions: next })); } else { setNewEmotionalStateForm((f) => ({ ...f, selectedEmotions: { ...f.selectedEmotions, [emotion]: DEFAULT_EMOTION_INTENSITY } })); } }} style={{ padding: "6px 12px", borderRadius: "999px", border: `1px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`, backgroundColor: isSelected ? "var(--bg-hover)" : "var(--bg-tertiary)", color: "var(--text-primary)", fontSize: "12px", fontWeight: isSelected ? "600" : "500", cursor: "pointer" }}>{emotion}{isSelected && ` ${intensity}/10`}</button>
                                     );
                                   })}
-                                </div>
-                                {Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 && (
+                                </JournalCompletionOutline>
+                                {Object.keys(omitSurveyOnlyEmotion(newEmotionalStateForm.selectedEmotions)).length > 0 && (
                                   <div style={{ marginBottom: "12px" }}>
-                                    {Object.entries(newEmotionalStateForm.selectedEmotions).map(([emotion, intensity]) => (
-                                      <div key={emotion} style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
+                                    {Object.entries(omitSurveyOnlyEmotion(newEmotionalStateForm.selectedEmotions)).map(([emotion, intensity]) => (
+                                      <JournalCompletionOutline key={emotion} style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px", borderRadius: 8 }}>
                                         <span style={{ minWidth: "80px", fontSize: "12px" }}>{emotion}</span>
-                                        <input type="range" min={0} max={10} value={intensity} onChange={(e) => setNewEmotionalStateForm((f) => ({ ...f, selectedEmotions: { ...f.selectedEmotions, [emotion]: parseInt(e.target.value, 10) } }))} style={{ flex: 1, maxWidth: "160px", accentColor: "var(--accent)" }} />
+                                        <JournalSliderShell
+                                          min={0}
+                                          max={10}
+                                          value={intensity}
+                                          onChange={(next) =>
+                                            setNewEmotionalStateForm((f) => ({
+                                              ...f,
+                                              selectedEmotions: { ...f.selectedEmotions, [emotion]: next },
+                                            }))
+                                          }
+                                          style={{ flex: 1, maxWidth: "160px" }}
+                                        />
                                         <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--accent)", minWidth: "24px" }}>{intensity}/10</span>
-                                      </div>
+                                      </JournalCompletionOutline>
                                     ))}
                                   </div>
                                 )}
                                 <h4 style={{ margin: "12px 0 8px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Before trade</h4>
                                 {JOURNAL_SURVEY_QUESTIONS.before.map((q) => (
-                                  <div key={q.key} style={{ marginBottom: "12px" }}>
+                                  <JournalCompletionOutline key={q.key} style={{ marginBottom: "12px", borderRadius: 8 }}>
                                     <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>{q.question}</label>
                                     <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>{q.scale}</p>
                                     <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                                       <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>1</span>
-                                      <input type="range" min={1} max={10} value={newEmotionalStateSurveyResponses[q.key] ?? 6} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
+                                      <JournalSliderShell
+                                        min={1}
+                                        max={10}
+                                        value={newEmotionalStateSurveyResponses[q.key] ?? 6}
+                                        onChange={(next) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: next }))}
+                                        style={{ flex: 1, minWidth: "60px" }}
+                                      />
                                       <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>10</span>
                                       <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 6}</span>
                                     </div>
-                                  </div>
+                                  </JournalCompletionOutline>
                                 ))}
                                 <p style={{ margin: "12px 0 0", fontSize: "11px", color: "var(--text-secondary)" }}>Fill during/after/notes below, then add in Emo. Notes section.</p>
                               </div>
@@ -8988,16 +9175,22 @@ export default function Journal() {
                           <div style={{ padding: "12px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
                             <h4 style={{ margin: "0 0 8px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>During trade</h4>
                             {JOURNAL_SURVEY_QUESTIONS.during.map((q) => (
-                              <div key={q.key} style={{ marginBottom: "12px" }}>
+                              <JournalCompletionOutline key={q.key} style={{ marginBottom: "12px", borderRadius: 8 }}>
                                 <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>{q.question}</label>
                                 <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>{q.scale}</p>
                                 <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                                   <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>1</span>
-                                  <input type="range" min={1} max={10} value={newEmotionalStateSurveyResponses[q.key] ?? 6} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
+                                  <JournalSliderShell
+                                    min={1}
+                                    max={10}
+                                    value={newEmotionalStateSurveyResponses[q.key] ?? 6}
+                                    onChange={(next) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: next }))}
+                                    style={{ flex: 1, minWidth: "60px" }}
+                                  />
                                   <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>10</span>
                                   <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 6}</span>
                                 </div>
-                              </div>
+                              </JournalCompletionOutline>
                             ))}
                           </div>
                         )}
@@ -9005,16 +9198,22 @@ export default function Journal() {
                           <div style={{ padding: "12px", backgroundColor: "var(--bg-secondary)", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
                             <h4 style={{ margin: "0 0 8px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>After trade</h4>
                             {JOURNAL_SURVEY_QUESTIONS.after.map((q) => (
-                              <div key={q.key} style={{ marginBottom: "12px" }}>
+                              <JournalCompletionOutline key={q.key} style={{ marginBottom: "12px", borderRadius: 8 }}>
                                 <label style={{ display: "block", marginBottom: "4px", fontSize: "12px" }}>{q.question}</label>
                                 <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}>{q.scale}</p>
                                 <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                                   <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>1</span>
-                                  <input type="range" min={1} max={10} value={newEmotionalStateSurveyResponses[q.key] ?? 6} onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))} style={{ flex: 1, minWidth: "60px", accentColor: "var(--accent)" }} />
+                                  <JournalSliderShell
+                                    min={1}
+                                    max={10}
+                                    value={newEmotionalStateSurveyResponses[q.key] ?? 6}
+                                    onChange={(next) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: next }))}
+                                    style={{ flex: 1, minWidth: "60px" }}
+                                  />
                                   <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>10</span>
                                   <span style={{ minWidth: "24px", textAlign: "center", fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 6}</span>
                                 </div>
-                              </div>
+                              </JournalCompletionOutline>
                             ))}
                           </div>
                         )}
@@ -9741,7 +9940,7 @@ export default function Journal() {
                                 >
                                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", flexWrap: "wrap", gap: "8px" }}>
                                     <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
-                                      {Object.entries(pending.selectedEmotions).map(([emotion, intensity]) => (
+                                      {Object.entries(omitSurveyOnlyEmotion(pending.selectedEmotions)).map(([emotion, intensity]) => (
                                         <span key={emotion} style={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "13px" }}>
                                           {emotion} {intensity}/10
                                         </span>
@@ -9932,7 +10131,7 @@ export default function Journal() {
                                   <div>
                                     <h3 style={{ margin: "0 0 4px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Emotions</h3>
                                     <p style={{ margin: "0 0 10px", fontSize: "12px", color: "var(--text-secondary)" }}>Tap to add or remove; then set strength below.</p>
-                                    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                                    <JournalCompletionOutline style={{ display: "flex", flexWrap: "wrap", gap: "8px", borderRadius: 8 }}>
                                       {JOURNAL_EMOTIONS.map((emotion) => {
                                         const intensity = newEmotionalStateForm.selectedEmotions[emotion];
                                         const isSelected = intensity !== undefined;
@@ -9969,9 +10168,9 @@ export default function Journal() {
                                           </button>
                                         );
                                       })}
-                                    </div>
+                                    </JournalCompletionOutline>
                                   </div>
-                                  {Object.keys(newEmotionalStateForm.selectedEmotions).length > 0 && (
+                                  {Object.keys(omitSurveyOnlyEmotion(newEmotionalStateForm.selectedEmotions)).length > 0 && (
                                     <div style={{ padding: "16px", backgroundColor: "var(--bg-tertiary)", borderRadius: "12px", border: "1px solid var(--border-color)" }}>
                                       <h3 style={{ margin: "0 0 4px", ...journalSectionTitleStyle("muted", { size: "sm" }) }}>Set intensity</h3>
                                       <div style={{ marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-secondary)" }}>
@@ -9981,21 +10180,20 @@ export default function Journal() {
                                         <span style={{ marginLeft: "4px" }}>← strength</span>
                                       </div>
                                       <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                                        {Object.entries(newEmotionalStateForm.selectedEmotions).map(([emotion, intensity]) => (
-                                          <div key={emotion} style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap", padding: "8px 0", borderBottom: "1px solid var(--border-color)" }}>
+                                        {Object.entries(omitSurveyOnlyEmotion(newEmotionalStateForm.selectedEmotions)).map(([emotion, intensity]) => (
+                                          <JournalCompletionOutline key={emotion} style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap", padding: "8px 0", borderBottom: "1px solid var(--border-color)", borderRadius: 8 }}>
                                             <span style={{ minWidth: "88px", fontSize: "13px", fontWeight: "500" }}>{emotion}</span>
-                                            <input
-                                              type="range"
+                                            <JournalSliderShell
                                               min={0}
                                               max={10}
                                               value={intensity}
-                                              onChange={(e) =>
+                                              onChange={(next) =>
                                                 setNewEmotionalStateForm((f) => ({
                                                   ...f,
-                                                  selectedEmotions: { ...f.selectedEmotions, [emotion]: parseInt(e.target.value, 10) },
+                                                  selectedEmotions: { ...f.selectedEmotions, [emotion]: next },
                                                 }))
                                               }
-                                              style={{ flex: "1", minWidth: "100px", maxWidth: "220px", height: "6px", accentColor: "var(--accent)" }}
+                                              style={{ flex: 1, minWidth: "100px", maxWidth: "220px" }}
                                             />
                                             <span style={{ fontSize: "13px", fontWeight: "600", color: "var(--accent)", minWidth: "28px" }}>{intensity}/10</span>
                                             <span style={{ fontSize: "12px", color: "var(--text-secondary)", minWidth: "64px" }}>{INTENSITY_LABELS[intensity]}</span>
@@ -10010,7 +10208,7 @@ export default function Journal() {
                                             >
                                               Remove
                                             </button>
-                                          </div>
+                                          </JournalCompletionOutline>
                                         ))}
                                       </div>
                                     </div>
@@ -10022,23 +10220,22 @@ export default function Journal() {
                                         {phase === "before" ? "Before Trade" : phase === "during" ? "During Trade" : "After Trade"}
                                       </h3>
                                       {JOURNAL_SURVEY_QUESTIONS[phase].map((q, idx) => (
-                                        <div key={q.key} style={{ marginBottom: "16px" }}>
+                                        <JournalCompletionOutline key={q.key} style={{ marginBottom: "16px", borderRadius: 8 }}>
                                           <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500" }}>{idx + 1}. {q.question}</label>
                                           <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "6px" }}>{q.scale}</p>
                                           <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                                             <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "16px" }}>1</span>
-                                            <input
-                                              type="range"
+                                            <JournalSliderShell
                                               min={1}
                                               max={10}
                                               value={newEmotionalStateSurveyResponses[q.key] ?? 6}
-                                              onChange={(e) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: parseInt(e.target.value, 10) }))}
-                                              style={{ flex: 1, minWidth: "80px", accentColor: "var(--accent)" }}
+                                              onChange={(next) => setNewEmotionalStateSurveyResponses((r) => ({ ...r, [q.key]: next }))}
+                                              style={{ flex: 1, minWidth: "80px" }}
                                             />
                                             <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "16px" }}>10</span>
                                             <span style={{ minWidth: "28px", textAlign: "center", fontSize: "13px", fontWeight: "600", color: "var(--accent)" }}>{newEmotionalStateSurveyResponses[q.key] ?? 6}</span>
                                           </div>
-                                        </div>
+                                        </JournalCompletionOutline>
                                       ))}
                                     </div>
                                   ))}
@@ -10138,7 +10335,7 @@ export default function Journal() {
                                           <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "15px" }} />
                                         </div>
                                         {children.map((child) => (
-                                          <div key={child.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", marginLeft: "20px", marginBottom: "4px" }}>
+                                          <JournalCompletionOutline key={child.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", marginLeft: "20px", marginBottom: "4px", borderRadius: 8 }}>
                                             <input type="checkbox" checked={getChecked(child.id)} onChange={() => onToggle(child.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
                                             <label style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)", cursor: "pointer", display: "flex", minWidth: 0 }} onClick={() => onToggle(child.id)}>
                                               <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)", cursor: "pointer" }} />
@@ -10153,13 +10350,13 @@ export default function Journal() {
                                                 </button>
                                               </span>
                                             )}
-                                          </div>
+                                          </JournalCompletionOutline>
                                         ))}
                                       </div>
                                     );
                                   })}
                                   {regularItems.map((item) => (
-                                    <div key={item.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
+                                    <JournalCompletionOutline key={item.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", marginBottom: "4px", backgroundColor: "var(--bg-tertiary)", borderRadius: "6px" }}>
                                       <input type="checkbox" checked={getChecked(item.id)} onChange={() => onToggle(item.id)} style={{ cursor: "pointer", width: "16px", height: "16px" }} />
                                       <label style={{ flex: 1, fontSize: "14px", color: "var(--text-primary)", cursor: "pointer", display: "flex", minWidth: 0 }} onClick={() => onToggle(item.id)}>
                                         <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)", cursor: "pointer" }} />
@@ -10174,7 +10371,7 @@ export default function Journal() {
                                           </button>
                                         </span>
                                       )}
-                                    </div>
+                                    </JournalCompletionOutline>
                                   ))}
                                 </div>
                               );
@@ -10421,8 +10618,9 @@ export default function Journal() {
                                           <ChecklistItemCaption fillRow={false} title={group.item_text} description={group.description} titleStyle={{ fontWeight: "600", color: "var(--text-primary)", fontSize: "15px" }} />
                                         </div>
                                         {children.map((child) => (
-                                          <div
+                                          <JournalCompletionOutline
                                             key={child.id}
+                                            completionTone="warning"
                                             style={{
                                               display: "flex",
                                               alignItems: "center",
@@ -10447,15 +10645,16 @@ export default function Journal() {
                                               <ChecklistItemCaption title={child.item_text} description={child.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
                                             </label>
                                             {renderSurveyControlsTab(child)}
-                                          </div>
+                                          </JournalCompletionOutline>
                                         ))}
                                       </div>
                                     );
                                   })}
                                   {/* Render regular items */}
                                   {regularItems.map((item) => (
-                                    <div
+                                    <JournalCompletionOutline
                                       key={item.id}
+                                      completionTone="warning"
                                       style={{
                                         display: "flex",
                                         alignItems: "center",
@@ -10479,7 +10678,7 @@ export default function Journal() {
                                         <ChecklistItemCaption title={item.item_text} description={item.description} titleStyle={{ fontSize: "14px", color: "var(--text-primary)" }} />
                                       </label>
                                       {renderSurveyControlsTab(item)}
-                                    </div>
+                                    </JournalCompletionOutline>
                                   ))}
                                 </div>
                               );
