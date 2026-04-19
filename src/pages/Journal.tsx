@@ -7,7 +7,7 @@ import {
 } from "../utils/journalStickySession";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronUp, Search, LayoutDashboard, GripVertical, Eye, EyeOff, Settings, ListChecks, Scale, Sparkles, Activity } from "lucide-react";
+import { Plus, Edit2, Trash2, FileText, X, RotateCcw, Maximize2, Minimize2, Link2, ChevronDown, ChevronRight, ChevronUp, Search, LayoutDashboard, GripVertical, Eye, EyeOff, Settings, ListChecks, Scale, Sparkles, Activity, FoldVertical, Lock, Unlock, Folder } from "lucide-react";
 import {
   DndContext,
   closestCenter,
@@ -21,6 +21,7 @@ import {
   SortableContext,
   useSortable,
   verticalListSortingStrategy,
+  horizontalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from "recharts";
@@ -197,6 +198,7 @@ import {
   loadJournalTradePatternIndicatorIds,
   setJournalTradePatternIndicatorIds,
   migrateJournalIndicatorDraftTradePatterns,
+  expandStrategyRuleLinesForDisplay,
   type Indicator,
   type IndicatorPhase,
   type StrategyCustomRuleSet,
@@ -673,6 +675,12 @@ const JOURNAL_SECTION_ORDER_KEY = "tradebutler_journal_section_order";
 const JOURNAL_DEFAULT_STRATEGY_ID_KEY = "tradebutler_journal_default_strategy_id";
 const JOURNAL_DEFAULT_SECTION_ORDER_KEY = "tradebutler_journal_default_section_order";
 const JOURNAL_HIDDEN_SECTION_IDS_KEY = "tradebutler_journal_hidden_section_ids";
+/** Last-used collapsed sections (session). */
+const JOURNAL_COLLAPSED_SECTION_IDS_KEY = "tradebutler_journal_collapsed_section_ids";
+/** Default collapsed sections when opening the journal (applied when session key is absent). */
+const JOURNAL_DEFAULT_COLLAPSED_SECTION_IDS_KEY = "tradebutler_journal_default_collapsed_section_ids";
+/** When false, section pills in the sticky nav bar are not draggable (click only scrolls). */
+const JOURNAL_NAV_REORDER_UNLOCKED_KEY = "tradebutler_journal_nav_reorder_unlocked";
 /**
  * Bump when `CORE_SECTION_ORDER` changes so existing users get a one-time migration:
  * core sections follow the new default order; `custom:*` / `custom_rules:*` entries stay grouped after core in their prior relative order.
@@ -696,6 +704,8 @@ function SortableSectionRow({
   onMoveDown,
   isHidden,
   onToggleHide,
+  startCollapsedByDefault,
+  onToggleStartCollapsed,
 }: {
   sectionId: string;
   label: string;
@@ -705,6 +715,9 @@ function SortableSectionRow({
   onMoveDown: () => void;
   isHidden?: boolean;
   onToggleHide?: () => void;
+  /** When true, this section is collapsed when the journal opens (until expanded). */
+  startCollapsedByDefault?: boolean;
+  onToggleStartCollapsed?: () => void;
 }) {
   const {
     attributes,
@@ -760,8 +773,133 @@ function SortableSectionRow({
           {isHidden ? <Eye size={14} /> : <EyeOff size={14} />}
         </button>
       )}
+      {onToggleStartCollapsed && (
+        <button
+          type="button"
+          onClick={onToggleStartCollapsed}
+          title={
+            startCollapsedByDefault
+              ? "Starts collapsed when you open the journal — click to open expanded by default"
+              : "Start collapsed when you open the journal — click to enable"
+          }
+          style={{
+            padding: "4px 6px",
+            background: startCollapsedByDefault ? "color-mix(in srgb, var(--accent) 16%, transparent)" : "transparent",
+            border: `1px solid ${startCollapsedByDefault ? "var(--accent)" : "var(--border-color)"}`,
+            borderRadius: "6px",
+            color: startCollapsedByDefault ? "var(--accent)" : "var(--text-secondary)",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <FoldVertical size={14} aria-hidden />
+        </button>
+      )}
       <button type="button" disabled={index === 0} onClick={onMoveUp} style={{ padding: "4px 8px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: index === 0 ? "var(--text-secondary)" : "var(--text-primary)", cursor: index === 0 ? "not-allowed" : "pointer", display: "flex" }} title="Move up"><ChevronUp size={16} /></button>
       <button type="button" disabled={index === totalLength - 1} onClick={onMoveDown} style={{ padding: "4px 8px", background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: "6px", color: index === totalLength - 1 ? "var(--text-secondary)" : "var(--text-primary)", cursor: index === totalLength - 1 ? "not-allowed" : "pointer", display: "flex" }} title="Move down"><ChevronDown size={16} /></button>
+    </div>
+  );
+}
+
+/** Reorder visible nav bar ids in place within fullSectionOrder (keeps hidden / off-bar sections stable). */
+function reorderNavBarInFullOrder(fullSectionOrder: string[], navBarIds: string[], newNavBarIds: string[]): string[] {
+  const navSet = new Set(navBarIds);
+  if (navBarIds.length !== newNavBarIds.length) return fullSectionOrder;
+  let i = 0;
+  return fullSectionOrder.map((id) => (navSet.has(id) ? (newNavBarIds[i++] ?? id) : id));
+}
+
+/** Sticky journal nav pill: drag handle + scroll target when reorder is unlocked. */
+function SortableJournalNavPill({
+  sectionId,
+  label,
+  onScrollTo,
+  isBodyCollapsed,
+}: {
+  sectionId: string;
+  label: string;
+  onScrollTo: () => void;
+  isBodyCollapsed: boolean;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: sectionId });
+
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.75 : isBodyCollapsed ? 0.72 : 1,
+    zIndex: isDragging ? 2 : undefined,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        ...style,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 2,
+        borderRadius: "999px",
+        border: "1px solid var(--accent)",
+        background: "var(--bg-primary)",
+        paddingLeft: 2,
+      }}
+    >
+      <button
+        type="button"
+        {...attributes}
+        {...listeners}
+        title="Drag to reorder sections"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "2px 3px",
+          border: "none",
+          background: "transparent",
+          color: "var(--text-secondary)",
+          cursor: "grab",
+          borderRadius: "999px 0 0 999px",
+          flexShrink: 0,
+        }}
+      >
+        <GripVertical size={11} aria-hidden />
+      </button>
+      <button
+        type="button"
+        onClick={onScrollTo}
+        title={label}
+        style={{
+          padding: "4px 10px 4px 4px",
+          fontSize: "11px",
+          fontWeight: "500",
+          letterSpacing: "0.02em",
+          color: "var(--accent)",
+          background: "transparent",
+          border: "none",
+          borderRadius: "0 999px 999px 0",
+          cursor: "pointer",
+          transition: "background 0.12s ease, color 0.12s ease",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = "var(--accent)";
+          e.currentTarget.style.color = "white";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "transparent";
+          e.currentTarget.style.color = "var(--accent)";
+        }}
+      >
+        {label}
+      </button>
     </div>
   );
 }
@@ -856,6 +994,69 @@ function JournalChecklistListShell({ children, tone = "accent" }: { children: Re
     >
       {children}
     </div>
+  );
+}
+
+/** Read-only rule lines: same list structure as checklist rows, warning/orange tone. */
+function JournalRuleListRow({ text, isLast }: { text: string; isLast: boolean }) {
+  const [hover, setHover] = useState(false);
+  const w = "var(--warning)";
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: "10px",
+        padding: "7px 12px",
+        borderBottom: isLast ? "none" : "1px solid color-mix(in srgb, var(--border-color) 85%, transparent)",
+        borderLeft: `3px solid color-mix(in srgb, ${w} 50%, transparent)`,
+        background: hover ? `color-mix(in srgb, ${w} 10%, var(--bg-secondary))` : "transparent",
+        transition: "background 0.18s ease",
+      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <Scale size={16} style={{ color: "var(--warning)", marginTop: 1, flexShrink: 0, opacity: 0.92 }} aria-hidden />
+      <div style={{ flex: 1, minWidth: 0, color: "var(--text-primary)", fontSize: 13, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>{text}</div>
+    </div>
+  );
+}
+
+function JournalRuleSectionHeader({ title }: { title: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 12px",
+        borderBottom: "1px solid color-mix(in srgb, var(--border-color) 85%, transparent)",
+        borderLeft: "3px solid color-mix(in srgb, var(--warning) 50%, transparent)",
+        background: "color-mix(in srgb, var(--warning) 8%, transparent)",
+        fontSize: 13,
+        fontWeight: 700,
+        color: "var(--warning)",
+      }}
+    >
+      <Folder size={14} style={{ flexShrink: 0, opacity: 0.9 }} aria-hidden />
+      <span style={{ flex: 1, minWidth: 0 }}>{title}</span>
+    </div>
+  );
+}
+
+/** Renders persisted strategy rules with optional `__TB_SECTION__:` group headers. */
+function JournalStrategyRulesListBody({ rules }: { rules: string[] }) {
+  const rows = expandStrategyRuleLinesForDisplay(rules);
+  return (
+    <>
+      {rows.map((row, idx) => {
+        if (row.kind === "section") {
+          return <JournalRuleSectionHeader key={`sec-${idx}-${row.title}`} title={row.title} />;
+        }
+        const hasMoreRules = rows.slice(idx + 1).some((r) => r.kind === "rule");
+        return <JournalRuleListRow key={`rule-${idx}`} text={row.text} isLast={!hasMoreRules} />;
+      })}
+    </>
   );
 }
 
@@ -1111,38 +1312,6 @@ function JournalChecklistRowReadonly({
   );
 }
 
-const journalRuleCardStyle: CSSProperties = {
-  padding: "10px 14px 10px 16px",
-  background: "linear-gradient(160deg, color-mix(in srgb, var(--warning) 10%, var(--bg-secondary)) 0%, color-mix(in srgb, var(--warning) 4%, var(--bg-tertiary)) 100%)",
-  border: "1px solid color-mix(in srgb, var(--warning) 28%, var(--border-color))",
-  borderLeft: "4px solid var(--warning)",
-  borderRadius: 8,
-  color: "var(--text-primary)",
-  fontSize: 13,
-  lineHeight: 1.45,
-  whiteSpace: "pre-wrap",
-  boxShadow: "0 1px 8px rgba(0,0,0,0.1)",
-  fontStyle: "italic",
-};
-
-function JournalRuleCard({ children }: { children: ReactNode }) {
-  const [hover, setHover] = useState(false);
-  return (
-    <div
-      style={{
-        ...journalRuleCardStyle,
-        boxShadow: hover ? "0 4px 16px rgba(0,0,0,0.16)" : journalRuleCardStyle.boxShadow,
-        borderColor: hover ? "color-mix(in srgb, var(--warning) 45%, var(--border-color))" : "color-mix(in srgb, var(--warning) 28%, var(--border-color))",
-        transition: "box-shadow 0.18s ease, border-color 0.18s ease",
-      }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-    >
-      {children}
-    </div>
-  );
-}
-
 export default function Journal() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [journalEntriesPage, setJournalEntriesPage] = useState(1);
@@ -1236,6 +1405,25 @@ export default function Journal() {
     }
     return [];
   });
+  const [collapsedSectionIds, setCollapsedSectionIds] = useState<string[]>(() => {
+    try {
+      const session = localStorage.getItem(JOURNAL_COLLAPSED_SECTION_IDS_KEY);
+      if (session) {
+        const parsed = JSON.parse(session) as unknown;
+        if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) return parsed;
+      }
+      const def = localStorage.getItem(JOURNAL_DEFAULT_COLLAPSED_SECTION_IDS_KEY);
+      if (def) {
+        const parsed = JSON.parse(def) as unknown;
+        if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) return parsed;
+      }
+    } catch {
+      /* ignore */
+    }
+    return [];
+  });
+  /** Draft list for "start collapsed" defaults while the section layout modal is open (persisted with Set as default arrangement). */
+  const [sectionLayoutModalCollapsedDefaults, setSectionLayoutModalCollapsedDefaults] = useState<string[]>([]);
   const [defaultStrategyIdForJournal, setDefaultStrategyIdForJournal] = useState<number | null>(() => {
     try {
       const saved = localStorage.getItem(JOURNAL_DEFAULT_STRATEGY_ID_KEY);
@@ -1251,6 +1439,15 @@ export default function Journal() {
   const [strategyDropdownOpen, setStrategyDropdownOpen] = useState(false);
   const strategyDropdownRef = useRef<HTMLDivElement>(null);
   const [showSectionOrderModal, setShowSectionOrderModal] = useState(false);
+  const [sectionOrderModalTitle, setSectionOrderModalTitle] = useState("Journal layout");
+  /** When true, sticky nav section pills can be dragged to reorder (still opens layout modal via "Sections" control). */
+  const [journalNavReorderUnlocked, setJournalNavReorderUnlocked] = useState(() => {
+    try {
+      return localStorage.getItem(JOURNAL_NAV_REORDER_UNLOCKED_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
   const [loading, setLoading] = useState(true);
   const [isMaximized, setIsMaximized] = useState(false);
   const [isTabContentMaximized, setIsTabContentMaximized] = useState(false);
@@ -1841,12 +2038,18 @@ export default function Journal() {
   const persistJournalScrollStateRef = useRef<() => void>(() => {});
 
   // Scroll journal entry section into view (for scrolling page mode)
-  const scrollToSection = (sectionId: string) => {
-    const el = sectionRefs.current.get(sectionId);
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  };
+  const scrollToSection = useCallback((sectionId: string) => {
+    setCollapsedSectionIds((prev) => {
+      if (!prev.includes(sectionId)) return prev;
+      return prev.filter((id) => id !== sectionId);
+    });
+    window.setTimeout(() => {
+      const el = sectionRefs.current.get(sectionId);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 64);
+  }, []);
 
   // Persist section order when it changes
   useEffect(() => {
@@ -1864,6 +2067,43 @@ export default function Journal() {
       /* ignore */
     }
   }, [hiddenSectionIds]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(JOURNAL_COLLAPSED_SECTION_IDS_KEY, JSON.stringify(collapsedSectionIds));
+    } catch {
+      /* ignore */
+    }
+  }, [collapsedSectionIds]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(JOURNAL_NAV_REORDER_UNLOCKED_KEY, journalNavReorderUnlocked ? "true" : "false");
+    } catch {
+      /* ignore */
+    }
+  }, [journalNavReorderUnlocked]);
+
+  const toggleJournalSectionCollapsed = useCallback((sectionId: string) => {
+    setCollapsedSectionIds((prev) => (prev.includes(sectionId) ? prev.filter((id) => id !== sectionId) : [...prev, sectionId]));
+  }, []);
+
+  useEffect(() => {
+    if (!showSectionOrderModal) return;
+    try {
+      const raw = localStorage.getItem(JOURNAL_DEFAULT_COLLAPSED_SECTION_IDS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
+          setSectionLayoutModalCollapsedDefaults(parsed);
+          return;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    setSectionLayoutModalCollapsedDefaults([]);
+  }, [showSectionOrderModal]);
 
   useEffect(() => {
     if (!strategyDropdownOpen) return;
@@ -1953,6 +2193,9 @@ export default function Journal() {
   // Drag-and-drop for Reorder sections modal (handler is defined after effectiveSectionOrder)
   const sectionOrderSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  );
+  const journalNavSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 10 } })
   );
 
   persistJournalScrollStateRef.current = () => {
@@ -4458,6 +4701,12 @@ export default function Journal() {
     return sectionId;
   };
 
+  const openJournalSectionOrderModal = (context: "global" | string) => {
+    if (context === "global") setSectionOrderModalTitle("Journal layout");
+    else setSectionOrderModalTitle(`${getSectionLabelScroll(context)} Layout`);
+    setShowSectionOrderModal(true);
+  };
+
   const calculateEntryProbability = (tradeIndex: number): number => {
     if (!entryFormData.strategy_id) return 0;
     const checklists = strategyChecklists.get(entryFormData.strategy_id);
@@ -4665,6 +4914,61 @@ export default function Journal() {
     if (oldIndex === -1 || newIndex === -1) return;
     setJournalSectionOrder(arrayMove(fullSectionOrder, oldIndex, newIndex));
   }, [fullSectionOrder]);
+
+  const navBarSectionIds = useMemo(
+    () =>
+      effectiveSectionOrder.filter(
+        (sectionId) =>
+          !EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId as JournalSectionId) || showAddEmotionalStateForm
+      ),
+    [effectiveSectionOrder, showAddEmotionalStateForm]
+  );
+
+  const handleJournalNavBarDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (!journalNavReorderUnlocked) return;
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIndex = navBarSectionIds.indexOf(active.id as string);
+      const newIndex = navBarSectionIds.indexOf(over.id as string);
+      if (oldIndex === -1 || newIndex === -1) return;
+      const newNavOrder = arrayMove(navBarSectionIds, oldIndex, newIndex);
+      setJournalSectionOrder(reorderNavBarInFullOrder(fullSectionOrder, navBarSectionIds, newNavOrder));
+    },
+    [journalNavReorderUnlocked, navBarSectionIds, fullSectionOrder]
+  );
+
+  const persistJournalDefaultArrangementFromBar = useCallback(() => {
+    try {
+      localStorage.setItem(JOURNAL_DEFAULT_SECTION_ORDER_KEY, JSON.stringify(journalSectionOrder));
+      localStorage.setItem(JOURNAL_DEFAULT_COLLAPSED_SECTION_IDS_KEY, JSON.stringify(collapsedSectionIds));
+    } catch {
+      /* ignore */
+    }
+  }, [journalSectionOrder, collapsedSectionIds]);
+
+  const resetJournalSectionOrderToSavedOrCore = useCallback(() => {
+    try {
+      const raw = localStorage.getItem(JOURNAL_DEFAULT_SECTION_ORDER_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as string[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const normalized = parsed.map((id) => (id === "mantra_checklist" ? "custom:daily_mantra" : id));
+          const valid = normalized.filter(
+            (id) =>
+              id !== "custom_checklists_surveys" &&
+              (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:") || id.startsWith("custom_rules:"))
+          );
+          const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
+          setJournalSectionOrder([...valid, ...missing]);
+        }
+      } else {
+        setJournalSectionOrder([...CORE_SECTION_ORDER]);
+      }
+    } catch {
+      setJournalSectionOrder([...CORE_SECTION_ORDER]);
+    }
+  }, []);
 
   /** Render checklist UI for a single type (used in scrolling sections). */
   const renderChecklistForType = (type: string, options?: { checklistLayout?: "cards" | "list"; splitSidePanel?: boolean; accentVariant?: "accent" | "warning" }) => {
@@ -6301,6 +6605,15 @@ export default function Journal() {
   const [strategyCustomRuleSets, setStrategyCustomRuleSets] = useState<StrategyCustomRuleSet[]>([]);
   const [journalSignalsSettingsModalPhase, setJournalSignalsSettingsModalPhase] = useState<IndicatorPhase | null>(null);
   const [journalChecklistConfigureType, setJournalChecklistConfigureType] = useState<string | null>(null);
+  const journalChecklistEmbeddedStrategyRules = useMemo(() => {
+    if (journalChecklistConfigureType === "entry") {
+      return { kind: "entry" as const, initialRules: strategyEntryRuleTexts };
+    }
+    if (journalChecklistConfigureType === "take_profit") {
+      return { kind: "takeProfit" as const, initialRules: strategyTakeProfitRuleTexts };
+    }
+    return undefined;
+  }, [journalChecklistConfigureType, strategyEntryRuleTexts, strategyTakeProfitRuleTexts]);
   const [journalRulesConfigure, setJournalRulesConfigure] = useState<
     null | { kind: "entry" | "takeProfit" } | { kind: "custom"; ruleSetId: string }
   >(null);
@@ -7153,11 +7466,9 @@ export default function Journal() {
                                           {strategyEntryRuleTexts.length === 0 ? (
                                             <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>No entry rules configured.</p>
                                           ) : (
-                                            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                                              {strategyEntryRuleTexts.map((rule, idx) => (
-                                                <JournalRuleCard key={`entry-rule-ro-${idx}`}>{rule}</JournalRuleCard>
-                                              ))}
-                                            </div>
+                                            <JournalChecklistListShell tone="warning">
+                                              <JournalStrategyRulesListBody rules={strategyEntryRuleTexts} />
+                                            </JournalChecklistListShell>
                                           )}
                                         </div>
                                       </div>
@@ -7182,11 +7493,9 @@ export default function Journal() {
                                           {strategyTakeProfitRuleTexts.length === 0 ? (
                                             <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>No take profit rules configured.</p>
                                           ) : (
-                                            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                                              {strategyTakeProfitRuleTexts.map((rule, idx) => (
-                                                <JournalRuleCard key={`tp-rule-ro-${idx}`}>{rule}</JournalRuleCard>
-                                              ))}
-                                            </div>
+                                            <JournalChecklistListShell tone="warning">
+                                              <JournalStrategyRulesListBody rules={strategyTakeProfitRuleTexts} />
+                                            </JournalChecklistListShell>
                                           )}
                                         </div>
                                       </div>
@@ -7554,72 +7863,231 @@ export default function Journal() {
                               )}
                             </div>
                           )}
-                          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "5px", padding: "6px 12px", borderBottom: "1px solid var(--border-color)", backgroundColor: "var(--bg-tertiary)" }}>
-                            {effectiveSectionOrder
-                              .filter((sectionId) => !EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId as JournalSectionId) || showAddEmotionalStateForm)
-                              .map((sectionId) => (
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 6,
+                              flexWrap: "nowrap",
+                              minWidth: 0,
+                              padding: "6px 12px",
+                              borderBottom: "1px solid var(--border-color)",
+                              backgroundColor: "var(--bg-tertiary)",
+                            }}
+                          >
                               <button
-                                key={sectionId}
                                 type="button"
-                                onClick={() => scrollToSection(sectionId)}
-                                onMouseEnter={(e) => {
-                                  e.currentTarget.style.background = "var(--accent)";
-                                  e.currentTarget.style.color = "white";
-                                  e.currentTarget.style.borderColor = "var(--accent)";
-                                }}
-                                onMouseLeave={(e) => {
-                                  e.currentTarget.style.background = "var(--bg-primary)";
-                                  e.currentTarget.style.color = "var(--accent)";
-                                  e.currentTarget.style.borderColor = "var(--accent)";
-                                }}
+                                onClick={() => setJournalNavReorderUnlocked((v) => !v)}
+                                title={
+                                  journalNavReorderUnlocked
+                                    ? "Lock: pills only scroll to sections (no drag)"
+                                    : "Unlock: drag section pills by the grip to reorder"
+                                }
                                 style={{
-                                  padding: "4px 10px",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  padding: "4px 8px",
                                   fontSize: "11px",
-                                  fontWeight: "500",
-                                  letterSpacing: "0.02em",
-                                  color: "var(--accent)",
-                                  background: "var(--bg-primary)",
-                                  border: "1px solid var(--accent)",
+                                  fontWeight: 500,
+                                  color: journalNavReorderUnlocked ? "var(--accent)" : "var(--text-secondary)",
+                                  background: journalNavReorderUnlocked ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "transparent",
+                                  border: `1px solid ${journalNavReorderUnlocked ? "var(--accent)" : "var(--border-color)"}`,
                                   borderRadius: "999px",
                                   cursor: "pointer",
-                                  transition: "background 0.12s ease, color 0.12s ease, border-color 0.12s ease",
+                                  flexShrink: 0,
                                 }}
                               >
-                                {getSectionLabel(sectionId)}
+                                {journalNavReorderUnlocked ? <Unlock size={14} aria-hidden /> : <Lock size={14} aria-hidden />}
                               </button>
-                            ))}
-                            <button
-                              type="button"
-                              onClick={() => setShowSectionOrderModal(true)}
-                              onMouseEnter={(e) => {
-                                e.currentTarget.style.background = "var(--bg-hover)";
-                                e.currentTarget.style.borderColor = "var(--text-secondary)";
-                                e.currentTarget.style.color = "var(--text-primary)";
-                              }}
-                              onMouseLeave={(e) => {
-                                e.currentTarget.style.background = "transparent";
-                                e.currentTarget.style.borderColor = "var(--border-color)";
-                                e.currentTarget.style.color = "var(--text-secondary)";
-                              }}
-                              style={{
-                                padding: "4px 8px",
-                                fontSize: "11px",
-                                fontWeight: "500",
-                                letterSpacing: "0.02em",
-                                color: "var(--text-secondary)",
-                                background: "transparent",
-                                border: "1px dashed var(--border-color)",
-                                borderRadius: "999px",
-                                cursor: "pointer",
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "4px",
-                                transition: "background 0.12s ease, border-color 0.12s ease, color 0.12s ease",
-                              }}
-                              title="Reorder sections"
-                            >
-                              <GripVertical size={11} /> Order
-                            </button>
+                              <span
+                                aria-hidden
+                                style={{
+                                  width: 1,
+                                  height: 18,
+                                  flexShrink: 0,
+                                  background: "var(--border-color)",
+                                  opacity: 0.9,
+                                  alignSelf: "center",
+                                }}
+                              />
+                              <div
+                                style={{
+                                  display: "flex",
+                                  flexDirection: "row",
+                                  alignItems: "center",
+                                  gap: 5,
+                                  flexWrap: "nowrap",
+                                  flex: "1 1 auto",
+                                  minWidth: 0,
+                                  overflowX: "auto",
+                                  overflowY: "hidden",
+                                  scrollbarWidth: "thin",
+                                }}
+                              >
+                              {journalNavReorderUnlocked && !showSectionOrderModal ? (
+                                <DndContext sensors={journalNavSensors} collisionDetection={closestCenter} onDragEnd={handleJournalNavBarDragEnd}>
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      flexDirection: "row",
+                                      alignItems: "center",
+                                      gap: 5,
+                                      flexWrap: "nowrap",
+                                    }}
+                                  >
+                                    <SortableContext items={navBarSectionIds} strategy={horizontalListSortingStrategy}>
+                                      {navBarSectionIds.map((sectionId) => (
+                                        <SortableJournalNavPill
+                                          key={sectionId}
+                                          sectionId={sectionId}
+                                          label={getSectionLabel(sectionId)}
+                                          isBodyCollapsed={collapsedSectionIds.includes(sectionId)}
+                                          onScrollTo={() => scrollToSection(sectionId)}
+                                        />
+                                      ))}
+                                    </SortableContext>
+                                    <button
+                                      type="button"
+                                      onClick={() => openJournalSectionOrderModal("global")}
+                                      style={{
+                                        padding: "4px 8px",
+                                        fontSize: "11px",
+                                        fontWeight: 500,
+                                        letterSpacing: "0.02em",
+                                        color: "var(--text-secondary)",
+                                        background: "transparent",
+                                        border: "1px dashed var(--border-color)",
+                                        borderRadius: "999px",
+                                        cursor: "pointer",
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: "4px",
+                                        flexShrink: 0,
+                                        whiteSpace: "nowrap",
+                                      }}
+                                      title="Hide sections, start-collapsed defaults, and full list reorder"
+                                    >
+                                      <Settings size={11} aria-hidden />
+                                      Sections
+                                    </button>
+                                  </div>
+                                </DndContext>
+                              ) : (
+                                <>
+                                {navBarSectionIds.map((sectionId) => (
+                                  <button
+                                    key={sectionId}
+                                    type="button"
+                                    onClick={() => scrollToSection(sectionId)}
+                                    onMouseEnter={(e) => {
+                                      e.currentTarget.style.background = "var(--accent)";
+                                      e.currentTarget.style.color = "white";
+                                      e.currentTarget.style.borderColor = "var(--accent)";
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      e.currentTarget.style.background = "var(--bg-primary)";
+                                      e.currentTarget.style.color = "var(--accent)";
+                                      e.currentTarget.style.borderColor = "var(--accent)";
+                                    }}
+                                    style={{
+                                      padding: "4px 10px",
+                                      fontSize: "11px",
+                                      fontWeight: "500",
+                                      letterSpacing: "0.02em",
+                                      color: "var(--accent)",
+                                      background: "var(--bg-primary)",
+                                      border: "1px solid var(--accent)",
+                                      borderRadius: "999px",
+                                      cursor: "pointer",
+                                      opacity: collapsedSectionIds.includes(sectionId) ? 0.72 : 1,
+                                      transition: "background 0.12s ease, color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease",
+                                      flexShrink: 0,
+                                      whiteSpace: "nowrap",
+                                    }}
+                                  >
+                                    {getSectionLabel(sectionId)}
+                                  </button>
+                                ))}
+                                <button
+                                  type="button"
+                                  onClick={() => openJournalSectionOrderModal("global")}
+                                  style={{
+                                    padding: "4px 8px",
+                                    fontSize: "11px",
+                                    fontWeight: 500,
+                                    letterSpacing: "0.02em",
+                                    color: "var(--text-secondary)",
+                                    background: "transparent",
+                                    border: "1px dashed var(--border-color)",
+                                    borderRadius: "999px",
+                                    cursor: "pointer",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "4px",
+                                    flexShrink: 0,
+                                    whiteSpace: "nowrap",
+                                  }}
+                                  title="Hide sections, start-collapsed defaults, and full list reorder"
+                                >
+                                  <Settings size={11} aria-hidden />
+                                  Sections
+                                </button>
+                                </>
+                              )}
+                              </div>
+                              <span
+                                aria-hidden
+                                style={{
+                                  width: 1,
+                                  height: 18,
+                                  flexShrink: 0,
+                                  background: "var(--border-color)",
+                                  opacity: 0.9,
+                                  alignSelf: "center",
+                                }}
+                              />
+                              <button
+                                type="button"
+                                onClick={persistJournalDefaultArrangementFromBar}
+                                style={{
+                                  padding: "4px 8px",
+                                  fontSize: "11px",
+                                  fontWeight: 500,
+                                  letterSpacing: "0.02em",
+                                  color: "var(--text-secondary)",
+                                  background: "transparent",
+                                  border: "1px dashed var(--border-color)",
+                                  borderRadius: "999px",
+                                  cursor: "pointer",
+                                  flexShrink: 0,
+                                  whiteSpace: "nowrap",
+                                }}
+                                title="Save current section order and collapsed state as your default for new journal sessions"
+                              >
+                                Set default
+                              </button>
+                              <button
+                                type="button"
+                                onClick={resetJournalSectionOrderToSavedOrCore}
+                                style={{
+                                  padding: "4px 8px",
+                                  fontSize: "11px",
+                                  fontWeight: 500,
+                                  letterSpacing: "0.02em",
+                                  color: "var(--text-secondary)",
+                                  background: "transparent",
+                                  border: "1px dashed var(--border-color)",
+                                  borderRadius: "999px",
+                                  cursor: "pointer",
+                                  flexShrink: 0,
+                                  whiteSpace: "nowrap",
+                                }}
+                                title="Restore section order from your saved default (or core order if none saved)"
+                              >
+                                Reset to Default
+                              </button>
                           </div>
                         </div>
                       </>
@@ -7628,9 +8096,33 @@ export default function Journal() {
                     {effectiveSectionOrder.map((sectionId) => {
                       const hideUntilEmoStarted = EMOTIONAL_STATE_SECTIONS_HIDDEN_UNTIL_STARTED.includes(sectionId as JournalSectionId) && !showAddEmotionalStateForm;
                       if (hideUntilEmoStarted) return null;
+                      const isSectionCollapsed = collapsedSectionIds.includes(sectionId);
                       return (
                       <div key={sectionId} id={`section-${sectionId}`} ref={(el) => { sectionRefs.current.set(sectionId, el); }} style={{ marginBottom: "28px", scrollMarginTop: !isTabContentMaximized ? (journalEntryMetaCollapsed ? "100px" : "56px") : "12px" }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" }}>
+                          <button
+                            type="button"
+                            onClick={() => toggleJournalSectionCollapsed(sectionId)}
+                            aria-expanded={!isSectionCollapsed}
+                            title={isSectionCollapsed ? "Expand section" : "Collapse section"}
+                            style={{
+                              flexShrink: 0,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              width: 32,
+                              height: 32,
+                              padding: 0,
+                              borderRadius: 8,
+                              border: "1px solid var(--border-color)",
+                              background: "var(--bg-tertiary)",
+                              color: "var(--text-secondary)",
+                              cursor: "pointer",
+                            }}
+                          >
+                            {isSectionCollapsed ? <ChevronRight size={18} aria-hidden /> : <ChevronDown size={18} aria-hidden />}
+                          </button>
+                          <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
                           {(() => {
                             const canCfg = Boolean(entryFormData.strategy_id && (isCreating || isEditing));
                             let configureCog: ReactNode = null;
@@ -7667,19 +8159,53 @@ export default function Journal() {
                                   onClick={() => setJournalRulesConfigure({ kind: "custom", ruleSetId: sectionId.slice("custom_rules:".length) })}
                                 />
                               );
+                            } else if (canCfg && sectionId === "entry_checklist") {
+                              configureCog = (
+                                <JournalStrategyConfigureCogButton
+                                  title="Configure entry checklist and entry rules on strategy (affects all journal entries using this strategy)"
+                                  onClick={() => setJournalChecklistConfigureType("entry")}
+                                />
+                              );
+                            } else if (canCfg && sectionId === "take_profit_checklist") {
+                              configureCog = (
+                                <JournalStrategyConfigureCogButton
+                                  title="Configure take profit checklist and rules on strategy (affects all journal entries using this strategy)"
+                                  onClick={() => setJournalChecklistConfigureType("take_profit")}
+                                />
+                              );
                             }
                             const heading = (
                               <h3 style={{ ...journalSectionTitleStyle("accent"), margin: 0, flex: "1 1 auto", minWidth: 0 }}>
                                 {getSectionLabelScroll(sectionId)}
                               </h3>
                             );
-                            return configureCog ? (
+                            const titleRightSlot =
+                              configureCog ?? (
+                                <button
+                                  type="button"
+                                  title="Journal section layout — order, visibility, which sections start collapsed"
+                                  onClick={() => openJournalSectionOrderModal(sectionId)}
+                                  style={{
+                                    flexShrink: 0,
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    padding: "4px",
+                                    border: "none",
+                                    borderRadius: 8,
+                                    background: "transparent",
+                                    color: "var(--text-secondary)",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  <Settings size={16} aria-hidden />
+                                </button>
+                              );
+                            return (
                               <JournalStrategySectionTitlePill>
                                 {heading}
-                                {configureCog}
+                                {titleRightSlot}
                               </JournalStrategySectionTitlePill>
-                            ) : (
-                              heading
                             );
                           })()}
                           {sectionId === "emotional_state_before" && (isCreating || isEditing) && showAddEmotionalStateForm && (
@@ -7711,6 +8237,9 @@ export default function Journal() {
                             </button>
                           )}
                         </div>
+                        </div>
+                        {!isSectionCollapsed && (
+                        <>
                         {sectionId === "implementation" && (
                           <RichTextEditor value={currentTrade.trade} onChange={(content: string) => updateTradeFormData(activeTradeIndex, "trade", content)} placeholder="Describe the related trades..." readOnly={false} />
                         )}
@@ -7738,56 +8267,28 @@ export default function Journal() {
                           <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
                             <JournalStrategySectionCard>
                               <div style={{ marginBottom: "10px" }}>
-                                {entryFormData.strategy_id && (isCreating || isEditing) ? (
-                                  <JournalStrategySectionTitlePill>
-                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                                      <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
-                                      <span style={journalSectionTitleStyle("accent")}>Entry Checklist</span>
-                                    </div>
-                                    <JournalStrategyConfigureCogButton
-                                      title="Configure entry checklist on strategy (affects all journal entries using this strategy)"
-                                      onClick={() => setJournalChecklistConfigureType("entry")}
-                                    />
-                                  </JournalStrategySectionTitlePill>
-                                ) : (
-                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                                    <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
-                                    <span style={journalSectionTitleStyle("accent")}>Entry Checklist</span>
-                                  </div>
-                                )}
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                  <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                                  <span style={journalSectionTitleStyle("accent")}>Entry Checklist</span>
+                                </div>
                               </div>
                               {renderChecklistForType("entry", { checklistLayout: "list" })}
                             </JournalStrategySectionCard>
                             <JournalStrategySectionCard>
                               <div style={{ marginBottom: "10px" }}>
-                                {entryFormData.strategy_id && (isCreating || isEditing) ? (
-                                  <JournalStrategySectionTitlePill>
-                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                                      <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
-                                      <span style={journalSectionTitleStyle("warning")}>Entry Rules</span>
-                                    </div>
-                                    <JournalStrategyConfigureCogButton
-                                      title="Configure entry rules on strategy (affects all journal entries using this strategy)"
-                                      onClick={() => setJournalRulesConfigure({ kind: "entry" })}
-                                    />
-                                  </JournalStrategySectionTitlePill>
-                                ) : (
-                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                                    <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
-                                    <span style={journalSectionTitleStyle("warning")}>Entry Rules</span>
-                                  </div>
-                                )}
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                  <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                                  <span style={journalSectionTitleStyle("warning")}>Entry Rules</span>
+                                </div>
                               </div>
                               {strategyEntryRuleTexts.length === 0 ? (
                                 <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
                                   No entry rules configured.
                                 </p>
                               ) : (
-                                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                                  {strategyEntryRuleTexts.map((rule, idx) => (
-                                    <JournalRuleCard key={`entry-rule-${idx}`}>{rule}</JournalRuleCard>
-                                  ))}
-                                </div>
+                                <JournalChecklistListShell tone="warning">
+                                  <JournalStrategyRulesListBody rules={strategyEntryRuleTexts} />
+                                </JournalChecklistListShell>
                               )}
                             </JournalStrategySectionCard>
                           </div>
@@ -7799,56 +8300,28 @@ export default function Journal() {
                           <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap" }}>
                             <JournalStrategySectionCard>
                               <div style={{ marginBottom: "10px" }}>
-                                {entryFormData.strategy_id && (isCreating || isEditing) ? (
-                                  <JournalStrategySectionTitlePill>
-                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                                      <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
-                                      <span style={journalSectionTitleStyle("accent")}>Take Profit Checklist</span>
-                                    </div>
-                                    <JournalStrategyConfigureCogButton
-                                      title="Configure take profit checklist on strategy (affects all journal entries using this strategy)"
-                                      onClick={() => setJournalChecklistConfigureType("take_profit")}
-                                    />
-                                  </JournalStrategySectionTitlePill>
-                                ) : (
-                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                                    <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
-                                    <span style={journalSectionTitleStyle("accent")}>Take Profit Checklist</span>
-                                  </div>
-                                )}
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                  <ListChecks size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden />
+                                  <span style={journalSectionTitleStyle("accent")}>Take Profit Checklist</span>
+                                </div>
                               </div>
                               {renderChecklistForType("take_profit", { checklistLayout: "list" })}
                             </JournalStrategySectionCard>
                             <JournalStrategySectionCard>
                               <div style={{ marginBottom: "10px" }}>
-                                {entryFormData.strategy_id && (isCreating || isEditing) ? (
-                                  <JournalStrategySectionTitlePill>
-                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                                      <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
-                                      <span style={journalSectionTitleStyle("warning")}>Take Profit Rules</span>
-                                    </div>
-                                    <JournalStrategyConfigureCogButton
-                                      title="Configure take profit rules on strategy (affects all journal entries using this strategy)"
-                                      onClick={() => setJournalRulesConfigure({ kind: "takeProfit" })}
-                                    />
-                                  </JournalStrategySectionTitlePill>
-                                ) : (
-                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                                    <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
-                                    <span style={journalSectionTitleStyle("warning")}>Take Profit Rules</span>
-                                  </div>
-                                )}
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                  <Scale size={16} style={{ color: "var(--warning)", flexShrink: 0 }} aria-hidden />
+                                  <span style={journalSectionTitleStyle("warning")}>Take Profit Rules</span>
+                                </div>
                               </div>
                               {strategyTakeProfitRuleTexts.length === 0 ? (
                                 <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
                                   No take profit rules configured.
                                 </p>
                               ) : (
-                                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                                  {strategyTakeProfitRuleTexts.map((rule, idx) => (
-                                    <JournalRuleCard key={`tp-rule-${idx}`}>{rule}</JournalRuleCard>
-                                  ))}
-                                </div>
+                                <JournalChecklistListShell tone="warning">
+                                  <JournalStrategyRulesListBody rules={strategyTakeProfitRuleTexts} />
+                                </JournalChecklistListShell>
                               )}
                             </JournalStrategySectionCard>
                           </div>
@@ -8627,6 +9100,8 @@ export default function Journal() {
                               }} style={{ marginTop: "12px", padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "13px", fontWeight: "600" }}>Add emotional state to entry</button>
                             )}
                           </div>
+                        )}
+                        </>
                         )}
                       </div>
                     ); })}
@@ -11110,9 +11585,12 @@ export default function Journal() {
           checklistType={journalChecklistConfigureType}
           sectionTitle={getChecklistTitle(journalChecklistConfigureType)}
           sourceItems={strategyChecklists.get(entryFormData.strategy_id)?.get(journalChecklistConfigureType) ?? []}
+          embeddedStrategyRules={journalChecklistEmbeddedStrategyRules}
           onAfterSave={() => {
             const sid = entryFormData.strategy_id!;
             void loadStrategyChecklists(sid);
+            setStrategyEntryRuleTexts(loadStrategyRuleTexts(dataMode, sid, "entry"));
+            setStrategyTakeProfitRuleTexts(loadStrategyRuleTexts(dataMode, sid, "takeProfit"));
             if (selectedEntry?.id) {
               void loadChecklistResponses(selectedEntry.id, sid);
             }
@@ -11388,9 +11866,33 @@ export default function Journal() {
       {/* Section order modal: reorder journal entry sections */}
       {showSectionOrderModal && (
         <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setShowSectionOrderModal(false)}>
-          <div style={{ backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "12px", padding: "20px", width: "90%", maxWidth: "420px", boxShadow: "0 8px 32px rgba(0,0,0,0.3)" }} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px", color: "var(--text-primary)" }}>Reorder sections</h3>
-            <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "16px" }}>Drag to reorder. Use the eye icon to hide or show sections on the journal page.</p>
+          <div style={{ backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border-color)", borderRadius: "12px", padding: "20px", width: "90%", maxWidth: "500px", boxShadow: "0 8px 32px rgba(0,0,0,0.3)" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: "8px" }}>
+              <h3 style={{ fontSize: "16px", fontWeight: "600", margin: 0, color: "var(--text-primary)" }}>{sectionOrderModalTitle}</h3>
+              <button
+                type="button"
+                onClick={() => setShowSectionOrderModal(false)}
+                title="Close without saving"
+                style={{
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-tertiary)",
+                  color: "var(--text-primary)",
+                  borderRadius: 8,
+                  padding: "6px 8px",
+                  cursor: "pointer",
+                  display: "flex",
+                  flexShrink: 0,
+                }}
+              >
+                <X size={18} aria-hidden />
+              </button>
+            </div>
+            <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px", lineHeight: 1.45 }}>
+              Drag to reorder. The eye hides a section completely. The fold icon marks sections that start <strong>collapsed</strong> when you open the journal (body hidden until you expand).
+            </p>
+            <p style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "14px", opacity: 0.95 }}>
+              Use <strong>Set as default arrangement</strong> to save order, visibility, and collapsed defaults for the next time you open the journal.
+            </p>
             <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "60vh", overflowY: "auto" }}>
               <DndContext
                 sensors={sectionOrderSensors}
@@ -11409,21 +11911,29 @@ export default function Journal() {
                       onMoveDown={() => setJournalSectionOrder(arrayMove(fullSectionOrder, index, index + 1))}
                       isHidden={hiddenSectionIds.includes(sectionId)}
                       onToggleHide={() => setHiddenSectionIds((prev) => (prev.includes(sectionId) ? prev.filter((id) => id !== sectionId) : [...prev, sectionId]))}
+                      startCollapsedByDefault={sectionLayoutModalCollapsedDefaults.includes(sectionId)}
+                      onToggleStartCollapsed={() =>
+                        setSectionLayoutModalCollapsedDefaults((prev) =>
+                          prev.includes(sectionId) ? prev.filter((id) => id !== sectionId) : [...prev, sectionId]
+                        )
+                      }
                     />
                   ))}
                 </SortableContext>
               </DndContext>
             </div>
             <div style={{ marginTop: "16px", display: "flex", flexWrap: "wrap", gap: "8px", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ display: "flex", gap: "8px" }}>
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                 <button
                   type="button"
                   onClick={() => {
                     try {
                       localStorage.setItem(JOURNAL_DEFAULT_SECTION_ORDER_KEY, JSON.stringify(journalSectionOrder));
+                      localStorage.setItem(JOURNAL_DEFAULT_COLLAPSED_SECTION_IDS_KEY, JSON.stringify(sectionLayoutModalCollapsedDefaults));
                     } catch {
                       /* ignore */
                     }
+                    setCollapsedSectionIds([...sectionLayoutModalCollapsedDefaults]);
                   }}
                   style={{ padding: "6px 12px", fontSize: "12px", color: "var(--text-secondary)", background: "transparent", border: "1px dashed var(--border-color)", borderRadius: "6px", cursor: "pointer" }}
                 >
@@ -11431,34 +11941,13 @@ export default function Journal() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    try {
-                      const raw = localStorage.getItem(JOURNAL_DEFAULT_SECTION_ORDER_KEY);
-                      if (raw) {
-                        const parsed = JSON.parse(raw) as string[];
-                        if (Array.isArray(parsed) && parsed.length > 0) {
-                          const normalized = parsed.map((id) => (id === "mantra_checklist" ? "custom:daily_mantra" : id));
-                        const valid = normalized.filter(
-                            (id) =>
-                              id !== "custom_checklists_surveys" &&
-                              (CORE_SECTION_ORDER.includes(id as JournalSectionId) || id.startsWith("custom:") || id.startsWith("custom_rules:"))
-                          );
-                          const missing = CORE_SECTION_ORDER.filter((id) => !valid.includes(id));
-                          setJournalSectionOrder([...valid, ...missing]);
-                        }
-                      } else {
-                        setJournalSectionOrder([...CORE_SECTION_ORDER]);
-                      }
-                    } catch {
-                      setJournalSectionOrder([...CORE_SECTION_ORDER]);
-                    }
-                  }}
+                  onClick={resetJournalSectionOrderToSavedOrCore}
                   style={{ padding: "6px 12px", fontSize: "12px", color: "var(--text-secondary)", background: "transparent", border: "1px dashed var(--border-color)", borderRadius: "6px", cursor: "pointer" }}
                 >
                   Reset to default arrangement
                 </button>
               </div>
-              <button type="button" onClick={() => setShowSectionOrderModal(false)} style={{ padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "13px" }}>Done</button>
+              <button type="button" onClick={() => setShowSectionOrderModal(false)} style={{ padding: "8px 16px", background: "var(--accent)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "13px" }}>Save</button>
             </div>
           </div>
         </div>

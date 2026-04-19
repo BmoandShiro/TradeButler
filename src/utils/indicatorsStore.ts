@@ -1,5 +1,4 @@
 import type { DataMode } from "./dataMode";
-import { PLANESTATION_DEMO_STRATEGY_ID } from "./planestationConstants";
 
 export interface Indicator {
   id: string; // uuid-ish
@@ -27,6 +26,11 @@ export interface Indicator {
    * Built-in candidates: "TechnicalPattern", "Candlestick".
    */
   signalGroup?: "TechnicalPattern" | "Candlestick";
+  /**
+   * Sub-category for Technical Analysis patterns (Signals page filter), e.g. Harmonics vs chart patterns.
+   * When omitted, the UI may infer from `id` (e.g. `harmonic_*` → Harmonics).
+   */
+  patternFamily?: string;
 }
 
 const INDICATORS_KEY = "tradebutler_indicators_v1";
@@ -341,10 +345,16 @@ function escapeXml(s: string): string {
 
 /** Built-in pattern signals: 512×288 neutral chart + caption (matches Signals page titles). */
 const BUILTIN_PATTERN_THUMBNAIL_IDS = new Set<string>([
-  "sfp",
+  "sfp_timeframe",
   "fvg",
   "divergence",
-  "harmonics",
+  "harmonic_gartley",
+  "harmonic_bat",
+  "harmonic_butterfly",
+  "harmonic_crab",
+  "harmonic_shark",
+  "harmonic_cypher",
+  "harmonic_deep_crab",
   "ascending_triangle",
   "bearish_symmetric_triangle",
   "bullish_symmetric_triangle",
@@ -451,6 +461,91 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
   // Map [0..1] to chart coordinates.
   const mapY = (t: number) => y1 - t * innerH;
   const mapX = (t: number) => x0 + t * innerW;
+
+  /** Distinct XABCD / O-X-A-B-C geometry per harmonic type for pattern thumbnails. */
+  const harmonicPatternGlyph = (harmId: string): string | null => {
+    const accentLine = `stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"`;
+    const ptsById: Record<string, [number, number][]> = {
+      // Classic bullish Gartley-style M: B and C retracements, D at PRZ.
+      harmonic_gartley: [
+        [0.07, 0.62],
+        [0.21, 0.28],
+        [0.35, 0.5],
+        [0.49, 0.34],
+        [0.73, 0.52],
+      ],
+      // Bat: shallower B, tight PRZ.
+      harmonic_bat: [
+        [0.08, 0.58],
+        [0.22, 0.32],
+        [0.38, 0.46],
+        [0.52, 0.38],
+        [0.69, 0.46],
+      ],
+      // Butterfly: D extends beyond X (completion past the initial swing).
+      harmonic_butterfly: [
+        [0.1, 0.55],
+        [0.23, 0.26],
+        [0.38, 0.48],
+        [0.52, 0.32],
+        [0.78, 0.64],
+      ],
+      // Crab: extreme extension to D.
+      harmonic_crab: [
+        [0.07, 0.58],
+        [0.21, 0.3],
+        [0.36, 0.52],
+        [0.5, 0.36],
+        [0.84, 0.58],
+      ],
+      // Shark (O-X-A-B-C): five-leg structure.
+      harmonic_shark: [
+        [0.06, 0.52],
+        [0.18, 0.3],
+        [0.32, 0.5],
+        [0.46, 0.34],
+        [0.72, 0.5],
+      ],
+      // Cypher: deep C point, characteristic zigzag.
+      harmonic_cypher: [
+        [0.08, 0.58],
+        [0.22, 0.3],
+        [0.36, 0.48],
+        [0.5, 0.22],
+        [0.7, 0.46],
+      ],
+      // Deep Crab: even more extreme D than standard crab.
+      harmonic_deep_crab: [
+        [0.06, 0.6],
+        [0.2, 0.32],
+        [0.34, 0.52],
+        [0.48, 0.36],
+        [0.88, 0.62],
+      ],
+    };
+    const raw = ptsById[harmId];
+    if (!raw) return null;
+    const pts = raw.map(([tx, ty]) => [mapX(tx), mapY(ty)] as [number, number]);
+    const d = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p[0].toFixed(2)} ${p[1].toFixed(2)}`).join(" ");
+    const dPt = pts[pts.length - 1];
+    const przR = innerW * 0.055;
+    const przTop = dPt[1] - przR * 1.2;
+    const przLeft = dPt[0] - przR;
+    const labels = harmId === "harmonic_shark" ? ["O", "X", "A", "B", "C"] : ["X", "A", "B", "C", "D"];
+    const lab = labels
+      .map((lb, i) => {
+        const [px, py] = pts[i];
+        return `<text x="${px.toFixed(2)}" y="${(py - 8).toFixed(2)}" text-anchor="middle" fill="rgba(255,255,255,0.45)" font-size="9" font-family="ui-sans-serif, system-ui, sans-serif">${lb}</text>`;
+      })
+      .join("");
+    return `
+      <path d="${d}" ${accentLine}/>
+      <rect x="${przLeft.toFixed(2)}" y="${przTop.toFixed(2)}" width="${(przR * 2).toFixed(2)}" height="${(przR * 2.4).toFixed(
+        2
+      )}" rx="5" fill="${accent}" opacity="0.14" stroke="rgba(255,255,255,0.28)"/>
+      ${lab}
+    `;
+  };
 
   // Generic sparkline fallback (not just text).
   const fallbackPath = pointsToPath([
@@ -829,6 +924,27 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
       `;
       break;
     }
+    case "breaker_block_timeframe": {
+      const zLeft = x0 + innerW * 0.14;
+      const zW = innerW * 0.32;
+      const zTop = mapY(0.68);
+      const zBot = mapY(0.36);
+      const cxTf = x0 + innerW * 0.62;
+      const midY = mapY(0.52);
+      glyph = `
+        <rect x="${zLeft.toFixed(2)}" y="${Math.min(zTop, zBot).toFixed(2)}" width="${zW.toFixed(2)}" height="${Math.abs(zBot - zTop).toFixed(
+          2
+        )}" rx="5" fill="${accent}" opacity="0.14" stroke="rgba(255,255,255,0.28)"/>
+        <text x="${(zLeft + zW / 2).toFixed(2)}" y="${midY.toFixed(2)}" text-anchor="middle" fill="rgba(255,255,255,0.42)" font-size="10" font-family="ui-sans-serif, system-ui, sans-serif">BB</text>
+        <path d="M ${(zLeft + zW * 0.12).toFixed(2)} ${mapY(0.58).toFixed(2)} L ${(zLeft + zW * 0.88).toFixed(2)} ${mapY(0.42).toFixed(2)}"
+          stroke="rgba(239,68,68,0.78)" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M ${cxTf.toFixed(2)} ${mapY(0.62).toFixed(2)} L ${cxTf.toFixed(2)} ${mapY(0.22).toFixed(2)}" stroke="rgba(255,255,255,0.32)" stroke-width="2" stroke-linecap="round"/>
+        <rect x="${(cxTf - innerW * 0.035).toFixed(2)}" y="${Math.min(mapY(0.48), mapY(0.38)).toFixed(2)}" width="${(innerW * 0.07).toFixed(
+          2
+        )}" height="${Math.abs(mapY(0.38) - mapY(0.48)).toFixed(2)}" rx="2" fill="rgba(16,185,129,0.55)" stroke="rgba(255,255,255,0.15)"/>
+      `;
+      break;
+    }
     case "elliott_wave": {
       const imp = [
         [0.06, 0.58],
@@ -861,28 +977,30 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
     }
 
     // --- Pattern thumbnails (technical + candlestick) ---
-    case "sfp": {
-      // Swing Failure Pattern: spike + rejection back toward baseline.
-      const mid = mapY(0.50);
-      const top = mapY(0.22);
-      const left = x0 + innerW * 0.18;
-      const spike = x0 + innerW * 0.52;
-      const right = x0 + innerW * 0.86;
-      const reject = mapY(0.40);
-
+    case "sfp_timeframe": {
+      // Swing Failure Pattern: prior swing high, wick sweeps liquidity above it, body closes back inside (failed breakout).
+      const wickStroke = "rgba(255,255,255,0.28)";
+      const swingHighY = mapY(0.34);
+      const cx = x0 + innerW * 0.56;
+      const bodyW = innerW * 0.12;
+      const openY = mapY(0.37);
+      const closeY = mapY(0.47);
+      const bodyTop = Math.min(openY, closeY);
+      const bodyBot = Math.max(openY, closeY);
+      const wickHigh = mapY(0.16);
+      const wickLow = Math.max(openY, closeY);
       glyph = `
-        <path d="M ${left.toFixed(2)} ${mid.toFixed(2)} L ${spike.toFixed(2)} ${top.toFixed(2)} L ${right.toFixed(
-        2
-      )} ${reject.toFixed(2)}"
-          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
-        <path d="M ${spike.toFixed(2)} ${reject.toFixed(2)} L ${(spike + innerW * 0.12).toFixed(2)} ${mid.toFixed(
-        2
-      )}"
-          stroke="rgba(255,255,255,0.70)" stroke-width="2" fill="none" stroke-linecap="round"/>
-        <circle cx="${spike.toFixed(2)}" cy="${top.toFixed(2)}" r="4.8" fill="${accent}" opacity="0.85"/>
-        <rect x="${(spike - innerW * 0.12).toFixed(2)}" y="${(reject - 6).toFixed(2)}" width="${(innerW * 0.18).toFixed(
-        2
-      )}" height="12" rx="6" fill="${accent}" opacity="0.16" stroke="rgba(255,255,255,0.25)"/>
+        <path d="M ${(x0 + innerW * 0.08).toFixed(2)} ${mapY(0.64).toFixed(2)} L ${(x0 + innerW * 0.26).toFixed(2)} ${mapY(0.52).toFixed(2)} L ${(x0 + innerW * 0.38).toFixed(2)} ${mapY(0.43).toFixed(2)}"
+          stroke="rgba(255,255,255,0.22)" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M ${x0.toFixed(2)} ${swingHighY.toFixed(2)} L ${x1.toFixed(2)} ${swingHighY.toFixed(2)}"
+          stroke="${accent}" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round" opacity="0.95"/>
+        <path d="M ${cx.toFixed(2)} ${wickHigh.toFixed(2)} L ${cx.toFixed(2)} ${wickLow.toFixed(2)}" stroke="${wickStroke}" stroke-width="2.2" stroke-linecap="round"/>
+        <rect x="${(cx - bodyW / 2).toFixed(2)}" y="${bodyTop.toFixed(2)}" width="${bodyW.toFixed(2)}" height="${(bodyBot - bodyTop).toFixed(
+          2
+        )}" rx="5" fill="${accent}" opacity="0.55" stroke="rgba(255,255,255,0.22)"/>
+        <circle cx="${cx.toFixed(2)}" cy="${wickHigh.toFixed(2)}" r="3.8" fill="${accent}" opacity="0.92"/>
+        <path d="M ${(cx + bodyW * 0.65).toFixed(2)} ${closeY.toFixed(2)} L ${(x0 + innerW * 0.82).toFixed(2)} ${mapY(0.52).toFixed(2)}"
+          stroke="rgba(255,255,255,0.45)" stroke-width="1.8" fill="none" stroke-linecap="round"/>
       `;
       break;
     }
@@ -943,28 +1061,15 @@ function makeIndicatorExampleImageForId(id: string, abbreviation: string, accent
       `;
       break;
     }
-    case "harmonics": {
-      // Generic XABCD harmonic swing + PRZ (Gartley/Bat family stand-in).
-      const x = x0 + innerW * 0.10;
-      const xa = x0 + innerW * 0.26;
-      const xb = x0 + innerW * 0.42;
-      const xc = x0 + innerW * 0.58;
-      const xd = x0 + innerW * 0.82;
-      const yx = mapY(0.56);
-      const ya = mapY(0.38);
-      const yb = mapY(0.64);
-      const yc = mapY(0.36);
-      const yd = mapY(0.58);
-      const przLeft = xd - innerW * 0.1;
-      const przTop = Math.min(yc, yd) - innerH * 0.05;
-      const przH = Math.abs(yd - yc) + innerH * 0.14;
-      glyph = `
-        <path d="M ${x.toFixed(2)} ${yx.toFixed(2)} L ${xa.toFixed(2)} ${ya.toFixed(2)} L ${xb.toFixed(2)} ${yb.toFixed(2)} L ${xc.toFixed(2)} ${yc.toFixed(2)} L ${xd.toFixed(2)} ${yd.toFixed(2)}"
-          stroke="${accent}" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-        <rect x="${przLeft.toFixed(2)}" y="${przTop.toFixed(2)}" width="${(innerW * 0.12).toFixed(2)}" height="${przH.toFixed(
-          2
-        )}" rx="6" fill="${accent}" opacity="0.12" stroke="rgba(255,255,255,0.22)"/>
-      `;
+    case "harmonic_gartley":
+    case "harmonic_bat":
+    case "harmonic_butterfly":
+    case "harmonic_crab":
+    case "harmonic_shark":
+    case "harmonic_cypher":
+    case "harmonic_deep_crab": {
+      const g = harmonicPatternGlyph(id);
+      if (g) glyph = g;
       break;
     }
 
@@ -1932,12 +2037,21 @@ const BUILTIN_INDICATORS: Array<Omit<Indicator, "createdAt">> = [
   },
   {
     id: "order_block_timeframe",
-    name: "Order Block Timeframe",
-    abbreviation: "OB-TF",
+    name: "Order Block",
+    abbreviation: "OB",
     category: "Structure",
     description: "Concept indicator: identifies order blocks on a chosen higher timeframe.",
     capturesTimeframes: true,
-    code: "// Order Block TF template (conceptual)\n// You may compute OB zones externally and feed them as data.\n",
+    code: "// Order Block template (conceptual)\n// You may compute OB zones externally and feed them as data.\n",
+  },
+  {
+    id: "breaker_block_timeframe",
+    name: "Breaker Block",
+    abbreviation: "BB",
+    category: "Structure",
+    description: "Concept indicator: breaker / mitigation blocks on a selected higher timeframe (order-flow structure).",
+    capturesTimeframes: true,
+    code: "// Breaker Block template (conceptual)\n",
   },
   {
     id: "elliott_wave",
@@ -1949,7 +2063,7 @@ const BUILTIN_INDICATORS: Array<Omit<Indicator, "createdAt">> = [
   },
   {
     id: "choch_bos_timeframe",
-    name: "CHoCH + BOS Timeframe",
+    name: "CHoCH + BOS",
     abbreviation: "CHoCH/BOS",
     category: "Structure",
     description: "Concept indicator for market structure shifts (CHoCH) and break of structure (BOS) on a selected timeframe.",
@@ -1957,12 +2071,14 @@ const BUILTIN_INDICATORS: Array<Omit<Indicator, "createdAt">> = [
     code: "// CHoCH/BOS template (conceptual)\n",
   },
   {
-    id: "sfp",
+    id: "sfp_timeframe",
     name: "SFP (Swing Failure Pattern)",
     abbreviation: "SFP",
     category: "Pattern",
     signalGroup: "TechnicalPattern",
-    description: "Concept indicator that tags SFP liquidity grabs for reversal/continuation entries.",
+    patternFamily: "Price action",
+    description: "Swing Failure Pattern: liquidity sweep beyond a prior swing, then failure (close back inside). Choose the analysis timeframe when logging in the journal.",
+    capturesTimeframes: true,
     code: "// SFP template (conceptual)\n",
   },
   {
@@ -1984,13 +2100,67 @@ const BUILTIN_INDICATORS: Array<Omit<Indicator, "createdAt">> = [
     code: "// Divergence template (conceptual)\n",
   },
   {
-    id: "harmonics",
-    name: "Harmonic Patterns",
-    abbreviation: "Harm",
+    id: "harmonic_gartley",
+    name: "Gartley Pattern",
+    abbreviation: "Gart",
     category: "Pattern",
     signalGroup: "TechnicalPattern",
-    description: "Harmonic pattern concept (e.g. Gartley/Bat/Butterfly) and PRZ level mapping.",
-    code: "// Harmonic Patterns template (conceptual)\n",
+    description: "Gartley harmonic setup: XABCD ratios with PRZ at the D completion.",
+    code: "// Gartley harmonic template (conceptual)\n",
+  },
+  {
+    id: "harmonic_bat",
+    name: "Bat Pattern",
+    abbreviation: "Bat",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Bat harmonic pattern (distinct B depth vs Gartley) and PRZ.",
+    code: "// Bat harmonic template (conceptual)\n",
+  },
+  {
+    id: "harmonic_butterfly",
+    name: "Butterfly Pattern",
+    abbreviation: "Bfly",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Butterfly harmonic: D completion can extend beyond the initial X swing.",
+    code: "// Butterfly harmonic template (conceptual)\n",
+  },
+  {
+    id: "harmonic_crab",
+    name: "Crab Pattern",
+    abbreviation: "Crab",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Crab harmonic with extreme CD extension into PRZ.",
+    code: "// Crab harmonic template (conceptual)\n",
+  },
+  {
+    id: "harmonic_shark",
+    name: "Shark Pattern",
+    abbreviation: "Shrk",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Shark harmonic structure (O-X-A-B-C swing sequence).",
+    code: "// Shark harmonic template (conceptual)\n",
+  },
+  {
+    id: "harmonic_cypher",
+    name: "Cypher Pattern",
+    abbreviation: "Cyph",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Cypher harmonic with a deep C point vs XA.",
+    code: "// Cypher harmonic template (conceptual)\n",
+  },
+  {
+    id: "harmonic_deep_crab",
+    name: "Deep Crab Pattern",
+    abbreviation: "D.Crab",
+    category: "Pattern",
+    signalGroup: "TechnicalPattern",
+    description: "Deep Crab variant with stronger CD extension than standard Crab.",
+    code: "// Deep Crab harmonic template (conceptual)\n",
   },
   {
     id: "ascending_triangle",
@@ -2307,8 +2477,10 @@ function getIndicatorLibraryThumbnailIds(): Set<string> {
   return indicatorLibraryThumbnailIdsCache;
 }
 
-// If a strategy has no stored indicator associations yet for the active mode,
-// use a sensible starter set so the Journal indicators UI has something to show.
+/**
+ * Optional reference list (e.g. docs, “suggested” presets). Not applied automatically —
+ * `loadStrategyIndicatorIds` only returns IDs the user saved for that strategy.
+ */
 export const DEFAULT_STRATEGY_INDICATOR_IDS: string[] = [
   "rsi",
   "stoch_rsi",
@@ -2321,17 +2493,52 @@ export const DEFAULT_STRATEGY_INDICATOR_IDS: string[] = [
   "sma",
   "fib_levels",
   "order_block_timeframe",
+  "breaker_block_timeframe",
   "elliott_wave",
   "choch_bos_timeframe",
-  "sfp",
+  "sfp_timeframe",
   "fvg",
   "divergence",
+  "harmonic_gartley",
+  "harmonic_bat",
+  "harmonic_butterfly",
+  "harmonic_crab",
+  "harmonic_shark",
+  "harmonic_cypher",
+  "harmonic_deep_crab",
   "supertrend",
   "ichimoku_cloud",
   "volume",
 ];
 
 type StrategyIndicatorsMap = Record<string, Record<string, string[]>>; // mode -> strategyId -> indicatorIds
+
+/** Built-in harmonic splits (replaces legacy `harmonics` id in saved strategy lists). */
+const HARMONIC_PATTERN_IDS = [
+  "harmonic_gartley",
+  "harmonic_bat",
+  "harmonic_butterfly",
+  "harmonic_crab",
+  "harmonic_shark",
+  "harmonic_cypher",
+  "harmonic_deep_crab",
+] as const;
+
+function migrateLegacyStrategyIndicatorIds(ids: string[]): string[] {
+  const out: string[] = [];
+  for (const id of ids) {
+    if (id === "sfp") {
+      out.push("sfp_timeframe");
+      continue;
+    }
+    if (id === "harmonics") {
+      out.push(...HARMONIC_PATTERN_IDS);
+      continue;
+    }
+    out.push(id);
+  }
+  return Array.from(new Set(out));
+}
 type JournalIndicatorValuesMap = Record<
   string,
   string
@@ -2532,34 +2739,60 @@ export function deleteIndicator(id: string): boolean {
   return true;
 }
 
+/**
+ * Real and Paper share one logical “signals for this strategy” list: loading Paper falls back to
+ * Real when Paper has never been set, and saving from either mode updates both so they stay aligned.
+ */
 export function loadStrategyIndicatorIds(mode: DataMode, strategyId: number): string[] {
   const data = safeParse<StrategyIndicatorsMap>(localStorage.getItem(STRATEGY_INDICATORS_KEY), {});
-  const byMode = data[mode] ?? {};
-  const stored = byMode[String(strategyId)];
   const indicatorIds = new Set(loadIndicators().map((i) => i.id));
+  const key = String(strategyId);
 
-  // Demo "Planestation's Strategy" (sandbox id 7): do not use the global default starter set.
-  // Missing storage previously produced 19 generic signals instead of mirroring "My Strategy" after sync.
-  if (mode === "sandbox" && strategyId === PLANESTATION_DEMO_STRATEGY_ID) {
+  if (mode === "sandbox") {
+    const stored = data[mode]?.[key];
     if (!Array.isArray(stored)) {
       return [];
     }
-    return stored.filter((id) => indicatorIds.has(id));
+    return migrateLegacyStrategyIndicatorIds(stored).filter((id) => indicatorIds.has(id));
   }
 
-  if (Array.isArray(stored)) {
-    const cleaned = stored.filter((id) => indicatorIds.has(id));
-    return cleaned.length > 0 ? cleaned : DEFAULT_STRATEGY_INDICATOR_IDS;
+  const realStored = data.real?.[key];
+  const paperStored = data.paper?.[key];
+
+  let merged: string[] | undefined;
+  if (mode === "real") {
+    if (Array.isArray(realStored)) merged = realStored;
+    else if (Array.isArray(paperStored)) merged = paperStored;
+  } else {
+    if (Array.isArray(paperStored)) merged = paperStored;
+    else if (Array.isArray(realStored)) merged = realStored;
   }
 
-  return DEFAULT_STRATEGY_INDICATOR_IDS;
+  if (!Array.isArray(merged)) {
+    return [];
+  }
+  return migrateLegacyStrategyIndicatorIds(merged).filter((id) => indicatorIds.has(id));
 }
 
 export function saveStrategyIndicatorIds(mode: DataMode, strategyId: number, indicatorIds: string[]) {
   const data = safeParse<StrategyIndicatorsMap>(localStorage.getItem(STRATEGY_INDICATORS_KEY), {});
-  const byMode = data[mode] ?? {};
-  byMode[String(strategyId)] = Array.from(new Set(indicatorIds));
-  data[mode] = byMode;
+  const ids = Array.from(new Set(indicatorIds));
+
+  if (mode === "sandbox") {
+    const byMode = data[mode] ?? {};
+    byMode[String(strategyId)] = ids;
+    data[mode] = byMode;
+    localStorage.setItem(STRATEGY_INDICATORS_KEY, JSON.stringify(data));
+    return;
+  }
+
+  const key = String(strategyId);
+  const byReal = data.real ?? {};
+  const byPaper = data.paper ?? {};
+  byReal[key] = ids;
+  byPaper[key] = ids;
+  data.real = byReal;
+  data.paper = byPaper;
   localStorage.setItem(STRATEGY_INDICATORS_KEY, JSON.stringify(data));
 }
 
@@ -2617,30 +2850,70 @@ function sanitizeRuleTextRules(rules: string[]): string[] {
   return rules.map((r) => r.trim()).filter((r) => r.length > 0);
 }
 
+/** Serialized section headers in entry / take-profit strategy rule lines (localStorage). */
+export const STRATEGY_RULE_SECTION_PREFIX = "__TB_SECTION__:";
+
+export type StrategyRuleDisplayRow =
+  | { kind: "section"; title: string }
+  | { kind: "rule"; text: string };
+
+/** Expands persisted rule lines into section headers + rules for Journal and other readers. */
+export function expandStrategyRuleLinesForDisplay(lines: string[]): StrategyRuleDisplayRow[] {
+  if (!lines.length) return [];
+  const hasSection = lines.some((l) => l.trimStart().startsWith(STRATEGY_RULE_SECTION_PREFIX));
+  if (!hasSection) {
+    return lines.filter((l) => l.trim()).map((text) => ({ kind: "rule" as const, text }));
+  }
+  const out: StrategyRuleDisplayRow[] = [];
+  for (const raw of lines) {
+    const lead = raw.trimStart();
+    if (!lead) continue;
+    if (lead.startsWith(STRATEGY_RULE_SECTION_PREFIX)) {
+      const title = lead.slice(STRATEGY_RULE_SECTION_PREFIX.length).trim();
+      if (title) out.push({ kind: "section", title });
+    } else {
+      out.push({ kind: "rule", text: raw });
+    }
+  }
+  return out;
+}
+
 export function loadStrategyRuleTexts(mode: DataMode, strategyId: number, ruleType: StrategyRuleType): string[] {
   if (strategyId < 0) return [];
 
-  const data = safeParse<StrategyRuleTextMap>(localStorage.getItem(STRATEGY_RULE_TEXT_KEY), {} as any);
-  const byMode = data[mode] ?? {};
-  const stored = byMode[String(strategyId)] ?? {};
-  const ruleTexts = stored?.[ruleType];
+  const loadFrom = (m: DataMode): string[] => {
+    const data = safeParse<StrategyRuleTextMap>(localStorage.getItem(STRATEGY_RULE_TEXT_KEY), {} as any);
+    const byMode = data[m] ?? {};
+    const stored = byMode[String(strategyId)] ?? {};
+    const ruleTexts = stored?.[ruleType];
+    if (Array.isArray(ruleTexts)) {
+      const cleaned = sanitizeRuleTextRules(ruleTexts).filter((r) => !/^Legacy indicator rule:/i.test(r.trim()));
+      if (cleaned.length > 0) return cleaned;
+    }
+    return [];
+  };
 
-  if (Array.isArray(ruleTexts)) {
-    const cleaned = sanitizeRuleTextRules(ruleTexts).filter((r) => !/^Legacy indicator rule:/i.test(r.trim()));
-    if (cleaned.length > 0) return cleaned;
+  const primary = loadFrom(mode);
+  if (primary.length > 0) return primary;
+  if (mode === "paper") {
+    const fromReal = loadFrom("real");
+    if (fromReal.length > 0) return fromReal;
   }
-
   return [];
 }
 
 export function saveStrategyRuleTexts(mode: DataMode, strategyId: number, ruleType: StrategyRuleType, rules: string[]) {
   if (strategyId < 0) return;
   const data = safeParse<StrategyRuleTextMap>(localStorage.getItem(STRATEGY_RULE_TEXT_KEY), {} as any);
-  const byMode = data[mode] ?? {};
-  const entry = byMode[String(strategyId)] ?? {};
-  entry[ruleType] = sanitizeRuleTextRules(rules);
-  byMode[String(strategyId)] = entry;
-  data[mode] = byMode;
+  const sanitized = sanitizeRuleTextRules(rules);
+  const modes: DataMode[] = mode === "sandbox" ? ["sandbox"] : ["real", "paper"];
+  for (const m of modes) {
+    const byMode = data[m] ?? {};
+    const entry = byMode[String(strategyId)] ?? {};
+    entry[ruleType] = sanitized;
+    byMode[String(strategyId)] = entry;
+    data[m] = byMode;
+  }
   localStorage.setItem(STRATEGY_RULE_TEXT_KEY, JSON.stringify(data));
 }
 
@@ -2705,6 +2978,14 @@ export function loadStrategyCustomRuleSets(mode: DataMode, strategyId: number): 
     return sanitizeCustomRuleSets(Array.isArray(raw) ? raw : []);
   }
 
+  if (mode === "paper") {
+    const byReal = data.real ?? {};
+    const rawReal = byReal[String(strategyId)];
+    if (rawReal !== undefined) {
+      return sanitizeCustomRuleSets(Array.isArray(rawReal) ? rawReal : []);
+    }
+  }
+
   // First load for this strategy: migrate only *explicitly stored* legacy "custom" lines (user/strategy data),
   // not indicator-derived placeholder text from loadStrategyRuleTexts.
   const explicitLegacy = loadStoredStrategyRuleTextsArrayOnly(mode, strategyId, "custom");
@@ -2725,9 +3006,13 @@ export function saveStrategyCustomRuleSets(mode: DataMode, strategyId: number, s
   if (strategyId < 0) return;
 
   const data = safeParse<StrategyCustomRuleSetsMap>(localStorage.getItem(STRATEGY_CUSTOM_RULE_SETS_KEY), {} as any);
-  const byMode = data[mode] ?? {};
-  byMode[String(strategyId)] = sanitizeCustomRuleSets(sets);
-  data[mode] = byMode;
+  const cleaned = sanitizeCustomRuleSets(sets);
+  const modes: DataMode[] = mode === "sandbox" ? ["sandbox"] : ["real", "paper"];
+  for (const m of modes) {
+    const byMode = data[m] ?? {};
+    byMode[String(strategyId)] = cleaned;
+    data[m] = byMode;
+  }
   localStorage.setItem(STRATEGY_CUSTOM_RULE_SETS_KEY, JSON.stringify(data));
 }
 
@@ -2752,7 +3037,13 @@ type StrategyRulesEnabledMap = Record<
 export function loadStrategyRulesEnabled(mode: DataMode, strategyId: number): StrategyRulesEnabled {
   const data = safeParse<StrategyRulesEnabledMap>(localStorage.getItem(STRATEGY_RULES_ENABLED_KEY), {} as any);
   const byMode = data[mode] ?? {};
-  const stored = byMode[String(strategyId)] ?? {};
+  let stored = byMode[String(strategyId)] ?? {};
+  if (mode === "paper" && stored.entryRulesEnabled === undefined && stored.takeProfitRulesEnabled === undefined) {
+    const realStored = (data.real ?? {})[String(strategyId)] ?? {};
+    if (typeof realStored.entryRulesEnabled === "boolean" || typeof realStored.takeProfitRulesEnabled === "boolean") {
+      stored = { ...realStored };
+    }
+  }
   const entryRulesEnabled = typeof stored.entryRulesEnabled === "boolean" ? stored.entryRulesEnabled : true;
   const takeProfitRulesEnabled = typeof stored.takeProfitRulesEnabled === "boolean" ? stored.takeProfitRulesEnabled : true;
   return { entryRulesEnabled, takeProfitRulesEnabled };
@@ -2761,12 +3052,16 @@ export function loadStrategyRulesEnabled(mode: DataMode, strategyId: number): St
 export function saveStrategyRulesEnabled(mode: DataMode, strategyId: number, enabled: StrategyRulesEnabled) {
   if (strategyId < 0) return;
   const data = safeParse<StrategyRulesEnabledMap>(localStorage.getItem(STRATEGY_RULES_ENABLED_KEY), {} as any);
-  const byMode = data[mode] ?? {};
-  byMode[String(strategyId)] = {
+  const payload = {
     entryRulesEnabled: enabled.entryRulesEnabled,
     takeProfitRulesEnabled: enabled.takeProfitRulesEnabled,
   };
-  data[mode] = byMode;
+  const modes: DataMode[] = mode === "sandbox" ? ["sandbox"] : ["real", "paper"];
+  for (const m of modes) {
+    const byMode = data[m] ?? {};
+    byMode[String(strategyId)] = payload;
+    data[m] = byMode;
+  }
   localStorage.setItem(STRATEGY_RULES_ENABLED_KEY, JSON.stringify(data));
 }
 

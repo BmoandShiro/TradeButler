@@ -24,6 +24,21 @@ interface StrategyRef {
 
 type SignalsView = "all" | "signals" | "technical" | "candles";
 
+/** Groups technical analysis pattern cards for the Pattern category filter (Harmonics, etc.). */
+const TECHNICAL_PATTERN_FAMILY_ALL = "all" as const;
+const TECHNICAL_PATTERN_FAMILY_OPTIONS = ["Harmonics", "Chart patterns", "Price action"] as const;
+type TechnicalPatternFamilyFilter = typeof TECHNICAL_PATTERN_FAMILY_ALL | (typeof TECHNICAL_PATTERN_FAMILY_OPTIONS)[number];
+
+function getTechnicalPatternFamily(i: Indicator): (typeof TECHNICAL_PATTERN_FAMILY_OPTIONS)[number] {
+  const explicit = i.patternFamily?.trim();
+  if (explicit && (TECHNICAL_PATTERN_FAMILY_OPTIONS as readonly string[]).includes(explicit)) {
+    return explicit as (typeof TECHNICAL_PATTERN_FAMILY_OPTIONS)[number];
+  }
+  if (i.id.startsWith("harmonic_")) return "Harmonics";
+  if (i.id === "fvg" || i.id === "divergence" || i.id === "sfp_timeframe") return "Price action";
+  return "Chart patterns";
+}
+
 const THEME_COLOR_PRESET_DEFS: Array<{ hex: string; label: string }> = [
   { hex: "#7C3AED", label: "Purple" },
   { hex: "#2563EB", label: "Blue" },
@@ -72,6 +87,7 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
 
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all"); // "all" | "custom" | "Momentum" | ...
+  const [technicalPatternFamilyFilter, setTechnicalPatternFamilyFilter] = useState<TechnicalPatternFamilyFilter>(TECHNICAL_PATTERN_FAMILY_ALL);
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [showBullish, setShowBullish] = useState(true);
   const [showBearish, setShowBearish] = useState(true);
@@ -302,13 +318,17 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
       base = base.filter((i) => favoriteIds.has(i.id));
     }
 
+    if (technicalPatternFamilyFilter !== TECHNICAL_PATTERN_FAMILY_ALL) {
+      base = base.filter((i) => getTechnicalPatternFamily(i) === technicalPatternFamilyFilter);
+    }
+
     return [...base].sort((a, b) => {
       const ak = a.kind === "custom" ? 0 : 1;
       const bk = b.kind === "custom" ? 0 : 1;
       if (ak !== bk) return ak - bk;
       return (a.name || "").localeCompare(b.name || "");
     });
-  }, [indicators, query, strategyIndicatorIdSet, favoriteOnly, favoriteIds]);
+  }, [indicators, query, strategyIndicatorIdSet, favoriteOnly, favoriteIds, technicalPatternFamilyFilter]);
 
   const candlestickPatterns = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -807,6 +827,29 @@ export default function IndicatorsPage({ view = "signals" }: { view?: SignalsVie
             <option value="Volume">Volume</option>
             <option value="Structure">Structure</option>
             <option value="Pattern">Pattern</option>
+          </select>
+        )}
+        {(view === "all" || view === "technical") && (
+          <select
+            value={technicalPatternFamilyFilter}
+            onChange={(e) => setTechnicalPatternFamilyFilter(e.target.value as TechnicalPatternFamilyFilter)}
+            style={{
+              padding: "10px 12px",
+              background: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "10px",
+              color: "var(--text-primary)",
+              outline: "none",
+              maxWidth: "220px",
+            }}
+            aria-label="Filter technical analysis patterns by category"
+          >
+            <option value={TECHNICAL_PATTERN_FAMILY_ALL}>All pattern categories</option>
+            {TECHNICAL_PATTERN_FAMILY_OPTIONS.map((fam) => (
+              <option key={fam} value={fam}>
+                {fam}
+              </option>
+            ))}
           </select>
         )}
         <label style={{ display: "inline-flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
